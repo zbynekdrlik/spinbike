@@ -67,6 +67,16 @@ pub async fn list_active_templates(pool: &SqlitePool) -> Result<Vec<ClassTemplat
     Ok(templates)
 }
 
+pub async fn list_all_templates(pool: &SqlitePool) -> Result<Vec<ClassTemplateRow>> {
+    let templates = sqlx::query_as::<_, ClassTemplateRow>(
+        "SELECT * FROM class_templates ORDER BY weekday, start_time",
+    )
+    .fetch_all(pool)
+    .await
+    .context("Failed to list all templates")?;
+    Ok(templates)
+}
+
 pub async fn cancel_occurrence(
     pool: &SqlitePool,
     template_id: i64,
@@ -115,7 +125,7 @@ pub async fn get_booking_count(pool: &SqlitePool, template_id: i64, date: &str) 
     Ok(count)
 }
 
-/// Create a booking with capacity enforcement.
+/// Create a booking with atomic capacity enforcement via a single INSERT with subquery.
 pub async fn create_booking(
     pool: &SqlitePool,
     template_id: i64,
@@ -123,34 +133,27 @@ pub async fn create_booking(
     user_id: i64,
     created_by: Option<i64>,
 ) -> Result<i64> {
-    // Fetch template capacity.
-    let capacity: i64 = sqlx::query_scalar("SELECT capacity FROM class_templates WHERE id = ?")
-        .bind(template_id)
-        .fetch_one(pool)
-        .await
-        .context("Template not found")?;
-
-    // Count active bookings.
-    let booked = get_booking_count(pool, template_id, date).await?;
-
-    if booked >= capacity {
-        bail!("Class is full ({booked}/{capacity})");
-    }
-
-    let id = sqlx::query_scalar(
+    // Atomic insert: only inserts if current booking count < template capacity.
+    // This eliminates the race condition between checking count and inserting.
+    let result = sqlx::query_scalar::<_, i64>(
         "INSERT INTO bookings (template_id, date, user_id, created_by)
-         VALUES (?, ?, ?, ?)
+         SELECT ?1, ?2, ?3, ?4
+         WHERE (SELECT COUNT(*) FROM bookings WHERE template_id = ?1 AND date = ?2 AND cancelled_at IS NULL)
+               < (SELECT capacity FROM class_templates WHERE id = ?1)
          RETURNING id",
     )
     .bind(template_id)
     .bind(date)
     .bind(user_id)
     .bind(created_by)
-    .fetch_one(pool)
+    .fetch_optional(pool)
     .await
     .context("Failed to create booking")?;
 
-    Ok(id)
+    match result {
+        Some(id) => Ok(id),
+        None => bail!("Class is full"),
+    }
 }
 
 pub async fn cancel_booking(pool: &SqlitePool, booking_id: i64) -> Result<()> {
@@ -180,7 +183,7 @@ pub async fn list_bookings_for_class(
 
 pub async fn list_user_bookings(pool: &SqlitePool, user_id: i64) -> Result<Vec<BookingRow>> {
     let bookings = sqlx::query_as::<_, BookingRow>(
-        "SELECT * FROM bookings WHERE user_id = ? AND cancelled_at IS NULL ORDER BY date, created_at",
+        "SELECT * FROM bookings WHERE user_id = ? AND cancelled_at IS NULL AND date >= date('now') ORDER BY date, created_at",
     )
     .bind(user_id)
     .fetch_all(pool)

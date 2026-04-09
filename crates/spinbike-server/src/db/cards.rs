@@ -49,9 +49,15 @@ pub async fn link_card_to_user(pool: &SqlitePool, card_id: i64, user_id: i64) ->
     Ok(())
 }
 
+/// Round a monetary value to 2 decimal places to mitigate f64 precision issues.
+pub fn round_cents(value: f64) -> f64 {
+    (value * 100.0).round() / 100.0
+}
+
 pub async fn update_credit(pool: &SqlitePool, card_id: i64, delta: f64) -> Result<()> {
-    sqlx::query("UPDATE cards SET credit = credit + ? WHERE id = ?")
-        .bind(delta)
+    let rounded_delta = round_cents(delta);
+    sqlx::query("UPDATE cards SET credit = ROUND(credit + ?, 2) WHERE id = ?")
+        .bind(rounded_delta)
         .bind(card_id)
         .execute(pool)
         .await

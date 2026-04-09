@@ -34,14 +34,14 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
         .is_ok()
 }
 
-/// Create a JWT token with 7-day expiry.
+/// Create a JWT token with 24-hour expiry.
 pub fn create_token(secret: &str, user_id: i64, email: &str, role: &Role) -> Result<String> {
     let now = chrono::Utc::now().timestamp();
     let claims = Claims {
         sub: user_id,
         email: email.to_string(),
         role: role.clone(),
-        exp: now + 7 * 24 * 60 * 60,
+        exp: now + 24 * 60 * 60,
         iat: now,
     };
     let token = jsonwebtoken::encode(

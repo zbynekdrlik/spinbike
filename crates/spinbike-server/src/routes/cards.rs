@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::AppState;
 use crate::auth::AuthUser;
 use crate::db::{cards as db, transactions};
+use crate::routes::internal_error;
 
 #[derive(Deserialize)]
 pub struct LinkCardRequest {
@@ -88,12 +89,7 @@ async fn link_card(
 ) -> Result<Json<CardResponse>, (StatusCode, Json<serde_json::Value>)> {
     let card = db::get_card_by_barcode(&state.pool, &body.barcode)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?
+        .map_err(internal_error)?
         .ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,
@@ -110,21 +106,11 @@ async fn link_card(
 
     db::link_card_to_user(&state.pool, card.id, claims.sub)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     let updated = db::get_card_by_barcode(&state.pool, &body.barcode)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?
+        .map_err(internal_error)?
         .unwrap();
 
     Ok(Json(CardResponse::from(&updated)))
@@ -144,12 +130,7 @@ async fn lookup_card(
 
     let card = db::get_card_by_barcode(&state.pool, &barcode)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?
+        .map_err(internal_error)?
         .ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,
@@ -172,24 +153,26 @@ async fn activate_card(
         ));
     }
 
+    // M4: create_card will fail on duplicate barcode due to UNIQUE constraint.
+    // The error from context("Failed to create card") is generic enough.
     let card_id = db::create_card(&state.pool, &body.barcode)
         .await
         .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
+            let msg = e.to_string();
+            if msg.contains("UNIQUE") || msg.contains("unique") {
+                (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({"error": "A card with this barcode already exists"})),
+                )
+            } else {
+                internal_error(e)
+            }
         })?;
 
     if body.initial_credit > 0.0 {
         db::update_credit(&state.pool, card_id, body.initial_credit)
             .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                )
-            })?;
+            .map_err(internal_error)?;
 
         transactions::create_transaction(
             &state.pool,
@@ -201,22 +184,12 @@ async fn activate_card(
             "topup",
         )
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
     }
 
     let card = db::get_card_by_barcode(&state.pool, &body.barcode)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?
+        .map_err(internal_error)?
         .unwrap();
 
     Ok((StatusCode::CREATED, Json(CardResponse::from(&card))))
@@ -234,14 +207,17 @@ async fn topup_card(
         ));
     }
 
+    // I7: Validate topup amount is positive.
+    if body.amount <= 0.0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Amount must be greater than zero"})),
+        ));
+    }
+
     db::update_credit(&state.pool, body.card_id, body.amount)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     transactions::create_transaction(
         &state.pool,
@@ -253,24 +229,14 @@ async fn topup_card(
         "topup",
     )
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    .map_err(internal_error)?;
 
     // Re-fetch the card to return updated state.
     let card = sqlx::query_as::<_, db::CardRow>("SELECT * FROM cards WHERE id = ?")
         .bind(body.card_id)
         .fetch_one(&state.pool)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     Ok(Json(CardResponse::from(&card)))
 }
@@ -289,23 +255,13 @@ async fn block_card(
 
     db::set_blocked(&state.pool, body.card_id, body.blocked)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     let card = sqlx::query_as::<_, db::CardRow>("SELECT * FROM cards WHERE id = ?")
         .bind(body.card_id)
         .fetch_one(&state.pool)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     Ok(Json(CardResponse::from(&card)))
 }
@@ -316,21 +272,11 @@ async fn my_balance(
 ) -> Result<Json<BalanceResponse>, (StatusCode, Json<serde_json::Value>)> {
     let cards = db::get_card_by_user(&state.pool, claims.sub)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     let txns = transactions::list_transactions_for_user(&state.pool, claims.sub)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     Ok(Json(BalanceResponse {
         cards: cards.iter().map(CardResponse::from).collect(),

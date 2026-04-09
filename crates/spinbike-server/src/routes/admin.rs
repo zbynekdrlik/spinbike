@@ -1,14 +1,15 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::auth::{AuthUser, parse_role};
+use crate::auth::AuthUser;
 use crate::db::{classes, settings, users};
+use crate::routes::internal_error;
 use spinbike_core::ws::ServerMsg;
 
 // ---------- Templates ----------
@@ -128,6 +129,13 @@ pub struct UpdateServiceRequest {
     pub active: Option<bool>,
 }
 
+// ---------- Query params ----------
+
+#[derive(Deserialize)]
+pub struct ListTemplatesQuery {
+    pub include_inactive: Option<bool>,
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route(
@@ -154,20 +162,39 @@ pub fn routes() -> Router<AppState> {
         .route("/api/admin/users/{id}/role", put(update_user_role))
 }
 
+/// Require at least staff role. Returns Err with 403 if the user is a customer.
+fn require_staff(
+    claims: &spinbike_core::auth::Claims,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if matches!(claims.role, spinbike_core::auth::Role::Customer) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Staff access required"})),
+        ));
+    }
+    Ok(())
+}
+
 // ---------- Template handlers ----------
 
+// I5: list_templates now requires staff role.
 async fn list_templates(
     State(state): State<AppState>,
-    AuthUser(_claims): AuthUser,
+    AuthUser(claims): AuthUser,
+    Query(query): Query<ListTemplatesQuery>,
 ) -> Result<Json<Vec<TemplateResponse>>, (StatusCode, Json<serde_json::Value>)> {
-    let templates = classes::list_active_templates(&state.pool)
-        .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+    require_staff(&claims)?;
+
+    // M3: Support ?include_inactive=true for admin use.
+    let templates = if query.include_inactive.unwrap_or(false) {
+        classes::list_all_templates(&state.pool)
+            .await
+            .map_err(internal_error)?
+    } else {
+        classes::list_active_templates(&state.pool)
+            .await
+            .map_err(internal_error)?
+    };
 
     Ok(Json(
         templates
@@ -206,12 +233,7 @@ async fn create_template(
         body.capacity,
     )
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    .map_err(internal_error)?;
 
     Ok((
         StatusCode::CREATED,
@@ -243,12 +265,7 @@ async fn delete_template(
         .bind(id)
         .execute(&state.pool)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -273,12 +290,7 @@ async fn update_template(
     .bind(id)
     .fetch_one(&state.pool)
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    .map_err(internal_error)?;
 
     let weekday = body.weekday.unwrap_or(existing.weekday);
     let start_time = body.start_time.unwrap_or(existing.start_time);
@@ -302,12 +314,7 @@ async fn update_template(
     .bind(id)
     .execute(&state.pool)
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    .map_err(internal_error)?;
 
     Ok(Json(TemplateResponse {
         id,
@@ -342,12 +349,7 @@ async fn cancel_class(
         Some(claims.sub),
     )
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    .map_err(internal_error)?;
 
     let _ = state.event_tx.send(ServerMsg::ClassCancelled {
         template_id: body.template_id,
@@ -359,20 +361,18 @@ async fn cancel_class(
 
 // ---------- Instructor handlers ----------
 
+// I5: list_instructors now requires staff role.
 async fn list_instructors(
     State(state): State<AppState>,
-    AuthUser(_claims): AuthUser,
+    AuthUser(claims): AuthUser,
 ) -> Result<Json<Vec<InstructorRow>>, (StatusCode, Json<serde_json::Value>)> {
+    require_staff(&claims)?;
+
     let rows =
         sqlx::query_as::<_, InstructorRow>("SELECT id, name, active FROM instructors ORDER BY id")
             .fetch_all(&state.pool)
             .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                )
-            })?;
+            .map_err(internal_error)?;
 
     Ok(Json(rows))
 }
@@ -393,12 +393,7 @@ async fn create_instructor(
         .bind(&body.name)
         .fetch_one(&state.pool)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     Ok((
         StatusCode::CREATED,
@@ -428,12 +423,7 @@ async fn update_instructor(
             .bind(id)
             .fetch_one(&state.pool)
             .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                )
-            })?;
+            .map_err(internal_error)?;
 
     let name = body.name.unwrap_or(existing.name);
     let active: i64 = body
@@ -447,33 +437,26 @@ async fn update_instructor(
         .bind(id)
         .execute(&state.pool)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     Ok(Json(InstructorRow { id, name, active }))
 }
 
 // ---------- Service handlers ----------
 
+// I5: list_services now requires staff role.
 async fn list_services(
     State(state): State<AppState>,
-    AuthUser(_claims): AuthUser,
+    AuthUser(claims): AuthUser,
 ) -> Result<Json<Vec<ServiceRow>>, (StatusCode, Json<serde_json::Value>)> {
+    require_staff(&claims)?;
+
     let rows = sqlx::query_as::<_, ServiceRow>(
         "SELECT id, name, default_price, active FROM services ORDER BY id",
     )
     .fetch_all(&state.pool)
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    .map_err(internal_error)?;
 
     Ok(Json(rows))
 }
@@ -496,12 +479,7 @@ async fn create_service(
             .bind(body.default_price)
             .fetch_one(&state.pool)
             .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                )
-            })?;
+            .map_err(internal_error)?;
 
     Ok((
         StatusCode::CREATED,
@@ -533,12 +511,7 @@ async fn update_service(
     .bind(id)
     .fetch_one(&state.pool)
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    .map_err(internal_error)?;
 
     let name = body.name.unwrap_or(existing.name);
     let default_price = body.default_price.unwrap_or(existing.default_price);
@@ -554,12 +527,7 @@ async fn update_service(
         .bind(id)
         .execute(&state.pool)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     Ok(Json(ServiceRow {
         id,
@@ -579,12 +547,7 @@ async fn get_settings(
         sqlx::query_as("SELECT key, value FROM settings ORDER BY key")
             .fetch_all(&state.pool)
             .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                )
-            })?;
+            .map_err(internal_error)?;
 
     Ok(Json(
         rows.into_iter()
@@ -607,12 +570,7 @@ async fn update_setting(
 
     settings::set_setting(&state.pool, &body.key, &body.value)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -630,12 +588,9 @@ async fn list_users_handler(
         ));
     }
 
-    let rows = users::list_users(&state.pool).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    let rows = users::list_users(&state.pool)
+        .await
+        .map_err(internal_error)?;
 
     Ok(Json(
         rows.into_iter()
@@ -664,17 +619,17 @@ async fn update_user_role(
         ));
     }
 
-    // Validate role string.
-    let _role = parse_role(&body.role);
+    // I6: Validate role string before writing to DB.
+    if !["admin", "staff", "customer"].contains(&body.role.as_str()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid role. Must be admin, staff, or customer"})),
+        ));
+    }
 
     users::update_user_role(&state.pool, user_id, &body.role)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     Ok(StatusCode::NO_CONTENT)
 }

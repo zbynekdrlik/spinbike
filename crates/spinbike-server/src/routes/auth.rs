@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::AppState;
 use crate::auth::{self, AuthUser, parse_role};
 use crate::db::users;
+use crate::routes::internal_error;
 
 #[derive(Deserialize)]
 pub struct RegisterRequest {
@@ -49,15 +50,33 @@ async fn register(
     State(state): State<AppState>,
     Json(body): Json<RegisterRequest>,
 ) -> Result<(StatusCode, Json<AuthResponse>), (StatusCode, Json<serde_json::Value>)> {
+    // I4: Input validation.
+    let name = body.name.trim();
+    if name.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Name must not be empty"})),
+        ));
+    }
+
+    if !body.email.contains('@') || !body.email.contains('.') {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid email address"})),
+        ));
+    }
+
+    if body.password.len() < 8 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Password must be at least 8 characters"})),
+        ));
+    }
+
     // Check for duplicate email.
     let existing = users::get_user_by_email(&state.pool, &body.email)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     if existing.is_some() {
         return Err((
@@ -66,39 +85,24 @@ async fn register(
         ));
     }
 
-    let password_hash = auth::hash_password(&body.password).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    let password_hash = auth::hash_password(&body.password).map_err(internal_error)?;
 
     let user_id = users::create_user(
         &state.pool,
         &body.email,
         Some(&password_hash),
-        &body.name,
+        name,
         body.phone.as_deref(),
         "customer",
         None,
         None,
     )
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    .map_err(internal_error)?;
 
     let role = spinbike_core::auth::Role::Customer;
-    let token =
-        auth::create_token(&state.jwt_secret, user_id, &body.email, &role).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+    let token = auth::create_token(&state.jwt_secret, user_id, &body.email, &role)
+        .map_err(internal_error)?;
 
     Ok((
         StatusCode::CREATED,
@@ -107,7 +111,7 @@ async fn register(
             user: UserInfo {
                 id: user_id,
                 email: body.email,
-                name: body.name,
+                name: name.to_string(),
                 role: "customer".to_string(),
             },
         }),
@@ -120,12 +124,7 @@ async fn login(
 ) -> Result<Json<AuthResponse>, (StatusCode, Json<serde_json::Value>)> {
     let user = users::get_user_by_email(&state.pool, &body.email)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?
+        .map_err(internal_error)?
         .ok_or_else(|| {
             (
                 StatusCode::UNAUTHORIZED,
@@ -148,13 +147,8 @@ async fn login(
     }
 
     let role = parse_role(&user.role);
-    let token =
-        auth::create_token(&state.jwt_secret, user.id, &user.email, &role).map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+    let token = auth::create_token(&state.jwt_secret, user.id, &user.email, &role)
+        .map_err(internal_error)?;
 
     Ok(Json(AuthResponse {
         token,

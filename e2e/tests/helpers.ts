@@ -9,18 +9,13 @@ export function setupConsoleCheck(page: Page): string[] {
     page.on('console', (msg) => {
         if (msg.type() === 'error' || msg.type() === 'warning') {
             const text = msg.text();
-            // Ignore benign WASM/SharedArrayBuffer/browser-level warnings
+            // Ignore only truly benign browser-level warnings
             if (
                 text.includes('SharedArrayBuffer') ||
                 text.includes('wasm') ||
-                text.includes('WebSocket') ||
-                text.includes('ws://') ||
-                text.includes('wss://') ||
                 text.includes('integrity') ||
                 text.includes('subresource integrity') ||
-                text.includes('crbug.com') ||
-                text.includes('Failed to load resource') ||
-                text.includes('the server responded with a status of')
+                text.includes('crbug.com')
             ) {
                 return;
             }

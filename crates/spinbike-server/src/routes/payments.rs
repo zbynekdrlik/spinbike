@@ -3,7 +3,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::auth::AuthUser;
-use crate::db::{cards, transactions};
+use crate::db::cards;
+use crate::routes::internal_error;
 
 #[derive(Deserialize)]
 pub struct ChargeRequest {
@@ -43,17 +44,25 @@ async fn charge(
         ));
     }
 
-    // Get card and check if blocked.
+    // C3: Validate amount is positive.
+    if body.amount <= 0.0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Amount must be greater than zero"})),
+        ));
+    }
+
+    let amount = cards::round_cents(body.amount);
+
+    // C2: Wrap entire operation in a transaction to prevent race conditions.
+    let mut tx = state.pool.begin().await.map_err(internal_error)?;
+
+    // Re-read card inside the transaction.
     let card = sqlx::query_as::<_, cards::CardRow>("SELECT * FROM cards WHERE id = ?")
         .bind(body.card_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?
+        .map_err(internal_error)?
         .ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,
@@ -69,41 +78,38 @@ async fn charge(
     }
 
     // Check sufficient credit (unless allow_debit is set).
-    if card.credit < body.amount && card.allow_debit == 0 {
+    if card.credit < amount && card.allow_debit == 0 {
         return Err((
             StatusCode::CONFLICT,
             Json(serde_json::json!({"error": "Insufficient credit"})),
         ));
     }
 
-    // Debit the card.
-    cards::update_credit(&state.pool, body.card_id, -body.amount)
+    // Debit the card within the transaction.
+    sqlx::query("UPDATE cards SET credit = ROUND(credit - ?, 2) WHERE id = ?")
+        .bind(amount)
+        .bind(body.card_id)
+        .execute(&mut *tx)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
-    let tx_id = transactions::create_transaction(
-        &state.pool,
-        card.user_id,
-        Some(body.card_id),
-        Some(claims.sub),
-        body.service_id,
-        -body.amount,
-        "charge",
+    let tx_id: i64 = sqlx::query_scalar(
+        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action)
+         VALUES (?, ?, ?, ?, ?, 'charge')
+         RETURNING id",
     )
+    .bind(card.user_id)
+    .bind(Some(body.card_id))
+    .bind(Some(claims.sub))
+    .bind(body.service_id)
+    .bind(-amount)
+    .fetch_one(&mut *tx)
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    .map_err(internal_error)?;
 
-    let new_credit = card.credit - body.amount;
+    tx.commit().await.map_err(internal_error)?;
+
+    let new_credit = cards::round_cents(card.credit - amount);
 
     Ok(Json(PaymentResponse {
         transaction_id: tx_id,
@@ -123,16 +129,24 @@ async fn storno(
         ));
     }
 
+    // C3: Validate amount is positive.
+    if body.amount <= 0.0 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Amount must be greater than zero"})),
+        ));
+    }
+
+    let amount = cards::round_cents(body.amount);
+
+    // Wrap in a transaction for consistency.
+    let mut tx = state.pool.begin().await.map_err(internal_error)?;
+
     let card = sqlx::query_as::<_, cards::CardRow>("SELECT * FROM cards WHERE id = ?")
         .bind(body.card_id)
-        .fetch_optional(&state.pool)
+        .fetch_optional(&mut *tx)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?
+        .map_err(internal_error)?
         .ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,
@@ -140,34 +154,31 @@ async fn storno(
             )
         })?;
 
-    // Credit the card (refund).
-    cards::update_credit(&state.pool, body.card_id, body.amount)
+    // Credit the card (refund) within the transaction.
+    sqlx::query("UPDATE cards SET credit = ROUND(credit + ?, 2) WHERE id = ?")
+        .bind(amount)
+        .bind(body.card_id)
+        .execute(&mut *tx)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
-    let tx_id = transactions::create_transaction(
-        &state.pool,
-        card.user_id,
-        Some(body.card_id),
-        Some(claims.sub),
-        None,
-        body.amount,
-        "storno",
+    let tx_id: i64 = sqlx::query_scalar(
+        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action)
+         VALUES (?, ?, ?, ?, ?, 'storno')
+         RETURNING id",
     )
+    .bind(card.user_id)
+    .bind(Some(body.card_id))
+    .bind(Some(claims.sub))
+    .bind::<Option<i64>>(None)
+    .bind(amount)
+    .fetch_one(&mut *tx)
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    .map_err(internal_error)?;
 
-    let new_credit = card.credit + body.amount;
+    tx.commit().await.map_err(internal_error)?;
+
+    let new_credit = cards::round_cents(card.credit + amount);
 
     Ok(Json(PaymentResponse {
         transaction_id: tx_id,

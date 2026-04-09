@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::AppState;
 use crate::auth::{AuthUser, OptionalAuthUser};
 use crate::db::classes as db;
+use crate::routes::internal_error;
 use spinbike_core::ws::ServerMsg;
 
 #[derive(Deserialize)]
@@ -86,12 +87,9 @@ async fn list_classes(
         )
     })?;
 
-    let templates = db::list_active_templates(&state.pool).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    let templates = db::list_active_templates(&state.pool)
+        .await
+        .map_err(internal_error)?;
 
     let mut occurrences = Vec::new();
     let mut current = from;
@@ -182,12 +180,7 @@ async fn list_participants(
     .bind(&date)
     .fetch_all(&state.pool)
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    .map_err(internal_error)?;
 
     Ok(Json(
         rows.into_iter()
@@ -221,12 +214,7 @@ async fn create_booking(
     // Check if class is cancelled.
     let cancelled = db::is_occurrence_cancelled(&state.pool, body.template_id, &body.date)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     if cancelled {
         return Err((
@@ -257,10 +245,7 @@ async fn create_booking(
                 Json(serde_json::json!({"error": msg})),
             )
         } else {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": msg})),
-            )
+            internal_error(e)
         }
     })?;
 
@@ -304,12 +289,7 @@ async fn cancel_booking(
     .bind(booking_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?
+    .map_err(internal_error)?
     .ok_or_else(|| {
         (
             StatusCode::NOT_FOUND,
@@ -327,12 +307,7 @@ async fn cancel_booking(
 
     db::cancel_booking(&state.pool, booking_id)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     // Broadcast booking update.
     let booked = db::get_booking_count(&state.pool, booking.template_id, &booking.date)
@@ -360,12 +335,7 @@ async fn my_bookings(
 ) -> Result<Json<Vec<BookingResponse>>, (StatusCode, Json<serde_json::Value>)> {
     let bookings = db::list_user_bookings(&state.pool, claims.sub)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     let responses: Vec<BookingResponse> = bookings
         .into_iter()

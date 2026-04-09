@@ -1,17 +1,44 @@
 use axum::{
     extract::{
-        State,
+        Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
     response::IntoResponse,
 };
 use futures::{SinkExt, StreamExt};
+use serde::Deserialize;
 use spinbike_core::ws::ClientMsg;
 use tracing::{info, warn};
 
 use crate::AppState;
+use crate::auth;
 
-pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
+#[derive(Deserialize)]
+pub struct WsQuery {
+    pub token: Option<String>,
+}
+
+pub async fn ws_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    Query(query): Query<WsQuery>,
+) -> impl IntoResponse {
+    // M2: Optional authentication via token query parameter.
+    let claims = query
+        .token
+        .as_deref()
+        .and_then(|t| auth::validate_token(&state.jwt_secret, t).ok());
+
+    if let Some(ref c) = claims {
+        info!(
+            user_id = c.sub,
+            email = %c.email,
+            "Authenticated WebSocket connection"
+        );
+    } else {
+        info!("Anonymous WebSocket connection");
+    }
+
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
