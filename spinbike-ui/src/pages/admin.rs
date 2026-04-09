@@ -169,15 +169,33 @@ fn TemplatesTab() -> impl IntoView {
             let rows: Vec<_> = list.iter().map(|t| {
                 let tid = t.id;
                 let set_v = set_ver;
+                let set_m = set_msg;
                 let day_name = WEEKDAY_NAMES.get(t.weekday as usize).unwrap_or(&"?").to_string();
                 let time = t.start_time.clone();
                 let dur = format!("{}m", t.duration_minutes);
                 let cap = t.capacity;
                 let instr = t.instructor_id.map(|i| i.to_string()).unwrap_or_else(|| "-".into());
+                let (editing, set_editing) = signal(false);
+                let edit_cap_ref = NodeRef::<leptos::html::Input>::new();
+                let edit_time_ref = NodeRef::<leptos::html::Input>::new();
+                let time_for_edit = t.start_time.clone();
+                let cap_for_edit = t.capacity;
                 let on_del = move |_| {
                     spawn_local(async move {
                         let _ = api::delete(&format!("/api/admin/templates/{tid}")).await;
                         set_v.update(|v| *v += 1);
+                    });
+                };
+                let on_save = move |_| {
+                    let new_time = edit_time_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
+                    let new_cap: i64 = edit_cap_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default().parse().unwrap_or(0);
+                    spawn_local(async move {
+                        #[derive(serde::Serialize)]
+                        struct Req { start_time: Option<String>, capacity: Option<i64> }
+                        match api::put(&format!("/api/admin/templates/{tid}"), &Req { start_time: Some(new_time), capacity: Some(new_cap) }).await {
+                            Ok(_) => { set_editing.set(false); set_v.update(|v| *v += 1); }
+                            Err(e) => set_m.set(format!("Error: {e}")),
+                        }
                     });
                 };
                 view! {
@@ -190,8 +208,31 @@ fn TemplatesTab() -> impl IntoView {
                         <td>{instr}</td>
                     </tr>
                     <tr>
-                        <td colspan="6"><button class="btn btn-sm btn-danger" on:click=on_del>"Delete"</button></td>
+                        <td colspan="6">
+                            <button class="btn btn-sm btn-danger" on:click=on_del>"Delete"</button>
+                            <button class="btn btn-sm btn-outline" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>"Edit"</button>
+                        </td>
                     </tr>
+                    {move || {
+                        if editing.get() {
+                            let time_val = time_for_edit.clone();
+                            view! {
+                                <tr>
+                                    <td colspan="6">
+                                        <div class="inline-form" style="display:flex;gap:8px;align-items:center;padding:4px 0">
+                                            <label>"Time"</label>
+                                            <input type="time" class="form-control" style="width:auto" node_ref=edit_time_ref value=time_val />
+                                            <label>"Capacity"</label>
+                                            <input type="number" class="form-control" style="width:80px" node_ref=edit_cap_ref value=cap_for_edit min="1" />
+                                            <button class="btn btn-sm btn-primary" on:click=on_save>"Save"</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }.into_any()
+                        } else {
+                            view! { <tr style="display:none"></tr> }.into_any()
+                        }
+                    }}
                 }.into_any()
             }).collect();
             view! {
@@ -255,9 +296,67 @@ fn InstructorsTab() -> impl IntoView {
             }
             let list = items.get();
             let rows: Vec<_> = list.iter().map(|i| {
+                let iid = i.id;
                 let name = i.name.clone();
-                let active = if i.active != 0 { "Yes" } else { "No" };
-                view! { <tr><td>{i.id}</td><td>{name}</td><td>{active}</td></tr> }
+                let is_active = i.active != 0;
+                let active_label = if is_active { "Active" } else { "Inactive" };
+                let toggle_label = if is_active { "Deactivate" } else { "Activate" };
+                let set_v = set_ver;
+                let set_m = set_msg;
+                let (editing, set_editing) = signal(false);
+                let edit_name_ref = NodeRef::<leptos::html::Input>::new();
+                let name_for_edit = i.name.clone();
+                let on_toggle = move |_| {
+                    let new_active = !is_active;
+                    spawn_local(async move {
+                        #[derive(serde::Serialize)]
+                        struct Req { active: Option<bool> }
+                        match api::put(&format!("/api/admin/instructors/{iid}"), &Req { active: Some(new_active) }).await {
+                            Ok(_) => set_v.update(|v| *v += 1),
+                            Err(e) => set_m.set(format!("Error: {e}")),
+                        }
+                    });
+                };
+                let on_save = move |_| {
+                    let new_name = edit_name_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
+                    spawn_local(async move {
+                        #[derive(serde::Serialize)]
+                        struct Req { name: Option<String> }
+                        match api::put(&format!("/api/admin/instructors/{iid}"), &Req { name: Some(new_name) }).await {
+                            Ok(_) => { set_editing.set(false); set_v.update(|v| *v += 1); }
+                            Err(e) => set_m.set(format!("Error: {e}")),
+                        }
+                    });
+                };
+                view! {
+                    <tr>
+                        <td>{iid}</td>
+                        <td>{name}</td>
+                        <td>{active_label}</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline" on:click=on_toggle>{toggle_label}</button>
+                            <button class="btn btn-sm btn-outline" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>"Edit"</button>
+                        </td>
+                    </tr>
+                    {move || {
+                        if editing.get() {
+                            let nval = name_for_edit.clone();
+                            view! {
+                                <tr>
+                                    <td colspan="4">
+                                        <div class="inline-form" style="display:flex;gap:8px;align-items:center;padding:4px 0">
+                                            <label>"Name"</label>
+                                            <input type="text" class="form-control" style="width:auto" node_ref=edit_name_ref value=nval />
+                                            <button class="btn btn-sm btn-primary" on:click=on_save>"Save"</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }.into_any()
+                        } else {
+                            view! { <tr style="display:none"></tr> }.into_any()
+                        }
+                    }}
+                }.into_any()
             }).collect();
             view! {
                 <table>
@@ -326,10 +425,74 @@ fn ServicesTab() -> impl IntoView {
             }
             let list = items.get();
             let rows: Vec<_> = list.iter().map(|s| {
+                let sid = s.id;
                 let name = s.name.clone();
                 let price = format!("{:.0}", s.default_price);
-                let active = if s.active != 0 { "Yes" } else { "No" };
-                view! { <tr><td>{s.id}</td><td>{name}</td><td>{price}</td><td>{active}</td></tr> }
+                let is_active = s.active != 0;
+                let active_label = if is_active { "Active" } else { "Inactive" };
+                let toggle_label = if is_active { "Deactivate" } else { "Activate" };
+                let set_v = set_ver;
+                let set_m = set_msg;
+                let (editing, set_editing) = signal(false);
+                let edit_name_ref = NodeRef::<leptos::html::Input>::new();
+                let edit_price_ref = NodeRef::<leptos::html::Input>::new();
+                let name_for_edit = s.name.clone();
+                let price_for_edit = s.default_price;
+                let on_toggle = move |_| {
+                    let new_active = !is_active;
+                    spawn_local(async move {
+                        #[derive(serde::Serialize)]
+                        struct Req { active: Option<bool> }
+                        match api::put(&format!("/api/admin/services/{sid}"), &Req { active: Some(new_active) }).await {
+                            Ok(_) => set_v.update(|v| *v += 1),
+                            Err(e) => set_m.set(format!("Error: {e}")),
+                        }
+                    });
+                };
+                let on_save = move |_| {
+                    let new_name = edit_name_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
+                    let new_price: f64 = edit_price_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default().parse().unwrap_or(0.0);
+                    spawn_local(async move {
+                        #[derive(serde::Serialize)]
+                        struct Req { name: Option<String>, default_price: Option<f64> }
+                        match api::put(&format!("/api/admin/services/{sid}"), &Req { name: Some(new_name), default_price: Some(new_price) }).await {
+                            Ok(_) => { set_editing.set(false); set_v.update(|v| *v += 1); }
+                            Err(e) => set_m.set(format!("Error: {e}")),
+                        }
+                    });
+                };
+                view! {
+                    <tr>
+                        <td>{sid}</td>
+                        <td>{name}</td>
+                        <td>{price}</td>
+                        <td>{active_label}</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline" on:click=on_toggle>{toggle_label}</button>
+                            <button class="btn btn-sm btn-outline" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>"Edit"</button>
+                        </td>
+                    </tr>
+                    {move || {
+                        if editing.get() {
+                            let nval = name_for_edit.clone();
+                            view! {
+                                <tr>
+                                    <td colspan="5">
+                                        <div class="inline-form" style="display:flex;gap:8px;align-items:center;padding:4px 0">
+                                            <label>"Name"</label>
+                                            <input type="text" class="form-control" style="width:auto" node_ref=edit_name_ref value=nval />
+                                            <label>"Price"</label>
+                                            <input type="number" class="form-control" style="width:80px" node_ref=edit_price_ref value=price_for_edit step="1" min="0" />
+                                            <button class="btn btn-sm btn-primary" on:click=on_save>"Save"</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            }.into_any()
+                        } else {
+                            view! { <tr style="display:none"></tr> }.into_any()
+                        }
+                    }}
+                }.into_any()
             }).collect();
             view! {
                 <table>

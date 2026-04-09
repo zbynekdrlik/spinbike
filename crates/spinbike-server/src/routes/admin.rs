@@ -103,22 +103,52 @@ pub struct UserResponse {
     pub created_at: String,
 }
 
+// ---------- Update requests ----------
+
+#[derive(Deserialize)]
+pub struct UpdateTemplateRequest {
+    pub weekday: Option<i64>,
+    pub start_time: Option<String>,
+    pub duration_minutes: Option<i64>,
+    pub instructor_id: Option<Option<i64>>,
+    pub capacity: Option<i64>,
+    pub active: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateInstructorRequest {
+    pub name: Option<String>,
+    pub active: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateServiceRequest {
+    pub name: Option<String>,
+    pub default_price: Option<f64>,
+    pub active: Option<bool>,
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route(
             "/api/admin/templates",
             get(list_templates).post(create_template),
         )
-        .route("/api/admin/templates/{id}", delete(delete_template))
+        .route(
+            "/api/admin/templates/{id}",
+            delete(delete_template).put(update_template),
+        )
         .route("/api/admin/cancel-class", post(cancel_class))
         .route(
             "/api/admin/instructors",
             get(list_instructors).post(create_instructor),
         )
+        .route("/api/admin/instructors/{id}", put(update_instructor))
         .route(
             "/api/admin/services",
             get(list_services).post(create_service),
         )
+        .route("/api/admin/services/{id}", put(update_service))
         .route("/api/admin/settings", get(get_settings).put(update_setting))
         .route("/api/admin/users", get(list_users_handler))
         .route("/api/admin/users/{id}/role", put(update_user_role))
@@ -223,6 +253,73 @@ async fn delete_template(
     Ok(StatusCode::NO_CONTENT)
 }
 
+async fn update_template(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateTemplateRequest>,
+) -> Result<Json<TemplateResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_manage_users() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin access required"})),
+        ));
+    }
+
+    // Fetch existing row, merge fields, then do a full UPDATE.
+    let existing = sqlx::query_as::<_, classes::ClassTemplateRow>(
+        "SELECT * FROM class_templates WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+    })?;
+
+    let weekday = body.weekday.unwrap_or(existing.weekday);
+    let start_time = body.start_time.unwrap_or(existing.start_time);
+    let duration_minutes = body.duration_minutes.unwrap_or(existing.duration_minutes);
+    let instructor_id = body.instructor_id.unwrap_or(existing.instructor_id);
+    let capacity = body.capacity.unwrap_or(existing.capacity);
+    let active: i64 = body
+        .active
+        .map(|a| if a { 1 } else { 0 })
+        .unwrap_or(existing.active);
+
+    sqlx::query(
+        "UPDATE class_templates SET weekday=?, start_time=?, duration_minutes=?, instructor_id=?, capacity=?, active=? WHERE id=?",
+    )
+    .bind(weekday)
+    .bind(&start_time)
+    .bind(duration_minutes)
+    .bind(instructor_id)
+    .bind(capacity)
+    .bind(active)
+    .bind(id)
+    .execute(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+    })?;
+
+    Ok(Json(TemplateResponse {
+        id,
+        weekday,
+        start_time,
+        duration_minutes,
+        instructor_id,
+        capacity,
+        active: active != 0,
+    }))
+}
+
 // ---------- Cancel class ----------
 
 async fn cancel_class(
@@ -313,6 +410,53 @@ async fn create_instructor(
     ))
 }
 
+async fn update_instructor(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateInstructorRequest>,
+) -> Result<Json<InstructorRow>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_manage_users() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin access required"})),
+        ));
+    }
+
+    let existing =
+        sqlx::query_as::<_, InstructorRow>("SELECT id, name, active FROM instructors WHERE id = ?")
+            .bind(id)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                )
+            })?;
+
+    let name = body.name.unwrap_or(existing.name);
+    let active: i64 = body
+        .active
+        .map(|a| if a { 1 } else { 0 })
+        .unwrap_or(existing.active);
+
+    sqlx::query("UPDATE instructors SET name=?, active=? WHERE id=?")
+        .bind(&name)
+        .bind(active)
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
+
+    Ok(Json(InstructorRow { id, name, active }))
+}
+
 // ---------- Service handlers ----------
 
 async fn list_services(
@@ -368,6 +512,61 @@ async fn create_service(
             active: 1,
         }),
     ))
+}
+
+async fn update_service(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateServiceRequest>,
+) -> Result<Json<ServiceRow>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_manage_users() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin access required"})),
+        ));
+    }
+
+    let existing = sqlx::query_as::<_, ServiceRow>(
+        "SELECT id, name, default_price, active FROM services WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+    })?;
+
+    let name = body.name.unwrap_or(existing.name);
+    let default_price = body.default_price.unwrap_or(existing.default_price);
+    let active: i64 = body
+        .active
+        .map(|a| if a { 1 } else { 0 })
+        .unwrap_or(existing.active);
+
+    sqlx::query("UPDATE services SET name=?, default_price=?, active=? WHERE id=?")
+        .bind(&name)
+        .bind(default_price)
+        .bind(active)
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
+
+    Ok(Json(ServiceRow {
+        id,
+        name,
+        default_price,
+        active,
+    }))
 }
 
 // ---------- Settings handlers ----------
