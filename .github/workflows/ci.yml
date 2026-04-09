@@ -25,13 +25,12 @@ jobs:
             exit 1
           fi
 
-      - name: Check for continue-on-error
+      - name: Ban continue-on-error in CI
         run: |
-          PATTERN='continue-on-error: true'
-          MATCHES=$(grep -rn "$PATTERN" .github/workflows/ | grep -v 'Check for continue-on-error' || true)
-          if [ -n "$MATCHES" ]; then
-            echo "$MATCHES"
-            echo "ERROR: Found continue-on-error: true in workflows."
+          # Use a regex that won't match this step's own text
+          FOUND=$(grep -rn 'continue-on-error:.*true' .github/workflows/ | grep -v 'Ban continue-on-error' | grep -v '^\s*#' || true)
+          if [ -n "$FOUND" ]; then
+            echo "$FOUND"
             exit 1
           fi
 
