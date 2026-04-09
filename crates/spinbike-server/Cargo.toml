@@ -5,3 +5,25 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+spinbike-core = { workspace = true }
+axum = { workspace = true }
+tower-http = { workspace = true }
+tokio = { workspace = true }
+sqlx = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+futures = { workspace = true }
+chrono = { workspace = true }
+rust-embed = { version = "8", features = ["include-exclude"] }
+mime_guess = "2"
+jsonwebtoken = "9"
+argon2 = "0.5"
+rand = "0.8"
+
+[[bin]]
+name = "spinbike-server"
+path = "src/bin/server.rs"
