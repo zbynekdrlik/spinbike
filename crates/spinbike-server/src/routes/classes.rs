@@ -48,9 +48,21 @@ pub struct BookingResponse {
     pub user_id: i64,
 }
 
+/// A participant in a class (booking joined with user info).
+#[derive(Serialize)]
+pub struct ParticipantResponse {
+    pub booking_id: i64,
+    pub user_name: String,
+    pub user_email: String,
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/classes", get(list_classes))
+        .route(
+            "/api/classes/{template_id}/{date}/participants",
+            get(list_participants),
+        )
         .route("/api/bookings", post(create_booking))
         .route("/api/bookings/{id}", delete(cancel_booking))
         .route("/api/my/bookings", get(my_bookings))
@@ -137,6 +149,55 @@ async fn list_classes(
     }
 
     Ok(Json(occurrences))
+}
+
+/// Staff-only endpoint: list participants for a specific class occurrence.
+async fn list_participants(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path((template_id, date)): Path<(i64, String)>,
+) -> Result<Json<Vec<ParticipantResponse>>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_cancel_any_booking() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Staff access required"})),
+        ));
+    }
+
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        booking_id: i64,
+        user_name: String,
+        user_email: String,
+    }
+
+    let rows = sqlx::query_as::<_, Row>(
+        "SELECT b.id AS booking_id, u.name AS user_name, u.email AS user_email
+         FROM bookings b
+         JOIN users u ON u.id = b.user_id
+         WHERE b.template_id = ? AND b.date = ? AND b.cancelled_at IS NULL
+         ORDER BY b.created_at",
+    )
+    .bind(template_id)
+    .bind(&date)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": e.to_string()})),
+        )
+    })?;
+
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| ParticipantResponse {
+                booking_id: r.booking_id,
+                user_name: r.user_name,
+                user_email: r.user_email,
+            })
+            .collect(),
+    ))
 }
 
 async fn create_booking(

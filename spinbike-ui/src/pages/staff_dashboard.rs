@@ -5,6 +5,14 @@ use web_sys::HtmlInputElement;
 use crate::api;
 use crate::pages::schedule::ClassSlot;
 
+#[derive(Debug, Clone, serde::Deserialize)]
+#[allow(dead_code)]
+struct Participant {
+    booking_id: i64,
+    user_name: String,
+    user_email: String,
+}
+
 fn current_week_range() -> (String, String) {
     let now = js_sys::Date::new_0();
     let year = now.get_full_year() as u32;
@@ -134,6 +142,22 @@ pub fn StaffDashboardPage() -> impl IntoView {
                     view! { <span class="badge badge-cancelled">"Cancelled"</span> }.into_any()
                 };
 
+                // Fetch participants for this class
+                let (participants, set_participants) = signal(Vec::<Participant>::new());
+                let date_p = date.clone();
+                {
+                    let date_p = date_p.clone();
+                    spawn_local(async move {
+                        if let Ok(data) = api::get::<Vec<Participant>>(
+                            &format!("/api/classes/{template_id}/{date_p}/participants"),
+                        )
+                        .await
+                        {
+                            set_participants.set(data);
+                        }
+                    });
+                }
+
                 view! {
                     <div>
                         <div class=card_class>
@@ -144,6 +168,42 @@ pub fn StaffDashboardPage() -> impl IntoView {
                             <div class="class-action">
                                 {actions}
                             </div>
+                        </div>
+                        <div class="participants-list" style="margin-left:8px;margin-bottom:8px">
+                            {move || {
+                                let list = participants.get();
+                                if list.is_empty() {
+                                    return view! { <span></span> }.into_any();
+                                }
+                                let tags: Vec<_> = list.iter().map(|p| {
+                                    let bid = p.booking_id;
+                                    let name = p.user_name.clone();
+                                    let set_p = set_participants;
+                                    let set_v = set_ver;
+                                    let on_cancel = move |_| {
+                                        spawn_local(async move {
+                                            if api::delete(&format!("/api/bookings/{bid}")).await.is_ok() {
+                                                set_p.update(|list| list.retain(|pp| pp.booking_id != bid));
+                                                set_v.update(|v| *v += 1);
+                                            }
+                                        });
+                                    };
+                                    view! {
+                                        <span class="badge" style="display:inline-flex;align-items:center;gap:4px;margin:2px 4px;padding:2px 8px;background:#e0e7ff;border-radius:12px;font-size:0.8rem">
+                                            {name}
+                                            <button
+                                                class="btn-icon"
+                                                style="background:none;border:none;cursor:pointer;font-size:0.8rem;color:#dc2626;padding:0 2px"
+                                                on:click=on_cancel
+                                                title="Cancel booking"
+                                            >
+                                                "\u{2715}"
+                                            </button>
+                                        </span>
+                                    }.into_any()
+                                }).collect();
+                                view! { <div>{tags}</div> }.into_any()
+                            }}
                         </div>
                         {move || {
                             if walkin_open.get() && !cancelled {
