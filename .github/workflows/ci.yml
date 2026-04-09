@@ -27,7 +27,10 @@ jobs:
 
       - name: Check for continue-on-error
         run: |
-          if grep -rn 'continue-on-error:\s*true' .github/workflows/; then
+          PATTERN='continue-on-error: true'
+          MATCHES=$(grep -rn "$PATTERN" .github/workflows/ | grep -v 'Check for continue-on-error' || true)
+          if [ -n "$MATCHES" ]; then
+            echo "$MATCHES"
             echo "ERROR: Found continue-on-error: true in workflows."
             exit 1
           fi
