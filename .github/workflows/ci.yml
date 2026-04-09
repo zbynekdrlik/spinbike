@@ -109,6 +109,57 @@ jobs:
           path: spinbike-ui/dist/
           retention-days: 7
 
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [test, build-wasm]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Download WASM dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: spinbike-ui-dist
+          path: spinbike-ui/dist/
+
+      - name: Build server
+        run: cargo build --bin spinbike-server --release
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright
+        run: cd e2e && npm ci && npx playwright install --with-deps chromium
+
+      - name: Start server
+        run: |
+          PORT=8099 DATABASE_PATH=/tmp/spinbike-e2e.db JWT_SECRET=ci-test ./target/release/spinbike-server &
+
+      - name: Wait for server
+        run: |
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:8099 > /dev/null 2>&1; then
+              echo "Server ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Server failed to start"
+          exit 1
+
+      - name: Run E2E tests
+        run: cd e2e && npx playwright test
+        env:
+          DATABASE_PATH: /tmp/spinbike-e2e.db
+
   check-version-bump:
     name: Version Bump Check
     runs-on: ubuntu-latest
