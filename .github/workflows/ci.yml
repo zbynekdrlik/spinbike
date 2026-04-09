@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  push:
+    branches: [main, dev]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: ${{ github.event_name == 'push' }}
+
+jobs:
+  test-integrity:
+    name: Test Integrity
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for ignored tests
+        run: |
+          if grep -rn '#\[ignore\]' crates/ --include='*.rs'; then
+            echo "ERROR: Found #[ignore] attributes in test code. All tests must run."
+            exit 1
+          fi
+
+      - name: Check for continue-on-error
+        run: |
+          if grep -rn 'continue-on-error:\s*true' .github/workflows/; then
+            echo "ERROR: Found continue-on-error: true in workflows."
+            exit 1
+          fi
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: test-integrity
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Create placeholder dist for rust-embed
+        run: mkdir -p spinbike-ui/dist && touch spinbike-ui/dist/index.html
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Create placeholder dist for rust-embed
+        run: mkdir -p spinbike-ui/dist && touch spinbike-ui/dist/index.html
+
+      - name: Run tests
+        run: cargo test -p spinbike-core -p spinbike-server
+
+  build-wasm:
+    name: Build WASM (UI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: spinbike-ui
+          cache-on-failure: true
+
+      - name: Install Trunk
+        uses: jetli/trunk-action@v0.5.0
+
+      - name: Build UI
+        run: cd spinbike-ui && trunk build --release
+
+      - name: Upload dist artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: spinbike-ui-dist
+          path: spinbike-ui/dist/
+          retention-days: 7
+
+  check-version-bump:
+    name: Version Bump Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Compare VERSION with main
+        run: |
+          pr_version=$(cat VERSION)
+          git checkout origin/main -- VERSION
+          main_version=$(cat VERSION)
+          git checkout HEAD -- VERSION
+
+          echo "PR version:   $pr_version"
+          echo "Main version: $main_version"
+
+          if [ "$pr_version" = "$main_version" ]; then
+            echo "ERROR: VERSION ($pr_version) has not been bumped from main ($main_version)."
+            exit 1
+          fi
+
+          # Simple semver comparison: PR version must be strictly greater
+          printf '%s\n%s\n' "$main_version" "$pr_version" | sort -V | head -n1 | grep -qx "$main_version"
+          if [ $? -ne 0 ]; then
+            echo "ERROR: PR version ($pr_version) is not greater than main version ($main_version)."
+            exit 1
+          fi
+
+          if [ "$pr_version" = "$main_version" ]; then
+            echo "ERROR: Versions are equal after sort check."
+            exit 1
+          fi
+
+          echo "OK: Version bumped from $main_version to $pr_version."
