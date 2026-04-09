@@ -3,6 +3,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
 
 use crate::api;
+use crate::i18n::{self, Lang};
 
 #[derive(serde::Serialize)]
 struct LinkReq {
@@ -19,6 +20,7 @@ struct CardResp {
 
 #[component]
 pub fn LinkCardPage() -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let barcode_ref = NodeRef::<leptos::html::Input>::new();
     let (error, set_error) = signal(String::new());
     let (success_msg, set_success_msg) = signal(String::new());
@@ -56,7 +58,7 @@ pub fn LinkCardPage() -> impl IntoView {
 
     view! {
         <div style="max-width:400px;margin:0 auto">
-            <h1 class="page-title">"Link Card"</h1>
+            <h1 class="page-title">{move || i18n::t(lang.get(), "link_card")}</h1>
 
             {move || {
                 let e = error.get();
@@ -78,11 +80,11 @@ pub fn LinkCardPage() -> impl IntoView {
 
             <form on:submit=on_submit>
                 <div class="form-group">
-                    <label>"Card Barcode"</label>
-                    <input type="text" class="form-control" node_ref=barcode_ref placeholder="Scan or enter barcode" required />
+                    <label>{move || i18n::t(lang.get(), "card_barcode")}</label>
+                    <input type="text" class="form-control" node_ref=barcode_ref placeholder=move || i18n::t(lang.get(), "scan_or_enter") required />
                 </div>
                 <button type="submit" class="btn btn-primary btn-block" disabled=move || loading.get()>
-                    {move || if loading.get() { "Linking..." } else { "Link Card" }}
+                    {move || if loading.get() { i18n::t(lang.get(), "linking") } else { i18n::t(lang.get(), "link_card") }}
                 </button>
             </form>
         </div>

@@ -5,6 +5,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::api;
 use crate::components::class_card::{ClassCard, ClassCardProps};
 use crate::components::day_picker::{DayPicker, DayPickerProps};
+use crate::i18n::{self, Lang};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ClassSlot {
@@ -52,6 +53,7 @@ fn current_week_dates() -> (Vec<(i32, u32, u32)>, Vec<String>) {
 
 #[component]
 pub fn SchedulePage() -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (dates, date_strs) = current_week_dates();
     let date_strs_stored = date_strs.clone();
 
@@ -117,7 +119,7 @@ pub fn SchedulePage() -> impl IntoView {
     let date_strs_for_view = date_strs_stored.clone();
 
     view! {
-        <h1 class="page-title">"Class Schedule"</h1>
+        <h1 class="page-title">{move || i18n::t(lang.get(), "schedule")}</h1>
         {DayPicker(DayPickerProps { days: dates, selected_idx, set_selected_idx })}
 
         {move || {
@@ -144,7 +146,7 @@ pub fn SchedulePage() -> impl IntoView {
 
             if day_classes.is_empty() {
                 return view! {
-                    <div class="empty-state">"No classes scheduled for this day"</div>
+                    <div class="empty-state">{move || i18n::t(lang.get(), "no_classes_today")}</div>
                 }.into_any();
             }
 

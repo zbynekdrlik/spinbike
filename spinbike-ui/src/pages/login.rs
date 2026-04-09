@@ -4,6 +4,7 @@ use web_sys::HtmlInputElement;
 
 use crate::api;
 use crate::auth::{self, AuthData, UserInfo};
+use crate::i18n::{self, Lang};
 
 #[derive(serde::Serialize)]
 struct LoginReq {
@@ -59,6 +60,7 @@ fn save_and_redirect(resp: AuthResp) {
 
 #[component]
 pub fn LoginPage() -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let email_ref = NodeRef::<leptos::html::Input>::new();
     let pass_ref = NodeRef::<leptos::html::Input>::new();
     let (error, set_error) = signal(String::new());
@@ -89,7 +91,7 @@ pub fn LoginPage() -> impl IntoView {
 
     view! {
         <div style="max-width:400px;margin:40px auto">
-            <h1 class="page-title">"Login"</h1>
+            <h1 class="page-title">{move || i18n::t(lang.get(), "login")}</h1>
             {move || {
                 let e = error.get();
                 if e.is_empty() {
@@ -100,19 +102,19 @@ pub fn LoginPage() -> impl IntoView {
             }}
             <form on:submit=on_submit>
                 <div class="form-group">
-                    <label>"Email"</label>
+                    <label>{move || i18n::t(lang.get(), "email")}</label>
                     <input type="email" class="form-control" node_ref=email_ref required />
                 </div>
                 <div class="form-group">
-                    <label>"Password"</label>
+                    <label>{move || i18n::t(lang.get(), "password")}</label>
                     <input type="password" class="form-control" node_ref=pass_ref required />
                 </div>
                 <button type="submit" class="btn btn-primary btn-block" disabled=move || loading.get()>
-                    {move || if loading.get() { "Logging in..." } else { "Login" }}
+                    {move || if loading.get() { i18n::t(lang.get(), "logging_in") } else { i18n::t(lang.get(), "login") }}
                 </button>
             </form>
             <p class="text-center text-muted mt-2">
-                "Don't have an account? " <a href="/register">"Register"</a>
+                {move || i18n::t(lang.get(), "dont_have_account")} <a href="/register">{move || i18n::t(lang.get(), "register")}</a>
             </p>
         </div>
     }
@@ -120,6 +122,7 @@ pub fn LoginPage() -> impl IntoView {
 
 #[component]
 pub fn RegisterPage() -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let name_ref = NodeRef::<leptos::html::Input>::new();
     let email_ref = NodeRef::<leptos::html::Input>::new();
     let pass_ref = NodeRef::<leptos::html::Input>::new();
@@ -152,7 +155,7 @@ pub fn RegisterPage() -> impl IntoView {
 
     view! {
         <div style="max-width:400px;margin:40px auto">
-            <h1 class="page-title">"Register"</h1>
+            <h1 class="page-title">{move || i18n::t(lang.get(), "register")}</h1>
             {move || {
                 let e = error.get();
                 if e.is_empty() {
@@ -163,27 +166,27 @@ pub fn RegisterPage() -> impl IntoView {
             }}
             <form on:submit=on_submit>
                 <div class="form-group">
-                    <label>"Name"</label>
+                    <label>{move || i18n::t(lang.get(), "name")}</label>
                     <input type="text" class="form-control" node_ref=name_ref required />
                 </div>
                 <div class="form-group">
-                    <label>"Email"</label>
+                    <label>{move || i18n::t(lang.get(), "email")}</label>
                     <input type="email" class="form-control" node_ref=email_ref required />
                 </div>
                 <div class="form-group">
-                    <label>"Password"</label>
+                    <label>{move || i18n::t(lang.get(), "password")}</label>
                     <input type="password" class="form-control" node_ref=pass_ref required minlength="6" />
                 </div>
                 <div class="form-group">
-                    <label>"Phone (optional)"</label>
+                    <label>{move || i18n::t(lang.get(), "phone_optional")}</label>
                     <input type="tel" class="form-control" node_ref=phone_ref />
                 </div>
                 <button type="submit" class="btn btn-primary btn-block" disabled=move || loading.get()>
-                    {move || if loading.get() { "Creating account..." } else { "Register" }}
+                    {move || if loading.get() { i18n::t(lang.get(), "creating_account") } else { i18n::t(lang.get(), "register") }}
                 </button>
             </form>
             <p class="text-center text-muted mt-2">
-                "Already have an account? " <a href="/login">"Login"</a>
+                {move || i18n::t(lang.get(), "already_have_account")} <a href="/login">{move || i18n::t(lang.get(), "login")}</a>
             </p>
         </div>
     }

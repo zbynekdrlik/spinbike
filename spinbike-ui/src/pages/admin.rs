@@ -3,6 +3,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{HtmlInputElement, HtmlSelectElement};
 
 use crate::api;
+use crate::i18n::{self, Lang, ADMIN_TAB_KEYS, WEEKDAY_KEYS};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[allow(dead_code)]
@@ -46,29 +47,27 @@ struct SettingRow {
     value: String,
 }
 
-static WEEKDAY_NAMES: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
-
 #[component]
 pub fn AdminPage() -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (tab, set_tab) = signal("templates".to_string());
 
-    let tabs = ["templates", "instructors", "services", "users", "settings"];
-    let tab_buttons: Vec<_> = tabs.iter().map(|t| {
-        let t = t.to_string();
-        let t2 = t.clone();
-        let t3 = t.clone();
+    let tab_buttons: Vec<_> = ADMIN_TAB_KEYS.iter().map(|(id, key)| {
+        let id = id.to_string();
+        let id2 = id.clone();
+        let key = *key;
         view! {
             <button
-                class=move || if tab.get() == t { "tab-btn active" } else { "tab-btn" }
-                on:click=move |_| set_tab.set(t2.clone())
+                class=move || if tab.get() == id { "tab-btn active" } else { "tab-btn" }
+                on:click=move |_| set_tab.set(id2.clone())
             >
-                {t3}
+                {move || i18n::t(lang.get(), key)}
             </button>
         }
     }).collect();
 
     view! {
-        <h1 class="page-title">"Admin"</h1>
+        <h1 class="page-title">{move || i18n::t(lang.get(), "admin")}</h1>
         <div class="tabs">{tab_buttons}</div>
         {move || {
             match tab.get().as_str() {
@@ -87,6 +86,7 @@ pub fn AdminPage() -> impl IntoView {
 
 #[component]
 fn TemplatesTab() -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (items, set_items) = signal(Vec::<TemplateRow>::new());
     let (loading, set_loading) = signal(true);
     let (ver, set_ver) = signal(0u32);
@@ -130,8 +130,8 @@ fn TemplatesTab() -> impl IntoView {
 
     let weekday_options: Vec<_> = (0..7).map(|i: usize| {
         let val = i.to_string();
-        let name = WEEKDAY_NAMES[i];
-        view! { <option value=val>{name}</option> }
+        let key = WEEKDAY_KEYS[i];
+        view! { <option value=val>{move || i18n::t(lang.get(), key)}</option> }
     }).collect();
 
     view! {
@@ -139,26 +139,26 @@ fn TemplatesTab() -> impl IntoView {
 
         <form class="inline-form mb-2" on:submit=on_create>
             <div class="form-group">
-                <label>"Weekday"</label>
+                <label>{move || i18n::t(lang.get(), "weekday")}</label>
                 <select class="form-control" node_ref=weekday_ref>{weekday_options}</select>
             </div>
             <div class="form-group">
-                <label>"Start Time"</label>
+                <label>{move || i18n::t(lang.get(), "start_time")}</label>
                 <input type="time" class="form-control" node_ref=time_ref required />
             </div>
             <div class="form-group">
-                <label>"Duration"</label>
+                <label>{move || i18n::t(lang.get(), "duration")}</label>
                 <input type="number" class="form-control" node_ref=dur_ref value="45" min="15" step="5" />
             </div>
             <div class="form-group">
-                <label>"Capacity"</label>
+                <label>{move || i18n::t(lang.get(), "capacity")}</label>
                 <input type="number" class="form-control" node_ref=cap_ref value="20" min="1" />
             </div>
             <div class="form-group">
-                <label>"Instructor ID"</label>
-                <input type="number" class="form-control" node_ref=instr_ref placeholder="Optional" />
+                <label>{move || i18n::t(lang.get(), "instructor_id")}</label>
+                <input type="number" class="form-control" node_ref=instr_ref placeholder=move || i18n::t(lang.get(), "optional") />
             </div>
-            <button type="submit" class="btn btn-primary btn-sm">"Create"</button>
+            <button type="submit" class="btn btn-primary btn-sm">{move || i18n::t(lang.get(), "create")}</button>
         </form>
 
         {move || {
@@ -170,7 +170,8 @@ fn TemplatesTab() -> impl IntoView {
                 let tid = t.id;
                 let set_v = set_ver;
                 let set_m = set_msg;
-                let day_name = WEEKDAY_NAMES.get(t.weekday as usize).unwrap_or(&"?").to_string();
+                let weekday_idx = t.weekday as usize;
+                let day_key = WEEKDAY_KEYS.get(weekday_idx).copied().unwrap_or("mon");
                 let time = t.start_time.clone();
                 let dur = format!("{}m", t.duration_minutes);
                 let cap = t.capacity;
@@ -201,7 +202,7 @@ fn TemplatesTab() -> impl IntoView {
                 view! {
                     <tr>
                         <td>{tid}</td>
-                        <td>{day_name}</td>
+                        <td>{move || i18n::t(lang.get(), day_key)}</td>
                         <td>{time}</td>
                         <td>{dur}</td>
                         <td>{cap}</td>
@@ -209,8 +210,8 @@ fn TemplatesTab() -> impl IntoView {
                     </tr>
                     <tr>
                         <td colspan="6">
-                            <button class="btn btn-sm btn-danger" on:click=on_del>"Delete"</button>
-                            <button class="btn btn-sm btn-outline" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>"Edit"</button>
+                            <button class="btn btn-sm btn-danger" on:click=on_del>{move || i18n::t(lang.get(), "delete")}</button>
+                            <button class="btn btn-sm btn-outline" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
                         </td>
                     </tr>
                     {move || {
@@ -220,11 +221,11 @@ fn TemplatesTab() -> impl IntoView {
                                 <tr>
                                     <td colspan="6">
                                         <div class="inline-form" style="display:flex;gap:8px;align-items:center;padding:4px 0">
-                                            <label>"Time"</label>
+                                            <label>{i18n::t(lang.get(), "time")}</label>
                                             <input type="time" class="form-control" style="width:auto" node_ref=edit_time_ref value=time_val />
-                                            <label>"Capacity"</label>
+                                            <label>{i18n::t(lang.get(), "capacity")}</label>
                                             <input type="number" class="form-control" style="width:80px" node_ref=edit_cap_ref value=cap_for_edit min="1" />
-                                            <button class="btn btn-sm btn-primary" on:click=on_save>"Save"</button>
+                                            <button class="btn btn-sm btn-primary" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
                                         </div>
                                     </td>
                                 </tr>
@@ -248,6 +249,7 @@ fn TemplatesTab() -> impl IntoView {
 
 #[component]
 fn InstructorsTab() -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (items, set_items) = signal(Vec::<InstructorRow>::new());
     let (loading, set_loading) = signal(true);
     let (ver, set_ver) = signal(0u32);
@@ -284,10 +286,10 @@ fn InstructorsTab() -> impl IntoView {
         {move || { let m = msg.get(); if m.is_empty() { view! { <span></span> }.into_any() } else { view! { <div class="alert alert-info">{m}</div> }.into_any() } }}
         <form class="inline-form mb-2" on:submit=on_create>
             <div class="form-group">
-                <label>"Name"</label>
+                <label>{move || i18n::t(lang.get(), "name")}</label>
                 <input type="text" class="form-control" node_ref=name_ref required />
             </div>
-            <button type="submit" class="btn btn-primary btn-sm">"Add Instructor"</button>
+            <button type="submit" class="btn btn-primary btn-sm">{move || i18n::t(lang.get(), "add_instructor")}</button>
         </form>
 
         {move || {
@@ -299,8 +301,6 @@ fn InstructorsTab() -> impl IntoView {
                 let iid = i.id;
                 let name = i.name.clone();
                 let is_active = i.active != 0;
-                let active_label = if is_active { "Active" } else { "Inactive" };
-                let toggle_label = if is_active { "Deactivate" } else { "Activate" };
                 let set_v = set_ver;
                 let set_m = set_msg;
                 let (editing, set_editing) = signal(false);
@@ -332,10 +332,10 @@ fn InstructorsTab() -> impl IntoView {
                     <tr>
                         <td>{iid}</td>
                         <td>{name}</td>
-                        <td>{active_label}</td>
+                        <td>{move || if is_active { i18n::t(lang.get(), "active") } else { i18n::t(lang.get(), "inactive") }}</td>
                         <td>
-                            <button class="btn btn-sm btn-outline" on:click=on_toggle>{toggle_label}</button>
-                            <button class="btn btn-sm btn-outline" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>"Edit"</button>
+                            <button class="btn btn-sm btn-outline" on:click=on_toggle>{move || if is_active { i18n::t(lang.get(), "deactivate") } else { i18n::t(lang.get(), "activate") }}</button>
+                            <button class="btn btn-sm btn-outline" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
                         </td>
                     </tr>
                     {move || {
@@ -345,9 +345,9 @@ fn InstructorsTab() -> impl IntoView {
                                 <tr>
                                     <td colspan="4">
                                         <div class="inline-form" style="display:flex;gap:8px;align-items:center;padding:4px 0">
-                                            <label>"Name"</label>
+                                            <label>{i18n::t(lang.get(), "name")}</label>
                                             <input type="text" class="form-control" style="width:auto" node_ref=edit_name_ref value=nval />
-                                            <button class="btn btn-sm btn-primary" on:click=on_save>"Save"</button>
+                                            <button class="btn btn-sm btn-primary" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
                                         </div>
                                     </td>
                                 </tr>
@@ -371,6 +371,7 @@ fn InstructorsTab() -> impl IntoView {
 
 #[component]
 fn ServicesTab() -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (items, set_items) = signal(Vec::<ServiceRow>::new());
     let (loading, set_loading) = signal(true);
     let (ver, set_ver) = signal(0u32);
@@ -409,14 +410,14 @@ fn ServicesTab() -> impl IntoView {
         {move || { let m = msg.get(); if m.is_empty() { view! { <span></span> }.into_any() } else { view! { <div class="alert alert-info">{m}</div> }.into_any() } }}
         <form class="inline-form mb-2" on:submit=on_create>
             <div class="form-group">
-                <label>"Name"</label>
+                <label>{move || i18n::t(lang.get(), "name")}</label>
                 <input type="text" class="form-control" node_ref=name_ref required />
             </div>
             <div class="form-group">
-                <label>"Price (CZK)"</label>
+                <label>{move || i18n::t(lang.get(), "price_czk")}</label>
                 <input type="number" class="form-control" node_ref=price_ref step="1" min="0" required />
             </div>
-            <button type="submit" class="btn btn-primary btn-sm">"Add Service"</button>
+            <button type="submit" class="btn btn-primary btn-sm">{move || i18n::t(lang.get(), "add_service")}</button>
         </form>
 
         {move || {
@@ -429,8 +430,6 @@ fn ServicesTab() -> impl IntoView {
                 let name = s.name.clone();
                 let price = format!("{:.0}", s.default_price);
                 let is_active = s.active != 0;
-                let active_label = if is_active { "Active" } else { "Inactive" };
-                let toggle_label = if is_active { "Deactivate" } else { "Activate" };
                 let set_v = set_ver;
                 let set_m = set_msg;
                 let (editing, set_editing) = signal(false);
@@ -466,10 +465,10 @@ fn ServicesTab() -> impl IntoView {
                         <td>{sid}</td>
                         <td>{name}</td>
                         <td>{price}</td>
-                        <td>{active_label}</td>
+                        <td>{move || if is_active { i18n::t(lang.get(), "active") } else { i18n::t(lang.get(), "inactive") }}</td>
                         <td>
-                            <button class="btn btn-sm btn-outline" on:click=on_toggle>{toggle_label}</button>
-                            <button class="btn btn-sm btn-outline" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>"Edit"</button>
+                            <button class="btn btn-sm btn-outline" on:click=on_toggle>{move || if is_active { i18n::t(lang.get(), "deactivate") } else { i18n::t(lang.get(), "activate") }}</button>
+                            <button class="btn btn-sm btn-outline" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
                         </td>
                     </tr>
                     {move || {
@@ -479,11 +478,11 @@ fn ServicesTab() -> impl IntoView {
                                 <tr>
                                     <td colspan="5">
                                         <div class="inline-form" style="display:flex;gap:8px;align-items:center;padding:4px 0">
-                                            <label>"Name"</label>
+                                            <label>{i18n::t(lang.get(), "name")}</label>
                                             <input type="text" class="form-control" style="width:auto" node_ref=edit_name_ref value=nval />
-                                            <label>"Price"</label>
+                                            <label>{i18n::t(lang.get(), "price")}</label>
                                             <input type="number" class="form-control" style="width:80px" node_ref=edit_price_ref value=price_for_edit step="1" min="0" />
-                                            <button class="btn btn-sm btn-primary" on:click=on_save>"Save"</button>
+                                            <button class="btn btn-sm btn-primary" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
                                         </div>
                                     </td>
                                 </tr>
@@ -507,6 +506,7 @@ fn ServicesTab() -> impl IntoView {
 
 #[component]
 fn UsersTab() -> impl IntoView {
+    let _lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (items, set_items) = signal(Vec::<UserRow>::new());
     let (loading, set_loading) = signal(true);
     let (ver, set_ver) = signal(0u32);
@@ -589,6 +589,7 @@ fn UsersTab() -> impl IntoView {
 
 #[component]
 fn SettingsTab() -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (items, set_items) = signal(Vec::<SettingRow>::new());
     let (loading, set_loading) = signal(true);
     let (ver, set_ver) = signal(0u32);
@@ -627,14 +628,14 @@ fn SettingsTab() -> impl IntoView {
         {move || { let m = msg.get(); if m.is_empty() { view! { <span></span> }.into_any() } else { view! { <div class="alert alert-info">{m}</div> }.into_any() } }}
         <form class="inline-form mb-2" on:submit=on_save>
             <div class="form-group">
-                <label>"Key"</label>
+                <label>{move || i18n::t(lang.get(), "key")}</label>
                 <input type="text" class="form-control" node_ref=key_ref required />
             </div>
             <div class="form-group">
-                <label>"Value"</label>
+                <label>{move || i18n::t(lang.get(), "value")}</label>
                 <input type="text" class="form-control" node_ref=val_ref required />
             </div>
-            <button type="submit" class="btn btn-primary btn-sm">"Save"</button>
+            <button type="submit" class="btn btn-primary btn-sm">{move || i18n::t(lang.get(), "save")}</button>
         </form>
 
         {move || {

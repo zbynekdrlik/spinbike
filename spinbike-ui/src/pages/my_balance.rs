@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
+use crate::i18n::{self, Lang};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct BalanceResp {
@@ -29,6 +30,7 @@ struct TxInfo {
 
 #[component]
 pub fn MyBalancePage() -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (data, set_data) = signal(None::<BalanceResp>);
     let (loading, set_loading) = signal(true);
     let (error, set_error) = signal(String::new());
@@ -48,7 +50,7 @@ pub fn MyBalancePage() -> impl IntoView {
     });
 
     view! {
-        <h1 class="page-title">"My Balance"</h1>
+        <h1 class="page-title">{move || i18n::t(lang.get(), "my_balance")}</h1>
 
         {move || {
             let e = error.get();
@@ -60,26 +62,26 @@ pub fn MyBalancePage() -> impl IntoView {
             }
 
             match data.get() {
-                None => view! { <div class="empty-state">"Unable to load balance"</div> }.into_any(),
+                None => view! { <div class="empty-state">{i18n::t(lang.get(), "unable_to_load")}</div> }.into_any(),
                 Some(balance) => {
                     if balance.cards.is_empty() {
                         view! {
                             <div class="card">
-                                <p class="text-muted">"No card linked to your account."</p>
-                                <a href="/link-card" class="btn btn-primary mt-2">"Link a Card"</a>
+                                <p class="text-muted">{move || i18n::t(lang.get(), "no_card_linked")}</p>
+                                <a href="/link-card" class="btn btn-primary mt-2">{move || i18n::t(lang.get(), "link_a_card")}</a>
                             </div>
                         }.into_any()
                     } else {
                         let card_views: Vec<_> = balance.cards.iter().map(|c| {
                             let barcode = c.barcode.clone();
                             let credit_str = format!("{:.0} CZK", c.credit);
-                            let status = if c.blocked { "BLOCKED" } else { "Active" };
+                            let is_blocked = c.blocked;
                             view! {
                                 <div class="card mb-2">
                                     <div class="flex justify-between items-center">
                                         <div>
                                             <div class="card-title">{format!("Card: {barcode}")}</div>
-                                            <div class="text-muted">{status}</div>
+                                            <div class="text-muted">{move || if is_blocked { i18n::t(lang.get(), "blocked") } else { i18n::t(lang.get(), "active") }}</div>
                                         </div>
                                         <div style="font-size:1.5rem;font-weight:700;color:var(--primary)">
                                             {credit_str}
@@ -90,7 +92,7 @@ pub fn MyBalancePage() -> impl IntoView {
                         }).collect();
 
                         let tx_view = if balance.transactions.is_empty() {
-                            view! { <p class="text-muted mt-2">"No transactions yet."</p> }.into_any()
+                            view! { <p class="text-muted mt-2">{i18n::t(lang.get(), "no_transactions")}</p> }.into_any()
                         } else {
                             let tx_rows: Vec<_> = balance.transactions.iter().map(|tx| {
                                 let date = tx.created_at.clone();
@@ -100,7 +102,7 @@ pub fn MyBalancePage() -> impl IntoView {
                             }).collect();
                             view! {
                                 <div>
-                                    <h2 style="font-size:1rem;font-weight:700;margin:16px 0 8px">"Transactions"</h2>
+                                    <h2 style="font-size:1rem;font-weight:700;margin:16px 0 8px">{i18n::t(lang.get(), "transactions")}</h2>
                                     <table>
                                         <tbody>{tx_rows}</tbody>
                                     </table>

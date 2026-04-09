@@ -3,6 +3,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{HtmlInputElement, HtmlSelectElement};
 
 use crate::api;
+use crate::i18n::{self, Lang};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct CardInfo {
@@ -27,6 +28,7 @@ struct PaymentResp {
 
 #[component]
 pub fn PaymentsPage() -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let barcode_ref = NodeRef::<leptos::html::Input>::new();
     let (card, set_card) = signal(None::<CardInfo>);
     let (services, set_services) = signal(Vec::<ServiceInfo>::new());
@@ -70,14 +72,14 @@ pub fn PaymentsPage() -> impl IntoView {
     };
 
     view! {
-        <h1 class="page-title">"Payments"</h1>
+        <h1 class="page-title">{move || i18n::t(lang.get(), "payments")}</h1>
 
         <form class="inline-form mb-2" on:submit=on_lookup>
             <div class="form-group">
-                <label>"Card Barcode"</label>
-                <input type="text" class="form-control" node_ref=barcode_ref placeholder="Scan barcode" required />
+                <label>{move || i18n::t(lang.get(), "card_barcode_label")}</label>
+                <input type="text" class="form-control" node_ref=barcode_ref placeholder=move || i18n::t(lang.get(), "scan_barcode") required />
             </div>
-            <button type="submit" class="btn btn-primary" disabled=move || loading.get()>"Lookup"</button>
+            <button type="submit" class="btn btn-primary" disabled=move || loading.get()>{move || i18n::t(lang.get(), "lookup")}</button>
         </form>
 
         {move || {
@@ -128,6 +130,7 @@ fn ChargeForm(
     set_msg: WriteSignal<String>,
     set_card: WriteSignal<Option<CardInfo>>,
 ) -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let service_ref = NodeRef::<leptos::html::Select>::new();
     let amount_ref = NodeRef::<leptos::html::Input>::new();
     let (loading, set_loading) = signal(false);
@@ -192,12 +195,12 @@ fn ChargeForm(
 
     view! {
         <div class="card mb-2">
-            <h3 style="font-size:0.95rem;margin-bottom:8px">"Charge"</h3>
+            <h3 style="font-size:0.95rem;margin-bottom:8px">{move || i18n::t(lang.get(), "charge")}</h3>
             <form class="inline-form" on:submit=on_submit>
                 <div class="form-group">
-                    <label>"Service"</label>
+                    <label>{move || i18n::t(lang.get(), "service")}</label>
                     <select class="form-control" node_ref=service_ref on:change=on_service_change>
-                        <option value="">"-- Select --"</option>
+                        <option value="">{move || i18n::t(lang.get(), "select_service")}</option>
                         {move || {
                             services.get().iter().map(|s| {
                                 let val = s.id.to_string();
@@ -208,10 +211,10 @@ fn ChargeForm(
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>"Amount (CZK)"</label>
+                    <label>{move || i18n::t(lang.get(), "amount_czk")}</label>
                     <input type="number" class="form-control" node_ref=amount_ref step="1" min="1" required />
                 </div>
-                <button type="submit" class="btn btn-sm btn-primary" disabled=move || loading.get()>"Charge"</button>
+                <button type="submit" class="btn btn-sm btn-primary" disabled=move || loading.get()>{move || i18n::t(lang.get(), "charge")}</button>
             </form>
         </div>
     }
@@ -223,6 +226,7 @@ fn StornoForm(
     set_msg: WriteSignal<String>,
     set_card: WriteSignal<Option<CardInfo>>,
 ) -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let amount_ref = NodeRef::<leptos::html::Input>::new();
     let (loading, set_loading) = signal(false);
 
@@ -262,13 +266,13 @@ fn StornoForm(
 
     view! {
         <div class="card">
-            <h3 style="font-size:0.95rem;margin-bottom:8px">"Storno (Refund)"</h3>
+            <h3 style="font-size:0.95rem;margin-bottom:8px">{move || i18n::t(lang.get(), "storno_refund")}</h3>
             <form class="inline-form" on:submit=on_submit>
                 <div class="form-group">
-                    <label>"Amount (CZK)"</label>
+                    <label>{move || i18n::t(lang.get(), "amount_czk")}</label>
                     <input type="number" class="form-control" node_ref=amount_ref step="1" min="1" required />
                 </div>
-                <button type="submit" class="btn btn-sm btn-danger" disabled=move || loading.get()>"Storno"</button>
+                <button type="submit" class="btn btn-sm btn-danger" disabled=move || loading.get()>{move || i18n::t(lang.get(), "storno")}</button>
             </form>
         </div>
     }

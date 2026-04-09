@@ -3,6 +3,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
 
 use crate::api;
+use crate::i18n::{self, Lang};
 use crate::pages::schedule::ClassSlot;
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -45,6 +46,7 @@ fn current_week_range() -> (String, String) {
 
 #[component]
 pub fn StaffDashboardPage() -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (classes, set_classes) = signal(Vec::<ClassSlot>::new());
     let (loading, set_loading) = signal(true);
     let (error, set_error) = signal(String::new());
@@ -67,7 +69,7 @@ pub fn StaffDashboardPage() -> impl IntoView {
     });
 
     view! {
-        <h1 class="page-title">"Staff Dashboard"</h1>
+        <h1 class="page-title">{move || i18n::t(lang.get(), "staff_dashboard")}</h1>
 
         {move || {
             let e = error.get();
@@ -85,7 +87,7 @@ pub fn StaffDashboardPage() -> impl IntoView {
 
             let list = classes.get();
             if list.is_empty() {
-                return view! { <div class="empty-state">"No classes this week"</div> }.into_any();
+                return view! { <div class="empty-state">{i18n::t(lang.get(), "no_classes_week")}</div> }.into_any();
             }
 
             let cards: Vec<_> = list.iter().map(|slot| {
@@ -103,7 +105,8 @@ pub fn StaffDashboardPage() -> impl IntoView {
                 };
 
                 let time_label = format!("{} {}", slot.date, slot.start_time);
-                let spots_label = format!("{}/{} booked", slot.booked, slot.capacity);
+                let booked = slot.booked;
+                let capacity = slot.capacity;
 
                 let (cancel_loading, set_cancel_loading) = signal(false);
                 let (walkin_open, set_walkin_open) = signal(false);
@@ -131,15 +134,15 @@ pub fn StaffDashboardPage() -> impl IntoView {
                     view! {
                         <div class="flex gap-1">
                             <button class="btn btn-sm btn-outline" on:click=move |_| set_walkin_open.update(|v| *v = !*v)>
-                                "+ Walk-in"
+                                {move || i18n::t(lang.get(), "add_walk_in")}
                             </button>
                             <button class="btn btn-sm btn-danger" on:click=on_cancel_class disabled=move || cancel_loading.get()>
-                                "Cancel Class"
+                                {move || i18n::t(lang.get(), "cancel_class")}
                             </button>
                         </div>
                     }.into_any()
                 } else {
-                    view! { <span class="badge badge-cancelled">"Cancelled"</span> }.into_any()
+                    view! { <span class="badge badge-cancelled">{move || i18n::t(lang.get(), "cancelled")}</span> }.into_any()
                 };
 
                 // Fetch participants for this class
@@ -163,7 +166,7 @@ pub fn StaffDashboardPage() -> impl IntoView {
                         <div class=card_class>
                             <div class="class-info">
                                 <div class="class-time">{time_label}</div>
-                                <div class="class-spots">{spots_label}</div>
+                                <div class="class-spots">{move || i18n::tf(lang.get(), "booked_format", &[&booked.to_string(), &capacity.to_string()])}</div>
                             </div>
                             <div class="class-action">
                                 {actions}
@@ -195,7 +198,7 @@ pub fn StaffDashboardPage() -> impl IntoView {
                                                 class="btn-icon"
                                                 style="background:none;border:none;cursor:pointer;font-size:0.8rem;color:#dc2626;padding:0 2px"
                                                 on:click=on_cancel
-                                                title="Cancel booking"
+                                                title=move || i18n::t(lang.get(), "cancel_booking")
                                             >
                                                 "\u{2715}"
                                             </button>
@@ -235,6 +238,7 @@ fn WalkinForm(
     date: String,
     #[prop(into)] on_done: Callback<()>,
 ) -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let uid_ref = NodeRef::<leptos::html::Input>::new();
     let (err, set_err) = signal(String::new());
     let (loading, set_loading) = signal(false);
@@ -250,7 +254,7 @@ fn WalkinForm(
             .unwrap_or_default();
         let user_id: i64 = user_id_str.parse().unwrap_or(0);
         if user_id == 0 {
-            set_err.set("Enter a valid user ID".into());
+            set_err.set(i18n::t(lang.get_untracked(), "enter_valid_user_id").to_string());
             return;
         }
 
@@ -291,11 +295,11 @@ fn WalkinForm(
         <div class="card" style="margin-left:20px;margin-top:-8px">
             <form class="inline-form" on:submit=on_submit>
                 <div class="form-group">
-                    <label>"User ID"</label>
-                    <input type="number" class="form-control" node_ref=uid_ref placeholder="User ID" required />
+                    <label>{move || i18n::t(lang.get(), "user_id")}</label>
+                    <input type="number" class="form-control" node_ref=uid_ref placeholder=move || i18n::t(lang.get(), "user_id") required />
                 </div>
                 <button type="submit" class="btn btn-sm btn-primary" disabled=move || loading.get()>
-                    {move || if loading.get() { "..." } else { "Book" }}
+                    {move || if loading.get() { "..." } else { i18n::t(lang.get(), "book") }}
                 </button>
             </form>
             {move || {

@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
+use crate::i18n::{self, Lang};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[allow(dead_code)]
@@ -14,6 +15,7 @@ struct BookingRow {
 
 #[component]
 pub fn MyBookingsPage() -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (bookings, set_bookings) = signal(Vec::<BookingRow>::new());
     let (loading, set_loading) = signal(true);
     let (error, set_error) = signal(String::new());
@@ -35,7 +37,7 @@ pub fn MyBookingsPage() -> impl IntoView {
     });
 
     view! {
-        <h1 class="page-title">"My Bookings"</h1>
+        <h1 class="page-title">{move || i18n::t(lang.get(), "my_bookings")}</h1>
 
         {move || {
             let e = error.get();
@@ -53,7 +55,7 @@ pub fn MyBookingsPage() -> impl IntoView {
 
             let list = bookings.get();
             if list.is_empty() {
-                return view! { <div class="empty-state">"No upcoming bookings"</div> }.into_any();
+                return view! { <div class="empty-state">{move || i18n::t(lang.get(), "no_bookings")}</div> }.into_any();
             }
 
             let cards: Vec<_> = list.iter().map(|b| {
@@ -83,7 +85,7 @@ pub fn MyBookingsPage() -> impl IntoView {
                         <div class="card-header">
                             <div class="card-title">{title}</div>
                             <button class="btn btn-sm btn-danger" on:click=on_cancel disabled=move || cancel_loading.get()>
-                                {move || if cancel_loading.get() { "..." } else { "Cancel" }}
+                                {move || if cancel_loading.get() { "..." } else { i18n::t(lang.get(), "cancel") }}
                             </button>
                         </div>
                         {move || {
