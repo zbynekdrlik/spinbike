@@ -9,13 +9,16 @@ export function setupConsoleCheck(page: Page): string[] {
     page.on('console', (msg) => {
         if (msg.type() === 'error' || msg.type() === 'warning') {
             const text = msg.text();
-            // Ignore only truly benign browser-level warnings
+            // Ignore benign browser-level warnings and expected 4xx responses
+            // (tests intentionally trigger 401/403/409 — those are not bugs)
+            // 5xx errors are NOT filtered — those indicate real server bugs
             if (
                 text.includes('SharedArrayBuffer') ||
                 text.includes('wasm') ||
                 text.includes('integrity') ||
                 text.includes('subresource integrity') ||
-                text.includes('crbug.com')
+                text.includes('crbug.com') ||
+                /the server responded with a status of 4\d\d/.test(text)
             ) {
                 return;
             }
