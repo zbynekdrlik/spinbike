@@ -21,6 +21,14 @@ pub async fn create_card(pool: &SqlitePool, barcode: &str) -> Result<i64> {
     Ok(id)
 }
 
+pub async fn list_all_cards(pool: &SqlitePool) -> Result<Vec<CardRow>> {
+    let cards = sqlx::query_as::<_, CardRow>("SELECT * FROM cards ORDER BY barcode")
+        .fetch_all(pool)
+        .await
+        .context("Failed to list cards")?;
+    Ok(cards)
+}
+
 pub async fn get_card_by_barcode(pool: &SqlitePool, barcode: &str) -> Result<Option<CardRow>> {
     let card = sqlx::query_as::<_, CardRow>("SELECT * FROM cards WHERE barcode = ?")
         .bind(barcode)

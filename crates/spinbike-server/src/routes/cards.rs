@@ -74,12 +74,29 @@ impl From<&db::CardRow> for CardResponse {
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/api/cards", get(list_cards))
         .route("/api/cards/link", post(link_card))
         .route("/api/cards/lookup/{barcode}", get(lookup_card))
         .route("/api/cards/activate", post(activate_card))
         .route("/api/cards/topup", post(topup_card))
         .route("/api/cards/block", post(block_card))
         .route("/api/my/balance", get(my_balance))
+}
+
+async fn list_cards(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<Vec<CardResponse>>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_manage_cards() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Staff only"})),
+        ));
+    }
+    let cards = db::list_all_cards(&state.pool)
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(cards.iter().map(CardResponse::from).collect()))
 }
 
 async fn link_card(

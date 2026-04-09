@@ -22,6 +22,20 @@ pub fn CardOpsPage() -> impl IntoView {
     let (error, set_error) = signal(String::new());
     let (loading, set_loading) = signal(false);
     let (msg, set_msg) = signal(String::new());
+    let (all_cards, set_all_cards) = signal(Vec::<CardInfo>::new());
+    let (cards_loading, set_cards_loading) = signal(true);
+
+    // Load all cards on mount
+    spawn_local({
+        let set_all_cards = set_all_cards.clone();
+        async move {
+            match api::get::<Vec<CardInfo>>("/api/cards").await {
+                Ok(cards) => set_all_cards.set(cards),
+                Err(_) => {} // silently fail — user may not be staff
+            }
+            set_cards_loading.set(false);
+        }
+    });
 
     let on_lookup = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
@@ -114,6 +128,56 @@ pub fn CardOpsPage() -> impl IntoView {
         <div class="mt-3">
             <h2 style="font-size:1rem;font-weight:700;margin-bottom:8px">"Activate New Card"</h2>
             {ActivateForm(ActivateFormProps { set_msg, set_card })}
+        </div>
+
+        <div class="mt-3">
+            <h2 style="font-size:1rem;font-weight:700;margin-bottom:8px">"All Member Cards"</h2>
+            {move || {
+                if cards_loading.get() {
+                    return view! { <p class="text-muted">"Loading cards..."</p> }.into_any();
+                }
+                let cards = all_cards.get();
+                if cards.is_empty() {
+                    return view! { <p class="text-muted">"No cards found"</p> }.into_any();
+                }
+                view! {
+                    <div style="overflow-x:auto;">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>"Barcode"</th>
+                                    <th>"Credit"</th>
+                                    <th>"Status"</th>
+                                    <th>"Linked"</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {cards.into_iter().map(|c| {
+                                    let barcode = c.barcode.clone();
+                                    let credit = format!("{:.2} EUR", c.credit);
+                                    let status = if c.blocked { "Blocked" } else { "Active" };
+                                    let status_class = if c.blocked { "text-danger" } else { "text-success" };
+                                    let linked = if c.user_id.is_some() { "Yes" } else { "No" };
+                                    let bc = c.barcode.clone();
+                                    view! {
+                                        <tr style="cursor:pointer" on:click=move |_| {
+                                            if let Some(input) = barcode_ref.get() {
+                                                let el: &HtmlInputElement = &input;
+                                                el.set_value(&bc);
+                                            }
+                                        }>
+                                            <td><code>{barcode}</code></td>
+                                            <td>{credit}</td>
+                                            <td class=status_class>{status}</td>
+                                            <td>{linked}</td>
+                                        </tr>
+                                    }
+                                }).collect::<Vec<_>>()}
+                            </tbody>
+                        </table>
+                    </div>
+                }.into_any()
+            }}
         </div>
     }
 }

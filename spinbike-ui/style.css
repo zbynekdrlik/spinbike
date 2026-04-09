@@ -497,3 +497,11 @@ th {
         flex-direction: column;
     }
 }
+
+/* Data tables */
+.data-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.data-table th { text-align: left; padding: 8px 10px; background: var(--surface); color: var(--muted); border-bottom: 1px solid var(--border); font-weight: 600; }
+.data-table td { padding: 6px 10px; border-bottom: 1px solid var(--border); }
+.data-table tr:hover { background: var(--surface-hover); }
+.text-success { color: var(--accent); }
+.text-danger { color: var(--danger); }
