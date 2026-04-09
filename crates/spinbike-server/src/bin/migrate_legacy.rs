@@ -65,8 +65,8 @@ fn export_table(mdb_path: &PathBuf, table: &str) -> Result<String> {
         bail!("mdb-export failed for table '{table}': {stderr}");
     }
 
-    Ok(String::from_utf8(output.stdout)
-        .with_context(|| format!("mdb-export output for '{table}' is not valid UTF-8"))?)
+    String::from_utf8(output.stdout)
+        .with_context(|| format!("mdb-export output for '{table}' is not valid UTF-8"))
 }
 
 /// Map a legacy action string to the new action format.

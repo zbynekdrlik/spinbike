@@ -14,6 +14,7 @@ pub struct UserRow {
     pub created_at: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_user(
     pool: &SqlitePool,
     email: &str,
