@@ -84,17 +84,42 @@ mod tests {
     async fn create_and_list_transactions() {
         let pool = setup().await;
 
-        let user_id = create_user(&pool, "tx@test.com", None, "Tx", None, "customer", None, None)
-            .await
-            .unwrap();
+        let user_id = create_user(
+            &pool,
+            "tx@test.com",
+            None,
+            "Tx",
+            None,
+            "customer",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         let card_id = create_card(&pool, "TX-CARD").await.unwrap();
 
-        create_transaction(&pool, Some(user_id), Some(card_id), None, Some(1), 5.0, "charge")
-            .await
-            .unwrap();
-        create_transaction(&pool, Some(user_id), Some(card_id), None, Some(1), 5.0, "charge")
-            .await
-            .unwrap();
+        create_transaction(
+            &pool,
+            Some(user_id),
+            Some(card_id),
+            None,
+            Some(1),
+            5.0,
+            "charge",
+        )
+        .await
+        .unwrap();
+        create_transaction(
+            &pool,
+            Some(user_id),
+            Some(card_id),
+            None,
+            Some(1),
+            5.0,
+            "charge",
+        )
+        .await
+        .unwrap();
 
         let by_card = list_transactions_for_card(&pool, card_id).await.unwrap();
         assert_eq!(by_card.len(), 2);

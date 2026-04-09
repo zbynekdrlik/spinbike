@@ -2,12 +2,11 @@ use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 
 pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>> {
-    let value: Option<String> =
-        sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
-            .bind(key)
-            .fetch_optional(pool)
-            .await
-            .context("Failed to get setting")?;
+    let value: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
+        .bind(key)
+        .fetch_optional(pool)
+        .await
+        .context("Failed to get setting")?;
     Ok(value)
 }
 
@@ -63,6 +62,9 @@ mod tests {
 
         // Insert new.
         set_setting(&pool, "new_key", "hello").await.unwrap();
-        assert_eq!(get_setting(&pool, "new_key").await.unwrap().unwrap(), "hello");
+        assert_eq!(
+            get_setting(&pool, "new_key").await.unwrap().unwrap(),
+            "hello"
+        );
     }
 }

@@ -10,7 +10,7 @@ use std::io::Cursor;
 use std::path::PathBuf;
 use std::process::Command;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -89,15 +89,21 @@ fn map_action(action: &str) -> Option<&'static str> {
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(EnvFilter::from_default_env().add_directive("migrate_legacy=info".parse()?))
+        .with_env_filter(
+            EnvFilter::from_default_env().add_directive("migrate_legacy=info".parse()?),
+        )
         .init();
 
     let (mdb_path, output_path) = parse_args()?;
 
     // Remove existing output file to start fresh.
     if output_path.exists() {
-        std::fs::remove_file(&output_path)
-            .with_context(|| format!("Failed to remove existing output: {}", output_path.display()))?;
+        std::fs::remove_file(&output_path).with_context(|| {
+            format!(
+                "Failed to remove existing output: {}",
+                output_path.display()
+            )
+        })?;
     }
 
     info!("Opening output database: {}", output_path.display());
@@ -253,37 +259,33 @@ async fn main() -> Result<()> {
     info!("Creating initial admin account...");
     let admin_email = "admin@spinbike.local";
 
-    let existing: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM users WHERE email = ?")
-            .bind(admin_email)
-            .fetch_optional(&pool)
-            .await?;
+    let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE email = ?")
+        .bind(admin_email)
+        .fetch_optional(&pool)
+        .await?;
 
     if existing.is_some() {
         info!("Admin account already exists, skipping");
     } else {
-        let password_hash = auth::hash_password("changeme")
-            .context("Failed to hash admin password")?;
+        let password_hash =
+            auth::hash_password("changeme").context("Failed to hash admin password")?;
 
-        sqlx::query(
-            "INSERT INTO users (email, password_hash, name, role) VALUES (?, ?, ?, ?)",
-        )
-        .bind(admin_email)
-        .bind(&password_hash)
-        .bind("Admin")
-        .bind("admin")
-        .execute(&pool)
-        .await
-        .context("Failed to create admin user")?;
+        sqlx::query("INSERT INTO users (email, password_hash, name, role) VALUES (?, ?, ?, ?)")
+            .bind(admin_email)
+            .bind(&password_hash)
+            .bind("Admin")
+            .bind("admin")
+            .execute(&pool)
+            .await
+            .context("Failed to create admin user")?;
 
         info!("Created admin account: {admin_email} / changeme");
     }
 
     // --- Verify seed services ---
-    let svc_count: i64 =
-        sqlx::query_scalar("SELECT COUNT(*) FROM services")
-            .fetch_one(&pool)
-            .await?;
+    let svc_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM services")
+        .fetch_one(&pool)
+        .await?;
     info!("Services in database: {svc_count}");
     if svc_count == 0 {
         warn!("No services found — migrations should have seeded them. Check migration V1.");

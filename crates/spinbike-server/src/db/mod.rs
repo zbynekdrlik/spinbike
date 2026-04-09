@@ -61,11 +61,12 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
     .await
     .context("Failed to create schema_version table")?;
 
-    let current_version: i64 = sqlx::query("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
-        .fetch_one(pool)
-        .await
-        .context("Failed to read schema version")?
-        .get("v");
+    let current_version: i64 =
+        sqlx::query("SELECT COALESCE(MAX(version), 0) AS v FROM schema_version")
+            .fetch_one(pool)
+            .await
+            .context("Failed to read schema version")?
+            .get("v");
 
     for &(version, description, sql) in MIGRATIONS {
         if version <= current_version {
@@ -84,9 +85,10 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
             if trimmed.is_empty() {
                 continue;
             }
-            sqlx::query(trimmed).execute(&mut *tx).await.with_context(|| {
-                format!("Migration v{version} failed on: {trimmed}")
-            })?;
+            sqlx::query(trimmed)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("Migration v{version} failed on: {trimmed}"))?;
         }
 
         sqlx::query("INSERT INTO schema_version (version, description) VALUES (?, ?)")
@@ -139,11 +141,10 @@ mod tests {
         assert_eq!(tables, expected);
 
         // Verify seed data.
-        let svc_count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM services")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let svc_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM services")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(svc_count, 2);
 
         let setting: String =
@@ -161,11 +162,10 @@ mod tests {
         // Running again should not error.
         run_migrations(&pool).await.unwrap();
 
-        let version: i64 =
-            sqlx::query_scalar("SELECT MAX(version) FROM schema_version")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let version: i64 = sqlx::query_scalar("SELECT MAX(version) FROM schema_version")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(version, 1);
     }
 }

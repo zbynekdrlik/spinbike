@@ -13,13 +13,11 @@ pub struct CardRow {
 }
 
 pub async fn create_card(pool: &SqlitePool, barcode: &str) -> Result<i64> {
-    let id = sqlx::query_scalar(
-        "INSERT INTO cards (barcode) VALUES (?) RETURNING id",
-    )
-    .bind(barcode)
-    .fetch_one(pool)
-    .await
-    .context("Failed to create card")?;
+    let id = sqlx::query_scalar("INSERT INTO cards (barcode) VALUES (?) RETURNING id")
+        .bind(barcode)
+        .fetch_one(pool)
+        .await
+        .context("Failed to create card")?;
     Ok(id)
 }
 
@@ -84,8 +82,8 @@ pub async fn set_allow_debit(pool: &SqlitePool, card_id: i64, allow: bool) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::{create_memory_pool, run_migrations};
     use crate::db::users::create_user;
+    use crate::db::{create_memory_pool, run_migrations};
 
     async fn setup() -> SqlitePool {
         let pool = create_memory_pool().await.unwrap();
@@ -98,7 +96,10 @@ mod tests {
         let pool = setup().await;
 
         let card_id = create_card(&pool, "CARD-001").await.unwrap();
-        let card = get_card_by_barcode(&pool, "CARD-001").await.unwrap().unwrap();
+        let card = get_card_by_barcode(&pool, "CARD-001")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(card.id, card_id);
         assert_eq!(card.barcode, "CARD-001");
         assert!(card.user_id.is_none());
@@ -112,11 +113,17 @@ mod tests {
         let card_id = create_card(&pool, "CARD-002").await.unwrap();
 
         update_credit(&pool, card_id, 10.0).await.unwrap();
-        let card = get_card_by_barcode(&pool, "CARD-002").await.unwrap().unwrap();
+        let card = get_card_by_barcode(&pool, "CARD-002")
+            .await
+            .unwrap()
+            .unwrap();
         assert!((card.credit - 10.0).abs() < f64::EPSILON);
 
         update_credit(&pool, card_id, -3.5).await.unwrap();
-        let card = get_card_by_barcode(&pool, "CARD-002").await.unwrap().unwrap();
+        let card = get_card_by_barcode(&pool, "CARD-002")
+            .await
+            .unwrap()
+            .unwrap();
         assert!((card.credit - 6.5).abs() < f64::EPSILON);
     }
 

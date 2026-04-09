@@ -7,9 +7,9 @@ use axum::{
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 
+use crate::AppState;
 use crate::auth::{AuthUser, OptionalAuthUser};
 use crate::db::classes as db;
-use crate::AppState;
 use spinbike_core::ws::ServerMsg;
 
 #[derive(Deserialize)]
@@ -180,23 +180,28 @@ async fn create_booking(
         None
     };
 
-    let booking_id =
-        db::create_booking(&state.pool, body.template_id, &body.date, booking_user_id, created_by)
-            .await
-            .map_err(|e| {
-                let msg = e.to_string();
-                if msg.contains("full") {
-                    (
-                        StatusCode::CONFLICT,
-                        Json(serde_json::json!({"error": msg})),
-                    )
-                } else {
-                    (
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        Json(serde_json::json!({"error": msg})),
-                    )
-                }
-            })?;
+    let booking_id = db::create_booking(
+        &state.pool,
+        body.template_id,
+        &body.date,
+        booking_user_id,
+        created_by,
+    )
+    .await
+    .map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("full") {
+            (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": msg})),
+            )
+        } else {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": msg})),
+            )
+        }
+    })?;
 
     // Broadcast booking update.
     let booked = db::get_booking_count(&state.pool, body.template_id, &body.date)
@@ -259,12 +264,14 @@ async fn cancel_booking(
         ));
     }
 
-    db::cancel_booking(&state.pool, booking_id).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    db::cancel_booking(&state.pool, booking_id)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
     // Broadcast booking update.
     let booked = db::get_booking_count(&state.pool, booking.template_id, &booking.date)

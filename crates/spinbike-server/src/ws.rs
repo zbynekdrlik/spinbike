@@ -11,10 +11,7 @@ use tracing::{info, warn};
 
 use crate::AppState;
 
-pub async fn ws_handler(
-    ws: WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn ws_handler(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 

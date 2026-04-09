@@ -6,9 +6,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::AppState;
 use crate::auth::AuthUser;
 use crate::db::{cards as db, transactions};
-use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct LinkCardRequest {
@@ -172,12 +172,14 @@ async fn activate_card(
         ));
     }
 
-    let card_id = db::create_card(&state.pool, &body.barcode).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    let card_id = db::create_card(&state.pool, &body.barcode)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
     if body.initial_credit > 0.0 {
         db::update_credit(&state.pool, card_id, body.initial_credit)

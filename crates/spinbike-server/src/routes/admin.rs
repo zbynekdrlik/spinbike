@@ -6,9 +6,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::AppState;
 use crate::auth::{AuthUser, parse_role};
 use crate::db::{classes, settings, users};
-use crate::AppState;
 use spinbike_core::ws::ServerMsg;
 
 // ---------- Templates ----------
@@ -105,11 +105,20 @@ pub struct UserResponse {
 
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/api/admin/templates", get(list_templates).post(create_template))
+        .route(
+            "/api/admin/templates",
+            get(list_templates).post(create_template),
+        )
         .route("/api/admin/templates/{id}", delete(delete_template))
         .route("/api/admin/cancel-class", post(cancel_class))
-        .route("/api/admin/instructors", get(list_instructors).post(create_instructor))
-        .route("/api/admin/services", get(list_services).post(create_service))
+        .route(
+            "/api/admin/instructors",
+            get(list_instructors).post(create_instructor),
+        )
+        .route(
+            "/api/admin/services",
+            get(list_services).post(create_service),
+        )
         .route("/api/admin/settings", get(get_settings).put(update_setting))
         .route("/api/admin/users", get(list_users_handler))
         .route("/api/admin/users/{id}/role", put(update_user_role))
@@ -121,12 +130,14 @@ async fn list_templates(
     State(state): State<AppState>,
     AuthUser(_claims): AuthUser,
 ) -> Result<Json<Vec<TemplateResponse>>, (StatusCode, Json<serde_json::Value>)> {
-    let templates = classes::list_active_templates(&state.pool).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    let templates = classes::list_active_templates(&state.pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
     Ok(Json(
         templates
@@ -255,17 +266,16 @@ async fn list_instructors(
     State(state): State<AppState>,
     AuthUser(_claims): AuthUser,
 ) -> Result<Json<Vec<InstructorRow>>, (StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query_as::<_, InstructorRow>(
-        "SELECT id, name, active FROM instructors ORDER BY id",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    let rows =
+        sqlx::query_as::<_, InstructorRow>("SELECT id, name, active FROM instructors ORDER BY id")
+            .fetch_all(&state.pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                )
+            })?;
 
     Ok(Json(rows))
 }
@@ -282,18 +292,16 @@ async fn create_instructor(
         ));
     }
 
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO instructors (name) VALUES (?) RETURNING id",
-    )
-    .bind(&body.name)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    let id: i64 = sqlx::query_scalar("INSERT INTO instructors (name) VALUES (?) RETURNING id")
+        .bind(&body.name)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
     Ok((
         StatusCode::CREATED,
@@ -338,19 +346,18 @@ async fn create_service(
         ));
     }
 
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO services (name, default_price) VALUES (?, ?) RETURNING id",
-    )
-    .bind(&body.name)
-    .bind(body.default_price)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    let id: i64 =
+        sqlx::query_scalar("INSERT INTO services (name, default_price) VALUES (?, ?) RETURNING id")
+            .bind(&body.name)
+            .bind(body.default_price)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({"error": e.to_string()})),
+                )
+            })?;
 
     Ok((
         StatusCode::CREATED,

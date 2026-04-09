@@ -2,8 +2,8 @@ pub mod oauth;
 
 use anyhow::{Context, Result};
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
     Argon2, PasswordHash, PasswordVerifier,
+    password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
 };
 use axum::{
     extract::{FromRef, FromRequestParts},

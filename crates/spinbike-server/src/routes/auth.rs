@@ -6,9 +6,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
+use crate::AppState;
 use crate::auth::{self, AuthUser, parse_role};
 use crate::db::users;
-use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct RegisterRequest {
@@ -92,12 +92,13 @@ async fn register(
     })?;
 
     let role = spinbike_core::auth::Role::Customer;
-    let token = auth::create_token(&state.jwt_secret, user_id, &body.email, &role).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    let token =
+        auth::create_token(&state.jwt_secret, user_id, &body.email, &role).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
     Ok((
         StatusCode::CREATED,
@@ -147,12 +148,13 @@ async fn login(
     }
 
     let role = parse_role(&user.role);
-    let token = auth::create_token(&state.jwt_secret, user.id, &user.email, &role).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    let token =
+        auth::create_token(&state.jwt_secret, user.id, &user.email, &role).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": e.to_string()})),
+            )
+        })?;
 
     Ok(Json(AuthResponse {
         token,

@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use sqlx::SqlitePool;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -104,11 +104,7 @@ pub async fn is_occurrence_cancelled(
     Ok(count > 0)
 }
 
-pub async fn get_booking_count(
-    pool: &SqlitePool,
-    template_id: i64,
-    date: &str,
-) -> Result<i64> {
+pub async fn get_booking_count(pool: &SqlitePool, template_id: i64, date: &str) -> Result<i64> {
     let count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM bookings WHERE template_id = ? AND date = ? AND cancelled_at IS NULL",
     )
@@ -128,13 +124,11 @@ pub async fn create_booking(
     created_by: Option<i64>,
 ) -> Result<i64> {
     // Fetch template capacity.
-    let capacity: i64 = sqlx::query_scalar(
-        "SELECT capacity FROM class_templates WHERE id = ?",
-    )
-    .bind(template_id)
-    .fetch_one(pool)
-    .await
-    .context("Template not found")?;
+    let capacity: i64 = sqlx::query_scalar("SELECT capacity FROM class_templates WHERE id = ?")
+        .bind(template_id)
+        .fetch_one(pool)
+        .await
+        .context("Template not found")?;
 
     // Count active bookings.
     let booked = get_booking_count(pool, template_id, date).await?;
@@ -218,12 +212,16 @@ mod tests {
         let pool = setup().await;
         let user_id = make_user(&pool, "t1@test.com").await;
 
-        let tmpl_id = create_template(&pool, 1, "09:00", 60, None, 10).await.unwrap();
+        let tmpl_id = create_template(&pool, 1, "09:00", 60, None, 10)
+            .await
+            .unwrap();
         let booking_id = create_booking(&pool, tmpl_id, "2026-04-14", user_id, None)
             .await
             .unwrap();
 
-        let bookings = list_bookings_for_class(&pool, tmpl_id, "2026-04-14").await.unwrap();
+        let bookings = list_bookings_for_class(&pool, tmpl_id, "2026-04-14")
+            .await
+            .unwrap();
         assert_eq!(bookings.len(), 1);
         assert_eq!(bookings[0].id, booking_id);
         assert_eq!(bookings[0].user_id, user_id);
@@ -234,13 +232,19 @@ mod tests {
         let pool = setup().await;
 
         // Template with capacity 2.
-        let tmpl_id = create_template(&pool, 1, "10:00", 60, None, 2).await.unwrap();
+        let tmpl_id = create_template(&pool, 1, "10:00", 60, None, 2)
+            .await
+            .unwrap();
         let u1 = make_user(&pool, "cap1@test.com").await;
         let u2 = make_user(&pool, "cap2@test.com").await;
         let u3 = make_user(&pool, "cap3@test.com").await;
 
-        create_booking(&pool, tmpl_id, "2026-04-14", u1, None).await.unwrap();
-        create_booking(&pool, tmpl_id, "2026-04-14", u2, None).await.unwrap();
+        create_booking(&pool, tmpl_id, "2026-04-14", u1, None)
+            .await
+            .unwrap();
+        create_booking(&pool, tmpl_id, "2026-04-14", u2, None)
+            .await
+            .unwrap();
 
         // Third booking should fail — class is full.
         let result = create_booking(&pool, tmpl_id, "2026-04-14", u3, None).await;
@@ -252,45 +256,74 @@ mod tests {
     async fn cancel_booking_frees_spot() {
         let pool = setup().await;
 
-        let tmpl_id = create_template(&pool, 1, "11:00", 60, None, 1).await.unwrap();
+        let tmpl_id = create_template(&pool, 1, "11:00", 60, None, 1)
+            .await
+            .unwrap();
         let u1 = make_user(&pool, "cb1@test.com").await;
         let u2 = make_user(&pool, "cb2@test.com").await;
 
-        let b1 = create_booking(&pool, tmpl_id, "2026-04-14", u1, None).await.unwrap();
+        let b1 = create_booking(&pool, tmpl_id, "2026-04-14", u1, None)
+            .await
+            .unwrap();
 
         // Full — u2 cannot book.
-        assert!(create_booking(&pool, tmpl_id, "2026-04-14", u2, None).await.is_err());
+        assert!(
+            create_booking(&pool, tmpl_id, "2026-04-14", u2, None)
+                .await
+                .is_err()
+        );
 
         // Cancel u1's booking.
         cancel_booking(&pool, b1).await.unwrap();
 
         // Now u2 can book.
-        create_booking(&pool, tmpl_id, "2026-04-14", u2, None).await.unwrap();
-        assert_eq!(get_booking_count(&pool, tmpl_id, "2026-04-14").await.unwrap(), 1);
+        create_booking(&pool, tmpl_id, "2026-04-14", u2, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            get_booking_count(&pool, tmpl_id, "2026-04-14")
+                .await
+                .unwrap(),
+            1
+        );
     }
 
     #[tokio::test]
     async fn cancel_occurrence_test() {
         let pool = setup().await;
 
-        let tmpl_id = create_template(&pool, 2, "14:00", 60, None, 10).await.unwrap();
+        let tmpl_id = create_template(&pool, 2, "14:00", 60, None, 10)
+            .await
+            .unwrap();
 
-        assert!(!is_occurrence_cancelled(&pool, tmpl_id, "2026-04-15").await.unwrap());
+        assert!(
+            !is_occurrence_cancelled(&pool, tmpl_id, "2026-04-15")
+                .await
+                .unwrap()
+        );
 
         cancel_occurrence(&pool, tmpl_id, "2026-04-15", Some("Holiday"), None)
             .await
             .unwrap();
 
-        assert!(is_occurrence_cancelled(&pool, tmpl_id, "2026-04-15").await.unwrap());
+        assert!(
+            is_occurrence_cancelled(&pool, tmpl_id, "2026-04-15")
+                .await
+                .unwrap()
+        );
     }
 
     #[tokio::test]
     async fn duplicate_booking_rejected() {
         let pool = setup().await;
         let user_id = make_user(&pool, "dup@test.com").await;
-        let tmpl_id = create_template(&pool, 1, "09:00", 60, None, 10).await.unwrap();
+        let tmpl_id = create_template(&pool, 1, "09:00", 60, None, 10)
+            .await
+            .unwrap();
 
-        create_booking(&pool, tmpl_id, "2026-04-14", user_id, None).await.unwrap();
+        create_booking(&pool, tmpl_id, "2026-04-14", user_id, None)
+            .await
+            .unwrap();
 
         // Same user, same class, same date — unique index should reject.
         let result = create_booking(&pool, tmpl_id, "2026-04-14", user_id, None).await;

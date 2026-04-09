@@ -1,14 +1,9 @@
-use axum::{
-    Json, Router,
-    extract::State,
-    http::StatusCode,
-    routing::post,
-};
+use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
 use serde::{Deserialize, Serialize};
 
+use crate::AppState;
 use crate::auth::AuthUser;
 use crate::db::{cards, transactions};
-use crate::AppState;
 
 #[derive(Deserialize)]
 pub struct ChargeRequest {
