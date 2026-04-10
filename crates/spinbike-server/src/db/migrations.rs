@@ -1,5 +1,12 @@
 /// Each migration is (version, description, sql).
-pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[(1, "initial schema", V1_INITIAL_SCHEMA)];
+pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
+    (1, "initial schema", V1_INITIAL_SCHEMA),
+    (
+        2,
+        "card holder info and allow debit default",
+        V2_CARD_HOLDER_INFO,
+    ),
+];
 
 const V1_INITIAL_SCHEMA: &str = r#"
 CREATE TABLE users (
@@ -93,4 +100,12 @@ INSERT INTO services (name, default_price) VALUES ('Fitness', 5.0);
 
 INSERT INTO settings (key, value) VALUES ('bike_count', '10');
 INSERT INTO settings (key, value) VALUES ('center_name', 'Squash Centrum Smizany');
+"#;
+
+const V2_CARD_HOLDER_INFO: &str = r#"
+ALTER TABLE cards ADD COLUMN first_name TEXT;
+ALTER TABLE cards ADD COLUMN last_name TEXT;
+ALTER TABLE cards ADD COLUMN company TEXT;
+ALTER TABLE cards ADD COLUMN phone TEXT;
+UPDATE cards SET allow_debit = 1;
 "#;

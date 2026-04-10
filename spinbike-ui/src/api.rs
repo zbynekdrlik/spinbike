@@ -63,6 +63,25 @@ pub async fn put<B: Serialize>(path: &str, body: &B) -> Result<(), String> {
     Ok(())
 }
 
+pub async fn put_json<B: Serialize, T: DeserializeOwned>(
+    path: &str,
+    body: &B,
+) -> Result<T, String> {
+    let url = format!("{}{}", base_url(), path);
+    let req = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::PUT))
+        .json(body)
+        .map_err(|e| e.to_string())?;
+
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+
+    if !resp.ok() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(extract_error(&text, resp.status()));
+    }
+
+    resp.json::<T>().await.map_err(|e| e.to_string())
+}
+
 pub async fn delete(path: &str) -> Result<(), String> {
     let url = format!("{}{}", base_url(), path);
     let resp = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::DELETE))

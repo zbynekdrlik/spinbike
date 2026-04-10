@@ -153,31 +153,51 @@ async fn main() -> Result<()> {
             .trim()
             .parse()
             .unwrap_or(0);
+        let first_name = record.get(5).unwrap_or("").trim();
+        let last_name = record.get(6).unwrap_or("").trim();
+        let company = record.get(7).unwrap_or("").trim();
+        let phone = record.get(8).unwrap_or("").trim();
         let credit_eur: f64 = record
             .get(13)
             .context("Missing Credit (EUR) column")?
             .trim()
             .parse()
             .unwrap_or(0.0);
-        let debet: i64 = record
-            .get(9)
-            .context("Missing Debet column")?
-            .trim()
-            .parse()
-            .unwrap_or(0);
 
         if barcode.is_empty() {
             warn!("Skipping card with empty barcode (legacy id={legacy_id})");
             continue;
         }
 
+        let first_name_opt = if first_name.is_empty() {
+            None
+        } else {
+            Some(first_name)
+        };
+        let last_name_opt = if last_name.is_empty() {
+            None
+        } else {
+            Some(last_name)
+        };
+        let company_opt = if company.is_empty() {
+            None
+        } else {
+            Some(company)
+        };
+        let phone_opt = if phone.is_empty() { None } else { Some(phone) };
+
+        // allow_debit = 1 for all cards (legacy app behavior).
         let new_id: i64 = sqlx::query_scalar(
-            "INSERT INTO cards (barcode, blocked, credit, allow_debit) VALUES (?, ?, ?, ?) RETURNING id",
+            "INSERT INTO cards (barcode, blocked, credit, allow_debit, first_name, last_name, company, phone)
+             VALUES (?, ?, ?, 1, ?, ?, ?, ?) RETURNING id",
         )
         .bind(barcode)
         .bind(blocked)
         .bind(credit_eur)
-        .bind(debet)
+        .bind(first_name_opt)
+        .bind(last_name_opt)
+        .bind(company_opt)
+        .bind(phone_opt)
         .fetch_one(&pool)
         .await
         .with_context(|| format!("Failed to insert card barcode={barcode}"))?;

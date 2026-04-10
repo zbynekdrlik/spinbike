@@ -86,6 +86,14 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("name", ("Meno", "Name"));
     m.insert("phone", ("Telefon", "Phone"));
     m.insert("phone_optional", ("Telefon (volitelne)", "Phone (optional)"));
+    m.insert("first_name", ("Meno", "First Name"));
+    m.insert("last_name", ("Priezvisko", "Last Name"));
+    m.insert("company", ("Firma", "Company"));
+    m.insert("cardholder", ("Drzitel karty", "Cardholder"));
+    m.insert("transaction_history", ("Historia transakcii", "Transaction History"));
+    m.insert("no_transactions_card", ("Ziadne transakcie", "No transactions"));
+    m.insert("date", ("Datum", "Date"));
+    m.insert("action", ("Akcia", "Action"));
     m.insert("logging_in", ("Prihlasovanie...", "Logging in..."));
     m.insert("creating_account", ("Vytvaram ucet...", "Creating account..."));
     m.insert("dont_have_account", ("Nemate ucet? ", "Don't have an account? "));

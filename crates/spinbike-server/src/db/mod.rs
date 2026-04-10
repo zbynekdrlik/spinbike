@@ -166,6 +166,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
     }
 }

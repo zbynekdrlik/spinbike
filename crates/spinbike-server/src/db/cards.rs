@@ -10,15 +10,68 @@ pub struct CardRow {
     pub credit: f64,
     pub allow_debit: i64,
     pub created_at: String,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub company: Option<String>,
+    pub phone: Option<String>,
 }
 
 pub async fn create_card(pool: &SqlitePool, barcode: &str) -> Result<i64> {
-    let id = sqlx::query_scalar("INSERT INTO cards (barcode) VALUES (?) RETURNING id")
-        .bind(barcode)
-        .fetch_one(pool)
-        .await
-        .context("Failed to create card")?;
+    let id =
+        sqlx::query_scalar("INSERT INTO cards (barcode, allow_debit) VALUES (?, 1) RETURNING id")
+            .bind(barcode)
+            .fetch_one(pool)
+            .await
+            .context("Failed to create card")?;
     Ok(id)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn create_card_with_info(
+    pool: &SqlitePool,
+    barcode: &str,
+    credit: f64,
+    first_name: Option<&str>,
+    last_name: Option<&str>,
+    company: Option<&str>,
+    phone: Option<&str>,
+) -> Result<i64> {
+    let id = sqlx::query_scalar(
+        "INSERT INTO cards (barcode, credit, allow_debit, first_name, last_name, company, phone)
+         VALUES (?, ?, 1, ?, ?, ?, ?) RETURNING id",
+    )
+    .bind(barcode)
+    .bind(credit)
+    .bind(first_name)
+    .bind(last_name)
+    .bind(company)
+    .bind(phone)
+    .fetch_one(pool)
+    .await
+    .context("Failed to create card with info")?;
+    Ok(id)
+}
+
+pub async fn update_card_info(
+    pool: &SqlitePool,
+    card_id: i64,
+    first_name: Option<&str>,
+    last_name: Option<&str>,
+    company: Option<&str>,
+    phone: Option<&str>,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE cards SET first_name = ?, last_name = ?, company = ?, phone = ? WHERE id = ?",
+    )
+    .bind(first_name)
+    .bind(last_name)
+    .bind(company)
+    .bind(phone)
+    .bind(card_id)
+    .execute(pool)
+    .await
+    .context("Failed to update card info")?;
+    Ok(())
 }
 
 pub async fn list_all_cards(pool: &SqlitePool) -> Result<Vec<CardRow>> {

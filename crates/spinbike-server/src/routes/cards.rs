@@ -2,7 +2,7 @@ use axum::{
     Json, Router,
     extract::{Path, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,6 +20,26 @@ pub struct LinkCardRequest {
 pub struct ActivateCardRequest {
     pub barcode: String,
     pub initial_credit: f64,
+    #[serde(default)]
+    pub first_name: Option<String>,
+    #[serde(default)]
+    pub last_name: Option<String>,
+    #[serde(default)]
+    pub company: Option<String>,
+    #[serde(default)]
+    pub phone: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateCardRequest {
+    #[serde(default)]
+    pub first_name: Option<String>,
+    #[serde(default)]
+    pub last_name: Option<String>,
+    #[serde(default)]
+    pub company: Option<String>,
+    #[serde(default)]
+    pub phone: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -42,6 +62,10 @@ pub struct CardResponse {
     pub blocked: bool,
     pub credit: f64,
     pub allow_debit: bool,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub company: Option<String>,
+    pub phone: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -68,6 +92,10 @@ impl From<&db::CardRow> for CardResponse {
             blocked: c.blocked != 0,
             credit: c.credit,
             allow_debit: c.allow_debit != 0,
+            first_name: c.first_name.clone(),
+            last_name: c.last_name.clone(),
+            company: c.company.clone(),
+            phone: c.phone.clone(),
         }
     }
 }
@@ -80,6 +108,8 @@ pub fn routes() -> Router<AppState> {
         .route("/api/cards/activate", post(activate_card))
         .route("/api/cards/topup", post(topup_card))
         .route("/api/cards/block", post(block_card))
+        .route("/api/cards/{id}", put(update_card))
+        .route("/api/cards/{id}/transactions", get(card_transactions))
         .route("/api/my/balance", get(my_balance))
 }
 
@@ -172,19 +202,27 @@ async fn activate_card(
 
     // M4: create_card will fail on duplicate barcode due to UNIQUE constraint.
     // The error from context("Failed to create card") is generic enough.
-    let card_id = db::create_card(&state.pool, &body.barcode)
-        .await
-        .map_err(|e| {
-            let msg = e.to_string();
-            if msg.contains("UNIQUE") || msg.contains("unique") {
-                (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({"error": "A card with this barcode already exists"})),
-                )
-            } else {
-                internal_error(e)
-            }
-        })?;
+    let card_id = db::create_card_with_info(
+        &state.pool,
+        &body.barcode,
+        0.0,
+        body.first_name.as_deref(),
+        body.last_name.as_deref(),
+        body.company.as_deref(),
+        body.phone.as_deref(),
+    )
+    .await
+    .map_err(|e| {
+        let msg = e.to_string();
+        if msg.contains("UNIQUE") || msg.contains("unique") {
+            (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": "A card with this barcode already exists"})),
+            )
+        } else {
+            internal_error(e)
+        }
+    })?;
 
     if body.initial_credit > 0.0 {
         db::update_credit(&state.pool, card_id, body.initial_credit)
@@ -281,6 +319,74 @@ async fn block_card(
         .map_err(internal_error)?;
 
     Ok(Json(CardResponse::from(&card)))
+}
+
+async fn update_card(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateCardRequest>,
+) -> Result<Json<CardResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_manage_cards() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Staff access required"})),
+        ));
+    }
+
+    db::update_card_info(
+        &state.pool,
+        id,
+        body.first_name.as_deref(),
+        body.last_name.as_deref(),
+        body.company.as_deref(),
+        body.phone.as_deref(),
+    )
+    .await
+    .map_err(internal_error)?;
+
+    let card = sqlx::query_as::<_, db::CardRow>("SELECT * FROM cards WHERE id = ?")
+        .bind(id)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "Card not found"})),
+            )
+        })?;
+
+    Ok(Json(CardResponse::from(&card)))
+}
+
+async fn card_transactions(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<i64>,
+) -> Result<Json<Vec<TransactionResponse>>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_manage_cards() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Staff access required"})),
+        ));
+    }
+
+    let txns = transactions::list_transactions_for_card(&state.pool, id)
+        .await
+        .map_err(internal_error)?;
+
+    Ok(Json(
+        txns.into_iter()
+            .map(|t| TransactionResponse {
+                id: t.id,
+                card_id: t.card_id,
+                amount: t.amount,
+                action: t.action,
+                created_at: t.created_at,
+            })
+            .collect(),
+    ))
 }
 
 async fn my_balance(

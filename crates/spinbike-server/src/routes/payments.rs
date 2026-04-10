@@ -77,13 +77,7 @@ async fn charge(
         ));
     }
 
-    // Check sufficient credit (unless allow_debit is set).
-    if card.credit < amount && card.allow_debit == 0 {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "Insufficient credit"})),
-        ));
-    }
+    // Legacy app allowed credit to go negative — any card can go into debt.
 
     // Debit the card within the transaction.
     sqlx::query("UPDATE cards SET credit = ROUND(credit - ?, 2) WHERE id = ?")
