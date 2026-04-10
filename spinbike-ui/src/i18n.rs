@@ -190,9 +190,9 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("service", ("Sluzba", "Service"));
     m.insert("select_service", ("-- Vyberte --", "-- Select --"));
     m.insert("amount", ("Suma", "Amount"));
-    m.insert("amount_czk", ("Suma (CZK)", "Amount (CZK)"));
+    m.insert("amount_czk", ("Suma (EUR)", "Amount (EUR)"));
     m.insert("price", ("Cena", "Price"));
-    m.insert("price_czk", ("Cena (CZK)", "Price (CZK)"));
+    m.insert("price_czk", ("Cena (EUR)", "Price (EUR)"));
 
     // Admin
     m.insert("templates", ("Sablony hodin", "Templates"));

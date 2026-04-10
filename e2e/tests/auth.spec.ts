@@ -1,7 +1,11 @@
 import { test, expect } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole } from './helpers';
+import { setupConsoleCheck, assertCleanConsole, setEnglishLanguage } from './helpers';
 
 test.describe('Authentication flows', () => {
+    test.beforeEach(async ({ page }) => {
+        await setEnglishLanguage(page);
+    });
+
     test('register a new user via UI', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
 

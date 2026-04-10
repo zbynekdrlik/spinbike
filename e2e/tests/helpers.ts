@@ -36,9 +36,24 @@ export function assertCleanConsole(messages: string[]) {
 }
 
 /**
+ * Force English language before any page load.
+ * Tests assert against English strings; set localStorage before the WASM loads.
+ */
+export async function setEnglishLanguage(page: Page) {
+    await page.addInitScript(() => {
+        try {
+            localStorage.setItem('spinbike_lang', 'en');
+        } catch {
+            // ignore — storage not ready
+        }
+    });
+}
+
+/**
  * Login via the UI: navigate to /login, fill form, submit, wait for redirect.
  */
 export async function loginViaUI(page: Page, email: string, password: string) {
+    await setEnglishLanguage(page);
     await page.goto('/login');
     await page.waitForSelector('h1.page-title');
     await page.fill('input[type="email"]', email);
@@ -62,7 +77,8 @@ export async function loginViaAPI(page: Page, baseURL: string, email: string, pa
     }
     const data = await resp.json();
 
-    // Set localStorage so the WASM app sees the auth state
+    // Set English language and auth state before any page loads so the WASM picks it up.
+    await setEnglishLanguage(page);
     await page.goto('/');
     await page.evaluate((authData: { token: string; user: { id: number; email: string; name: string; role: string } }) => {
         localStorage.setItem('spinbike_token', authData.token);

@@ -65,7 +65,7 @@ test.describe('Staff pages', () => {
         // Verify card info is displayed (barcode and credit)
         const cardContent = await page.textContent('.card');
         expect(cardContent).toContain('70701001');
-        expect(cardContent).toContain('CZK');
+        expect(cardContent).toContain('EUR');
 
         assertCleanConsole(consoleMessages);
     });
@@ -88,7 +88,7 @@ test.describe('Staff pages', () => {
         await page.waitForSelector('.card', { timeout: 5000 });
         const cardInfo = await page.textContent('.card');
         expect(cardInfo).toContain('70701001');
-        expect(cardInfo).toContain('CZK');
+        expect(cardInfo).toContain('EUR');
 
         // The charge form should appear with service select and amount
         const chargeButton = page.locator('button:has-text("Charge")');

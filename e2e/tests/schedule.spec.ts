@@ -1,9 +1,13 @@
 import { test, expect } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
+import { setupConsoleCheck, assertCleanConsole, setEnglishLanguage } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
 test.describe('Schedule and booking', () => {
+    test.beforeEach(async ({ page }) => {
+        await setEnglishLanguage(page);
+    });
+
     test('public schedule page loads with heading and day picker', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
 

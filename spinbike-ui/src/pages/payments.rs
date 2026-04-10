@@ -106,7 +106,7 @@ pub fn PaymentsPage() -> impl IntoView {
                 Some(c) => {
                     let card_id = c.id;
                     let info_str = format!(
-                        "Card: {} | Credit: {:.0} CZK{}",
+                        "Card: {} | Credit: {:.2} EUR{}",
                         c.barcode, c.credit, if c.blocked { " | BLOCKED" } else { "" }
                     );
 
@@ -184,7 +184,7 @@ fn ChargeForm(
                 &Req { card_id, amount, service_id },
             ).await {
                 Ok(r) => {
-                    set_msg.set(format!("Charged! New credit: {:.0} CZK (tx #{})", r.new_credit, r.transaction_id));
+                    set_msg.set(format!("Charged! New credit: {:.2} EUR (tx #{})", r.new_credit, r.transaction_id));
                     set_card.update(|c| { if let Some(c) = c { c.credit = r.new_credit; } });
                 }
                 Err(e) => set_msg.set(format!("Error: {e}")),
@@ -255,7 +255,7 @@ fn StornoForm(
                 &Req { card_id, amount, reason: None },
             ).await {
                 Ok(r) => {
-                    set_msg.set(format!("Storno done! New credit: {:.0} CZK (tx #{})", r.new_credit, r.transaction_id));
+                    set_msg.set(format!("Storno done! New credit: {:.2} EUR (tx #{})", r.new_credit, r.transaction_id));
                     set_card.update(|c| { if let Some(c) = c { c.credit = r.new_credit; } });
                 }
                 Err(e) => set_msg.set(format!("Error: {e}")),
