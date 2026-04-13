@@ -85,7 +85,8 @@ impl TestApp {
             event_tx,
             jwt_secret: JWT_SECRET.to_string(),
         };
-        let router = routes::api_routes().with_state(state);
+        // Use all_routes() so tests can exercise the static-file fallback too.
+        let router = routes::all_routes().with_state(state);
 
         Self {
             router,
