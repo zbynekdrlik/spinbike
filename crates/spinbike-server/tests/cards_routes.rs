@@ -254,7 +254,7 @@ async fn block_and_unblock_toggles() {
         .request(post_json("/api/cards/block", &app.staff_token, &block_body))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
-    assert_eq!(resp["blocked"].as_bool().unwrap(), true);
+    assert!(resp["blocked"].as_bool().unwrap());
 
     let unblock_body = serde_json::json!({ "card_id": card_id, "blocked": false });
     let (_, resp) = app
@@ -264,7 +264,7 @@ async fn block_and_unblock_toggles() {
             &unblock_body,
         ))
         .await;
-    assert_eq!(resp["blocked"].as_bool().unwrap(), false);
+    assert!(!resp["blocked"].as_bool().unwrap());
 }
 
 /// Existence check: keep cards routes mounted. Kills Router::new() mutants.
