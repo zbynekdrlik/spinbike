@@ -192,10 +192,13 @@ jobs:
         run: |
           # Mutate only PR-changed lines in the Rust crates.
           # --no-shuffle keeps output deterministic for log readability.
+          # Exclude one-off CLI tools and the trivial server main() — these are
+          # entry points that would need full E2E harnesses to mutate usefully.
           cargo mutants \
             --in-diff pr.diff \
             --timeout 60 \
             --no-shuffle \
+            --exclude 'crates/spinbike-server/src/bin/*' \
             --package spinbike-core \
             --package spinbike-server
 
