@@ -4,10 +4,14 @@ use serde::Serialize;
 
 use crate::auth::{clear_auth, get_token};
 
-/// If the response is 401 Unauthorized, clear stored auth and redirect to /login.
+/// If the response is 401 AND we had a token stored (i.e., a previously-valid
+/// session expired), clear stored auth and redirect to /login.
 /// Returns true if the caller should bail.
-fn handle_unauthorized(status: u16) -> bool {
-    if status == 401 {
+///
+/// This intentionally does NOT redirect on 401s from unauthenticated requests
+/// (e.g., wrong password on login) — those show an inline error instead.
+fn handle_unauthorized(status: u16, had_token: bool) -> bool {
+    if status == 401 && had_token {
         clear_auth();
         if let Some(win) = web_sys::window() {
             let _ = win.location().set_href("/login");
@@ -37,7 +41,7 @@ pub async fn get<T: DeserializeOwned>(path: &str) -> Result<T, String> {
         .map_err(|e| e.to_string())?;
 
     if !resp.ok() {
-        if handle_unauthorized(resp.status()) {
+        if handle_unauthorized(resp.status(), get_token().is_some()) {
             return Err("Session expired, redirecting to login...".into());
         }
         let text = resp.text().await.unwrap_or_default();
@@ -56,7 +60,7 @@ pub async fn post<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Re
     let resp = req.send().await.map_err(|e| e.to_string())?;
 
     if !resp.ok() {
-        if handle_unauthorized(resp.status()) {
+        if handle_unauthorized(resp.status(), get_token().is_some()) {
             return Err("Session expired, redirecting to login...".into());
         }
         let text = resp.text().await.unwrap_or_default();
@@ -75,7 +79,7 @@ pub async fn put<B: Serialize>(path: &str, body: &B) -> Result<(), String> {
     let resp = req.send().await.map_err(|e| e.to_string())?;
 
     if !resp.ok() {
-        if handle_unauthorized(resp.status()) {
+        if handle_unauthorized(resp.status(), get_token().is_some()) {
             return Err("Session expired, redirecting to login...".into());
         }
         let text = resp.text().await.unwrap_or_default();
@@ -97,7 +101,7 @@ pub async fn put_json<B: Serialize, T: DeserializeOwned>(
     let resp = req.send().await.map_err(|e| e.to_string())?;
 
     if !resp.ok() {
-        if handle_unauthorized(resp.status()) {
+        if handle_unauthorized(resp.status(), get_token().is_some()) {
             return Err("Session expired, redirecting to login...".into());
         }
         let text = resp.text().await.unwrap_or_default();
@@ -115,7 +119,7 @@ pub async fn delete(path: &str) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
 
     if !resp.ok() {
-        if handle_unauthorized(resp.status()) {
+        if handle_unauthorized(resp.status(), get_token().is_some()) {
             return Err("Session expired, redirecting to login...".into());
         }
         let text = resp.text().await.unwrap_or_default();
