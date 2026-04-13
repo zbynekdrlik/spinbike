@@ -54,7 +54,11 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Create placeholder dist for rust-embed
-        run: mkdir -p spinbike-ui/dist && touch spinbike-ui/dist/index.html
+        run: |
+          mkdir -p spinbike-ui/dist
+          # Non-empty placeholder so static-file integration tests can assert
+          # the handler returns content (distinguishing from Default::default()).
+          echo "<!doctype html><title>spinbike-test</title>" > spinbike-ui/dist/index.html
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
@@ -74,7 +78,11 @@ jobs:
           cache-on-failure: true
 
       - name: Create placeholder dist for rust-embed
-        run: mkdir -p spinbike-ui/dist && touch spinbike-ui/dist/index.html
+        run: |
+          mkdir -p spinbike-ui/dist
+          # Non-empty placeholder so static-file integration tests can assert
+          # the handler returns content (distinguishing from Default::default()).
+          echo "<!doctype html><title>spinbike-test</title>" > spinbike-ui/dist/index.html
 
       - name: Run tests
         run: cargo test -p spinbike-core -p spinbike-server
@@ -183,7 +191,11 @@ jobs:
           tool: cargo-mutants
 
       - name: Create placeholder dist for rust-embed
-        run: mkdir -p spinbike-ui/dist && touch spinbike-ui/dist/index.html
+        run: |
+          mkdir -p spinbike-ui/dist
+          # Non-empty placeholder so static-file integration tests can assert
+          # the handler returns content (distinguishing from Default::default()).
+          echo "<!doctype html><title>spinbike-test</title>" > spinbike-ui/dist/index.html
 
       - name: Compute PR diff vs base
         run: git diff origin/${{ github.base_ref }}...HEAD > pr.diff
