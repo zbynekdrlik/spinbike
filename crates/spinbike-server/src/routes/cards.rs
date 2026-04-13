@@ -244,8 +244,11 @@ async fn activate_card(
     )
     .await
     .map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("UNIQUE") || msg.contains("unique") {
+        // `e.to_string()` only shows the outermost anyhow context
+        // ("Failed to create card with info"), so we use `{:#}` to include
+        // the chain, which carries the actual SQLite UNIQUE message.
+        let chain = format!("{e:#}");
+        if chain.contains("UNIQUE") || chain.contains("unique") {
             (
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({"error": "A card with this barcode already exists"})),

@@ -268,29 +268,30 @@ async fn block_and_unblock_toggles() {
 }
 
 /// Existence check: keep cards routes mounted. Kills Router::new() mutants.
+/// We only probe endpoints whose handler cannot legitimately return 404 —
+/// otherwise a handler-level 404 is indistinguishable from a missing route.
 #[tokio::test]
 async fn card_routes_are_registered() {
     let app = TestApp::new().await;
+    app.seed_card("REG1", 0.0, Some("Probe"), None, None, None)
+        .await;
     for path in [
-        "/api/cards",
-        "/api/cards/search?q=x",
-        "/api/cards/lookup/xxx",
+        "/api/cards",                   // list: 200 with array
+        "/api/cards/search?q=Probe",    // search: 200 with array
+        "/api/cards/9999/transactions", // list txns for unknown id: 200 with []
+        "/api/my/balance",              // balance: 200
     ] {
         let (status, _) = app.request(get(path, &app.staff_token)).await;
-        assert_ne!(
+        assert_eq!(
             status,
-            axum::http::StatusCode::NOT_FOUND,
-            "route {path} should be registered"
+            axum::http::StatusCode::OK,
+            "route {path} should be registered and return 200"
         );
     }
-    // delete on card id: should not 404 on route, may return 405 or forbid.
+    // Unrelated delete: DELETE isn't wired on /api/cards/{id}, so Axum returns
+    // 405 Method Not Allowed. That confirms the path segment itself is known.
     let (status, _) = app
         .request(delete("/api/cards/9999", &app.staff_token))
         .await;
-    // No DELETE handler exists, so 405 Method Not Allowed is the expected route-existence signal.
-    assert!(
-        status == axum::http::StatusCode::METHOD_NOT_ALLOWED
-            || status == axum::http::StatusCode::NOT_FOUND
-            || status == axum::http::StatusCode::OK
-    );
+    assert_eq!(status, axum::http::StatusCode::METHOD_NOT_ALLOWED);
 }
