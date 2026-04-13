@@ -187,7 +187,7 @@ async fn main() -> Result<()> {
         let phone_opt = if phone.is_empty() { None } else { Some(phone) };
 
         // allow_debit = 1 for all cards (legacy app behavior).
-        let new_id: i64 = sqlx::query_scalar(
+        let insert_result: Result<i64, _> = sqlx::query_scalar(
             "INSERT INTO cards (barcode, blocked, credit, allow_debit, first_name, last_name, company, phone)
              VALUES (?, ?, ?, 1, ?, ?, ?, ?) RETURNING id",
         )
@@ -199,8 +199,25 @@ async fn main() -> Result<()> {
         .bind(company_opt)
         .bind(phone_opt)
         .fetch_one(&pool)
-        .await
-        .with_context(|| format!("Failed to insert card barcode={barcode}"))?;
+        .await;
+
+        let new_id = match insert_result {
+            Ok(id) => id,
+            Err(e) if e.to_string().contains("UNIQUE constraint") => {
+                warn!("Skipping duplicate barcode {barcode} (legacy id={legacy_id})");
+                // Map to existing card so transactions still link correctly
+                let existing: i64 = sqlx::query_scalar("SELECT id FROM cards WHERE barcode = ?")
+                    .bind(barcode)
+                    .fetch_one(&pool)
+                    .await
+                    .with_context(|| format!("Failed to look up existing barcode={barcode}"))?;
+                legacy_card_map.insert(legacy_id.to_string(), existing);
+                continue;
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("Failed to insert card barcode={barcode}"));
+            }
+        };
 
         legacy_card_map.insert(legacy_id.to_string(), new_id);
         card_count += 1;

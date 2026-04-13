@@ -13,3 +13,4 @@ spinbike.db-wal
 *.db
 *.db-shm
 *.db-wal
+.playwright-mcp/
