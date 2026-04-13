@@ -3,6 +3,11 @@
 //! Spins up an in-memory DB + the real Axum router, and lets tests send
 //! requests via `tower::ServiceExt::oneshot` without binding a TCP port.
 
+// Each tests/*.rs file is a separate binary; clippy flags helpers not used
+// by that particular file as dead code. Suppressing — unused per-binary is
+// expected when a helper is shared across the suite.
+#![allow(dead_code)]
+
 use axum::{Router, body::Body};
 use http_body_util::BodyExt;
 use serde::de::DeserializeOwned;

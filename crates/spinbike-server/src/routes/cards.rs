@@ -420,18 +420,6 @@ async fn card_transactions(
     ))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn default_search_limit_is_ten() {
-        // Pinning this constant: the dashboard dropdown is designed around
-        // 10 suggestions. Any drift (0, 1, -1, larger) changes UX noticeably.
-        assert_eq!(default_search_limit(), 10);
-    }
-}
-
 async fn my_balance(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
@@ -457,4 +445,16 @@ async fn my_balance(
             })
             .collect(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_search_limit_is_ten() {
+        // Pinning this constant: the dashboard dropdown is designed around
+        // 10 suggestions. Any drift (0, 1, -1, larger) changes UX noticeably.
+        assert_eq!(default_search_limit(), 10);
+    }
 }
