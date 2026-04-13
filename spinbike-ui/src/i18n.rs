@@ -79,6 +79,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("admin", ("Administracia", "Admin"));
     m.insert("cards", ("Karty", "Cards"));
     m.insert("payments", ("Platby", "Payments"));
+    m.insert("classes", ("Hodiny", "Classes"));
 
     // Auth forms
     m.insert("email", ("Email", "Email"));
@@ -171,6 +172,34 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("no_cards_found", ("Ziadne karty", "No cards found"));
     m.insert("loading_cards", ("Nacitavam karty...", "Loading cards..."));
     m.insert("new_card_barcode", ("Ciarovy kod novej karty", "New card barcode"));
+
+    // Card dashboard (fast search + actions)
+    m.insert("card_dashboard", ("Karty — rychly prehlad", "Cards — Quick Dashboard"));
+    m.insert(
+        "search_cards_placeholder",
+        (
+            "Hladaj podla mena, firmy, telefonu, alebo ciarkoveho kodu…",
+            "Search by name, company, phone, or barcode…",
+        ),
+    );
+    m.insert("searching", ("Hladam…", "Searching…"));
+    m.insert("no_matches", ("Ziadne zhody", "No matches"));
+    m.insert("quick_topup", ("Rychle dobitie", "Quick top-up"));
+    m.insert("quick_charge", ("Rychla platba", "Quick charge"));
+    m.insert("custom_amount", ("Vlastna suma", "Custom amount"));
+    m.insert("hide_activate", ("Skryt aktivaciu", "Hide activation"));
+    m.insert(
+        "topup_ok_format",
+        ("Dobite! Novy kredit: {} €", "Topped up! New credit: {} €"),
+    );
+    m.insert(
+        "charge_ok_format",
+        ("Uctovane. Zostatok: {} €", "Charged. Balance: {} €"),
+    );
+    m.insert("block_ok", ("Karta zablokovana", "Card blocked"));
+    m.insert("unblock_ok", ("Karta odblokovana", "Card unblocked"));
+    m.insert("activate_ok", ("Karta aktivovana", "Card activated"));
+    m.insert("saved", ("Ulozene", "Saved"));
 
     // Staff dashboard
     m.insert("staff_dashboard", ("Panel personalu", "Staff Dashboard"));

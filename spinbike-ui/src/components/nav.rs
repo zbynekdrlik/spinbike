@@ -47,9 +47,8 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
                             <a href="/my/balance">{move || i18n::t(lang.get(), "balance")}</a>
                             {if is_staff {
                                 view! {
-                                    <a href="/staff">{move || i18n::t(lang.get(), "staff")}</a>
-                                    <a href="/staff/cards">{move || i18n::t(lang.get(), "cards")}</a>
-                                    <a href="/staff/payments">{move || i18n::t(lang.get(), "payments")}</a>
+                                    <a href="/staff">{move || i18n::t(lang.get(), "cards")}</a>
+                                    <a href="/staff/classes">{move || i18n::t(lang.get(), "classes")}</a>
                                 }.into_any()
                             } else {
                                 view! {}.into_any()

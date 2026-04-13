@@ -110,12 +110,40 @@ async function globalSetup(_config: FullConfig) {
         });
     }
 
-    // Create a test card with credit
-    await fetch(`${API}/api/cards/activate`, {
-        method: 'POST',
-        headers: authHeaders,
-        body: JSON.stringify({ barcode: '70701001', initial_credit: 50.0 }),
-    });
+    // Create named test cards so search-by-name / company / phone can find them.
+    const testCards = [
+        {
+            barcode: '70701001',
+            initial_credit: 50.0,
+            first_name: 'Jana',
+            last_name: 'Testova',
+            company: 'TestCorp',
+            phone: '+421900111222',
+        },
+        {
+            barcode: '70702002',
+            initial_credit: 25.0,
+            first_name: 'Petr',
+            last_name: 'Vzorny',
+            company: 'TestCorp',
+            phone: '+421900333444',
+        },
+        {
+            barcode: '70703003',
+            initial_credit: 10.0,
+            first_name: 'Eva',
+            last_name: 'Novotna',
+            company: 'OtherCo',
+            phone: '+421900555666',
+        },
+    ];
+    for (const card of testCards) {
+        await fetch(`${API}/api/cards/activate`, {
+            method: 'POST',
+            headers: authHeaders,
+            body: JSON.stringify(card),
+        });
+    }
 
     // Create a service for payment tests
     await fetch(`${API}/api/admin/services`, {

@@ -5,12 +5,11 @@ use leptos_router::path;
 use crate::components::nav::Navbar;
 use crate::i18n;
 use crate::pages::admin::AdminPage;
-use crate::pages::card_ops::CardOpsPage;
+use crate::pages::dashboard::DashboardPage;
 use crate::pages::link_card::LinkCardPage;
 use crate::pages::login::{LoginPage, RegisterPage};
 use crate::pages::my_balance::MyBalancePage;
 use crate::pages::my_bookings::MyBookingsPage;
-use crate::pages::payments::PaymentsPage;
 use crate::pages::schedule::SchedulePage;
 use crate::pages::staff_dashboard::StaffDashboardPage;
 
@@ -42,9 +41,8 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/my/bookings") view=MyBookingsPage />
                         <Route path=path!("/my/balance") view=MyBalancePage />
                         <Route path=path!("/link-card") view=LinkCardPage />
-                        <Route path=path!("/staff") view=StaffDashboardPage />
-                        <Route path=path!("/staff/cards") view=CardOpsPage />
-                        <Route path=path!("/staff/payments") view=PaymentsPage />
+                        <Route path=path!("/staff") view=DashboardPage />
+                        <Route path=path!("/staff/classes") view=StaffDashboardPage />
                         <Route path=path!("/admin") view=AdminPage />
                     </Routes>
                 </div>

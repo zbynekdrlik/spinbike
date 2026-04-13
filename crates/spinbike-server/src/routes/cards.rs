@@ -1,6 +1,6 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{get, post, put},
 };
@@ -54,6 +54,17 @@ pub struct BlockRequest {
     pub blocked: bool,
 }
 
+#[derive(Deserialize)]
+pub struct SearchQuery {
+    pub q: String,
+    #[serde(default = "default_search_limit")]
+    pub limit: i64,
+}
+
+fn default_search_limit() -> i64 {
+    10
+}
+
 #[derive(Serialize)]
 pub struct CardResponse {
     pub id: i64,
@@ -103,6 +114,7 @@ impl From<&db::CardRow> for CardResponse {
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/cards", get(list_cards))
+        .route("/api/cards/search", get(search_cards))
         .route("/api/cards/link", post(link_card))
         .route("/api/cards/lookup/{barcode}", get(lookup_card))
         .route("/api/cards/activate", post(activate_card))
@@ -111,6 +123,25 @@ pub fn routes() -> Router<AppState> {
         .route("/api/cards/{id}", put(update_card))
         .route("/api/cards/{id}/transactions", get(card_transactions))
         .route("/api/my/balance", get(my_balance))
+}
+
+async fn search_cards(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Query(params): Query<SearchQuery>,
+) -> Result<Json<Vec<CardResponse>>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_manage_cards() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Staff only"})),
+        ));
+    }
+    // Clamp limit to a sane range so clients can't request the whole table.
+    let limit = params.limit.clamp(1, 50);
+    let cards = db::search_cards(&state.pool, &params.q, limit)
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(cards.iter().map(CardResponse::from).collect()))
 }
 
 async fn list_cards(
