@@ -160,6 +160,45 @@ jobs:
         env:
           DATABASE_PATH: /tmp/spinbike-e2e.db
 
+  mutation-test:
+    name: Mutation Testing
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: test
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      - name: Create placeholder dist for rust-embed
+        run: mkdir -p spinbike-ui/dist && touch spinbike-ui/dist/index.html
+
+      - name: Compute PR diff vs base
+        run: git diff origin/${{ github.base_ref }}...HEAD > pr.diff
+
+      - name: Run cargo-mutants on diff
+        run: |
+          # Mutate only PR-changed lines in the Rust crates.
+          # --no-shuffle keeps output deterministic for log readability.
+          cargo mutants \
+            --in-diff pr.diff \
+            --timeout 60 \
+            --no-shuffle \
+            --package spinbike-core \
+            --package spinbike-server
+
   check-version-bump:
     name: Version Bump Check
     runs-on: ubuntu-latest
