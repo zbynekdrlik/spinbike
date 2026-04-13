@@ -338,7 +338,7 @@ fn ActionPanel(
                         {if !phone.is_empty() { format!(" · {phone}") } else { String::new() }}
                     </div>
                 </div>
-                <button class="btn btn-sm btn-outline" on:click=on_close aria-label="close">"\u{2715}"</button>
+                <button class="btn btn-sm btn-outline" on:click=move |e| on_close.run(e) title="close">"\u{2715}"</button>
             </div>
 
             <div style="font-size:1.4rem;font-weight:700;margin:8px 0">
