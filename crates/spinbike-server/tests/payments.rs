@@ -176,17 +176,20 @@ async fn charge_missing_card_is_404() {
 #[tokio::test]
 async fn payment_routes_are_registered() {
     let app = TestApp::new().await;
-    // Any response that is NOT 404 proves the route is mounted. We send a
-    // valid request and accept 200/400/403 — all acceptable.
-    let body = serde_json::json!({ "card_id": 1, "amount": 10.0 });
+    // Seed a real card so handler's "Card not found" 404 can't mask a
+    // route-registration 404.
+    let card_id = app
+        .seed_card("REG-PAY", 100.0, None, None, None, None)
+        .await;
+    let body = serde_json::json!({ "card_id": card_id, "amount": 5.0 });
     let (status, _) = app
         .request(post_json("/api/payments/charge", &app.staff_token, &body))
         .await;
-    assert_ne!(status, axum::http::StatusCode::NOT_FOUND);
+    assert_eq!(status, axum::http::StatusCode::OK);
     let (status, _) = app
         .request(post_json("/api/payments/storno", &app.staff_token, &body))
         .await;
-    assert_ne!(status, axum::http::StatusCode::NOT_FOUND);
-    // Use `get` to make the unused-helper warning go away and catch any 404 regression on read routes.
+    assert_eq!(status, axum::http::StatusCode::OK);
+    // Touch /api/cards so the `get` helper is exercised in this binary too.
     let _ = app.request(get("/api/cards", &app.staff_token)).await;
 }
