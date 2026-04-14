@@ -6,6 +6,7 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "card holder info and allow debit default",
         V2_CARD_HOLDER_INFO,
     ),
+    (3, "card search_text column + index", V3_CARD_SEARCH_TEXT),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -108,4 +109,12 @@ ALTER TABLE cards ADD COLUMN last_name TEXT;
 ALTER TABLE cards ADD COLUMN company TEXT;
 ALTER TABLE cards ADD COLUMN phone TEXT;
 UPDATE cards SET allow_debit = 1;
+"#;
+
+// Adds a normalized search column so staff can find "Zbyněk" by typing "zbyne".
+// Populated by Rust (via backfill_search_text) after the ALTER runs, since
+// SQLite can't strip diacritics natively.
+const V3_CARD_SEARCH_TEXT: &str = r#"
+ALTER TABLE cards ADD COLUMN search_text TEXT NOT NULL DEFAULT '';
+CREATE INDEX idx_cards_search_text ON cards(search_text);
 "#;
