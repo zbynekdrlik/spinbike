@@ -11,6 +11,10 @@ pub struct TransactionRow {
     pub amount: f64,
     pub action: String,
     pub created_at: String,
+    // Joined from services — None when the transaction wasn't tied to a service
+    // (e.g. top-ups, storno refunds).
+    #[sqlx(default)]
+    pub service_name: Option<String>,
 }
 
 pub async fn create_transaction(
@@ -44,7 +48,13 @@ pub async fn list_transactions_for_card(
     card_id: i64,
 ) -> Result<Vec<TransactionRow>> {
     let txns = sqlx::query_as::<_, TransactionRow>(
-        "SELECT * FROM transactions WHERE card_id = ? ORDER BY created_at DESC",
+        "SELECT t.id, t.user_id, t.card_id, t.staff_id, t.service_id,
+                t.amount, t.action, t.created_at,
+                s.name AS service_name
+         FROM transactions t
+         LEFT JOIN services s ON s.id = t.service_id
+         WHERE t.card_id = ?
+         ORDER BY t.created_at DESC",
     )
     .bind(card_id)
     .fetch_all(pool)
@@ -58,7 +68,13 @@ pub async fn list_transactions_for_user(
     user_id: i64,
 ) -> Result<Vec<TransactionRow>> {
     let txns = sqlx::query_as::<_, TransactionRow>(
-        "SELECT * FROM transactions WHERE user_id = ? ORDER BY created_at DESC",
+        "SELECT t.id, t.user_id, t.card_id, t.staff_id, t.service_id,
+                t.amount, t.action, t.created_at,
+                s.name AS service_name
+         FROM transactions t
+         LEFT JOIN services s ON s.id = t.service_id
+         WHERE t.user_id = ?
+         ORDER BY t.created_at DESC",
     )
     .bind(user_id)
     .fetch_all(pool)

@@ -92,6 +92,8 @@ pub struct TransactionResponse {
     pub amount: f64,
     pub action: String,
     pub created_at: String,
+    // Name of the service the transaction paid for, when applicable.
+    pub service_name: Option<String>,
 }
 
 impl From<&db::CardRow> for CardResponse {
@@ -418,6 +420,7 @@ async fn card_transactions(
                 amount: t.amount,
                 action: t.action,
                 created_at: t.created_at,
+                service_name: t.service_name,
             })
             .collect(),
     ))
@@ -445,6 +448,7 @@ async fn my_balance(
                 amount: t.amount,
                 action: t.action,
                 created_at: t.created_at,
+                service_name: t.service_name,
             })
             .collect(),
     }))

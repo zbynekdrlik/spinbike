@@ -54,6 +54,8 @@ struct TxnInfo {
     amount: f64,
     action: String,
     created_at: String,
+    #[serde(default)]
+    service_name: Option<String>,
 }
 
 const QUICK_TOPUP: [f64; 4] = [5.0, 10.0, 20.0, 50.0];
@@ -376,11 +378,13 @@ fn ActionPanel(
                     let rows: Vec<_> = t.iter().map(|tx| {
                         let date = format_sk_datetime(&tx.created_at);
                         let action = tx.action.clone();
+                        let service = tx.service_name.clone().unwrap_or_else(|| "—".into());
                         let amount = format!("{:+.2}", tx.amount);
                         view! {
                             <tr>
                                 <td>{date}</td>
                                 <td>{action}</td>
+                                <td>{service}</td>
                                 <td>{amount}</td>
                             </tr>
                         }
@@ -392,6 +396,7 @@ fn ActionPanel(
                                     <tr>
                                         <th>{i18n::t(lang.get(), "date")}</th>
                                         <th>{i18n::t(lang.get(), "action")}</th>
+                                        <th>{i18n::t(lang.get(), "service")}</th>
                                         <th>{i18n::t(lang.get(), "amount")}</th>
                                     </tr>
                                 </thead>
