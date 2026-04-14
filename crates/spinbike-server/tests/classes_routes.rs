@@ -5,15 +5,24 @@ mod helpers;
 use helpers::{TestApp, delete, get, post_json};
 use spinbike_server::db::classes as db_classes;
 
-/// Seed a basic template on weekday=0 (Monday) at 17:00 with capacity 10.
-/// Returns (template_id, date_on_that_monday).
+/// Pick a Monday at least a week in the future so /api/my/bookings
+/// (which filters `date >= date('now')`) always includes our seeded booking.
+fn future_monday() -> String {
+    use chrono::{Datelike, Days, Utc, Weekday};
+    let mut d = Utc::now().date_naive() + Days::new(7);
+    while d.weekday() != Weekday::Mon {
+        d = d.succ_opt().unwrap();
+    }
+    d.format("%Y-%m-%d").to_string()
+}
+
+/// Seed a basic Monday template at 17:00 with capacity 10.
+/// Returns (template_id, date_on_a_future_monday).
 async fn seed_monday_template(app: &TestApp) -> (i64, String) {
     let id = db_classes::create_template(&app.pool, 0, "17:00", 60, None, 10)
         .await
         .unwrap();
-    // Pick a known Monday so list_classes will generate an occurrence for us.
-    // 2026-04-13 was a Monday (today, per the session's current date).
-    (id, "2026-04-13".to_string())
+    (id, future_monday())
 }
 
 #[tokio::test]
