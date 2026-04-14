@@ -217,6 +217,59 @@ jobs:
             --package spinbike-core \
             --package spinbike-server
 
+  deploy:
+    name: Deploy (self-hosted)
+    runs-on: [self-hosted, spinbike-deploy]
+    needs: [test, build-wasm, e2e]
+    timeout-minutes: 30
+    # Only auto-deploy on direct pushes to dev; PR runs and other branches skip.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build WASM frontend (Trunk)
+        run: |
+          cd spinbike-ui
+          trunk build --release
+
+      - name: Force rust-embed to re-bake dist
+        # Cargo's incremental compilation doesn't track dist/ content, so the
+        # server binary skips re-embedding unless a tracked file changes.
+        run: touch crates/spinbike-server/src/routes/static_files.rs
+
+      - name: Build release server
+        run: cargo build --release --bin spinbike-server
+
+      - name: Install binary and restart service
+        run: |
+          # `install` unlinks the destination first, so the running process
+          # keeps its mmap to the old inode while the new file takes over the
+          # path — avoids ETXTBSY on the in-use binary.
+          install -m 755 target/release/spinbike-server \
+            /home/newlevel/devel/spinbike/target/release/spinbike-server
+          sudo -n systemctl restart spinbike.service
+
+      - name: Wait for live site health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sfI https://spinbike.newlevel.media > /dev/null; then
+              echo "Live site responding (attempt $i)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ERROR: live site did not respond within 60s"
+          sudo -n systemctl status spinbike.service --no-pager || true
+          exit 1
+
+      - name: Post-deploy smoke tests (Playwright against live)
+        run: |
+          cd e2e
+          npm ci
+          npx playwright install --with-deps chromium
+          SMOKE_BASE_URL=https://spinbike.newlevel.media \
+            npx playwright test -g '@smoke'
+
   check-version-bump:
     name: Version Bump Check
     runs-on: ubuntu-latest
