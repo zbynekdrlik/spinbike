@@ -121,6 +121,63 @@ async fn update_template_applies_changes() {
     assert_eq!(resp["start_time"].as_str().unwrap(), "19:30");
     // Unchanged field round-trips correctly.
     assert_eq!(resp["duration_minutes"].as_i64().unwrap(), 60);
+    // Active must stay true (default). Kills the `active != 0` → `active == 0`
+    // mutant that would flip the boolean in the response.
+    assert!(resp["active"].as_bool().unwrap());
+}
+
+#[tokio::test]
+async fn list_templates_include_inactive_returns_soft_deleted() {
+    // Kills the `list_all_templates -> Ok(vec![])` mutant: the include_inactive
+    // path must still return soft-deleted templates.
+    let app = TestApp::new().await;
+    let create = serde_json::json!({
+        "weekday": 3,
+        "start_time": "07:00",
+        "duration_minutes": 60,
+        "capacity": 4,
+    });
+    let (_, resp) = app
+        .request(post_json("/api/admin/templates", &app.admin_token, &create))
+        .await;
+    let tid = resp["id"].as_i64().unwrap();
+
+    // Soft-delete (sets active=0).
+    let _ = app
+        .request(delete(
+            &format!("/api/admin/templates/{tid}"),
+            &app.admin_token,
+        ))
+        .await;
+
+    // Default listing omits it.
+    let (_, resp) = app
+        .request(get("/api/admin/templates", &app.admin_token))
+        .await;
+    assert!(
+        !resp
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|t| t["id"].as_i64() == Some(tid))
+    );
+
+    // include_inactive=true must still return it — this is the path that calls
+    // `list_all_templates` (otherwise we hit `list_active_templates`).
+    let (status, resp) = app
+        .request(get(
+            "/api/admin/templates?include_inactive=true",
+            &app.admin_token,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let row = resp
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"].as_i64() == Some(tid))
+        .expect("soft-deleted template must appear when include_inactive=true");
+    assert!(!row["active"].as_bool().unwrap());
 }
 
 // ---------- Cancel class ----------
