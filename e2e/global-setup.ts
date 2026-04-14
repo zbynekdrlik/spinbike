@@ -5,6 +5,14 @@ const API = 'http://localhost:8099';
 const DB_PATH = process.env.DATABASE_PATH || '/tmp/spinbike-e2e-test.db';
 
 async function globalSetup(_config: FullConfig) {
+    // Post-deploy smoke runs (SMOKE_BASE_URL set) target production and must
+    // never seed test data. Bail out early — smoke.spec.ts is self-contained
+    // and reads from process.env.SMOKE_BASE_URL directly.
+    if (process.env.SMOKE_BASE_URL) {
+        console.log(`SMOKE_BASE_URL=${process.env.SMOKE_BASE_URL} — skipping global-setup`);
+        return;
+    }
+
     // Wait for server to be ready
     for (let i = 0; i < 30; i++) {
         try {
