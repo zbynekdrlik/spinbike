@@ -298,24 +298,21 @@ fn ActionPanel(
     #[prop(into)] on_close: Callback<web_sys::MouseEvent>,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
-    let (show_txns, set_show_txns) = signal(false);
     let (txns, set_txns) = signal(Vec::<TxnInfo>::new());
     let (show_edit, set_show_edit) = signal(false);
 
-    // Load transactions when shown for the first time.
+    // Transaction history is the most-read piece of card context, so load it
+    // as soon as the panel mounts and always render it below the actions.
     let card_id_for_txn = card.id;
     Effect::new(move |_| {
-        if show_txns.get() {
-            spawn_local(async move {
-                if let Ok(t) = api::get::<Vec<TxnInfo>>(&format!(
-                    "/api/cards/{card_id_for_txn}/transactions"
-                ))
-                .await
-                {
-                    set_txns.set(t);
-                }
-            });
-        }
+        spawn_local(async move {
+            if let Ok(t) =
+                api::get::<Vec<TxnInfo>>(&format!("/api/cards/{card_id_for_txn}/transactions"))
+                    .await
+            {
+                set_txns.set(t);
+            }
+        });
     });
 
     let card_id = card.id;
@@ -348,8 +345,10 @@ fn ActionPanel(
                 } else { view! {}.into_any() }}
             </div>
 
-            <TopupSection card_id=card_id set_selected=set_selected set_msg=set_msg />
+            // Ordered by actual staff usage frequency: charge (pay-for-service)
+            // is the most-common action, then top-up. Edit/block stay secondary.
             <ChargeSection card_id=card_id services=services set_selected=set_selected set_msg=set_msg />
+            <TopupSection card_id=card_id set_selected=set_selected set_msg=set_msg />
 
             <div class="flex gap-1 mt-2" style="flex-wrap:wrap">
                 <button
@@ -359,12 +358,6 @@ fn ActionPanel(
                     {move || i18n::t(lang.get(), "edit")}
                 </button>
                 <BlockButton card_id=card_id blocked=is_blocked set_selected=set_selected set_msg=set_msg />
-                <button
-                    class="btn btn-sm btn-outline"
-                    on:click=move |_| set_show_txns.update(|v| *v = !*v)
-                >
-                    {move || i18n::t(lang.get(), "transaction_history")}
-                </button>
             </div>
 
             {move || {
@@ -373,14 +366,15 @@ fn ActionPanel(
                 } else { view! { <span></span> }.into_any() }
             }}
 
-            {move || {
-                if show_txns.get() {
+            <div class="mt-2">
+                <h3 style="font-size:0.95rem;margin-bottom:8px">{move || i18n::t(lang.get(), "transaction_history")}</h3>
+                {move || {
                     let t = txns.get();
                     if t.is_empty() {
-                        return view! { <p class="text-muted mt-2">{i18n::t(lang.get(), "no_transactions_card")}</p> }.into_any();
+                        return view! { <p class="text-muted">{i18n::t(lang.get(), "no_transactions_card")}</p> }.into_any();
                     }
                     let rows: Vec<_> = t.iter().map(|tx| {
-                        let date = tx.created_at.clone();
+                        let date = format_sk_datetime(&tx.created_at);
                         let action = tx.action.clone();
                         let amount = format!("{:+.2}", tx.amount);
                         view! {
@@ -392,7 +386,7 @@ fn ActionPanel(
                         }
                     }).collect();
                     view! {
-                        <div class="mt-2" style="overflow-x:auto">
+                        <div style="overflow-x:auto">
                             <table class="data-table">
                                 <thead>
                                     <tr>
@@ -405,10 +399,27 @@ fn ActionPanel(
                             </table>
                         </div>
                     }.into_any()
-                } else { view! { <span></span> }.into_any() }
-            }}
+                }}
+            </div>
         </div>
     }
+}
+
+/// Format a server-side timestamp ("YYYY-MM-DD HH:MM:SS" or ISO 8601) into
+/// the Slovak convention `dd.MM.yyyy HH:mm`. Returns the input unchanged if
+/// the string doesn't parse — better to show something than nothing.
+fn format_sk_datetime(raw: &str) -> String {
+    use chrono::NaiveDateTime;
+    let trimmed = raw.trim();
+    // SQLite `datetime('now')` format.
+    if let Ok(dt) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S") {
+        return dt.format("%d.%m.%Y %H:%M").to_string();
+    }
+    // ISO 8601 with T separator (rarer but handle it just in case).
+    if let Ok(dt) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M:%S") {
+        return dt.format("%d.%m.%Y %H:%M").to_string();
+    }
+    raw.to_string()
 }
 
 #[component]
