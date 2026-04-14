@@ -98,6 +98,21 @@ mod tests {
             .map(|s| s.to_string())
     }
 
+    /// Kills `build_cors_layer -> Default::default()`. When CORS_ORIGIN is
+    /// unset (as in CI's test env) the wrapper must return the permissive
+    /// layer, not the empty default.
+    #[tokio::test]
+    async fn build_cors_layer_wrapper_is_permissive_when_env_unset() {
+        // Defensive: ensure env doesn't leak in from another harness.
+        // SAFETY: no other test sets CORS_ORIGIN in this crate.
+        unsafe {
+            std::env::remove_var("CORS_ORIGIN");
+        }
+        let layer = build_cors_layer();
+        let echoed = preflight_origin(layer, "https://anywhere.example").await;
+        assert_eq!(echoed.as_deref(), Some("*"));
+    }
+
     #[tokio::test]
     async fn cors_layer_for_none_is_permissive() {
         let layer = cors_layer_for(None);
