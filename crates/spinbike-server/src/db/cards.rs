@@ -507,4 +507,67 @@ mod tests {
         assert_eq!(cards.len(), 1);
         assert_eq!(cards[0].id, card_id);
     }
+
+    /// Simulates a DB that predates the V3 migration: cards exist with
+    /// empty search_text. Backfill must report how many it fixed AND
+    /// actually populate them, else diacritic-folded search silently
+    /// returns no results for those rows after upgrade.
+    #[tokio::test]
+    async fn backfill_populates_empty_search_text_and_reports_count() {
+        let pool = setup().await;
+
+        // Insert three rows with empty search_text directly, bypassing the
+        // normal create_card path which auto-computes it.
+        for (barcode, first, last) in [
+            ("LEGACY-1", "Zbyněk", "Drlík"),
+            ("LEGACY-2", "Stevo", "Žumerling"),
+            ("LEGACY-3", "Anna", "Nováková"),
+        ] {
+            sqlx::query(
+                "INSERT INTO cards (barcode, first_name, last_name, search_text) VALUES (?, ?, ?, '')",
+            )
+            .bind(barcode)
+            .bind(first)
+            .bind(last)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // Add a row that already has search_text so we can prove backfill
+        // skips it (the "WHERE search_text = ''" filter is load-bearing).
+        create_card_with_info(&pool, "MODERN-1", 0.0, Some("Eva"), Some("Mod"), None, None)
+            .await
+            .unwrap();
+
+        let count = backfill_search_text(&pool).await.unwrap();
+        assert_eq!(
+            count, 3,
+            "must report exact count — kills Ok(0) and Ok(1) mutants"
+        );
+
+        // Behavior: the three legacy rows now have populated search_text and
+        // diacritic-folded search finds them.
+        let hits = search_cards(&pool, "zbyne", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].barcode, "LEGACY-1");
+        let hits = search_cards(&pool, "zumer", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].barcode, "LEGACY-2");
+        let hits = search_cards(&pool, "novak", 10).await.unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].barcode, "LEGACY-3");
+    }
+
+    /// A second backfill call on a clean DB must be a no-op — proves the
+    /// WHERE filter works and we aren't churning rows on every startup.
+    #[tokio::test]
+    async fn backfill_is_idempotent() {
+        let pool = setup().await;
+        create_card_with_info(&pool, "NEW-1", 0.0, Some("A"), Some("B"), None, None)
+            .await
+            .unwrap();
+        let count = backfill_search_text(&pool).await.unwrap();
+        assert_eq!(count, 0);
+    }
 }
