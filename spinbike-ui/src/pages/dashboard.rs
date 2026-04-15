@@ -82,6 +82,16 @@ pub fn DashboardPage() -> impl IntoView {
     // suggestion" — so typing + Enter picks the top match without a click.
     let (highlighted_idx, set_highlighted_idx) = signal(0usize);
 
+    // Explicit ref so we can restore focus after pick_card and after the
+    // action panel closes. HTML `autofocus` only runs once on mount.
+    let search_input_ref = NodeRef::<leptos::html::Input>::new();
+
+    Effect::new(move |_| {
+        if let Some(el) = search_input_ref.get() {
+            let _ = el.focus();
+        }
+    });
+
     // Load services once (for charge dropdown).
     Effect::new(move |_| {
         spawn_local(async move {
@@ -139,6 +149,9 @@ pub fn DashboardPage() -> impl IntoView {
     let clear_selection = move |_| {
         set_selected.set(None);
         set_msg.set(String::new());
+        if let Some(el) = search_input_ref.get() {
+            let _ = el.focus();
+        }
     };
 
     // Shared "pick this card" behaviour — used both by click on a dropdown
@@ -149,6 +162,12 @@ pub fn DashboardPage() -> impl IntoView {
         set_query.set(String::new());
         set_results.set(Vec::new());
         set_err.set(String::new());
+        // Keep the keyboard-first workflow alive: the user should be able to
+        // start typing the next card's name immediately without reaching for
+        // the mouse.
+        if let Some(el) = search_input_ref.get() {
+            let _ = el.focus();
+        }
     };
 
     let on_search_keydown = move |ev: web_sys::KeyboardEvent| {
@@ -185,7 +204,7 @@ pub fn DashboardPage() -> impl IntoView {
             <input
                 type="search"
                 class="form-control"
-                autofocus
+                node_ref=search_input_ref
                 inputmode="search"
                 prop:value=move || query.get()
                 placeholder=move || i18n::t(lang.get(), "search_cards_placeholder")
