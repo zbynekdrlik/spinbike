@@ -505,3 +505,10 @@ th {
 .data-table tr:hover { background: var(--surface-hover); }
 .text-success { color: var(--accent); }
 .text-danger { color: var(--danger); }
+
+/* Negative card credit: red-tint the balance so staff spot overdrawn cards
+   at a glance. Applied both in the action-panel headline and per-result rows. */
+.credit-negative { color: var(--danger); font-weight: 700; }
+
+/* Keyboard-selected suggestion in the card search dropdown. */
+.search-result-active { background: var(--surface-hover); }

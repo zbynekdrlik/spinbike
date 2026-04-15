@@ -34,13 +34,20 @@ struct UserInfoResp {
     role: String,
 }
 
-fn navigate_home() {
+fn navigate_role_home(role: &str) {
+    // Staff/admin spend all their time on the card dashboard — land them there
+    // directly. Customers still get the schedule.
+    let target = match role {
+        "staff" | "admin" => "/staff",
+        _ => "/",
+    };
     if let Some(w) = web_sys::window() {
-        let _ = w.location().set_href("/");
+        let _ = w.location().set_href(target);
     }
 }
 
 fn save_and_redirect(resp: AuthResp) {
+    let role = resp.user.role.clone();
     let data = AuthData {
         token: resp.token,
         user: UserInfo {
@@ -55,7 +62,7 @@ fn save_and_redirect(resp: AuthResp) {
     if let Some(set_ver) = use_context::<WriteSignal<u32>>() {
         set_ver.update(|v| *v += 1);
     }
-    navigate_home();
+    navigate_role_home(&role);
 }
 
 #[component]

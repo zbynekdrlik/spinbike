@@ -78,6 +78,9 @@ pub fn DashboardPage() -> impl IntoView {
     let (show_activate, set_show_activate) = signal(false);
     let (msg, set_msg) = signal(String::new());
     let (err, set_err) = signal(String::new());
+    // Keyboard-driven highlight within the search dropdown. 0 means "first
+    // suggestion" — so typing + Enter picks the top match without a click.
+    let (highlighted_idx, set_highlighted_idx) = signal(0usize);
 
     // Load services once (for charge dropdown).
     Effect::new(move |_| {
@@ -113,6 +116,7 @@ pub fn DashboardPage() -> impl IntoView {
                 Ok(list) => {
                     if query.get_untracked() == q_at_start {
                         set_results.set(list);
+                        set_highlighted_idx.set(0);
                     }
                 }
                 Err(e) => set_err.set(e),
@@ -137,6 +141,43 @@ pub fn DashboardPage() -> impl IntoView {
         set_msg.set(String::new());
     };
 
+    // Shared "pick this card" behaviour — used both by click on a dropdown
+    // row and by pressing Enter while a row is highlighted. Signals are Copy,
+    // so this closure is Copy + Fn.
+    let pick_card = move |card: CardInfo| {
+        set_selected.set(Some(card));
+        set_query.set(String::new());
+        set_results.set(Vec::new());
+        set_err.set(String::new());
+    };
+
+    let on_search_keydown = move |ev: web_sys::KeyboardEvent| {
+        let list = results.get_untracked();
+        let len = list.len();
+        match ev.key().as_str() {
+            "ArrowDown" if len > 0 => {
+                ev.prevent_default();
+                set_highlighted_idx.update(|i| *i = (*i + 1) % len);
+            }
+            "ArrowUp" if len > 0 => {
+                ev.prevent_default();
+                set_highlighted_idx.update(|i| *i = (*i + len - 1) % len);
+            }
+            "Enter" if len > 0 => {
+                ev.prevent_default();
+                let idx = highlighted_idx.get_untracked().min(len - 1);
+                if let Some(card) = list.get(idx).cloned() {
+                    pick_card(card);
+                }
+            }
+            "Escape" => {
+                set_query.set(String::new());
+                set_results.set(Vec::new());
+            }
+            _ => {}
+        }
+    };
+
     view! {
         <h1 class="page-title">{move || i18n::t(lang.get(), "card_dashboard")}</h1>
 
@@ -149,6 +190,7 @@ pub fn DashboardPage() -> impl IntoView {
                 prop:value=move || query.get()
                 placeholder=move || i18n::t(lang.get(), "search_cards_placeholder")
                 on:input=on_search_input
+                on:keydown=on_search_keydown
                 style="font-size:1.1rem;padding:12px"
             />
             {move || {
@@ -163,7 +205,7 @@ pub fn DashboardPage() -> impl IntoView {
                 if list.is_empty() {
                     return view! { <span></span> }.into_any();
                 }
-                let items: Vec<_> = list.into_iter().map(|c| {
+                let items: Vec<_> = list.into_iter().enumerate().map(|(idx, c)| {
                     let card_for_pick = c.clone();
                     let name = full_name(&c);
                     let barcode = c.barcode.clone();
@@ -171,18 +213,25 @@ pub fn DashboardPage() -> impl IntoView {
                     let tail = &barcode[barcode.len() - tail_len..];
                     let tail_str = tail.to_string();
                     let company = c.company.clone().unwrap_or_default();
-                    let credit = format!("{:.2} €", c.credit);
+                    let credit_val = c.credit;
+                    let credit = format!("{:.2} €", credit_val);
+                    let credit_class = if credit_val < 0.0 { "credit-negative" } else { "" };
                     let is_blocked = c.blocked;
                     view! {
                         <div
-                            class="search-result"
+                            class=move || {
+                                if highlighted_idx.get() == idx {
+                                    "search-result search-result-active"
+                                } else {
+                                    "search-result"
+                                }
+                            }
                             data-testid="search-result"
                             style="display:flex;justify-content:space-between;align-items:center;padding:10px;border-bottom:1px solid var(--border);cursor:pointer;gap:8px"
-                            on:click=move |_| {
-                                set_selected.set(Some(card_for_pick.clone()));
-                                set_query.set(String::new());
-                                set_results.set(Vec::new());
-                                set_err.set(String::new());
+                            on:mouseenter=move |_| set_highlighted_idx.set(idx)
+                            on:click={
+                                let card = card_for_pick.clone();
+                                move |_| pick_card(card.clone())
                             }
                         >
                             <div>
@@ -197,7 +246,7 @@ pub fn DashboardPage() -> impl IntoView {
                                     {if !company.is_empty() { format!(" · {company}") } else { String::new() }}
                                 </div>
                             </div>
-                            <div style="font-weight:600;white-space:nowrap">{credit}</div>
+                            <div class=credit_class style="font-weight:600;white-space:nowrap">{credit}</div>
                         </div>
                     }
                 }).collect();
@@ -340,7 +389,11 @@ fn ActionPanel(
                 <button class="btn btn-sm btn-outline" on:click=move |e| on_close.run(e) title="close">"\u{2715}"</button>
             </div>
 
-            <div style="font-size:1.4rem;font-weight:700;margin:8px 0">
+            <div
+                class=if credit < 0.0 { "credit-negative" } else { "" }
+                style="font-size:1.4rem;font-weight:700;margin:8px 0"
+                data-testid="card-credit"
+            >
                 {format!("{credit:.2} €")}
                 {if is_blocked {
                     view! { <span class="badge badge-full" style="margin-left:8px;font-size:0.75rem">{i18n::t(lang.get(), "blocked")}</span> }.into_any()
@@ -410,21 +463,68 @@ fn ActionPanel(
     }
 }
 
-/// Format a server-side timestamp ("YYYY-MM-DD HH:MM:SS" or ISO 8601) into
-/// the Slovak convention `dd.MM.yyyy HH:mm`. Returns the input unchanged if
-/// the string doesn't parse — better to show something than nothing.
+/// Format a server-side timestamp into the Slovak convention `dd.MM.yyyy HH:mm`.
+/// Handles current SQLite output, ISO 8601, and legacy MS Access dumps
+/// (`MM/dd/yy` or `MM/dd/yyyy`) imported via the migrate-legacy tool.
+/// Falls back to the raw string so rows never disappear, even on unknown formats.
 fn format_sk_datetime(raw: &str) -> String {
     use chrono::NaiveDateTime;
     let trimmed = raw.trim();
-    // SQLite `datetime('now')` format.
-    if let Ok(dt) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S") {
-        return dt.format("%d.%m.%Y %H:%M").to_string();
-    }
-    // ISO 8601 with T separator (rarer but handle it just in case).
-    if let Ok(dt) = NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%dT%H:%M:%S") {
-        return dt.format("%d.%m.%Y %H:%M").to_string();
+    let patterns = [
+        "%Y-%m-%d %H:%M:%S",    // SQLite datetime('now')
+        "%Y-%m-%dT%H:%M:%S",    // ISO 8601 with T
+        "%Y-%m-%d %H:%M:%S%.f", // SQLite with fractional seconds
+        "%m/%d/%y %H:%M:%S",    // legacy MS Access, 2-digit year
+        "%m/%d/%Y %H:%M:%S",    // legacy MS Access, 4-digit year
+    ];
+    for pattern in patterns {
+        if let Ok(dt) = NaiveDateTime::parse_from_str(trimmed, pattern) {
+            return dt.format("%d.%m.%Y %H:%M").to_string();
+        }
     }
     raw.to_string()
+}
+
+#[cfg(test)]
+mod date_tests {
+    use super::format_sk_datetime;
+
+    #[test]
+    fn sqlite_format() {
+        assert_eq!(
+            format_sk_datetime("2026-04-14 18:13:11"),
+            "14.04.2026 18:13"
+        );
+    }
+
+    #[test]
+    fn iso_8601_format() {
+        assert_eq!(
+            format_sk_datetime("2026-04-14T18:13:11"),
+            "14.04.2026 18:13"
+        );
+    }
+
+    #[test]
+    fn legacy_two_digit_year() {
+        assert_eq!(
+            format_sk_datetime("03/24/26 18:59:08"),
+            "24.03.2026 18:59"
+        );
+    }
+
+    #[test]
+    fn legacy_four_digit_year() {
+        assert_eq!(
+            format_sk_datetime("03/24/2026 18:59:08"),
+            "24.03.2026 18:59"
+        );
+    }
+
+    #[test]
+    fn unknown_returns_input() {
+        assert_eq!(format_sk_datetime("not-a-date"), "not-a-date");
+    }
 }
 
 #[component]
