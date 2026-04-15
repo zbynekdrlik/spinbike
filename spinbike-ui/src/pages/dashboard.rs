@@ -107,6 +107,10 @@ pub fn DashboardPage() -> impl IntoView {
     Effect::new(move |_| {
         let q = query.get();
         set_msg.set(String::new());
+        // Every new query resets the keyboard highlight to row 0. Without
+        // this, a prior mouseenter or a stale `highlighted_idx` from the
+        // last search can survive into the new dropdown.
+        set_highlighted_idx.set(0);
         if q.trim().is_empty() {
             set_results.set(Vec::new());
             set_searching.set(false);
@@ -126,7 +130,6 @@ pub fn DashboardPage() -> impl IntoView {
                 Ok(list) => {
                     if query.get_untracked() == q_at_start {
                         set_results.set(list);
-                        set_highlighted_idx.set(0);
                     }
                 }
                 Err(e) => set_err.set(e),
