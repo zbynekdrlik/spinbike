@@ -250,7 +250,6 @@ pub fn DashboardPage() -> impl IntoView {
                             }
                             data-testid="search-result"
                             style="display:flex;justify-content:space-between;align-items:center;padding:10px;border-bottom:1px solid var(--border);cursor:pointer;gap:8px"
-                            on:mouseenter=move |_| set_highlighted_idx.set(idx)
                             on:click={
                                 let card = card_for_pick.clone();
                                 move |_| pick_card(card.clone())
