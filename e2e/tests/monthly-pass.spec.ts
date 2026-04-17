@@ -18,7 +18,7 @@ test.describe('Monthly pass — sell, banner, visit', () => {
 
         // Top up so the card has credit for the pass
         // Jana starts with 50.00 initial credit; after +50 topup → 100.00
-        await page.locator('text=+50').click();
+        await page.locator('[data-testid="topup-50"]').click();
         await expect(page.locator('[data-testid="card-credit"]')).toContainText('100.00');
 
         // Open the sell-pass modal
