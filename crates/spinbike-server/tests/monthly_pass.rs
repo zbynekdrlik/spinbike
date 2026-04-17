@@ -323,3 +323,38 @@ async fn card_response_includes_expired_pass_with_negative_days_remaining() {
         "days_remaining must be NEGATIVE for expired pass, got {days}"
     );
 }
+
+#[tokio::test]
+async fn card_response_pass_field_when_valid_until_equals_today() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("BOUNDARY-TODAY", 50.0, None, None, None, None)
+        .await;
+
+    let today = chrono::Local::now().date_naive();
+    let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name = 'Monthly pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO transactions (card_id, service_id, amount, action, valid_until, created_at)
+         VALUES (?, ?, -35.0, 'charge', ?, datetime('now'))",
+    )
+    .bind(card_id)
+    .bind(pass_svc)
+    .bind(today)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, body) = app
+        .request(get("/api/cards/lookup/BOUNDARY-TODAY", &app.staff_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        body["pass"]["days_remaining"].as_i64().unwrap(),
+        0,
+        "valid_until == today must have 0 days_remaining; pass still present"
+    );
+    assert_eq!(body["pass"]["valid_until"], today.to_string());
+}
