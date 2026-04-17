@@ -252,6 +252,24 @@ pub async fn set_allow_debit(pool: &SqlitePool, card_id: i64, allow: bool) -> Re
     Ok(())
 }
 
+/// Return the latest `valid_until` across a card's transactions, or `None` if
+/// the card has never had a monthly-pass purchase. Callers compare against
+/// today's date to determine whether the pass is active or expired.
+pub async fn get_card_pass_valid_until(
+    pool: &SqlitePool,
+    card_id: i64,
+) -> Result<Option<chrono::NaiveDate>> {
+    let row: Option<(Option<chrono::NaiveDate>,)> = sqlx::query_as(
+        "SELECT MAX(valid_until) FROM transactions
+         WHERE card_id = ? AND valid_until IS NOT NULL",
+    )
+    .bind(card_id)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to compute pass valid_until")?;
+    Ok(row.and_then(|(d,)| d))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -569,5 +587,72 @@ mod tests {
             .unwrap();
         let count = backfill_search_text(&pool).await.unwrap();
         assert_eq!(count, 0);
+    }
+
+    #[tokio::test]
+    async fn pass_valid_until_none_when_no_pass_purchased() {
+        let pool = setup().await;
+        let card_id = create_card(&pool, "NO-PASS").await.unwrap();
+        let result = get_card_pass_valid_until(&pool, card_id).await.unwrap();
+        assert_eq!(result, None);
+    }
+
+    #[tokio::test]
+    async fn pass_valid_until_returns_max_across_multiple_passes() {
+        use crate::db::transactions::create_transaction_with_valid_until;
+        let pool = setup().await;
+        let card_id = create_card(&pool, "MULTI-PASS").await.unwrap();
+        // Two pass purchases — the later one wins.
+        let d1 = chrono::NaiveDate::from_ymd_opt(2026, 5, 15).unwrap();
+        let d2 = chrono::NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
+        create_transaction_with_valid_until(
+            &pool,
+            None,
+            Some(card_id),
+            None,
+            Some(1),
+            -35.0,
+            "charge",
+            Some(d1),
+        )
+        .await
+        .unwrap();
+        create_transaction_with_valid_until(
+            &pool,
+            None,
+            Some(card_id),
+            None,
+            Some(1),
+            -35.0,
+            "charge",
+            Some(d2),
+        )
+        .await
+        .unwrap();
+
+        let result = get_card_pass_valid_until(&pool, card_id).await.unwrap();
+        assert_eq!(
+            result,
+            Some(d2),
+            "MAX(valid_until) must win regardless of insert order"
+        );
+    }
+
+    #[tokio::test]
+    async fn pass_valid_until_ignores_non_pass_transactions() {
+        use crate::db::transactions::create_transaction;
+        let pool = setup().await;
+        let card_id = create_card(&pool, "CHARGE-ONLY").await.unwrap();
+        create_transaction(&pool, None, Some(card_id), None, Some(1), -5.0, "charge")
+            .await
+            .unwrap();
+        create_transaction(&pool, None, Some(card_id), None, None, 20.0, "topup")
+            .await
+            .unwrap();
+        let result = get_card_pass_valid_until(&pool, card_id).await.unwrap();
+        assert_eq!(
+            result, None,
+            "non-pass transactions must not produce a valid_until"
+        );
     }
 }
