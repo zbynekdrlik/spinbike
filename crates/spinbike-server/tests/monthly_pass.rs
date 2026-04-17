@@ -413,3 +413,86 @@ async fn card_response_pass_field_when_valid_until_equals_today() {
     );
     assert_eq!(body["pass"]["valid_until"], today.to_string());
 }
+
+// ── Mutant-killing tests added below ───────────────────────────────────────
+
+/// Kills `c.allow_debit != 0` → `c.allow_debit == 0` mutant in card_response_from_row.
+/// seed_card uses create_card_with_info which sets allow_debit=1 by default.
+/// If the comparison were flipped the field would read false, failing this assertion.
+#[tokio::test]
+async fn card_response_allow_debit_reflects_db_value() {
+    let app = TestApp::new().await;
+    app.seed_card("ALLOW-DEBIT", 10.0, None, None, None, None)
+        .await;
+    let (status, body) = app
+        .request(get("/api/cards/lookup/ALLOW-DEBIT", &app.staff_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "body={body}");
+    assert_eq!(
+        body["allow_debit"], true,
+        "allow_debit must be true when DB row has allow_debit=1"
+    );
+}
+
+/// Kills `body.price < 0.0` → `body.price <= 0.0` mutant in sell_pass.
+/// price=0 is a valid promotional pass — mutation would wrongly reject it with 400.
+#[tokio::test]
+async fn sell_pass_accepts_zero_price() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("SELL-ZERO", 10.0, None, None, None, None)
+        .await;
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "price": 0.0, "valid_until": "2030-01-01" }),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "price=0 must be accepted; body={resp}"
+    );
+    // Credit unchanged when pass is free (price=0 → no debit).
+    assert_eq!(
+        resp["new_credit"].as_f64().unwrap(),
+        10.0,
+        "credit unchanged when price=0"
+    );
+}
+
+/// Kills mutants 4, 5 (empty-router replacements) and mutant 6 (`delete -` on -35.0).
+/// Empty-router mutants would return 404; real router returns 200.
+/// Sign mutant (+35.0) would store a positive amount; real code stores -35.0.
+#[tokio::test]
+async fn seed_expired_pass_endpoint_is_reachable_and_stores_negative_amount() {
+    let app = TestApp::new().await;
+    let (status, body) = app
+        .request(post_json(
+            "/api/test/seed-expired-pass",
+            &app.staff_token,
+            &json!({ "barcode": "SEED-EXPIRED-1", "valid_until": "2020-01-01" }),
+        ))
+        .await;
+    // Empty-router mutants would 404 — real router returns 200.
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "seed endpoint must be reachable; body={body}"
+    );
+    let card_id = body["card_id"].as_i64().expect("card_id in response");
+
+    // Verify the stored amount is NEGATIVE — kills the `delete -` mutant on -35.0.
+    let amount: f64 = sqlx::query_scalar(
+        "SELECT amount FROM transactions WHERE card_id = ? AND valid_until IS NOT NULL",
+    )
+    .bind(card_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        amount, -35.0,
+        "seed_expired_pass must store a NEGATIVE amount (ledger convention)"
+    );
+}

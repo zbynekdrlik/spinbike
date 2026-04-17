@@ -46,6 +46,16 @@ pub(crate) fn cors_layer_for(origin: Option<String>) -> CorsLayer {
     }
 }
 
+/// Pure predicate: returns true when the given raw env value indicates test mode.
+pub fn is_test_mode_from_env(raw: Option<&str>) -> bool {
+    raw == Some("1")
+}
+
+/// Reads SPINBIKE_TEST_MODE and returns whether test-only endpoints should be merged.
+pub fn is_test_mode() -> bool {
+    is_test_mode_from_env(std::env::var("SPINBIKE_TEST_MODE").ok().as_deref())
+}
+
 /// Build and start the Axum server.
 pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Result<()> {
     let (event_tx, _) = broadcast::channel(256);
@@ -57,7 +67,7 @@ pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Re
     };
 
     let mut router = routes::all_routes();
-    if std::env::var("SPINBIKE_TEST_MODE").ok().as_deref() == Some("1") {
+    if is_test_mode() {
         tracing::warn!(
             "SPINBIKE_TEST_MODE=1 — test fixture endpoints are active. Do NOT use in production!"
         );
@@ -83,6 +93,15 @@ mod tests {
     use axum::routing::get;
     use db::{create_memory_pool, run_migrations};
     use tower::ServiceExt;
+
+    #[test]
+    fn test_mode_only_when_env_is_exactly_one() {
+        assert!(is_test_mode_from_env(Some("1")));
+        assert!(!is_test_mode_from_env(Some("0")));
+        assert!(!is_test_mode_from_env(Some("true")));
+        assert!(!is_test_mode_from_env(Some("")));
+        assert!(!is_test_mode_from_env(None));
+    }
 
     /// Build a tiny router with the CORS layer and a single GET / route, then
     /// send a preflight OPTIONS and inspect the Access-Control-Allow-Origin

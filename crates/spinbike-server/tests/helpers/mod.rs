@@ -90,8 +90,12 @@ impl TestApp {
             event_tx,
             jwt_secret: JWT_SECRET.to_string(),
         };
-        // Use all_routes() so tests can exercise the static-file fallback too.
-        let router = routes::all_routes().with_state(state);
+        // Use all_routes() + test_fixtures so integration tests can exercise
+        // both the real routes and the seed endpoints (the test harness always
+        // wants these, regardless of SPINBIKE_TEST_MODE).
+        let router = routes::all_routes()
+            .merge(spinbike_server::routes::test_fixtures::routes())
+            .with_state(state);
 
         Self {
             router,
