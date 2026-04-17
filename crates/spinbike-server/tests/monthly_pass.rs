@@ -325,6 +325,61 @@ async fn card_response_includes_expired_pass_with_negative_days_remaining() {
 }
 
 #[tokio::test]
+async fn sell_pass_rejects_today_as_valid_until() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("SELL-TODAY", 100.0, None, None, None, None)
+        .await;
+    let today = chrono::Local::now().date_naive();
+    let today_str = today.format("%Y-%m-%d").to_string();
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "price": 35.0, "valid_until": today_str }),
+        ))
+        .await;
+    // today is NOT in the future — must reject (kills `<=` → `<` mutant).
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn log_visit_accepts_pass_with_valid_until_today() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("VISIT-TODAY", 50.0, None, None, None, None)
+        .await;
+
+    // Insert a pass expiring TODAY directly — API won't allow today via sell-pass.
+    let today = chrono::Local::now().date_naive();
+    let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name = 'Monthly pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO transactions (card_id, service_id, amount, action, valid_until, created_at)
+         VALUES (?, ?, -35.0, 'charge', ?, datetime('now'))",
+    )
+    .bind(card_id)
+    .bind(pass_svc)
+    .bind(today)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let spinning_id = service_id(&app, "Spinning").await;
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/log-visit",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "service_id": spinning_id }),
+        ))
+        .await;
+    // Pass expiring today is still active — must accept (kills `>=` → `>` mutant).
+    assert_eq!(status, axum::http::StatusCode::OK);
+}
+
+#[tokio::test]
 async fn card_response_pass_field_when_valid_until_equals_today() {
     let app = TestApp::new().await;
     let card_id = app
