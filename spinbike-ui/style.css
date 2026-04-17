@@ -529,3 +529,8 @@ th {
 .pass-banner-expired { background: #5a1c1c; color: #ffb3b3; border: 1px solid #a33; }
 .pass-banner-title { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.25rem; }
 .pass-banner-sub { font-size: 0.85rem; opacity: 0.85; }
+
+
+/* Transaction history rows */
+.txn-row-visit { color: #88ccff; }
+.txn-row-visit td { font-style: italic; }

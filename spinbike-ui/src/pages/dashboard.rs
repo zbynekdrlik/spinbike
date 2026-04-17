@@ -64,6 +64,8 @@ struct TxnInfo {
     created_at: String,
     #[serde(default)]
     service_name: Option<String>,
+    #[serde(default)]
+    valid_until: Option<chrono::NaiveDate>,
 }
 
 const QUICK_TOPUP: [f64; 4] = [5.0, 10.0, 20.0, 50.0];
@@ -667,12 +669,16 @@ fn ActionPanel(
                     let rows: Vec<_> = t.iter().map(|tx| {
                         let date = format_sk_datetime(&tx.created_at);
                         let action = tx.action.clone();
+                        let until_suffix = tx.valid_until
+                            .map(|d| format!(" · until {}", d.format("%d.%m")))
+                            .unwrap_or_default();
                         let service = tx.service_name.clone().unwrap_or_else(|| "—".into());
                         let amount = format!("{:+.2}", tx.amount);
+                        let row_class = if tx.action == "visit" { "txn-row-visit" } else { "txn-row" };
                         view! {
-                            <tr>
+                            <tr class=row_class>
                                 <td>{date}</td>
-                                <td>{action}</td>
+                                <td>{action}{until_suffix}</td>
                                 <td>{service}</td>
                                 <td>{amount}</td>
                             </tr>
