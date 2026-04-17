@@ -254,6 +254,13 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("pass_days_ago", ("dnami", "days ago"));
     m.insert("pass_last_valid_until", ("Naposledy platny do", "Last valid until"));
 
+    // Sell pass modal
+    m.insert("sell_monthly_pass", ("Predat mesacny listok", "Sell monthly pass"));
+    m.insert("modal_price", ("Cena (EUR)", "Price (EUR)"));
+    m.insert("modal_valid_until", ("Platny do", "Valid until"));
+    m.insert("modal_confirm", ("Predat", "Sell pass"));
+    m.insert("modal_cancel", ("Zrusit", "Cancel"));
+
     // General
     m.insert("loading", ("Nacitavanie...", "Loading..."));
     m.insert("page_not_found", ("Stranka nenajdena", "Page not found"));

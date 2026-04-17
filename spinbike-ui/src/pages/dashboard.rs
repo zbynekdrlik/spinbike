@@ -408,6 +408,138 @@ fn PassBanner(pass: Option<CardPass>) -> impl IntoView {
     }
 }
 
+fn event_target_value(ev: &web_sys::Event) -> String {
+    ev.target()
+        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+        .map(|i| i.value())
+        .unwrap_or_default()
+}
+
+#[component]
+fn SellPassModal(
+    card: CardInfo,
+    set_selected: WriteSignal<Option<CardInfo>>,
+    show: ReadSignal<bool>,
+    set_show: WriteSignal<bool>,
+) -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
+    let today = chrono::Local::now().date_naive();
+    // Default valid_until: max(current valid_until, today) + 30 days.
+    let default_date = card
+        .pass
+        .as_ref()
+        .map(|p| if p.valid_until > today { p.valid_until } else { today })
+        .unwrap_or(today)
+        + chrono::Duration::days(30);
+
+    let (price, set_price) = signal(35.0f64);
+    let (valid_until, set_valid_until) = signal(default_date);
+    let (err, set_err) = signal(String::new());
+
+    let card_id = card.id;
+
+    let on_confirm = move |_| {
+        let p = price.get();
+        let vu = valid_until.get();
+        spawn_local(async move {
+            #[derive(serde::Serialize)]
+            struct Req {
+                card_id: i64,
+                price: f64,
+                valid_until: chrono::NaiveDate,
+            }
+            #[derive(serde::Deserialize)]
+            struct Resp {
+                new_credit: f64,
+                valid_until: chrono::NaiveDate,
+                days_remaining: i32,
+            }
+            match api::post::<Req, Resp>(
+                "/api/payments/sell-pass",
+                &Req { card_id, price: p, valid_until: vu },
+            )
+            .await
+            {
+                Ok(r) => {
+                    set_selected.update(|opt| {
+                        if let Some(c) = opt.as_mut() {
+                            c.credit = r.new_credit;
+                            c.pass = Some(CardPass {
+                                valid_until: r.valid_until,
+                                days_remaining: r.days_remaining,
+                            });
+                        }
+                    });
+                    set_show.set(false);
+                }
+                Err(e) => set_err.set(format!("{e}")),
+            }
+        });
+    };
+
+    view! {
+        {move || {
+            if !show.get() {
+                return view! { <div></div> }.into_any();
+            }
+            view! {
+                <div class="modal-overlay" data-testid="sell-pass-modal">
+                    <div class="modal">
+                        <h3>{move || i18n::t(lang.get(), "sell_monthly_pass")}</h3>
+                        <label>{move || i18n::t(lang.get(), "modal_price")}</label>
+                        <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            data-testid="sell-pass-price"
+                            prop:value=move || format!("{:.2}", price.get())
+                            on:input=move |ev| {
+                                let ev: web_sys::Event = ev.into();
+                                if let Ok(v) = event_target_value(&ev).parse::<f64>() {
+                                    set_price.set(v);
+                                }
+                            }
+                        />
+                        <label>{move || i18n::t(lang.get(), "modal_valid_until")}</label>
+                        <input
+                            type="date"
+                            data-testid="sell-pass-date"
+                            prop:value=move || valid_until.get().format("%Y-%m-%d").to_string()
+                            on:input=move |ev| {
+                                let ev: web_sys::Event = ev.into();
+                                let s = event_target_value(&ev);
+                                if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                                    set_valid_until.set(d);
+                                }
+                            }
+                        />
+                        {move || {
+                            if err.get().is_empty() {
+                                view! { <div></div> }.into_any()
+                            } else {
+                                view! { <div class="err">{move || err.get()}</div> }.into_any()
+                            }
+                        }}
+                        <div class="modal-buttons">
+                            <button class="btn" on:click=move |_| set_show.set(false)>
+                                {move || i18n::t(lang.get(), "modal_cancel")}
+                            </button>
+                            <button
+                                class="btn btn-primary"
+                                data-testid="sell-pass-confirm"
+                                on:click=on_confirm
+                            >
+                                {move || i18n::t(lang.get(), "modal_confirm")}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+            .into_any()
+        }}
+    }
+}
+
 #[component]
 fn ActionPanel(
     card: CardInfo,
@@ -419,6 +551,7 @@ fn ActionPanel(
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (txns, set_txns) = signal(Vec::<TxnInfo>::new());
     let (show_edit, set_show_edit) = signal(false);
+    let (show_sell_pass, set_show_sell_pass) = signal(false);
 
     // Transaction history is the most-read piece of card context, so load it
     // as soon as the panel mounts and always render it below the actions.
@@ -443,6 +576,7 @@ fn ActionPanel(
     let phone = card.phone.clone().unwrap_or_default();
     let card_pass = card.pass.clone();
     let card_for_edit = card.clone();
+    let card_for_modal = card.clone();
 
     view! {
         <div class="card mb-2" data-testid="action-panel">
@@ -476,6 +610,16 @@ fn ActionPanel(
             <ChargeSection card_id=card_id services=services set_selected=set_selected set_msg=set_msg />
             <TopupSection card_id=card_id set_selected=set_selected set_msg=set_msg />
 
+            <div class="mt-2">
+                <button
+                    class="btn btn-pass"
+                    data-testid="sell-pass-btn"
+                    on:click=move |_| set_show_sell_pass.set(true)
+                >
+                    {move || i18n::t(lang.get(), "sell_monthly_pass")}" 35.00"
+                </button>
+            </div>
+
             <div class="flex gap-1 mt-2" style="flex-wrap:wrap">
                 <button
                     class="btn btn-sm btn-outline"
@@ -491,6 +635,13 @@ fn ActionPanel(
                     view! { <EditInfoForm card=card_for_edit.clone() set_selected=set_selected set_msg=set_msg set_show_edit=set_show_edit /> }.into_any()
                 } else { view! { <span></span> }.into_any() }
             }}
+
+            <SellPassModal
+                card=card_for_modal.clone()
+                set_selected=set_selected
+                show=show_sell_pass
+                set_show=set_show_sell_pass
+            />
 
             <div class="mt-2">
                 <h3 style="font-size:0.95rem;margin-bottom:8px">{move || i18n::t(lang.get(), "transaction_history")}</h3>

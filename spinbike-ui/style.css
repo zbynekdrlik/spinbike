@@ -513,6 +513,16 @@ th {
 /* Keyboard-selected suggestion in the card search dropdown. */
 .search-result-active { background: var(--surface-hover); }
 
+/* Sell pass button */
+.btn-pass { background: #3a5e2a; border-color: #5a8a3a; color: #fff; }
+
+/* Sell pass modal */
+.modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.modal { background: #1e1e24; border: 1px solid #333; border-radius: 8px; padding: 1.5rem; min-width: 320px; }
+.modal label { display: block; margin-top: 0.75rem; margin-bottom: 0.25rem; color: #aaa; font-size: 0.85rem; }
+.modal input { width: 100%; padding: 0.5rem; background: #2a2a32; color: #eee; border: 1px solid #444; border-radius: 4px; }
+.modal-buttons { display: flex; gap: 0.5rem; justify-content: flex-end; margin-top: 1rem; }
+
 /* Monthly pass banner */
 .pass-banner { padding: 0.85rem 1rem; border-radius: 6px; margin-bottom: 1rem; }
 .pass-banner-ok { background: #1b4a2a; color: #9bf3b4; border: 1px solid #2c7a4a; }
