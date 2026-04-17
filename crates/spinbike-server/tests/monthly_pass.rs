@@ -128,3 +128,91 @@ async fn sell_pass_rejects_blocked_card() {
         .await;
     assert_eq!(status, axum::http::StatusCode::CONFLICT);
 }
+
+#[tokio::test]
+async fn log_visit_writes_zero_amount_when_pass_active() {
+    let app = TestApp::new().await;
+    let card_id = app.seed_card("VISIT-1", 50.0, None, None, None, None).await;
+
+    // Sell a pass first (relies on Task 5's handler)
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "price": 35.0, "valid_until": "2030-01-01" }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let spinning_id = service_id(&app, "Spinning").await;
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/log-visit",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "service_id": spinning_id }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let tx_id = resp["transaction_id"].as_i64().unwrap();
+    let (amount, action, service_id_val): (f64, String, i64) =
+        sqlx::query_as("SELECT amount, action, service_id FROM transactions WHERE id = ?")
+            .bind(tx_id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(amount, 0.0);
+    assert_eq!(action, "visit");
+    assert_eq!(service_id_val, spinning_id);
+
+    // Credit unchanged (50 - 35 = 15)
+    assert_eq!(card_credit(&app, card_id).await, 15.0);
+}
+
+#[tokio::test]
+async fn log_visit_rejects_card_without_active_pass() {
+    let app = TestApp::new().await;
+    let card_id = app.seed_card("VISIT-2", 50.0, None, None, None, None).await;
+    let spinning_id = service_id(&app, "Spinning").await;
+
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/log-visit",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "service_id": spinning_id }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn log_visit_rejects_card_with_expired_pass() {
+    let app = TestApp::new().await;
+    let card_id = app.seed_card("VISIT-3", 50.0, None, None, None, None).await;
+
+    // Insert an expired pass transaction directly via SQL
+    let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name = 'Monthly pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO transactions (card_id, service_id, amount, action, valid_until, created_at)
+         VALUES (?, ?, -35.0, 'charge', ?, datetime('now'))",
+    )
+    .bind(card_id)
+    .bind(pass_svc)
+    .bind(chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap())
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let spinning_id = service_id(&app, "Spinning").await;
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/log-visit",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "service_id": spinning_id }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT);
+}

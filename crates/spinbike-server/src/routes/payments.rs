@@ -27,6 +27,17 @@ pub struct PaymentResponse {
 }
 
 #[derive(Deserialize)]
+pub struct LogVisitRequest {
+    pub card_id: i64,
+    pub service_id: i64,
+}
+
+#[derive(Serialize)]
+pub struct LogVisitResponse {
+    pub transaction_id: i64,
+}
+
+#[derive(Deserialize)]
 pub struct SellPassRequest {
     pub card_id: i64,
     pub price: f64,
@@ -46,6 +57,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/payments/charge", post(charge))
         .route("/api/payments/storno", post(storno))
         .route("/api/payments/sell-pass", post(sell_pass))
+        .route("/api/payments/log-visit", post(log_visit))
 }
 
 async fn charge(
@@ -281,5 +293,50 @@ async fn sell_pass(
         new_credit,
         valid_until: body.valid_until,
         days_remaining,
+    }))
+}
+
+async fn log_visit(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(body): Json<LogVisitRequest>,
+) -> Result<Json<LogVisitResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_process_payments() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Staff access required"})),
+        ));
+    }
+
+    let today = chrono::Local::now().date_naive();
+    let valid_until = cards::get_card_pass_valid_until(&state.pool, body.card_id)
+        .await
+        .map_err(internal_error)?;
+    match valid_until {
+        Some(d) if d >= today => {} // active — OK
+        _ => {
+            return Err((
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "Card has no active monthly pass; use /api/payments/charge"
+                })),
+            ));
+        }
+    }
+
+    let tx_id = crate::db::transactions::create_transaction(
+        &state.pool,
+        None,
+        Some(body.card_id),
+        Some(claims.sub),
+        Some(body.service_id),
+        0.0,
+        "visit",
+    )
+    .await
+    .map_err(internal_error)?;
+
+    Ok(Json(LogVisitResponse {
+        transaction_id: tx_id,
     }))
 }
