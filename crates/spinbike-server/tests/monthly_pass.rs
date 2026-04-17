@@ -47,6 +47,13 @@ async fn sell_pass_debits_credit_and_records_valid_until() {
     assert_eq!(status, axum::http::StatusCode::OK, "body = {resp}");
     assert_eq!(resp["new_credit"].as_f64().unwrap(), 15.0);
     assert_eq!(resp["valid_until"], "2030-05-17");
+    // Kills mutation where (valid_until - today) is flipped to (today - valid_until).
+    // 2030-05-17 must be in the future at test-run time, so days_remaining is strictly positive.
+    let days = resp["days_remaining"].as_i64().unwrap();
+    assert!(
+        days > 0,
+        "days_remaining must be strictly positive for a future valid_until, got {days}"
+    );
 
     assert_eq!(card_credit(&app, card_id).await, 15.0);
 
