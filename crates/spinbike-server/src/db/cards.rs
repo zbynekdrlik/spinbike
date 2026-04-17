@@ -209,7 +209,7 @@ pub async fn list_all_cards_with_pass(
          LEFT JOIN transactions t
            ON t.card_id = c.id AND t.valid_until IS NOT NULL
          GROUP BY c.id
-         ORDER BY c.id DESC",
+         ORDER BY c.barcode",
     )
     .fetch_all(pool)
     .await
@@ -229,6 +229,7 @@ pub async fn search_cards_with_pass(
     }
     let normalized = normalize_search(q);
     let like = format!("%{normalized}%");
+    let prefix = format!("{q}%");
     let rows: Vec<CardRowWithPass> = sqlx::query_as(
         "SELECT c.id, c.barcode, c.user_id, c.blocked, c.credit, c.allow_debit,
                 c.created_at, c.first_name, c.last_name, c.company, c.phone,
@@ -238,10 +239,15 @@ pub async fn search_cards_with_pass(
            ON t.card_id = c.id AND t.valid_until IS NOT NULL
          WHERE c.search_text LIKE ?
          GROUP BY c.id
-         ORDER BY c.id DESC
+         ORDER BY
+           CASE WHEN c.barcode LIKE ? THEN 0 ELSE 1 END,
+           c.last_name IS NULL, c.last_name ASC,
+           c.first_name IS NULL, c.first_name ASC,
+           c.barcode ASC
          LIMIT ?",
     )
     .bind(&like)
+    .bind(&prefix)
     .bind(limit)
     .fetch_all(pool)
     .await
