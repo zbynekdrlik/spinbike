@@ -69,6 +69,31 @@ fn export_table(mdb_path: &PathBuf, table: &str) -> Result<String> {
         .with_context(|| format!("mdb-export output for '{table}' is not valid UTF-8"))
 }
 
+/// Map legacy service names (Slovak, from MS Access `serviceTab`) to
+/// the service names seeded in the new system.
+fn map_legacy_service_name(name: &str) -> Option<&'static str> {
+    match name.trim() {
+        "Casova karta" => Some("Monthly pass"),
+        "Fitnes" => Some("Fitness"),
+        "Spinbike" => Some("Spinning"),
+        _ => None,
+    }
+}
+
+/// Parse legacy EndDate strings in `MM/DD/YY HH:MM:SS` format
+/// (e.g. "12/05/08 00:00:00") to a `NaiveDate`. Blank/unparsable → None.
+fn parse_legacy_end_date(s: &str) -> anyhow::Result<Option<chrono::NaiveDate>> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    // Two-digit year — chrono parses "08" as year 8 without `%y` flag.
+    match chrono::NaiveDateTime::parse_from_str(trimmed, "%m/%d/%y %H:%M:%S") {
+        Ok(dt) => Ok(Some(dt.date())),
+        Err(_) => Ok(None),
+    }
+}
+
 /// Map a legacy action string to the new action format.
 /// Returns None for actions that should not create a transaction (e.g., BLOKOVANA).
 fn map_action(action: &str) -> Option<&'static str> {
@@ -229,6 +254,15 @@ async fn main() -> Result<()> {
     let data_csv = export_table(&mdb_path, "Data")?;
     let mut data_reader = csv::Reader::from_reader(Cursor::new(&data_csv));
 
+    // Load service name → id map once for legacy service name resolution.
+    let service_ids: std::collections::HashMap<String, i64> =
+        sqlx::query_as::<_, (String, i64)>("SELECT name, id FROM services")
+            .fetch_all(&pool)
+            .await
+            .context("Failed to load services for legacy mapping")?
+            .into_iter()
+            .collect();
+
     // Track cards that should be blocked (from BLOKOVANA actions).
     let mut blocked_cards: Vec<i64> = Vec::new();
     let mut txn_count = 0u32;
@@ -247,6 +281,13 @@ async fn main() -> Result<()> {
             .unwrap_or(0.0);
         let date = record.get(6).context("Missing Date column")?.trim();
 
+        let legacy_service = record.get(4).context("Missing service column")?.trim();
+        let end_date_raw = record.get(7).context("Missing EndDate column")?.trim();
+
+        let service_id: Option<i64> = map_legacy_service_name(legacy_service)
+            .and_then(|new_name| service_ids.get(new_name).copied());
+        let valid_until = parse_legacy_end_date(end_date_raw)?;
+
         let new_card_id = legacy_card_map.get(legacy_card_id).copied();
 
         match map_action(action) {
@@ -261,12 +302,15 @@ async fn main() -> Result<()> {
                 // Format the legacy date for created_at.
                 // Legacy format: "MM/DD/YY HH:MM:SS" — store as-is since SQLite is flexible.
                 sqlx::query(
-                    "INSERT INTO transactions (card_id, amount, action, created_at) VALUES (?, ?, ?, ?)",
+                    "INSERT INTO transactions (card_id, amount, action, created_at, service_id, valid_until)
+                     VALUES (?, ?, ?, ?, ?, ?)",
                 )
                 .bind(new_card_id)
                 .bind(amount_eur)
                 .bind(mapped_action)
                 .bind(date)
+                .bind(service_id)
+                .bind(valid_until)
                 .execute(&pool)
                 .await
                 .with_context(|| {
@@ -338,4 +382,94 @@ async fn main() -> Result<()> {
     info!("  Output:      {}", output_path.display());
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_end_date_valid() {
+        assert_eq!(
+            parse_legacy_end_date("12/05/08 00:00:00").unwrap(),
+            Some(chrono::NaiveDate::from_ymd_opt(2008, 12, 5).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_end_date_empty_is_none() {
+        assert_eq!(parse_legacy_end_date("").unwrap(), None);
+        assert_eq!(parse_legacy_end_date("   ").unwrap(), None);
+    }
+
+    #[test]
+    fn parse_end_date_garbage_is_none() {
+        assert_eq!(parse_legacy_end_date("not a date").unwrap(), None);
+    }
+
+    #[test]
+    fn map_legacy_service_known_names() {
+        assert_eq!(
+            map_legacy_service_name("Casova karta"),
+            Some("Monthly pass")
+        );
+        assert_eq!(map_legacy_service_name("Fitnes"), Some("Fitness"));
+        assert_eq!(map_legacy_service_name("Spinbike"), Some("Spinning"));
+    }
+
+    #[test]
+    fn map_legacy_service_unknown_returns_none() {
+        assert_eq!(map_legacy_service_name("Something else"), None);
+        assert_eq!(map_legacy_service_name(""), None);
+    }
+
+    #[tokio::test]
+    async fn importer_preserves_service_and_end_date() {
+        use spinbike_server::db::{create_memory_pool, run_migrations};
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // Seed a card row so id 1 exists in the new DB.
+        sqlx::query(
+            "INSERT INTO cards (id, barcode, allow_debit, search_text) VALUES (1, 'C1', 1, 'c1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Mimic what the import loop does for one row.
+        let service_ids: std::collections::HashMap<String, i64> =
+            sqlx::query_as::<_, (String, i64)>("SELECT name, id FROM services")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .into_iter()
+                .collect();
+
+        let service_id = map_legacy_service_name("Casova karta")
+            .and_then(|n| service_ids.get(n).copied())
+            .unwrap();
+        let valid_until = parse_legacy_end_date("12/05/08 00:00:00").unwrap();
+
+        sqlx::query(
+            "INSERT INTO transactions (card_id, amount, action, created_at, service_id, valid_until)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(1_i64).bind(-19.92).bind("charge").bind("11/06/08 21:20:24")
+        .bind(Some(service_id)).bind(valid_until)
+        .execute(&pool).await.unwrap();
+
+        let row: (Option<String>, Option<chrono::NaiveDate>) = sqlx::query_as(
+            "SELECT s.name, t.valid_until FROM transactions t
+             LEFT JOIN services s ON s.id = t.service_id WHERE t.card_id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0.as_deref(), Some("Monthly pass"));
+        assert_eq!(
+            row.1,
+            Some(chrono::NaiveDate::from_ymd_opt(2008, 12, 5).unwrap())
+        );
+    }
 }
