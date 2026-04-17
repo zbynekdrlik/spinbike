@@ -7,6 +7,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         V2_CARD_HOLDER_INFO,
     ),
     (3, "card search_text column + index", V3_CARD_SEARCH_TEXT),
+    (
+        4,
+        "monthly pass: valid_until + service seed",
+        V4_MONTHLY_PASS,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -118,3 +123,62 @@ const V3_CARD_SEARCH_TEXT: &str = r#"
 ALTER TABLE cards ADD COLUMN search_text TEXT NOT NULL DEFAULT '';
 CREATE INDEX idx_cards_search_text ON cards(search_text);
 "#;
+
+// Monthly pass (Casova karta): records the pass expiry date on the purchase
+// transaction row. NULL for every transaction except monthly-pass charges.
+// Service is seeded idempotently so re-running migrations is safe.
+const V4_MONTHLY_PASS: &str = r#"
+ALTER TABLE transactions ADD COLUMN valid_until TEXT;
+INSERT OR IGNORE INTO services (name, default_price, active) VALUES ('Monthly pass', 35.0, 1);
+"#;
+
+#[cfg(test)]
+mod tests {
+    use crate::db::{create_memory_pool, run_migrations};
+
+    #[tokio::test]
+    async fn v4_adds_valid_until_column() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        // PRAGMA table_info(transactions) returns one row per column with name/type.
+        let cols: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('transactions')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let names: Vec<&str> = cols.iter().map(|(n,)| n.as_str()).collect();
+        assert!(
+            names.contains(&"valid_until"),
+            "transactions.valid_until column missing; found columns: {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v4_seeds_monthly_pass_service() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (name, price, active): (String, f64, i64) = sqlx::query_as(
+            "SELECT name, default_price, active FROM services WHERE name = 'Monthly pass'",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("Monthly pass service must be seeded by V4");
+        assert_eq!(name, "Monthly pass");
+        assert_eq!(price, 35.0);
+        assert_eq!(active, 1);
+    }
+
+    #[tokio::test]
+    async fn v4_is_idempotent() {
+        // Running migrations twice must not fail (second run should be no-op).
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE name = 'Monthly pass'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(count, 1, "Monthly pass must be seeded exactly once");
+    }
+}
