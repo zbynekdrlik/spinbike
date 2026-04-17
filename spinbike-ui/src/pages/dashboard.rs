@@ -517,7 +517,7 @@ fn SellPassModal(
                             if err.get().is_empty() {
                                 view! { <div></div> }.into_any()
                             } else {
-                                view! { <div class="err">{move || err.get()}</div> }.into_any()
+                                view! { <div class="alert alert-error">{move || err.get()}</div> }.into_any()
                             }
                         }}
                         <div class="modal-buttons">
