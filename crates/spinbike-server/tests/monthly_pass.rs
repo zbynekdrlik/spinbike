@@ -216,3 +216,30 @@ async fn log_visit_rejects_card_with_expired_pass() {
         .await;
     assert_eq!(status, axum::http::StatusCode::CONFLICT);
 }
+
+#[tokio::test]
+async fn log_visit_rejects_unknown_service_id() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("VISIT-SVC", 50.0, None, None, None, None)
+        .await;
+
+    // Sell an active pass so the pass check passes — we want to isolate the service_id check
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "price": 35.0, "valid_until": "2030-01-01" }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/log-visit",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "service_id": 99999 }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
+}

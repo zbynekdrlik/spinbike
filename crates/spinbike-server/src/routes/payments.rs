@@ -324,6 +324,20 @@ async fn log_visit(
         }
     }
 
+    // Validate service exists — prevents bogus service_id in history.
+    let service_exists: Option<i64> =
+        sqlx::query_scalar("SELECT id FROM services WHERE id = ? AND active = 1")
+            .bind(body.service_id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(internal_error)?;
+    if service_exists.is_none() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Service not found"})),
+        ));
+    }
+
     let tx_id = crate::db::transactions::create_transaction(
         &state.pool,
         None,
