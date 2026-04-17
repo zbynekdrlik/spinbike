@@ -47,13 +47,9 @@ pub(crate) fn cors_layer_for(origin: Option<String>) -> CorsLayer {
 }
 
 /// Pure predicate: returns true when the given raw env value indicates test mode.
+/// Unit-tested; callers pass in the current SPINBIKE_TEST_MODE env value.
 pub fn is_test_mode_from_env(raw: Option<&str>) -> bool {
     raw == Some("1")
-}
-
-/// Reads SPINBIKE_TEST_MODE and returns whether test-only endpoints should be merged.
-pub fn is_test_mode() -> bool {
-    is_test_mode_from_env(std::env::var("SPINBIKE_TEST_MODE").ok().as_deref())
 }
 
 /// Build and start the Axum server.
@@ -67,7 +63,7 @@ pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Re
     };
 
     let mut router = routes::all_routes();
-    if is_test_mode() {
+    if is_test_mode_from_env(std::env::var("SPINBIKE_TEST_MODE").ok().as_deref()) {
         tracing::warn!(
             "SPINBIKE_TEST_MODE=1 — test fixture endpoints are active. Do NOT use in production!"
         );
