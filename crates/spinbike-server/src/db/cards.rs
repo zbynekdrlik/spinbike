@@ -156,6 +156,99 @@ pub async fn list_all_cards(pool: &SqlitePool) -> Result<Vec<CardRow>> {
     Ok(cards)
 }
 
+/// Card row + its current monthly-pass end date (computed as MAX across the
+/// card's transactions). Populated by a single GROUP BY query to avoid N+1.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct CardRowWithPass {
+    pub id: i64,
+    pub barcode: String,
+    pub user_id: Option<i64>,
+    pub blocked: i64,
+    pub credit: f64,
+    pub allow_debit: i64,
+    pub created_at: String,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub company: Option<String>,
+    pub phone: Option<String>,
+    pub pass_valid_until: Option<chrono::NaiveDate>,
+}
+
+impl CardRowWithPass {
+    /// Decompose into the card portion and the pass date.
+    pub fn into_parts(self) -> (CardRow, Option<chrono::NaiveDate>) {
+        (
+            CardRow {
+                id: self.id,
+                barcode: self.barcode,
+                user_id: self.user_id,
+                blocked: self.blocked,
+                credit: self.credit,
+                allow_debit: self.allow_debit,
+                created_at: self.created_at,
+                first_name: self.first_name,
+                last_name: self.last_name,
+                company: self.company,
+                phone: self.phone,
+            },
+            self.pass_valid_until,
+        )
+    }
+}
+
+/// Return all cards with their current monthly-pass end date in a single JOIN query,
+/// avoiding N+1 queries when building a list of CardResponse objects.
+pub async fn list_all_cards_with_pass(
+    pool: &SqlitePool,
+) -> Result<Vec<(CardRow, Option<chrono::NaiveDate>)>> {
+    let rows: Vec<CardRowWithPass> = sqlx::query_as(
+        "SELECT c.id, c.barcode, c.user_id, c.blocked, c.credit, c.allow_debit,
+                c.created_at, c.first_name, c.last_name, c.company, c.phone,
+                MAX(t.valid_until) AS pass_valid_until
+         FROM cards c
+         LEFT JOIN transactions t
+           ON t.card_id = c.id AND t.valid_until IS NOT NULL
+         GROUP BY c.id
+         ORDER BY c.id DESC",
+    )
+    .fetch_all(pool)
+    .await
+    .context("Failed to list cards with pass")?;
+    Ok(rows.into_iter().map(CardRowWithPass::into_parts).collect())
+}
+
+/// Search cards with their monthly-pass end date — single JOIN query to avoid N+1.
+pub async fn search_cards_with_pass(
+    pool: &SqlitePool,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<(CardRow, Option<chrono::NaiveDate>)>> {
+    let q = query.trim();
+    if q.is_empty() {
+        return Ok(Vec::new());
+    }
+    let normalized = normalize_search(q);
+    let like = format!("%{normalized}%");
+    let rows: Vec<CardRowWithPass> = sqlx::query_as(
+        "SELECT c.id, c.barcode, c.user_id, c.blocked, c.credit, c.allow_debit,
+                c.created_at, c.first_name, c.last_name, c.company, c.phone,
+                MAX(t.valid_until) AS pass_valid_until
+         FROM cards c
+         LEFT JOIN transactions t
+           ON t.card_id = c.id AND t.valid_until IS NOT NULL
+         WHERE c.search_text LIKE ?
+         GROUP BY c.id
+         ORDER BY c.id DESC
+         LIMIT ?",
+    )
+    .bind(&like)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("Failed to search cards with pass")?;
+    Ok(rows.into_iter().map(CardRowWithPass::into_parts).collect())
+}
+
 /// Search cards by partial match. Diacritic- and case-insensitive: the query
 /// is folded via `normalize_search` and compared against the pre-computed
 /// `search_text` column, so "zbyne" finds "Zbyněk" and "drlik" finds "Drlík".
@@ -204,6 +297,28 @@ pub async fn get_card_by_user(pool: &SqlitePool, user_id: i64) -> Result<Vec<Car
         .await
         .context("Failed to get cards for user")?;
     Ok(cards)
+}
+
+/// Return cards linked to a user with their monthly-pass end date in a single query.
+pub async fn get_cards_with_pass_by_user(
+    pool: &SqlitePool,
+    user_id: i64,
+) -> Result<Vec<(CardRow, Option<chrono::NaiveDate>)>> {
+    let rows: Vec<CardRowWithPass> = sqlx::query_as(
+        "SELECT c.id, c.barcode, c.user_id, c.blocked, c.credit, c.allow_debit,
+                c.created_at, c.first_name, c.last_name, c.company, c.phone,
+                MAX(t.valid_until) AS pass_valid_until
+         FROM cards c
+         LEFT JOIN transactions t
+           ON t.card_id = c.id AND t.valid_until IS NOT NULL
+         WHERE c.user_id = ?
+         GROUP BY c.id",
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await
+    .context("Failed to get cards with pass for user")?;
+    Ok(rows.into_iter().map(CardRowWithPass::into_parts).collect())
 }
 
 pub async fn link_card_to_user(pool: &SqlitePool, card_id: i64, user_id: i64) -> Result<()> {

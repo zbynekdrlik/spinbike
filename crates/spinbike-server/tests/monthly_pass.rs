@@ -462,6 +462,64 @@ async fn sell_pass_accepts_zero_price() {
     );
 }
 
+/// Issue 1: list_cards must return correct pass info via the single GROUP BY query,
+/// not N+1 individual queries. Regression guard: ensures the refactored path
+/// still populates the pass field correctly.
+#[tokio::test]
+async fn list_cards_returns_correct_pass_info_after_n_plus_one_fix() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("LIST-PASS-1", 50.0, None, None, None, None)
+        .await;
+
+    // Sell a pass so the card has a non-null pass_valid_until.
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "price": 35.0, "valid_until": "2030-06-01" }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let (status, body) = app.request(get("/api/cards", &app.staff_token)).await;
+    assert_eq!(status, axum::http::StatusCode::OK, "body={body}");
+
+    let cards = body.as_array().expect("response must be an array");
+    let card = cards
+        .iter()
+        .find(|c| c["id"].as_i64() == Some(card_id))
+        .expect("seeded card must appear in list");
+    assert_eq!(
+        card["pass"]["valid_until"], "2030-06-01",
+        "list_cards must include pass.valid_until from the GROUP BY query"
+    );
+    let days = card["pass"]["days_remaining"].as_i64().unwrap();
+    assert!(days > 0, "days_remaining must be positive; got {days}");
+}
+
+/// Issue 2: /charge must reject the Monthly pass service_id and direct staff to /sell-pass.
+#[tokio::test]
+async fn charge_rejects_monthly_pass_service_id() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("CHG-PASS", 100.0, None, None, None, None)
+        .await;
+    let pass_service_id = service_id(&app, "Monthly pass").await;
+    let (status, body) = app
+        .request(post_json(
+            "/api/payments/charge",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "amount": 35.0, "service_id": pass_service_id }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"].as_str().unwrap().contains("sell-pass"),
+        "error must point user to sell-pass endpoint, got: {body}"
+    );
+}
+
 /// Kills mutants 4, 5 (empty-router replacements) and mutant 6 (`delete -` on -35.0).
 /// Empty-router mutants would return 404; real router returns 200.
 /// Sign mutant (+35.0) would store a positive amount; real code stores -35.0.

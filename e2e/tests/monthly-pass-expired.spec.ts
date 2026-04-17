@@ -5,11 +5,12 @@ test.describe('Monthly pass — expired state', () => {
     test('expired pass → red banner, charge buttons return to paid mode', async ({ page, request }) => {
         const consoleMessages = setupConsoleCheck(page);
         const baseURL = 'http://localhost:8099';
-        await loginViaAPI(page, baseURL, 'staff@test.com', 'staff123');
+        const token = await loginViaAPI(page, baseURL, 'staff@test.com', 'staff123');
 
         const cardBarcode = 'EXPIRED-PASS-CARD';
         const seedResp = await request.post(`${baseURL}/api/test/seed-expired-pass`, {
             data: { barcode: cardBarcode, valid_until: '2020-01-01' },
+            headers: { Authorization: `Bearer ${token}` },
         });
         expect(seedResp.ok()).toBeTruthy();
 

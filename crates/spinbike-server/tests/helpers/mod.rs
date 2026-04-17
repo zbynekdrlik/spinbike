@@ -90,9 +90,9 @@ impl TestApp {
             event_tx,
             jwt_secret: JWT_SECRET.to_string(),
         };
-        // Use all_routes() + test_fixtures so integration tests can exercise
-        // both the real routes and the seed endpoints (the test harness always
-        // wants these, regardless of SPINBIKE_TEST_MODE).
+        // TestApp always merges test_fixtures regardless of SPINBIKE_TEST_MODE —
+        // the harness knows it's a test context. start_server() in production uses
+        // the env-var gate instead.
         let router = routes::all_routes()
             .merge(spinbike_server::routes::test_fixtures::routes())
             .with_state(state);

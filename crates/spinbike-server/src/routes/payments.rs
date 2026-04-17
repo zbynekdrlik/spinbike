@@ -72,6 +72,26 @@ async fn charge(
         ));
     }
 
+    // Reject Monthly pass service_id via /charge — it requires valid_until,
+    // which /charge doesn't set. Staff must use /sell-pass instead.
+    if let Some(sid) = body.service_id {
+        let is_pass: bool =
+            sqlx::query_scalar("SELECT name = 'Monthly pass' FROM services WHERE id = ?")
+                .bind(sid)
+                .fetch_optional(&state.pool)
+                .await
+                .map_err(internal_error)?
+                .unwrap_or(false);
+        if is_pass {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": "Use /api/payments/sell-pass for Monthly pass sales (requires valid_until)"
+                })),
+            ));
+        }
+    }
+
     // C3: Validate amount is positive.
     if body.amount <= 0.0 {
         return Err((

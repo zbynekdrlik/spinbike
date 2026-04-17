@@ -105,18 +105,28 @@ pub struct TransactionResponse {
 }
 
 // Replaces `impl From<&db::CardRow> for CardResponse`.
+// Used for single-card handlers (lookup, activate, topup, block, update, link)
+// where we need a fresh DB query for the pass.
 async fn card_response_from_row(
     pool: &sqlx::SqlitePool,
     c: &db::CardRow,
 ) -> anyhow::Result<CardResponse> {
+    let pass_valid_until = db::get_card_pass_valid_until(pool, c.id).await?;
+    Ok(card_response_from_row_with_pass(c, pass_valid_until))
+}
+
+/// Build a CardResponse from a pre-fetched pass date (avoids per-card DB round-trip).
+/// Used by list_cards and search_cards which retrieve pass info via a single GROUP BY query.
+fn card_response_from_row_with_pass(
+    c: &db::CardRow,
+    pass_valid_until: Option<chrono::NaiveDate>,
+) -> CardResponse {
     let today = chrono::Local::now().date_naive();
-    let pass = db::get_card_pass_valid_until(pool, c.id)
-        .await?
-        .map(|d| CardPass {
-            valid_until: d,
-            days_remaining: (d - today).num_days() as i32,
-        });
-    Ok(CardResponse {
+    let pass = pass_valid_until.map(|d| CardPass {
+        valid_until: d,
+        days_remaining: (d - today).num_days() as i32,
+    });
+    CardResponse {
         id: c.id,
         barcode: c.barcode.clone(),
         user_id: c.user_id,
@@ -128,7 +138,7 @@ async fn card_response_from_row(
         company: c.company.clone(),
         phone: c.phone.clone(),
         pass,
-    })
+    }
 }
 
 pub fn routes() -> Router<AppState> {
@@ -158,17 +168,14 @@ async fn search_cards(
     }
     // Clamp limit to a sane range so clients can't request the whole table.
     let limit = params.limit.clamp(1, 50);
-    let cards = db::search_cards(&state.pool, &params.q, limit)
+    // Use single JOIN query to get cards + pass info without N+1.
+    let rows = db::search_cards_with_pass(&state.pool, &params.q, limit)
         .await
         .map_err(internal_error)?;
-    let mut out = Vec::with_capacity(cards.len());
-    for c in &cards {
-        out.push(
-            card_response_from_row(&state.pool, c)
-                .await
-                .map_err(internal_error)?,
-        );
-    }
+    let out = rows
+        .iter()
+        .map(|(c, pass_valid_until)| card_response_from_row_with_pass(c, *pass_valid_until))
+        .collect();
     Ok(Json(out))
 }
 
@@ -182,17 +189,14 @@ async fn list_cards(
             Json(serde_json::json!({"error": "Staff only"})),
         ));
     }
-    let cards = db::list_all_cards(&state.pool)
+    // Use single JOIN query to get cards + pass info without N+1.
+    let rows = db::list_all_cards_with_pass(&state.pool)
         .await
         .map_err(internal_error)?;
-    let mut out = Vec::with_capacity(cards.len());
-    for c in &cards {
-        out.push(
-            card_response_from_row(&state.pool, c)
-                .await
-                .map_err(internal_error)?,
-        );
-    }
+    let out = rows
+        .iter()
+        .map(|(c, pass_valid_until)| card_response_from_row_with_pass(c, *pass_valid_until))
+        .collect();
     Ok(Json(out))
 }
 
@@ -492,7 +496,7 @@ async fn my_balance(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<BalanceResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let cards = db::get_card_by_user(&state.pool, claims.sub)
+    let rows = db::get_cards_with_pass_by_user(&state.pool, claims.sub)
         .await
         .map_err(internal_error)?;
 
@@ -500,14 +504,10 @@ async fn my_balance(
         .await
         .map_err(internal_error)?;
 
-    let mut card_responses = Vec::with_capacity(cards.len());
-    for c in &cards {
-        card_responses.push(
-            card_response_from_row(&state.pool, c)
-                .await
-                .map_err(internal_error)?,
-        );
-    }
+    let card_responses = rows
+        .iter()
+        .map(|(c, pass_valid_until)| card_response_from_row_with_pass(c, *pass_valid_until))
+        .collect();
 
     Ok(Json(BalanceResponse {
         cards: card_responses,

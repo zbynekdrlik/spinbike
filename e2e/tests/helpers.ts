@@ -65,8 +65,9 @@ export async function loginViaUI(page: Page, email: string, password: string) {
 
 /**
  * Login via API and store the token in localStorage so the WASM app picks it up.
+ * Returns the raw JWT token so callers can pass it to API requests (e.g. seed endpoints).
  */
-export async function loginViaAPI(page: Page, baseURL: string, email: string, password: string) {
+export async function loginViaAPI(page: Page, baseURL: string, email: string, password: string): Promise<string> {
     const resp = await fetch(`${baseURL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -84,4 +85,6 @@ export async function loginViaAPI(page: Page, baseURL: string, email: string, pa
         localStorage.setItem('spinbike_token', authData.token);
         localStorage.setItem('spinbike_user', JSON.stringify(authData.user));
     }, { token: data.token, user: data.user });
+
+    return data.token as string;
 }

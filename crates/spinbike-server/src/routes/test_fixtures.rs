@@ -2,6 +2,7 @@ use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
 use serde::Deserialize;
 
 use crate::AppState;
+use crate::auth::AuthUser;
 use crate::db::cards;
 
 #[derive(Deserialize)]
@@ -17,13 +18,20 @@ pub fn routes() -> Router<AppState> {
 
 async fn seed_expired_pass(
     State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
     Json(body): Json<SeedExpiredPassRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    // Defence in depth: even though this route is env-gated, require staff role
+    // to guard against misconfiguration.
+    if !claims.role.can_process_payments() {
+        return Err((StatusCode::FORBIDDEN, "Staff required".into()));
+    }
     let card_id = cards::create_card(&state.pool, &body.barcode)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-    let pass_service_id: i64 =
-        sqlx::query_scalar("SELECT id FROM services WHERE name = 'Monthly pass'")
+    // Look up the service id and its current default_price to avoid hardcoding.
+    let (pass_service_id, pass_price): (i64, f64) =
+        sqlx::query_as("SELECT id, default_price FROM services WHERE name = 'Monthly pass'")
             .fetch_one(&state.pool)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
@@ -33,7 +41,7 @@ async fn seed_expired_pass(
     )
     .bind(card_id)
     .bind(pass_service_id)
-    .bind(-35.0_f64)
+    .bind(-pass_price)
     .bind(body.valid_until)
     .execute(&state.pool)
     .await

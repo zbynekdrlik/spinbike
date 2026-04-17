@@ -427,6 +427,8 @@ fn SellPassModal(
     set_selected: WriteSignal<Option<CardInfo>>,
     show: ReadSignal<bool>,
     set_show: WriteSignal<bool>,
+    /// Default price pre-fetched from the services list to avoid hardcoding 35.00.
+    monthly_pass_price: f64,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let today = chrono::Local::now().date_naive();
@@ -438,7 +440,8 @@ fn SellPassModal(
         .unwrap_or(today)
         + chrono::Duration::days(30);
 
-    let (price, set_price) = signal(35.0f64);
+    // Use the price looked up from the services table rather than a hardcoded literal.
+    let (price, set_price) = signal(monthly_pass_price);
     let (valid_until, set_valid_until) = signal(default_date);
     let (err, set_err) = signal(String::new());
 
@@ -632,7 +635,13 @@ fn ActionPanel(
                     data-testid="sell-pass-btn"
                     on:click=move |_| set_show_sell_pass.set(true)
                 >
-                    {move || i18n::t(lang.get(), "sell_monthly_pass")}" 35.00"
+                    {move || {
+                        let price = services.get().iter()
+                            .find(|s| s.name == "Monthly pass")
+                            .map(|s| s.default_price)
+                            .unwrap_or(35.0);
+                        format!("{} {:.2}", i18n::t(lang.get(), "sell_monthly_pass"), price)
+                    }}
                 </button>
             </div>
 
@@ -657,6 +666,10 @@ fn ActionPanel(
                 set_selected=set_selected
                 show=show_sell_pass
                 set_show=set_show_sell_pass
+                monthly_pass_price=services.get_untracked().iter()
+                    .find(|s| s.name == "Monthly pass")
+                    .map(|s| s.default_price)
+                    .unwrap_or(35.0)
             />
 
             <div class="mt-2">
@@ -939,19 +952,21 @@ fn ChargeSection(
                 // Pass is active: render one "Log visit" button per service.
                 view! {
                     <div class="flex gap-1" style="flex-wrap:wrap">
-                        {services.get().iter().map(|svc| {
-                            let service_id = svc.id;
-                            let svc_name = svc.name.clone();
-                            view! {
-                                <button
-                                    class="btn btn-sm btn-primary"
-                                    data-testid="log-visit-btn"
-                                    on:click=visit_click_for(service_id)
-                                >
-                                    {move || i18n::t(lang.get(), "log_visit")}" "{svc_name.clone()}
-                                </button>
-                            }
-                        }).collect::<Vec<_>>()}
+                        {services.get().into_iter()
+                            .filter(|svc| svc.name != "Monthly pass")
+                            .map(|svc| {
+                                let service_id = svc.id;
+                                let svc_name = svc.name.clone();
+                                view! {
+                                    <button
+                                        class="btn btn-sm btn-primary"
+                                        data-testid="log-visit-btn"
+                                        on:click=visit_click_for(service_id)
+                                    >
+                                        {move || i18n::t(lang.get(), "log_visit")}" "{svc_name.clone()}
+                                    </button>
+                                }
+                            }).collect::<Vec<_>>()}
                     </div>
                 }.into_any()
             } else {
@@ -961,11 +976,13 @@ fn ChargeSection(
                         <select class="form-control" node_ref=service_ref on:change=on_service_change data-testid="charge-service">
                             <option value="">{move || i18n::t(lang.get(), "select_service")}</option>
                             {move || {
-                                services.get().iter().map(|s| {
-                                    let val = s.id.to_string();
-                                    let label = format!("{} ({:.2} €)", s.name, s.default_price);
-                                    view! { <option value=val>{label}</option> }
-                                }).collect::<Vec<_>>()
+                                services.get().into_iter()
+                                    .filter(|s| s.name != "Monthly pass")
+                                    .map(|s| {
+                                        let val = s.id.to_string();
+                                        let label = format!("{} ({:.2} €)", s.name, s.default_price);
+                                        view! { <option value=val>{label}</option> }
+                                    }).collect::<Vec<_>>()
                             }}
                         </select>
                         <input
