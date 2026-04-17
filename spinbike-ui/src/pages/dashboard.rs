@@ -12,6 +12,12 @@ use crate::api;
 use crate::i18n::{self, Lang};
 
 #[derive(Debug, Clone, serde::Deserialize)]
+struct CardPass {
+    valid_until: chrono::NaiveDate,
+    days_remaining: i32,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
 struct CardInfo {
     id: i64,
     barcode: String,
@@ -29,6 +35,8 @@ struct CardInfo {
     company: Option<String>,
     #[serde(default)]
     phone: Option<String>,
+    #[serde(default)]
+    pass: Option<CardPass>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -362,6 +370,45 @@ fn urlencoding_light(s: &str) -> String {
 }
 
 #[component]
+fn PassBanner(pass: Option<CardPass>) -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
+    match pass {
+        None => view! { <div></div> }.into_any(),
+        Some(p) if p.days_remaining >= 0 => {
+            let date_str = p.valid_until.format("%d.%m.%Y").to_string();
+            let days = p.days_remaining;
+            view! {
+                <div class="pass-banner pass-banner-ok" data-testid="pass-banner-active">
+                    <div class="pass-banner-title">
+                        {move || i18n::t(lang.get(), "pass_valid_until")}" "{date_str.clone()}
+                    </div>
+                    <div class="pass-banner-sub">
+                        {days}" "{move || i18n::t(lang.get(), "pass_days_remaining")}
+                    </div>
+                </div>
+            }
+            .into_any()
+        }
+        Some(p) => {
+            let date_str = p.valid_until.format("%d.%m.%Y").to_string();
+            let days_ago = -p.days_remaining;
+            view! {
+                <div class="pass-banner pass-banner-expired" data-testid="pass-banner-expired">
+                    <div class="pass-banner-title">
+                        {move || i18n::t(lang.get(), "pass_expired")}" "{days_ago}" "
+                        {move || i18n::t(lang.get(), "pass_days_ago")}
+                    </div>
+                    <div class="pass-banner-sub">
+                        {move || i18n::t(lang.get(), "pass_last_valid_until")}" "{date_str.clone()}
+                    </div>
+                </div>
+            }
+            .into_any()
+        }
+    }
+}
+
+#[component]
 fn ActionPanel(
     card: CardInfo,
     services: ReadSignal<Vec<ServiceInfo>>,
@@ -394,6 +441,7 @@ fn ActionPanel(
     let is_blocked = card.blocked;
     let company = card.company.clone().unwrap_or_default();
     let phone = card.phone.clone().unwrap_or_default();
+    let card_pass = card.pass.clone();
     let card_for_edit = card.clone();
 
     view! {
@@ -409,6 +457,8 @@ fn ActionPanel(
                 </div>
                 <button class="btn btn-sm btn-outline" on:click=move |e| on_close.run(e) title="close">"\u{2715}"</button>
             </div>
+
+            <PassBanner pass=card_pass />
 
             <div
                 class=if credit < 0.0 { "credit-negative" } else { "" }

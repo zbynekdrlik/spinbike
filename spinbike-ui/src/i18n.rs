@@ -247,6 +247,13 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("time", ("Cas", "Time"));
     m.insert("optional", ("Volitelne", "Optional"));
 
+    // Monthly pass banner
+    m.insert("pass_valid_until", ("✓ Mesacny listok platny do", "✓ Monthly pass valid until"));
+    m.insert("pass_days_remaining", ("dni zostava · neobmedzeny pristup", "days remaining · unlimited access"));
+    m.insert("pass_expired", ("Mesacny listok expiroval pred", "Monthly pass expired"));
+    m.insert("pass_days_ago", ("dnami", "days ago"));
+    m.insert("pass_last_valid_until", ("Naposledy platny do", "Last valid until"));
+
     // General
     m.insert("loading", ("Nacitavanie...", "Loading..."));
     m.insert("page_not_found", ("Stranka nenajdena", "Page not found"));

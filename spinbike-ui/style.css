@@ -512,3 +512,10 @@ th {
 
 /* Keyboard-selected suggestion in the card search dropdown. */
 .search-result-active { background: var(--surface-hover); }
+
+/* Monthly pass banner */
+.pass-banner { padding: 0.85rem 1rem; border-radius: 6px; margin-bottom: 1rem; }
+.pass-banner-ok { background: #1b4a2a; color: #9bf3b4; border: 1px solid #2c7a4a; }
+.pass-banner-expired { background: #5a1c1c; color: #ffb3b3; border: 1px solid #a33; }
+.pass-banner-title { font-size: 1.05rem; font-weight: 600; margin-bottom: 0.25rem; }
+.pass-banner-sub { font-size: 0.85rem; opacity: 0.85; }
