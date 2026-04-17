@@ -68,6 +68,10 @@ struct TxnInfo {
 
 const QUICK_TOPUP: [f64; 4] = [5.0, 10.0, 20.0, 50.0];
 
+fn pass_is_active(card: &CardInfo) -> bool {
+    card.pass.as_ref().map(|p| p.days_remaining >= 0).unwrap_or(false)
+}
+
 fn full_name(c: &CardInfo) -> String {
     let f = c.first_name.clone().unwrap_or_default();
     let l = c.last_name.clone().unwrap_or_default();
@@ -552,11 +556,14 @@ fn ActionPanel(
     let (txns, set_txns) = signal(Vec::<TxnInfo>::new());
     let (show_edit, set_show_edit) = signal(false);
     let (show_sell_pass, set_show_sell_pass) = signal(false);
+    // Counter incremented after a log-visit to re-trigger the history fetch.
+    let (txn_refresh, set_txn_refresh) = signal(0u32);
 
     // Transaction history is the most-read piece of card context, so load it
     // as soon as the panel mounts and always render it below the actions.
     let card_id_for_txn = card.id;
     Effect::new(move |_| {
+        let _ = txn_refresh.get(); // reactive dependency — re-runs on increment
         spawn_local(async move {
             if let Ok(t) =
                 api::get::<Vec<TxnInfo>>(&format!("/api/cards/{card_id_for_txn}/transactions"))
@@ -607,7 +614,14 @@ fn ActionPanel(
 
             // Ordered by actual staff usage frequency: charge (pay-for-service)
             // is the most-common action, then top-up. Edit/block stay secondary.
-            <ChargeSection card_id=card_id services=services set_selected=set_selected set_msg=set_msg />
+            <ChargeSection
+                card_id=card_id
+                services=services
+                set_selected=set_selected
+                set_msg=set_msg
+                pass_active=pass_is_active(&card)
+                set_txn_refresh=set_txn_refresh
+            />
             <TopupSection card_id=card_id set_selected=set_selected set_msg=set_msg />
 
             <div class="mt-2">
@@ -837,6 +851,8 @@ fn ChargeSection(
     services: ReadSignal<Vec<ServiceInfo>>,
     set_selected: WriteSignal<Option<CardInfo>>,
     set_msg: WriteSignal<String>,
+    pass_active: bool,
+    set_txn_refresh: WriteSignal<u32>,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let service_ref = NodeRef::<leptos::html::Select>::new();
@@ -890,36 +906,78 @@ fn ChargeSection(
         });
     };
 
+    // Closure factory for per-service log-visit click handlers (pass active path).
+    let visit_click_for = move |service_id: i64| {
+        move |_: web_sys::MouseEvent| {
+            spawn_local(async move {
+                #[derive(serde::Serialize)]
+                struct Req { card_id: i64, service_id: i64 }
+                #[derive(serde::Deserialize)]
+                struct Resp { #[allow(dead_code)] transaction_id: i64 }
+                match api::post::<Req, Resp>("/api/payments/log-visit", &Req { card_id, service_id }).await {
+                    Ok(_) => {
+                        set_txn_refresh.update(|n| *n += 1);
+                    }
+                    Err(e) => set_msg.set(format!("Error: {e}")),
+                }
+            });
+        }
+    };
+
     view! {
         <div class="mt-2">
             <div class="text-muted" style="font-size:0.85rem;margin-bottom:4px">
                 {move || i18n::t(lang.get(), "quick_charge")}
             </div>
-            <form class="inline-form" on:submit=on_submit style="flex-wrap:wrap">
-                <select class="form-control" node_ref=service_ref on:change=on_service_change data-testid="charge-service">
-                    <option value="">{move || i18n::t(lang.get(), "select_service")}</option>
-                    {move || {
-                        services.get().iter().map(|s| {
-                            let val = s.id.to_string();
-                            let label = format!("{} ({:.2} €)", s.name, s.default_price);
-                            view! { <option value=val>{label}</option> }
-                        }).collect::<Vec<_>>()
-                    }}
-                </select>
-                <input
-                    type="number"
-                    class="form-control"
-                    node_ref=amount_ref
-                    placeholder=move || i18n::t(lang.get(), "amount")
-                    step="0.01"
-                    min="0.01"
-                    style="width:8em"
-                    required
-                />
-                <button type="submit" class="btn btn-sm btn-danger" data-testid="charge-submit" disabled=move || loading.get()>
-                    {move || i18n::t(lang.get(), "charge")}
-                </button>
-            </form>
+            {if pass_active {
+                // Pass is active: render one "Log visit" button per service.
+                view! {
+                    <div class="flex gap-1" style="flex-wrap:wrap">
+                        {services.get().iter().map(|svc| {
+                            let service_id = svc.id;
+                            let svc_name = svc.name.clone();
+                            view! {
+                                <button
+                                    class="btn btn-sm btn-primary"
+                                    data-testid="log-visit-btn"
+                                    on:click=visit_click_for(service_id)
+                                >
+                                    {move || i18n::t(lang.get(), "log_visit")}" "{svc_name.clone()}
+                                </button>
+                            }
+                        }).collect::<Vec<_>>()}
+                    </div>
+                }.into_any()
+            } else {
+                // No active pass: existing charge form — unchanged.
+                view! {
+                    <form class="inline-form" on:submit=on_submit style="flex-wrap:wrap">
+                        <select class="form-control" node_ref=service_ref on:change=on_service_change data-testid="charge-service">
+                            <option value="">{move || i18n::t(lang.get(), "select_service")}</option>
+                            {move || {
+                                services.get().iter().map(|s| {
+                                    let val = s.id.to_string();
+                                    let label = format!("{} ({:.2} €)", s.name, s.default_price);
+                                    view! { <option value=val>{label}</option> }
+                                }).collect::<Vec<_>>()
+                            }}
+                        </select>
+                        <input
+                            type="number"
+                            class="form-control"
+                            node_ref=amount_ref
+                            placeholder=move || i18n::t(lang.get(), "amount")
+                            step="0.01"
+                            min="0.01"
+                            style="width:8em"
+                            required
+                        />
+                        <button type="submit" class="btn btn-sm btn-danger" data-testid="charge-submit" disabled=move || loading.get()>
+                            {move || i18n::t(lang.get(), "charge")}
+                        </button>
+                    </form>
+                }.into_any()
+            }}
         </div>
     }
 }
