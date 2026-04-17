@@ -285,3 +285,41 @@ async fn card_response_pass_field_is_null_when_no_pass() {
         "pass must be null when card has no pass"
     );
 }
+
+#[tokio::test]
+async fn card_response_includes_expired_pass_with_negative_days_remaining() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("EXPIRED-RESP", 50.0, None, None, None, None)
+        .await;
+
+    // Insert an expired pass directly — cannot go through sell-pass API (validates future date).
+    let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name = 'Monthly pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO transactions (card_id, service_id, amount, action, valid_until, created_at)
+         VALUES (?, ?, -35.0, 'charge', ?, datetime('now'))",
+    )
+    .bind(card_id)
+    .bind(pass_svc)
+    .bind(chrono::NaiveDate::from_ymd_opt(2020, 1, 1).unwrap())
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, body) = app
+        .request(get("/api/cards/lookup/EXPIRED-RESP", &app.staff_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        body["pass"]["valid_until"], "2020-01-01",
+        "expired pass must still be returned in response (state C on dashboard)"
+    );
+    let days = body["pass"]["days_remaining"].as_i64().unwrap();
+    assert!(
+        days < 0,
+        "days_remaining must be NEGATIVE for expired pass, got {days}"
+    );
+}

@@ -112,7 +112,6 @@ async fn card_response_from_row(
     let today = chrono::Local::now().date_naive();
     let pass = db::get_card_pass_valid_until(pool, c.id)
         .await?
-        .filter(|&d| d >= today)
         .map(|d| CardPass {
             valid_until: d,
             days_remaining: (d - today).num_days() as i32,
