@@ -247,7 +247,7 @@ jobs:
           # `install` unlinks the destination first, so the running process
           # keeps its mmap to the old inode while the new file takes over the
           # path — avoids ETXTBSY on the in-use binary.
-          install -m 755 target/release/spinbike-server \
+          install -Dm 755 target/release/spinbike-server \
             /home/newlevel/devel/spinbike/target/release/spinbike-server
           sudo -n systemctl restart spinbike.service
 
