@@ -655,4 +655,34 @@ mod tests {
             "non-pass transactions must not produce a valid_until"
         );
     }
+
+    #[tokio::test]
+    async fn pass_valid_until_picks_date_when_mixed_with_null_rows() {
+        use crate::db::transactions::{create_transaction, create_transaction_with_valid_until};
+        let pool = setup().await;
+        let card_id = create_card(&pool, "MIXED-NULL").await.unwrap();
+        // One non-pass txn (topup — valid_until NULL) and one pass txn (valid_until set).
+        create_transaction(&pool, None, Some(card_id), None, None, 20.0, "topup")
+            .await
+            .unwrap();
+        let pass_date = chrono::NaiveDate::from_ymd_opt(2030, 1, 15).unwrap();
+        create_transaction_with_valid_until(
+            &pool,
+            None,
+            Some(card_id),
+            None,
+            Some(1),
+            -35.0,
+            "charge",
+            Some(pass_date),
+        )
+        .await
+        .unwrap();
+        let result = get_card_pass_valid_until(&pool, card_id).await.unwrap();
+        assert_eq!(
+            result,
+            Some(pass_date),
+            "MAX must return the pass date, ignoring rows with NULL valid_until"
+        );
+    }
 }
