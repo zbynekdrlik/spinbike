@@ -151,7 +151,7 @@ jobs:
 
       - name: Start server
         run: |
-          PORT=8099 DATABASE_PATH=/tmp/spinbike-e2e.db JWT_SECRET=ci-test ./target/release/spinbike-server &
+          PORT=8099 DATABASE_PATH=/tmp/spinbike-e2e.db JWT_SECRET=ci-test SPINBIKE_TEST_MODE=1 ./target/release/spinbike-server &
 
       - name: Wait for server
         run: |

@@ -56,9 +56,14 @@ pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Re
         jwt_secret,
     };
 
-    let app = routes::all_routes()
-        .layer(build_cors_layer())
-        .with_state(state);
+    let mut router = routes::all_routes();
+    if std::env::var("SPINBIKE_TEST_MODE").ok().as_deref() == Some("1") {
+        tracing::warn!(
+            "SPINBIKE_TEST_MODE=1 — test fixture endpoints are active. Do NOT use in production!"
+        );
+        router = router.merge(routes::test_fixtures::routes());
+    }
+    let app = router.layer(build_cors_layer()).with_state(state);
 
     let addr = format!("0.0.0.0:{port}");
     info!("Starting server on {addr}");

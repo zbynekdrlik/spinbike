@@ -4,6 +4,7 @@ pub mod cards;
 pub mod classes;
 pub mod payments;
 pub mod static_files;
+pub mod test_fixtures;
 
 use axum::{Json, Router, http::StatusCode};
 
