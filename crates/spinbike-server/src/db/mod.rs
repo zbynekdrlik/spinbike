@@ -145,7 +145,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(svc_count, 2);
+        assert_eq!(svc_count, 3);
 
         let setting: String =
             sqlx::query_scalar("SELECT value FROM settings WHERE key = 'bike_count'")
@@ -166,6 +166,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(version, 3);
+        assert_eq!(version, 4);
     }
 }

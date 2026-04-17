@@ -243,3 +243,45 @@ async fn log_visit_rejects_unknown_service_id() {
         .await;
     assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn card_response_includes_pass_field_when_pass_active() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("PASS-RESP-1", 50.0, None, None, None, None)
+        .await;
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "price": 35.0, "valid_until": "2030-01-01" }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let (status, body) = app
+        .request(get("/api/cards/lookup/PASS-RESP-1", &app.staff_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["pass"]["valid_until"], "2030-01-01");
+    let days = body["pass"]["days_remaining"].as_i64().unwrap();
+    assert!(
+        days > 0,
+        "days_remaining must be positive for an active pass"
+    );
+}
+
+#[tokio::test]
+async fn card_response_pass_field_is_null_when_no_pass() {
+    let app = TestApp::new().await;
+    app.seed_card("NO-PASS-RESP", 10.0, None, None, None, None)
+        .await;
+    let (status, body) = app
+        .request(get("/api/cards/lookup/NO-PASS-RESP", &app.staff_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(
+        body["pass"].is_null(),
+        "pass must be null when card has no pass"
+    );
+}

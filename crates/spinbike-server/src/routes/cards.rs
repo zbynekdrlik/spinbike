@@ -66,6 +66,12 @@ fn default_search_limit() -> i64 {
 }
 
 #[derive(Serialize)]
+pub struct CardPass {
+    pub valid_until: chrono::NaiveDate,
+    pub days_remaining: i32,
+}
+
+#[derive(Serialize)]
 pub struct CardResponse {
     pub id: i64,
     pub barcode: String,
@@ -77,6 +83,7 @@ pub struct CardResponse {
     pub last_name: Option<String>,
     pub company: Option<String>,
     pub phone: Option<String>,
+    pub pass: Option<CardPass>,
 }
 
 #[derive(Serialize)]
@@ -94,23 +101,35 @@ pub struct TransactionResponse {
     pub created_at: String,
     // Name of the service the transaction paid for, when applicable.
     pub service_name: Option<String>,
+    pub valid_until: Option<chrono::NaiveDate>,
 }
 
-impl From<&db::CardRow> for CardResponse {
-    fn from(c: &db::CardRow) -> Self {
-        CardResponse {
-            id: c.id,
-            barcode: c.barcode.clone(),
-            user_id: c.user_id,
-            blocked: c.blocked != 0,
-            credit: c.credit,
-            allow_debit: c.allow_debit != 0,
-            first_name: c.first_name.clone(),
-            last_name: c.last_name.clone(),
-            company: c.company.clone(),
-            phone: c.phone.clone(),
-        }
-    }
+// Replaces `impl From<&db::CardRow> for CardResponse`.
+async fn card_response_from_row(
+    pool: &sqlx::SqlitePool,
+    c: &db::CardRow,
+) -> anyhow::Result<CardResponse> {
+    let today = chrono::Local::now().date_naive();
+    let pass = db::get_card_pass_valid_until(pool, c.id)
+        .await?
+        .filter(|&d| d >= today)
+        .map(|d| CardPass {
+            valid_until: d,
+            days_remaining: (d - today).num_days() as i32,
+        });
+    Ok(CardResponse {
+        id: c.id,
+        barcode: c.barcode.clone(),
+        user_id: c.user_id,
+        blocked: c.blocked != 0,
+        credit: c.credit,
+        allow_debit: c.allow_debit != 0,
+        first_name: c.first_name.clone(),
+        last_name: c.last_name.clone(),
+        company: c.company.clone(),
+        phone: c.phone.clone(),
+        pass,
+    })
 }
 
 pub fn routes() -> Router<AppState> {
@@ -143,7 +162,15 @@ async fn search_cards(
     let cards = db::search_cards(&state.pool, &params.q, limit)
         .await
         .map_err(internal_error)?;
-    Ok(Json(cards.iter().map(CardResponse::from).collect()))
+    let mut out = Vec::with_capacity(cards.len());
+    for c in &cards {
+        out.push(
+            card_response_from_row(&state.pool, c)
+                .await
+                .map_err(internal_error)?,
+        );
+    }
+    Ok(Json(out))
 }
 
 async fn list_cards(
@@ -159,7 +186,15 @@ async fn list_cards(
     let cards = db::list_all_cards(&state.pool)
         .await
         .map_err(internal_error)?;
-    Ok(Json(cards.iter().map(CardResponse::from).collect()))
+    let mut out = Vec::with_capacity(cards.len());
+    for c in &cards {
+        out.push(
+            card_response_from_row(&state.pool, c)
+                .await
+                .map_err(internal_error)?,
+        );
+    }
+    Ok(Json(out))
 }
 
 async fn link_card(
@@ -193,7 +228,11 @@ async fn link_card(
         .map_err(internal_error)?
         .unwrap();
 
-    Ok(Json(CardResponse::from(&updated)))
+    Ok(Json(
+        card_response_from_row(&state.pool, &updated)
+            .await
+            .map_err(internal_error)?,
+    ))
 }
 
 async fn lookup_card(
@@ -218,7 +257,11 @@ async fn lookup_card(
             )
         })?;
 
-    Ok(Json(CardResponse::from(&card)))
+    Ok(Json(
+        card_response_from_row(&state.pool, &card)
+            .await
+            .map_err(internal_error)?,
+    ))
 }
 
 async fn activate_card(
@@ -283,7 +326,14 @@ async fn activate_card(
         .map_err(internal_error)?
         .unwrap();
 
-    Ok((StatusCode::CREATED, Json(CardResponse::from(&card))))
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            card_response_from_row(&state.pool, &card)
+                .await
+                .map_err(internal_error)?,
+        ),
+    ))
 }
 
 async fn topup_card(
@@ -329,7 +379,11 @@ async fn topup_card(
         .await
         .map_err(internal_error)?;
 
-    Ok(Json(CardResponse::from(&card)))
+    Ok(Json(
+        card_response_from_row(&state.pool, &card)
+            .await
+            .map_err(internal_error)?,
+    ))
 }
 
 async fn block_card(
@@ -354,7 +408,11 @@ async fn block_card(
         .await
         .map_err(internal_error)?;
 
-    Ok(Json(CardResponse::from(&card)))
+    Ok(Json(
+        card_response_from_row(&state.pool, &card)
+            .await
+            .map_err(internal_error)?,
+    ))
 }
 
 async fn update_card(
@@ -393,7 +451,11 @@ async fn update_card(
             )
         })?;
 
-    Ok(Json(CardResponse::from(&card)))
+    Ok(Json(
+        card_response_from_row(&state.pool, &card)
+            .await
+            .map_err(internal_error)?,
+    ))
 }
 
 async fn card_transactions(
@@ -421,6 +483,7 @@ async fn card_transactions(
                 action: t.action,
                 created_at: t.created_at,
                 service_name: t.service_name,
+                valid_until: t.valid_until,
             })
             .collect(),
     ))
@@ -438,8 +501,17 @@ async fn my_balance(
         .await
         .map_err(internal_error)?;
 
+    let mut card_responses = Vec::with_capacity(cards.len());
+    for c in &cards {
+        card_responses.push(
+            card_response_from_row(&state.pool, c)
+                .await
+                .map_err(internal_error)?,
+        );
+    }
+
     Ok(Json(BalanceResponse {
-        cards: cards.iter().map(CardResponse::from).collect(),
+        cards: card_responses,
         transactions: txns
             .into_iter()
             .map(|t| TransactionResponse {
@@ -449,6 +521,7 @@ async fn my_balance(
                 action: t.action,
                 created_at: t.created_at,
                 service_name: t.service_name,
+                valid_until: t.valid_until,
             })
             .collect(),
     }))
