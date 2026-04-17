@@ -404,6 +404,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn list_all_cards_returns_seeded_rows() {
+        let pool = setup().await;
+        create_card(&pool, "LIST-1").await.unwrap();
+        create_card(&pool, "LIST-2").await.unwrap();
+        let cards = list_all_cards(&pool).await.unwrap();
+        assert_eq!(cards.len(), 2, "kills Ok(vec![]) mutant on list_all_cards");
+        let barcodes: Vec<&str> = cards.iter().map(|c| c.barcode.as_str()).collect();
+        assert!(barcodes.contains(&"LIST-1"));
+        assert!(barcodes.contains(&"LIST-2"));
+    }
+
+    #[tokio::test]
+    async fn get_cards_with_pass_by_user_returns_linked_cards() {
+        let pool = setup().await;
+        let user_id = create_user(
+            &pool,
+            "cards-by-user@test.com",
+            None,
+            "Test",
+            None,
+            "customer",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let card_id = create_card(&pool, "BY-USER-1").await.unwrap();
+        link_card_to_user(&pool, card_id, user_id).await.unwrap();
+
+        let rows = get_cards_with_pass_by_user(&pool, user_id).await.unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "kills Ok(vec![]) mutant on get_cards_with_pass_by_user"
+        );
+        assert_eq!(rows[0].0.barcode, "BY-USER-1");
+        assert_eq!(rows[0].1, None, "no pass purchased yet");
+    }
+
+    #[tokio::test]
     async fn create_and_get_card() {
         let pool = setup().await;
 
