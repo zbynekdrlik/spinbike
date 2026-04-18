@@ -7,7 +7,9 @@ on:
     branches: [main]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  # Keep push and pull_request concurrency separate so a PR run from the same
+  # branch doesn't swallow the push run that carries the deploy job.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: ${{ github.event_name == 'push' }}
 
 jobs:
@@ -25,10 +27,12 @@ jobs:
             exit 1
           fi
 
-      - name: Check for continue-on-error
+      - name: Ban continue-on-error in CI
         run: |
-          if grep -rn 'continue-on-error:\s*true' .github/workflows/; then
-            echo "ERROR: Found continue-on-error: true in workflows."
+          # Use a regex that won't match this step's own text
+          FOUND=$(grep -rn 'continue-on-error:.*true' .github/workflows/ | grep -v 'Ban continue-on-error' | grep -v '^\s*#' || true)
+          if [ -n "$FOUND" ]; then
+            echo "$FOUND"
             exit 1
           fi
 
@@ -52,7 +56,11 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Create placeholder dist for rust-embed
-        run: mkdir -p spinbike-ui/dist && touch spinbike-ui/dist/index.html
+        run: |
+          mkdir -p spinbike-ui/dist
+          # Non-empty placeholder so static-file integration tests can assert
+          # the handler returns content (distinguishing from Default::default()).
+          echo "<!doctype html><title>spinbike-test</title>" > spinbike-ui/dist/index.html
 
       - name: Clippy
         run: cargo clippy --all-targets -- -D warnings
@@ -72,7 +80,11 @@ jobs:
           cache-on-failure: true
 
       - name: Create placeholder dist for rust-embed
-        run: mkdir -p spinbike-ui/dist && touch spinbike-ui/dist/index.html
+        run: |
+          mkdir -p spinbike-ui/dist
+          # Non-empty placeholder so static-file integration tests can assert
+          # the handler returns content (distinguishing from Default::default()).
+          echo "<!doctype html><title>spinbike-test</title>" > spinbike-ui/dist/index.html
 
       - name: Run tests
         run: cargo test -p spinbike-core -p spinbike-server
@@ -106,6 +118,159 @@ jobs:
           name: spinbike-ui-dist
           path: spinbike-ui/dist/
           retention-days: 7
+
+  e2e:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [test, build-wasm]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Download WASM dist artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: spinbike-ui-dist
+          path: spinbike-ui/dist/
+
+      - name: Build server
+        run: cargo build --bin spinbike-server --release
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Playwright
+        run: cd e2e && npm ci && npx playwright install --with-deps chromium
+
+      - name: Start server
+        run: |
+          PORT=8099 DATABASE_PATH=/tmp/spinbike-e2e.db JWT_SECRET=ci-test SPINBIKE_TEST_MODE=1 ./target/release/spinbike-server &
+
+      - name: Wait for server
+        run: |
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:8099 > /dev/null 2>&1; then
+              echo "Server ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Server failed to start"
+          exit 1
+
+      - name: Run E2E tests
+        run: cd e2e && npx playwright test
+        env:
+          DATABASE_PATH: /tmp/spinbike-e2e.db
+
+  mutation-test:
+    name: Mutation Testing
+    runs-on: ubuntu-latest
+    # Generous timeout — public-repo CI is unmetered. The initial PR mutates
+    # the entire codebase against near-empty main (~269 mutants × ~30s each).
+    # Follow-up PRs only mutate diffed lines and finish in minutes.
+    timeout-minutes: 240
+    needs: test
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      - name: Create placeholder dist for rust-embed
+        run: |
+          mkdir -p spinbike-ui/dist
+          # Non-empty placeholder so static-file integration tests can assert
+          # the handler returns content (distinguishing from Default::default()).
+          echo "<!doctype html><title>spinbike-test</title>" > spinbike-ui/dist/index.html
+
+      - name: Compute PR diff vs base
+        run: git diff origin/${{ github.base_ref }}...HEAD > pr.diff
+
+      - name: Run cargo-mutants on diff
+        run: |
+          # Mutate only PR-changed lines in the Rust crates.
+          # --no-shuffle keeps output deterministic for log readability.
+          # Exclude one-off CLI tools and the trivial server main() — these are
+          # entry points that would need full E2E harnesses to mutate usefully.
+          cargo mutants \
+            --in-diff pr.diff \
+            --timeout 60 \
+            --no-shuffle \
+            --exclude 'crates/spinbike-server/src/bin/*' \
+            --package spinbike-core \
+            --package spinbike-server
+
+  deploy:
+    name: Deploy (self-hosted)
+    runs-on: [self-hosted, spinbike-deploy]
+    needs: [test, build-wasm, e2e]
+    timeout-minutes: 30
+    # Only auto-deploy on direct pushes to dev; PR runs and other branches skip.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build WASM frontend (Trunk)
+        run: |
+          cd spinbike-ui
+          trunk build --release
+
+      - name: Force rust-embed to re-bake dist
+        # Cargo's incremental compilation doesn't track dist/ content, so the
+        # server binary skips re-embedding unless a tracked file changes.
+        run: touch crates/spinbike-server/src/routes/static_files.rs
+
+      - name: Build release server
+        run: cargo build --release --bin spinbike-server
+
+      - name: Install binary and restart service
+        run: |
+          # `install` unlinks the destination first, so the running process
+          # keeps its mmap to the old inode while the new file takes over the
+          # path — avoids ETXTBSY on the in-use binary.
+          install -Dm 755 target/release/spinbike-server \
+            /home/newlevel/devel/spinbike/target/release/spinbike-server
+          sudo -n systemctl restart spinbike.service
+
+      - name: Wait for live site health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sfI https://spinbike.newlevel.media > /dev/null; then
+              echo "Live site responding (attempt $i)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ERROR: live site did not respond within 60s"
+          sudo -n systemctl status spinbike.service --no-pager || true
+          exit 1
+
+      - name: Post-deploy smoke tests (Playwright against live)
+        run: |
+          cd e2e
+          npm ci
+          npx playwright install --with-deps chromium
+          SMOKE_BASE_URL=https://spinbike.newlevel.media \
+            npx playwright test -g '@smoke'
 
   check-version-bump:
     name: Version Bump Check

@@ -4,10 +4,21 @@ pub mod cards;
 pub mod classes;
 pub mod payments;
 pub mod static_files;
+pub mod test_fixtures;
 
-use axum::Router;
+use axum::{Json, Router, http::StatusCode};
 
 use crate::AppState;
+
+/// Log the real error and return a generic "Internal server error" to the client.
+/// Prevents leaking implementation details to users.
+pub fn internal_error(e: impl std::fmt::Display) -> (StatusCode, Json<serde_json::Value>) {
+    tracing::error!("Internal error: {e}");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({"error": "Internal server error"})),
+    )
+}
 
 /// All API routes merged together.
 pub fn api_routes() -> Router<AppState> {

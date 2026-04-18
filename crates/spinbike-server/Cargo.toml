@@ -23,7 +23,17 @@ mime_guess = "2"
 jsonwebtoken = "9"
 argon2 = "0.5"
 rand = "0.8"
+csv = "1"
+unicode-normalization = "0.1"
 
 [[bin]]
 name = "spinbike-server"
 path = "src/bin/server.rs"
+
+[[bin]]
+name = "migrate-legacy"
+path = "src/bin/migrate_legacy.rs"
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

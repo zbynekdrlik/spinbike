@@ -1,5 +1,5 @@
 use axum::{
-    http::{StatusCode, header, Uri},
+    http::{StatusCode, Uri, header},
     response::{Html, IntoResponse, Response},
 };
 use rust_embed::Embed;
@@ -33,10 +33,10 @@ pub async fn static_handler(uri: Uri) -> Response {
     }
 
     // SPA fallback: serve index.html for paths without file extensions.
-    if !path.contains('.') || path.is_empty() {
-        if let Some(index) = Asset::get("index.html") {
-            return Html(String::from_utf8_lossy(&index.data).to_string()).into_response();
-        }
+    if (!path.contains('.') || path.is_empty())
+        && let Some(index) = Asset::get("index.html")
+    {
+        return Html(String::from_utf8_lossy(&index.data).to_string()).into_response();
     }
 
     (StatusCode::NOT_FOUND, "Not found").into_response()

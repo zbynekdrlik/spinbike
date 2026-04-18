@@ -2,8 +2,8 @@ pub mod oauth;
 
 use anyhow::{Context, Result};
 use argon2::{
-    password_hash::{rand_core::OsRng, PasswordHasher, SaltString},
     Argon2, PasswordHash, PasswordVerifier,
+    password_hash::{PasswordHasher, SaltString, rand_core::OsRng},
 };
 use axum::{
     extract::{FromRef, FromRequestParts},
@@ -34,14 +34,16 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
         .is_ok()
 }
 
-/// Create a JWT token with 7-day expiry.
+/// Create a JWT token with 90-day expiry.
+/// Long-lived sessions are acceptable for this app — it's a small fitness-center
+/// management tool, not a banking system. Users should stay logged in across visits.
 pub fn create_token(secret: &str, user_id: i64, email: &str, role: &Role) -> Result<String> {
     let now = chrono::Utc::now().timestamp();
     let claims = Claims {
         sub: user_id,
         email: email.to_string(),
         role: role.clone(),
-        exp: now + 7 * 24 * 60 * 60,
+        exp: now + 90 * 24 * 60 * 60,
         iat: now,
     };
     let token = jsonwebtoken::encode(
@@ -169,5 +171,20 @@ mod tests {
         let token = create_token("secret1", 1, "a@b.com", &Role::Admin).unwrap();
         let result = validate_token("wrong-secret", &token);
         assert!(result.is_err());
+    }
+
+    /// Pin the JWT expiry to exactly 90 days so any arithmetic drift
+    /// (e.g. 90*24*60*60 becoming 90+24*60*60) fails this test.
+    #[test]
+    fn jwt_expiry_is_exactly_90_days() {
+        let secret = "expiry-check";
+        let token = create_token(secret, 1, "a@b.com", &Role::Customer).unwrap();
+        let claims = validate_token(secret, &token).unwrap();
+        let ninety_days_secs: i64 = 90 * 24 * 60 * 60;
+        assert_eq!(claims.exp - claims.iat, ninety_days_secs);
+        // Also verify absolute magnitude: must be larger than ~89 days and
+        // smaller than ~91 days, which rules out swapping the arithmetic ops.
+        assert!(claims.exp - claims.iat > 89 * 24 * 60 * 60);
+        assert!(claims.exp - claims.iat < 91 * 24 * 60 * 60);
     }
 }

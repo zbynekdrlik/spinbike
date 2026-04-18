@@ -14,6 +14,7 @@ pub struct UserRow {
     pub created_at: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_user(
     pool: &SqlitePool,
     email: &str,
@@ -110,11 +111,23 @@ mod tests {
     async fn create_and_get_user() {
         let pool = setup().await;
 
-        let id = create_user(&pool, "alice@example.com", Some("hash123"), "Alice", Some("+1234"), "customer", None, None)
-            .await
-            .unwrap();
+        let id = create_user(
+            &pool,
+            "alice@example.com",
+            Some("hash123"),
+            "Alice",
+            Some("+1234"),
+            "customer",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
-        let user = get_user_by_email(&pool, "alice@example.com").await.unwrap().unwrap();
+        let user = get_user_by_email(&pool, "alice@example.com")
+            .await
+            .unwrap()
+            .unwrap();
         assert_eq!(user.id, id);
         assert_eq!(user.name, "Alice");
         assert_eq!(user.role, "customer");
@@ -128,11 +141,30 @@ mod tests {
     async fn duplicate_email_fails() {
         let pool = setup().await;
 
-        create_user(&pool, "bob@example.com", None, "Bob", None, "customer", None, None)
-            .await
-            .unwrap();
+        create_user(
+            &pool,
+            "bob@example.com",
+            None,
+            "Bob",
+            None,
+            "customer",
+            None,
+            None,
+        )
+        .await
+        .unwrap();
 
-        let result = create_user(&pool, "bob@example.com", None, "Bob2", None, "customer", None, None).await;
+        let result = create_user(
+            &pool,
+            "bob@example.com",
+            None,
+            "Bob2",
+            None,
+            "customer",
+            None,
+            None,
+        )
+        .await;
         assert!(result.is_err());
     }
 }

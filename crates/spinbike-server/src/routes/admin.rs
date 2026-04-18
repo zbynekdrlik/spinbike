@@ -1,14 +1,15 @@
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
     routing::{delete, get, post, put},
 };
 use serde::{Deserialize, Serialize};
 
-use crate::auth::{AuthUser, parse_role};
-use crate::db::{classes, settings, users};
 use crate::AppState;
+use crate::auth::AuthUser;
+use crate::db::{classes, settings, users};
+use crate::routes::internal_error;
 use spinbike_core::ws::ServerMsg;
 
 // ---------- Templates ----------
@@ -103,30 +104,97 @@ pub struct UserResponse {
     pub created_at: String,
 }
 
+// ---------- Update requests ----------
+
+#[derive(Deserialize)]
+pub struct UpdateTemplateRequest {
+    pub weekday: Option<i64>,
+    pub start_time: Option<String>,
+    pub duration_minutes: Option<i64>,
+    pub instructor_id: Option<Option<i64>>,
+    pub capacity: Option<i64>,
+    pub active: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateInstructorRequest {
+    pub name: Option<String>,
+    pub active: Option<bool>,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateServiceRequest {
+    pub name: Option<String>,
+    pub default_price: Option<f64>,
+    pub active: Option<bool>,
+}
+
+// ---------- Query params ----------
+
+#[derive(Deserialize)]
+pub struct ListTemplatesQuery {
+    pub include_inactive: Option<bool>,
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/api/admin/templates", get(list_templates).post(create_template))
-        .route("/api/admin/templates/{id}", delete(delete_template))
+        .route(
+            "/api/admin/templates",
+            get(list_templates).post(create_template),
+        )
+        .route(
+            "/api/admin/templates/{id}",
+            delete(delete_template).put(update_template),
+        )
         .route("/api/admin/cancel-class", post(cancel_class))
-        .route("/api/admin/instructors", get(list_instructors).post(create_instructor))
-        .route("/api/admin/services", get(list_services).post(create_service))
+        .route(
+            "/api/admin/instructors",
+            get(list_instructors).post(create_instructor),
+        )
+        .route("/api/admin/instructors/{id}", put(update_instructor))
+        .route(
+            "/api/admin/services",
+            get(list_services).post(create_service),
+        )
+        .route("/api/admin/services/{id}", put(update_service))
         .route("/api/admin/settings", get(get_settings).put(update_setting))
         .route("/api/admin/users", get(list_users_handler))
         .route("/api/admin/users/{id}/role", put(update_user_role))
 }
 
+/// Require at least staff role. Returns Err with 403 if the user is a customer.
+fn require_staff(
+    claims: &spinbike_core::auth::Claims,
+) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+    if matches!(claims.role, spinbike_core::auth::Role::Customer) {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Staff access required"})),
+        ));
+    }
+    Ok(())
+}
+
 // ---------- Template handlers ----------
 
+// I5: list_templates now requires staff role.
 async fn list_templates(
     State(state): State<AppState>,
-    AuthUser(_claims): AuthUser,
+    AuthUser(claims): AuthUser,
+    Query(query): Query<ListTemplatesQuery>,
 ) -> Result<Json<Vec<TemplateResponse>>, (StatusCode, Json<serde_json::Value>)> {
-    let templates = classes::list_active_templates(&state.pool).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    require_staff(&claims)?;
+
+    // M3: Support ?include_inactive=true for admin use.
+    let templates = if query.include_inactive.unwrap_or(false) {
+        classes::list_all_templates(&state.pool)
+            .await
+            .map_err(internal_error)?
+    } else {
+        classes::list_active_templates(&state.pool)
+            .await
+            .map_err(internal_error)?
+    };
 
     Ok(Json(
         templates
@@ -165,12 +233,7 @@ async fn create_template(
         body.capacity,
     )
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    .map_err(internal_error)?;
 
     Ok((
         StatusCode::CREATED,
@@ -202,14 +265,66 @@ async fn delete_template(
         .bind(id)
         .execute(&state.pool)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+async fn update_template(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateTemplateRequest>,
+) -> Result<Json<TemplateResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_manage_users() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin access required"})),
+        ));
+    }
+
+    // Fetch existing row, merge fields, then do a full UPDATE.
+    let existing = sqlx::query_as::<_, classes::ClassTemplateRow>(
+        "SELECT * FROM class_templates WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(internal_error)?;
+
+    let weekday = body.weekday.unwrap_or(existing.weekday);
+    let start_time = body.start_time.unwrap_or(existing.start_time);
+    let duration_minutes = body.duration_minutes.unwrap_or(existing.duration_minutes);
+    let instructor_id = body.instructor_id.unwrap_or(existing.instructor_id);
+    let capacity = body.capacity.unwrap_or(existing.capacity);
+    let active: i64 = body
+        .active
+        .map(|a| if a { 1 } else { 0 })
+        .unwrap_or(existing.active);
+
+    sqlx::query(
+        "UPDATE class_templates SET weekday=?, start_time=?, duration_minutes=?, instructor_id=?, capacity=?, active=? WHERE id=?",
+    )
+    .bind(weekday)
+    .bind(&start_time)
+    .bind(duration_minutes)
+    .bind(instructor_id)
+    .bind(capacity)
+    .bind(active)
+    .bind(id)
+    .execute(&state.pool)
+    .await
+    .map_err(internal_error)?;
+
+    Ok(Json(TemplateResponse {
+        id,
+        weekday,
+        start_time,
+        duration_minutes,
+        instructor_id,
+        capacity,
+        active: active != 0,
+    }))
 }
 
 // ---------- Cancel class ----------
@@ -234,12 +349,7 @@ async fn cancel_class(
         Some(claims.sub),
     )
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    .map_err(internal_error)?;
 
     let _ = state.event_tx.send(ServerMsg::ClassCancelled {
         template_id: body.template_id,
@@ -251,21 +361,18 @@ async fn cancel_class(
 
 // ---------- Instructor handlers ----------
 
+// I5: list_instructors now requires staff role.
 async fn list_instructors(
     State(state): State<AppState>,
-    AuthUser(_claims): AuthUser,
+    AuthUser(claims): AuthUser,
 ) -> Result<Json<Vec<InstructorRow>>, (StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query_as::<_, InstructorRow>(
-        "SELECT id, name, active FROM instructors ORDER BY id",
-    )
-    .fetch_all(&state.pool)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    require_staff(&claims)?;
+
+    let rows =
+        sqlx::query_as::<_, InstructorRow>("SELECT id, name, active FROM instructors ORDER BY id")
+            .fetch_all(&state.pool)
+            .await
+            .map_err(internal_error)?;
 
     Ok(Json(rows))
 }
@@ -282,18 +389,11 @@ async fn create_instructor(
         ));
     }
 
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO instructors (name) VALUES (?) RETURNING id",
-    )
-    .bind(&body.name)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    let id: i64 = sqlx::query_scalar("INSERT INTO instructors (name) VALUES (?) RETURNING id")
+        .bind(&body.name)
+        .fetch_one(&state.pool)
+        .await
+        .map_err(internal_error)?;
 
     Ok((
         StatusCode::CREATED,
@@ -305,23 +405,58 @@ async fn create_instructor(
     ))
 }
 
+async fn update_instructor(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateInstructorRequest>,
+) -> Result<Json<InstructorRow>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_manage_users() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin access required"})),
+        ));
+    }
+
+    let existing =
+        sqlx::query_as::<_, InstructorRow>("SELECT id, name, active FROM instructors WHERE id = ?")
+            .bind(id)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(internal_error)?;
+
+    let name = body.name.unwrap_or(existing.name);
+    let active: i64 = body
+        .active
+        .map(|a| if a { 1 } else { 0 })
+        .unwrap_or(existing.active);
+
+    sqlx::query("UPDATE instructors SET name=?, active=? WHERE id=?")
+        .bind(&name)
+        .bind(active)
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .map_err(internal_error)?;
+
+    Ok(Json(InstructorRow { id, name, active }))
+}
+
 // ---------- Service handlers ----------
 
+// I5: list_services now requires staff role.
 async fn list_services(
     State(state): State<AppState>,
-    AuthUser(_claims): AuthUser,
+    AuthUser(claims): AuthUser,
 ) -> Result<Json<Vec<ServiceRow>>, (StatusCode, Json<serde_json::Value>)> {
+    require_staff(&claims)?;
+
     let rows = sqlx::query_as::<_, ServiceRow>(
         "SELECT id, name, default_price, active FROM services ORDER BY id",
     )
     .fetch_all(&state.pool)
     .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    .map_err(internal_error)?;
 
     Ok(Json(rows))
 }
@@ -338,19 +473,13 @@ async fn create_service(
         ));
     }
 
-    let id: i64 = sqlx::query_scalar(
-        "INSERT INTO services (name, default_price) VALUES (?, ?) RETURNING id",
-    )
-    .bind(&body.name)
-    .bind(body.default_price)
-    .fetch_one(&state.pool)
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    let id: i64 =
+        sqlx::query_scalar("INSERT INTO services (name, default_price) VALUES (?, ?) RETURNING id")
+            .bind(&body.name)
+            .bind(body.default_price)
+            .fetch_one(&state.pool)
+            .await
+            .map_err(internal_error)?;
 
     Ok((
         StatusCode::CREATED,
@@ -363,6 +492,51 @@ async fn create_service(
     ))
 }
 
+async fn update_service(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<i64>,
+    Json(body): Json<UpdateServiceRequest>,
+) -> Result<Json<ServiceRow>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_manage_users() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Admin access required"})),
+        ));
+    }
+
+    let existing = sqlx::query_as::<_, ServiceRow>(
+        "SELECT id, name, default_price, active FROM services WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(internal_error)?;
+
+    let name = body.name.unwrap_or(existing.name);
+    let default_price = body.default_price.unwrap_or(existing.default_price);
+    let active: i64 = body
+        .active
+        .map(|a| if a { 1 } else { 0 })
+        .unwrap_or(existing.active);
+
+    sqlx::query("UPDATE services SET name=?, default_price=?, active=? WHERE id=?")
+        .bind(&name)
+        .bind(default_price)
+        .bind(active)
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .map_err(internal_error)?;
+
+    Ok(Json(ServiceRow {
+        id,
+        name,
+        default_price,
+        active,
+    }))
+}
+
 // ---------- Settings handlers ----------
 
 async fn get_settings(
@@ -373,12 +547,7 @@ async fn get_settings(
         sqlx::query_as("SELECT key, value FROM settings ORDER BY key")
             .fetch_all(&state.pool)
             .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    Json(serde_json::json!({"error": e.to_string()})),
-                )
-            })?;
+            .map_err(internal_error)?;
 
     Ok(Json(
         rows.into_iter()
@@ -401,12 +570,7 @@ async fn update_setting(
 
     settings::set_setting(&state.pool, &body.key, &body.value)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -424,12 +588,9 @@ async fn list_users_handler(
         ));
     }
 
-    let rows = users::list_users(&state.pool).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({"error": e.to_string()})),
-        )
-    })?;
+    let rows = users::list_users(&state.pool)
+        .await
+        .map_err(internal_error)?;
 
     Ok(Json(
         rows.into_iter()
@@ -458,17 +619,17 @@ async fn update_user_role(
         ));
     }
 
-    // Validate role string.
-    let _role = parse_role(&body.role);
+    // I6: Validate role string before writing to DB.
+    if !["admin", "staff", "customer"].contains(&body.role.as_str()) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Invalid role. Must be admin, staff, or customer"})),
+        ));
+    }
 
     users::update_user_role(&state.pool, user_id, &body.role)
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({"error": e.to_string()})),
-            )
-        })?;
+        .map_err(internal_error)?;
 
     Ok(StatusCode::NO_CONTENT)
 }

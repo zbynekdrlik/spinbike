@@ -7,3 +7,10 @@
 .env
 .superpowers/
 zbynek/
+spinbike.db
+spinbike.db-shm
+spinbike.db-wal
+*.db
+*.db-shm
+*.db-wal
+.playwright-mcp/

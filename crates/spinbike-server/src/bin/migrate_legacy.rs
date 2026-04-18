@@ -1,0 +1,475 @@
+//! CLI tool to migrate data from the legacy VB6 Access database into the new SQLite schema.
+//!
+//! Usage:
+//!   migrate-legacy --mdb-path <path/to/db.mdb> --output <path/to/spinbike.db>
+//!
+//! Requires `mdb-export` (from mdbtools) to be installed on the system.
+
+use std::collections::HashMap;
+use std::io::Cursor;
+use std::path::PathBuf;
+use std::process::Command;
+
+use anyhow::{Context, Result, bail};
+use tracing::{info, warn};
+use tracing_subscriber::EnvFilter;
+
+use spinbike_server::auth;
+use spinbike_server::db;
+
+fn parse_args() -> Result<(PathBuf, PathBuf)> {
+    let args: Vec<String> = std::env::args().collect();
+    let mut mdb_path: Option<PathBuf> = None;
+    let mut output: Option<PathBuf> = None;
+
+    let mut i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--mdb-path" => {
+                i += 1;
+                mdb_path = Some(PathBuf::from(
+                    args.get(i).context("--mdb-path requires a value")?,
+                ));
+            }
+            "--output" => {
+                i += 1;
+                output = Some(PathBuf::from(
+                    args.get(i).context("--output requires a value")?,
+                ));
+            }
+            other => bail!("Unknown argument: {other}"),
+        }
+        i += 1;
+    }
+
+    let mdb_path = mdb_path.context("Missing required argument: --mdb-path <path>")?;
+    let output = output.context("Missing required argument: --output <path>")?;
+
+    if !mdb_path.exists() {
+        bail!("MDB file not found: {}", mdb_path.display());
+    }
+
+    Ok((mdb_path, output))
+}
+
+/// Run `mdb-export` on the given table and return the CSV output as a string.
+fn export_table(mdb_path: &PathBuf, table: &str) -> Result<String> {
+    let output = Command::new("mdb-export")
+        .arg(mdb_path)
+        .arg(table)
+        .output()
+        .with_context(|| format!("Failed to run mdb-export for table '{table}'"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("mdb-export failed for table '{table}': {stderr}");
+    }
+
+    String::from_utf8(output.stdout)
+        .with_context(|| format!("mdb-export output for '{table}' is not valid UTF-8"))
+}
+
+/// Map legacy service names (Slovak, from MS Access `serviceTab`) to
+/// the service names seeded in the new system.
+fn map_legacy_service_name(name: &str) -> Option<&'static str> {
+    match name.trim() {
+        "Casova karta" => Some("Monthly pass"),
+        "Fitnes" => Some("Fitness"),
+        "Spinbike" => Some("Spinning"),
+        _ => None,
+    }
+}
+
+/// Parse legacy EndDate strings in `MM/DD/YY HH:MM:SS` format
+/// (e.g. "12/05/08 00:00:00") to a `NaiveDate`. Blank/unparsable → None.
+fn parse_legacy_end_date(s: &str) -> anyhow::Result<Option<chrono::NaiveDate>> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    // Two-digit year — chrono parses "08" as year 8 without `%y` flag.
+    match chrono::NaiveDateTime::parse_from_str(trimmed, "%m/%d/%y %H:%M:%S") {
+        Ok(dt) => Ok(Some(dt.date())),
+        Err(_) => Ok(None),
+    }
+}
+
+/// Map a legacy action string to the new action format.
+/// Returns None for actions that should not create a transaction (e.g., BLOKOVANA).
+fn map_action(action: &str) -> Option<&'static str> {
+    match action.trim().trim_matches('"') {
+        "Debet" => Some("debit"),
+        "Kredit" | "Novy kredit" => Some("credit"),
+        "AKTIVACIA" => Some("activation"),
+        "Storno" => Some("storno"),
+        "Vstup" => Some("debit"),
+        "BLOKOVANA" => None, // handled by setting card.blocked = true
+        other => {
+            warn!("Unknown legacy action: '{other}', mapping to 'unknown'");
+            Some("unknown")
+        }
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::from_default_env().add_directive("migrate_legacy=info".parse()?),
+        )
+        .init();
+
+    let (mdb_path, output_path) = parse_args()?;
+
+    // Remove existing output file to start fresh.
+    if output_path.exists() {
+        std::fs::remove_file(&output_path).with_context(|| {
+            format!(
+                "Failed to remove existing output: {}",
+                output_path.display()
+            )
+        })?;
+    }
+
+    info!("Opening output database: {}", output_path.display());
+    let pool = db::create_pool(&output_path).await?;
+    db::run_migrations(&pool).await?;
+
+    // --- Import instructors ---
+    info!("Importing instructors from t_Inst...");
+    let inst_csv = export_table(&mdb_path, "t_Inst")?;
+    let mut inst_reader = csv::Reader::from_reader(Cursor::new(&inst_csv));
+    let mut instructor_count = 0u32;
+
+    for result in inst_reader.records() {
+        let record = result.context("Failed to parse instructor CSV record")?;
+        let name = record.get(1).context("Missing Instruktor column")?.trim();
+        if name.is_empty() {
+            continue;
+        }
+
+        sqlx::query("INSERT INTO instructors (name) VALUES (?)")
+            .bind(name)
+            .execute(&pool)
+            .await
+            .with_context(|| format!("Failed to insert instructor '{name}'"))?;
+
+        instructor_count += 1;
+    }
+    info!("Imported {instructor_count} instructors");
+
+    // --- Import cards ---
+    info!("Importing cards from card table...");
+    let card_csv = export_table(&mdb_path, "card")?;
+    let mut card_reader = csv::Reader::from_reader(Cursor::new(&card_csv));
+
+    // Map legacy card Id -> new card id for transaction mapping.
+    let mut legacy_card_map: HashMap<String, i64> = HashMap::new();
+    let mut card_count = 0u32;
+
+    for result in card_reader.records() {
+        let record = result.context("Failed to parse card CSV record")?;
+        // Header: Id,BarCode,TypCard,Blocked,Credit_SK,Name,LastName,Firma,phone,Debet,FirstCredit,EndDate,TimeCard,Credit
+        let legacy_id = record.get(0).context("Missing Id column")?.trim();
+        let barcode = record.get(1).context("Missing BarCode column")?.trim();
+        let blocked: i64 = record
+            .get(3)
+            .context("Missing Blocked column")?
+            .trim()
+            .parse()
+            .unwrap_or(0);
+        let first_name = record.get(5).unwrap_or("").trim();
+        let last_name = record.get(6).unwrap_or("").trim();
+        let company = record.get(7).unwrap_or("").trim();
+        let phone = record.get(8).unwrap_or("").trim();
+        let credit_eur: f64 = record
+            .get(13)
+            .context("Missing Credit (EUR) column")?
+            .trim()
+            .parse()
+            .unwrap_or(0.0);
+
+        if barcode.is_empty() {
+            warn!("Skipping card with empty barcode (legacy id={legacy_id})");
+            continue;
+        }
+
+        let first_name_opt = if first_name.is_empty() {
+            None
+        } else {
+            Some(first_name)
+        };
+        let last_name_opt = if last_name.is_empty() {
+            None
+        } else {
+            Some(last_name)
+        };
+        let company_opt = if company.is_empty() {
+            None
+        } else {
+            Some(company)
+        };
+        let phone_opt = if phone.is_empty() { None } else { Some(phone) };
+
+        // allow_debit = 1 for all cards (legacy app behavior).
+        let insert_result: Result<i64, _> = sqlx::query_scalar(
+            "INSERT INTO cards (barcode, blocked, credit, allow_debit, first_name, last_name, company, phone)
+             VALUES (?, ?, ?, 1, ?, ?, ?, ?) RETURNING id",
+        )
+        .bind(barcode)
+        .bind(blocked)
+        .bind(credit_eur)
+        .bind(first_name_opt)
+        .bind(last_name_opt)
+        .bind(company_opt)
+        .bind(phone_opt)
+        .fetch_one(&pool)
+        .await;
+
+        let new_id = match insert_result {
+            Ok(id) => id,
+            Err(e) if e.to_string().contains("UNIQUE constraint") => {
+                warn!("Skipping duplicate barcode {barcode} (legacy id={legacy_id})");
+                // Map to existing card so transactions still link correctly
+                let existing: i64 = sqlx::query_scalar("SELECT id FROM cards WHERE barcode = ?")
+                    .bind(barcode)
+                    .fetch_one(&pool)
+                    .await
+                    .with_context(|| format!("Failed to look up existing barcode={barcode}"))?;
+                legacy_card_map.insert(legacy_id.to_string(), existing);
+                continue;
+            }
+            Err(e) => {
+                return Err(e).with_context(|| format!("Failed to insert card barcode={barcode}"));
+            }
+        };
+
+        legacy_card_map.insert(legacy_id.to_string(), new_id);
+        card_count += 1;
+    }
+    info!("Imported {card_count} cards");
+
+    // --- Import transactions ---
+    info!("Importing transactions from Data table...");
+    let data_csv = export_table(&mdb_path, "Data")?;
+    let mut data_reader = csv::Reader::from_reader(Cursor::new(&data_csv));
+
+    // Load service name → id map once for legacy service name resolution.
+    let service_ids: std::collections::HashMap<String, i64> =
+        sqlx::query_as::<_, (String, i64)>("SELECT name, id FROM services")
+            .fetch_all(&pool)
+            .await
+            .context("Failed to load services for legacy mapping")?
+            .into_iter()
+            .collect();
+
+    // Track cards that should be blocked (from BLOKOVANA actions).
+    let mut blocked_cards: Vec<i64> = Vec::new();
+    let mut txn_count = 0u32;
+    let mut skipped_count = 0u32;
+
+    for result in data_reader.records() {
+        let record = result.context("Failed to parse Data CSV record")?;
+        // Header: id_data,id_card,user,action,service,suma_SK,Date,EndDate,suma
+        let legacy_card_id = record.get(1).context("Missing id_card column")?.trim();
+        let action = record.get(3).context("Missing action column")?.trim();
+        let amount_eur: f64 = record
+            .get(8)
+            .context("Missing suma (EUR) column")?
+            .trim()
+            .parse()
+            .unwrap_or(0.0);
+        let date = record.get(6).context("Missing Date column")?.trim();
+
+        let legacy_service = record.get(4).context("Missing service column")?.trim();
+        let end_date_raw = record.get(7).context("Missing EndDate column")?.trim();
+
+        let service_id: Option<i64> = map_legacy_service_name(legacy_service)
+            .and_then(|new_name| service_ids.get(new_name).copied());
+        let valid_until = parse_legacy_end_date(end_date_raw)?;
+
+        let new_card_id = legacy_card_map.get(legacy_card_id).copied();
+
+        match map_action(action) {
+            None => {
+                // BLOKOVANA — mark card as blocked.
+                if let Some(card_id) = new_card_id {
+                    blocked_cards.push(card_id);
+                }
+                skipped_count += 1;
+            }
+            Some(mapped_action) => {
+                // Format the legacy date for created_at.
+                // Legacy format: "MM/DD/YY HH:MM:SS" — store as-is since SQLite is flexible.
+                sqlx::query(
+                    "INSERT INTO transactions (card_id, amount, action, created_at, service_id, valid_until)
+                     VALUES (?, ?, ?, ?, ?, ?)",
+                )
+                .bind(new_card_id)
+                .bind(amount_eur)
+                .bind(mapped_action)
+                .bind(date)
+                .bind(service_id)
+                .bind(valid_until)
+                .execute(&pool)
+                .await
+                .with_context(|| {
+                    format!(
+                        "Failed to insert transaction: card={legacy_card_id}, action={action}"
+                    )
+                })?;
+
+                txn_count += 1;
+            }
+        }
+    }
+
+    // Apply blocked status from BLOKOVANA actions.
+    for card_id in &blocked_cards {
+        sqlx::query("UPDATE cards SET blocked = 1 WHERE id = ?")
+            .bind(card_id)
+            .execute(&pool)
+            .await?;
+    }
+
+    info!(
+        "Imported {txn_count} transactions, skipped {skipped_count} BLOKOVANA actions (applied as card blocks)"
+    );
+
+    // --- Create admin account ---
+    info!("Creating initial admin account...");
+    let admin_email = "admin@spinbike.local";
+
+    let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE email = ?")
+        .bind(admin_email)
+        .fetch_optional(&pool)
+        .await?;
+
+    if existing.is_some() {
+        info!("Admin account already exists, skipping");
+    } else {
+        let password_hash =
+            auth::hash_password("changeme").context("Failed to hash admin password")?;
+
+        sqlx::query("INSERT INTO users (email, password_hash, name, role) VALUES (?, ?, ?, ?)")
+            .bind(admin_email)
+            .bind(&password_hash)
+            .bind("Admin")
+            .bind("admin")
+            .execute(&pool)
+            .await
+            .context("Failed to create admin user")?;
+
+        info!("Created admin account: {admin_email} / changeme");
+    }
+
+    // --- Verify seed services ---
+    let svc_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM services")
+        .fetch_one(&pool)
+        .await?;
+    info!("Services in database: {svc_count}");
+    if svc_count == 0 {
+        warn!("No services found — migrations should have seeded them. Check migration V1.");
+    }
+
+    // --- Summary ---
+    info!("=== Migration complete ===");
+    info!("  Instructors: {instructor_count}");
+    info!("  Cards:       {card_count}");
+    info!("  Transactions: {txn_count}");
+    info!("  Admin user:  {admin_email}");
+    info!("  Services:    {svc_count}");
+    info!("  Output:      {}", output_path.display());
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_end_date_valid() {
+        assert_eq!(
+            parse_legacy_end_date("12/05/08 00:00:00").unwrap(),
+            Some(chrono::NaiveDate::from_ymd_opt(2008, 12, 5).unwrap())
+        );
+    }
+
+    #[test]
+    fn parse_end_date_empty_is_none() {
+        assert_eq!(parse_legacy_end_date("").unwrap(), None);
+        assert_eq!(parse_legacy_end_date("   ").unwrap(), None);
+    }
+
+    #[test]
+    fn parse_end_date_garbage_is_none() {
+        assert_eq!(parse_legacy_end_date("not a date").unwrap(), None);
+    }
+
+    #[test]
+    fn map_legacy_service_known_names() {
+        assert_eq!(
+            map_legacy_service_name("Casova karta"),
+            Some("Monthly pass")
+        );
+        assert_eq!(map_legacy_service_name("Fitnes"), Some("Fitness"));
+        assert_eq!(map_legacy_service_name("Spinbike"), Some("Spinning"));
+    }
+
+    #[test]
+    fn map_legacy_service_unknown_returns_none() {
+        assert_eq!(map_legacy_service_name("Something else"), None);
+        assert_eq!(map_legacy_service_name(""), None);
+    }
+
+    #[tokio::test]
+    async fn importer_preserves_service_and_end_date() {
+        use spinbike_server::db::{create_memory_pool, run_migrations};
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // Seed a card row so id 1 exists in the new DB.
+        sqlx::query(
+            "INSERT INTO cards (id, barcode, allow_debit, search_text) VALUES (1, 'C1', 1, 'c1')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Mimic what the import loop does for one row.
+        let service_ids: std::collections::HashMap<String, i64> =
+            sqlx::query_as::<_, (String, i64)>("SELECT name, id FROM services")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .into_iter()
+                .collect();
+
+        let service_id = map_legacy_service_name("Casova karta")
+            .and_then(|n| service_ids.get(n).copied())
+            .unwrap();
+        let valid_until = parse_legacy_end_date("12/05/08 00:00:00").unwrap();
+
+        sqlx::query(
+            "INSERT INTO transactions (card_id, amount, action, created_at, service_id, valid_until)
+             VALUES (?, ?, ?, ?, ?, ?)",
+        )
+        .bind(1_i64).bind(-19.92).bind("charge").bind("11/06/08 21:20:24")
+        .bind(Some(service_id)).bind(valid_until)
+        .execute(&pool).await.unwrap();
+
+        let row: (Option<String>, Option<chrono::NaiveDate>) = sqlx::query_as(
+            "SELECT s.name, t.valid_until FROM transactions t
+             LEFT JOIN services s ON s.id = t.service_id WHERE t.card_id = 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row.0.as_deref(), Some("Monthly pass"));
+        assert_eq!(
+            row.1,
+            Some(chrono::NaiveDate::from_ymd_opt(2008, 12, 5).unwrap())
+        );
+    }
+}

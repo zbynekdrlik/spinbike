@@ -17,11 +17,24 @@ async fn main() -> Result<()> {
 
     let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "spinbike.db".to_string());
 
-    let jwt_secret =
-        std::env::var("JWT_SECRET").unwrap_or_else(|_| "dev-secret-change-in-production".to_string());
+    let jwt_secret = match std::env::var("JWT_SECRET") {
+        Ok(s) if !s.is_empty() => s,
+        _ => {
+            tracing::warn!(
+                "JWT_SECRET not set — using insecure default. DO NOT use in production!"
+            );
+            "dev-secret-change-in-production".to_string()
+        }
+    };
 
     let pool = db::create_pool(&PathBuf::from(&db_path)).await?;
     db::run_migrations(&pool).await?;
+
+    // Populate search_text for any cards that pre-date the V3 migration.
+    let backfilled = db::cards::backfill_search_text(&pool).await?;
+    if backfilled > 0 {
+        tracing::info!("backfilled search_text for {backfilled} cards");
+    }
 
     spinbike_server::start_server(pool, port, jwt_secret).await?;
 
