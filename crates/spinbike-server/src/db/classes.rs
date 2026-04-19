@@ -300,7 +300,7 @@ pub async fn list_upcoming_for_card(
                 booking_id: my_row.map(|(id, _)| id),
             });
         }
-        d = d + Duration::days(1);
+        d += Duration::days(1);
     }
     out.sort_by(|a, b| a.date.cmp(&b.date).then(a.start_time.cmp(&b.start_time)));
     Ok(out)
