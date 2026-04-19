@@ -4,7 +4,13 @@
     "description": "Reserve your spin class",
     "start_url": "/",
     "display": "standalone",
-    "background_color": "#0f172a",
-    "theme_color": "#0f172a",
-    "icons": []
+    "background_color": "#15151a",
+    "theme_color": "#15151a",
+    "icons": [
+        {
+            "src": "/favicon.svg",
+            "sizes": "any",
+            "type": "image/svg+xml"
+        }
+    ]
 }
