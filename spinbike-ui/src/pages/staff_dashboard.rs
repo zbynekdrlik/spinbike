@@ -1,10 +1,49 @@
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
+use wasm_bindgen::JsCast;
 use web_sys::HtmlInputElement;
 
 use crate::api;
 use crate::i18n::{self, Lang};
 use crate::pages::schedule::ClassSlot;
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct WalkinCardHit {
+    id: i64,
+    barcode: String,
+    user_id: Option<i64>,
+    #[serde(default)]
+    first_name: Option<String>,
+    #[serde(default)]
+    last_name: Option<String>,
+}
+
+fn walkin_display(card: &WalkinCardHit) -> String {
+    let name = match (&card.first_name, &card.last_name) {
+        (Some(f), Some(l)) => format!("{f} {l}"),
+        (Some(f), None) => f.clone(),
+        (None, Some(l)) => l.clone(),
+        (None, None) => String::new(),
+    };
+    if name.is_empty() {
+        card.barcode.clone()
+    } else {
+        format!("{name} · {}", card.barcode)
+    }
+}
+
+fn walkin_urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match *b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char);
+            }
+            _ => out.push_str(&format!("%{:02X}", b)),
+        }
+    }
+    out
+}
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[allow(dead_code)]
@@ -239,39 +278,71 @@ fn WalkinForm(
     #[prop(into)] on_done: Callback<()>,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
-    let uid_ref = NodeRef::<leptos::html::Input>::new();
+    let search_ref = NodeRef::<leptos::html::Input>::new();
+    let (query, set_query) = signal(String::new());
+    let (results, set_results) = signal(Vec::<WalkinCardHit>::new());
     let (err, set_err) = signal(String::new());
     let (loading, set_loading) = signal(false);
 
-    let on_submit = move |ev: web_sys::SubmitEvent| {
-        ev.prevent_default();
-        let user_id_str = uid_ref
-            .get()
-            .map(|el| {
-                let el: &HtmlInputElement = &el;
-                el.value()
-            })
-            .unwrap_or_default();
-        let user_id: i64 = user_id_str.parse().unwrap_or(0);
-        if user_id == 0 {
-            set_err.set(i18n::t(lang.get_untracked(), "enter_valid_user_id").to_string());
+    // Debounced card search, same pattern as the staff /staff dashboard.
+    Effect::new(move |_| {
+        let q = query.get();
+        set_err.set(String::new());
+        if q.trim().is_empty() {
+            set_results.set(Vec::new());
             return;
         }
+        let q_at_start = q.clone();
+        spawn_local(async move {
+            gloo_timers::future::TimeoutFuture::new(250).await;
+            if query.get_untracked() != q_at_start {
+                return;
+            }
+            let encoded = walkin_urlencode(&q_at_start);
+            match api::get::<Vec<WalkinCardHit>>(&format!(
+                "/api/cards/search?q={encoded}&limit=10"
+            ))
+            .await
+            {
+                Ok(list) => {
+                    if query.get_untracked() == q_at_start {
+                        set_results.set(list);
+                    }
+                }
+                Err(e) => set_err.set(e),
+            }
+        });
+    });
 
-        let date = date.clone();
-        let on_done = on_done.clone();
+    let on_input = move |ev: web_sys::Event| {
+        let value = ev
+            .target()
+            .and_then(|t| t.dyn_into::<HtmlInputElement>().ok())
+            .map(|el| el.value())
+            .unwrap_or_default();
+        set_query.set(value);
+    };
+
+    let date_for_pick = date.clone();
+    let pick = move |card: WalkinCardHit| {
+        let Some(user_id) = card.user_id else {
+            set_err.set(i18n::t(lang.get_untracked(), "card_has_no_user").to_string());
+            return;
+        };
+        let date = date_for_pick.clone();
         set_loading.set(true);
         set_err.set(String::new());
-
         spawn_local(async move {
             #[derive(serde::Serialize)]
             struct Req {
                 template_id: i64,
                 date: String,
                 user_id: Option<i64>,
+                card_id: Option<i64>,
             }
             #[derive(serde::Deserialize)]
             struct Resp {
+                #[allow(dead_code)]
                 id: i64,
             }
             match api::post::<Req, Resp>(
@@ -280,6 +351,7 @@ fn WalkinForm(
                     template_id,
                     date,
                     user_id: Some(user_id),
+                    card_id: Some(card.id),
                 },
             )
             .await
@@ -292,16 +364,43 @@ fn WalkinForm(
     };
 
     view! {
-        <div class="card" style="margin-left:20px;margin-top:-8px">
-            <form class="inline-form" on:submit=on_submit>
-                <div class="form-group">
-                    <label>{move || i18n::t(lang.get(), "user_id")}</label>
-                    <input type="number" class="form-control" node_ref=uid_ref placeholder=move || i18n::t(lang.get(), "user_id") required />
-                </div>
-                <button type="submit" class="btn btn-sm btn-primary" disabled=move || loading.get()>
-                    {move || if loading.get() { "..." } else { i18n::t(lang.get(), "book") }}
-                </button>
-            </form>
+        <div class="card" style="margin-left:20px;margin-top:-8px" data-testid="walkin-form">
+            <div class="form-group">
+                <label>{move || i18n::t(lang.get(), "search_card")}</label>
+                <input
+                    type="search"
+                    class="form-control"
+                    node_ref=search_ref
+                    data-testid="walkin-search"
+                    placeholder=move || i18n::t(lang.get(), "search_card_placeholder")
+                    prop:value=move || query.get()
+                    on:input=on_input
+                    autocomplete="off"
+                />
+            </div>
+            <ul class="walkin-results">
+                {move || {
+                    let list = results.get();
+                    let is_loading = loading.get();
+                    list.into_iter().map(|card| {
+                        let label = walkin_display(&card);
+                        let pick = pick.clone();
+                        let card_id = card.id;
+                        view! {
+                            <li class="walkin-row" data-testid=format!("walkin-pick-{card_id}")>
+                                <button
+                                    type="button"
+                                    class="btn btn-sm btn-primary"
+                                    disabled=is_loading
+                                    on:click=move |_| pick(card.clone())
+                                >
+                                    {label}
+                                </button>
+                            </li>
+                        }
+                    }).collect::<Vec<_>>()
+                }}
+            </ul>
             {move || {
                 let e = err.get();
                 if !e.is_empty() {

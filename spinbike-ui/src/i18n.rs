@@ -269,6 +269,21 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         "enter_valid_user_id",
         ("Zadajte platne ID pouzivatela", "Enter a valid user ID"),
     );
+    m.insert("search_card", ("Hladat kartu", "Search card"));
+    m.insert(
+        "search_card_placeholder",
+        (
+            "Meno, priezvisko alebo ciarovy kod",
+            "Name, surname or barcode",
+        ),
+    );
+    m.insert(
+        "card_has_no_user",
+        (
+            "Karta nema priradeneho pouzivatela",
+            "Card has no linked user",
+        ),
+    );
 
     // Payments
     m.insert("card_barcode_label", ("Ciarovy kod karty", "Card Barcode"));

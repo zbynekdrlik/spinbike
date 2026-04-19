@@ -889,3 +889,16 @@ table tbody tr:last-child td,
 .upcoming-row.state-cancelled { opacity: 0.6; }
 .upcoming-row .upcoming-count { color: var(--text-muted); }
 .upcoming-row .upcoming-instr { color: var(--text-muted); }
+
+.walkin-results {
+    list-style: none;
+    padding: 0;
+    margin: var(--s-2) 0 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-1);
+}
+.walkin-row .btn {
+    width: 100%;
+    text-align: left;
+}
