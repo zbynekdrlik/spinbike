@@ -234,7 +234,9 @@ async fn create_booking(
         body.template_id,
         &body.date,
         booking_user_id,
+        None,
         created_by,
+        "manual",
     )
     .await
     .map_err(|e| {

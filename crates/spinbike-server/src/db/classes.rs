@@ -1,4 +1,4 @@
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -131,28 +131,29 @@ pub async fn create_booking(
     template_id: i64,
     date: &str,
     user_id: i64,
+    card_id: Option<i64>,
     created_by: Option<i64>,
+    source: &str,
 ) -> Result<i64> {
-    // Atomic insert: only inserts if current booking count < template capacity.
-    // This eliminates the race condition between checking count and inserting.
     let result = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO bookings (template_id, date, user_id, created_by)
-         SELECT ?1, ?2, ?3, ?4
-         WHERE (SELECT COUNT(*) FROM bookings WHERE template_id = ?1 AND date = ?2 AND cancelled_at IS NULL)
+        "INSERT INTO bookings (template_id, date, user_id, card_id, created_by, source)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6
+         WHERE (SELECT COUNT(*) FROM bookings
+                WHERE template_id = ?1 AND date = ?2 AND cancelled_at IS NULL)
                < (SELECT capacity FROM class_templates WHERE id = ?1)
          RETURNING id",
     )
     .bind(template_id)
     .bind(date)
     .bind(user_id)
+    .bind(card_id)
     .bind(created_by)
+    .bind(source)
     .fetch_optional(pool)
-    .await
-    .context("Failed to create booking")?;
-
+    .await?;
     match result {
         Some(id) => Ok(id),
-        None => bail!("Class is full"),
+        None => anyhow::bail!("Class is full"),
     }
 }
 
@@ -218,9 +219,10 @@ mod tests {
         let tmpl_id = create_template(&pool, 1, "09:00", 60, None, 10)
             .await
             .unwrap();
-        let booking_id = create_booking(&pool, tmpl_id, "2026-04-14", user_id, None)
-            .await
-            .unwrap();
+        let booking_id =
+            create_booking(&pool, tmpl_id, "2026-04-14", user_id, None, None, "manual")
+                .await
+                .unwrap();
 
         let bookings = list_bookings_for_class(&pool, tmpl_id, "2026-04-14")
             .await
@@ -242,15 +244,15 @@ mod tests {
         let u2 = make_user(&pool, "cap2@test.com").await;
         let u3 = make_user(&pool, "cap3@test.com").await;
 
-        create_booking(&pool, tmpl_id, "2026-04-14", u1, None)
+        create_booking(&pool, tmpl_id, "2026-04-14", u1, None, None, "manual")
             .await
             .unwrap();
-        create_booking(&pool, tmpl_id, "2026-04-14", u2, None)
+        create_booking(&pool, tmpl_id, "2026-04-14", u2, None, None, "manual")
             .await
             .unwrap();
 
         // Third booking should fail — class is full.
-        let result = create_booking(&pool, tmpl_id, "2026-04-14", u3, None).await;
+        let result = create_booking(&pool, tmpl_id, "2026-04-14", u3, None, None, "manual").await;
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("full"));
     }
@@ -265,13 +267,13 @@ mod tests {
         let u1 = make_user(&pool, "cb1@test.com").await;
         let u2 = make_user(&pool, "cb2@test.com").await;
 
-        let b1 = create_booking(&pool, tmpl_id, "2026-04-14", u1, None)
+        let b1 = create_booking(&pool, tmpl_id, "2026-04-14", u1, None, None, "manual")
             .await
             .unwrap();
 
         // Full — u2 cannot book.
         assert!(
-            create_booking(&pool, tmpl_id, "2026-04-14", u2, None)
+            create_booking(&pool, tmpl_id, "2026-04-14", u2, None, None, "manual")
                 .await
                 .is_err()
         );
@@ -280,7 +282,7 @@ mod tests {
         cancel_booking(&pool, b1).await.unwrap();
 
         // Now u2 can book.
-        create_booking(&pool, tmpl_id, "2026-04-14", u2, None)
+        create_booking(&pool, tmpl_id, "2026-04-14", u2, None, None, "manual")
             .await
             .unwrap();
         assert_eq!(
@@ -317,6 +319,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn create_booking_records_card_id_and_source() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let user_id: i64 =
+            sqlx::query_scalar("INSERT INTO users (email, name) VALUES ('u@x','u') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let card_id: i64 = sqlx::query_scalar(
+            "INSERT INTO cards (barcode, user_id, credit) VALUES ('B1', ?, 0) RETURNING id",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let template_id = create_template(&pool, 0, "18:00", 60, None, 19)
+            .await
+            .unwrap();
+
+        let id = create_booking(
+            &pool,
+            template_id,
+            "2026-04-20",
+            user_id,
+            Some(card_id),
+            None,
+            "persistent",
+        )
+        .await
+        .unwrap();
+
+        let (got_card, got_source): (i64, String) =
+            sqlx::query_as("SELECT card_id, source FROM bookings WHERE id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(got_card, card_id);
+        assert_eq!(got_source, "persistent");
+    }
+
+    #[tokio::test]
     async fn duplicate_booking_rejected() {
         let pool = setup().await;
         let user_id = make_user(&pool, "dup@test.com").await;
@@ -324,12 +368,13 @@ mod tests {
             .await
             .unwrap();
 
-        create_booking(&pool, tmpl_id, "2026-04-14", user_id, None)
+        create_booking(&pool, tmpl_id, "2026-04-14", user_id, None, None, "manual")
             .await
             .unwrap();
 
         // Same user, same class, same date — unique index should reject.
-        let result = create_booking(&pool, tmpl_id, "2026-04-14", user_id, None).await;
+        let result =
+            create_booking(&pool, tmpl_id, "2026-04-14", user_id, None, None, "manual").await;
         assert!(result.is_err());
     }
 }
