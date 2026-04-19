@@ -164,9 +164,9 @@ test.describe('Schedule and booking', () => {
             return !document.querySelector('.spinner');
         }, { timeout: 10000 });
 
-        // Click the day that has the booked class
-        // targetDay is JS day (1=Mon..5=Fri), day picker buttons are indexed 0=Mon..4=Fri
-        const dayIdx = targetDay - 1; // 0-indexed Mon=0
+        // Click the day that has the booked class.
+        // targetDate weekday (1=Mon..5=Fri) maps to day-picker index (0=Mon..4=Fri).
+        const dayIdx = targetDate.getDay() - 1;
         const dayPicker = page.locator('.day-picker');
         await dayPicker.locator('button').nth(dayIdx).click();
         await page.waitForTimeout(500);
