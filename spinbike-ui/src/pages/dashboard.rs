@@ -9,7 +9,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{HtmlInputElement, HtmlSelectElement};
 
 use crate::api;
-use crate::components::UpcomingClasses;
+use crate::components::{PersistentToggles, UpcomingClasses};
 use crate::i18n::{self, Lang};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -679,6 +679,11 @@ fn ActionPanel(
             <UpcomingClasses
                 card_id=card_id
                 refresh_tick=upc_tick
+                on_changed=Callback::new(move |()| upc_tick.update(|n| *n += 1))
+            />
+
+            <PersistentToggles
+                card_id=card_id
                 on_changed=Callback::new(move |()| upc_tick.update(|n| *n += 1))
             />
 
