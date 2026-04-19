@@ -133,6 +133,7 @@ mod tests {
             "class_cancellations",
             "class_templates",
             "instructors",
+            "persistent_bookings",
             "schema_version",
             "services",
             "settings",
@@ -167,6 +168,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 6);
     }
 }
