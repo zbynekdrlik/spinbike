@@ -88,7 +88,9 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
                 <span class="badge badge-booked mb-1">{move || i18n::t(lang.get(), "booked")}</span>
                 <br/>
                 <button class="btn btn-outline btn-sm" on:click=on_cancel disabled=move || loading.get()>
-                    {move || if loading.get() { "..." } else {
+                    {move || if loading.get() {
+                        "...".to_string()
+                    } else {
                         let auto = i18n::t(lang.get(), "auto");
                         let skip = i18n::t(lang.get(), "skip_this_week");
                         format!("{auto} — {skip}")
