@@ -17,6 +17,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "spin booking: bookings extended + persistent_bookings",
         V5_SPIN_BOOKING,
     ),
+    (
+        6,
+        "seed 4 weekly spin classes + 2 instructors",
+        V6_SEED_SPIN_CLASSES,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -166,6 +171,31 @@ CREATE INDEX IF NOT EXISTS idx_bookings_uncharged_future
     WHERE cancelled_at IS NULL AND charged_at IS NULL;
 "#;
 
+// Seed 2 instructors and 4 weekly Mon-Thu 18:00 class templates.
+// All inserts are conditional so re-running migrations is a no-op.
+const V6_SEED_SPIN_CLASSES: &str = r#"
+INSERT INTO instructors (name, active)
+SELECT 'Stevo', 1 WHERE NOT EXISTS (SELECT 1 FROM instructors WHERE name='Stevo');
+INSERT INTO instructors (name, active)
+SELECT 'Vlada', 1 WHERE NOT EXISTS (SELECT 1 FROM instructors WHERE name='Vlada');
+
+INSERT INTO class_templates (weekday, start_time, duration_minutes, instructor_id, capacity, active)
+SELECT 0, '18:00', 60, (SELECT id FROM instructors WHERE name='Stevo'), 19, 1
+WHERE NOT EXISTS (SELECT 1 FROM class_templates WHERE weekday=0 AND start_time='18:00');
+
+INSERT INTO class_templates (weekday, start_time, duration_minutes, instructor_id, capacity, active)
+SELECT 1, '18:00', 60, (SELECT id FROM instructors WHERE name='Vlada'), 19, 1
+WHERE NOT EXISTS (SELECT 1 FROM class_templates WHERE weekday=1 AND start_time='18:00');
+
+INSERT INTO class_templates (weekday, start_time, duration_minutes, instructor_id, capacity, active)
+SELECT 2, '18:00', 60, (SELECT id FROM instructors WHERE name='Stevo'), 19, 1
+WHERE NOT EXISTS (SELECT 1 FROM class_templates WHERE weekday=2 AND start_time='18:00');
+
+INSERT INTO class_templates (weekday, start_time, duration_minutes, instructor_id, capacity, active)
+SELECT 3, '18:00', 60, (SELECT id FROM instructors WHERE name='Vlada'), 19, 1
+WHERE NOT EXISTS (SELECT 1 FROM class_templates WHERE weekday=3 AND start_time='18:00');
+"#;
+
 #[cfg(test)]
 mod tests {
     use crate::db::{create_memory_pool, run_migrations};
@@ -257,5 +287,71 @@ mod tests {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         run_migrations(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn v6_seeds_instructors_and_templates() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let stevo_id: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM instructors WHERE name='Stevo' AND active=1")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert!(stevo_id.is_some(), "Stevo must be seeded");
+
+        let vlada_id: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM instructors WHERE name='Vlada' AND active=1")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert!(vlada_id.is_some(), "Vlada must be seeded");
+
+        // Exactly 4 templates at 18:00 with capacity 19, one per weekday 0..=3.
+        let rows: Vec<(i64, String, i64, i64)> = sqlx::query_as(
+            "SELECT weekday, start_time, capacity, instructor_id
+             FROM class_templates
+             WHERE start_time = '18:00' AND active = 1
+             ORDER BY weekday",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(rows.len(), 4, "expected 4 seeded templates");
+        for (i, (wd, st, cap, inst)) in rows.iter().enumerate() {
+            assert_eq!(*wd, i as i64);
+            assert_eq!(st, "18:00");
+            assert_eq!(*cap, 19);
+            let expected = if *wd == 0 || *wd == 2 {
+                stevo_id.unwrap()
+            } else {
+                vlada_id.unwrap()
+            };
+            assert_eq!(*inst, expected, "wrong instructor for weekday {wd}");
+        }
+    }
+
+    #[tokio::test]
+    async fn v6_is_idempotent_and_does_not_duplicate() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM class_templates WHERE start_time='18:00' AND active=1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 4);
+
+        let instr_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM instructors WHERE name IN ('Stevo','Vlada')")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(instr_count, 2);
     }
 }
