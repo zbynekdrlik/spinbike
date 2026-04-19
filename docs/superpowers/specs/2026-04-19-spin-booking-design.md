@@ -74,9 +74,8 @@ Single rule, applied by a background charger **4 hours before class start**:
 
 | Card state at T−4h                      | Action                                                        |
 |------------------------------------------|---------------------------------------------------------------|
-| Has active monthly pass                  | Log a `visit` transaction (amount = 0), decrement pass visits |
-| No pass, credit ≥ Spinning price         | Log `visit` (amount = service price), debit credit            |
-| No pass, insufficient credit             | **Still charge.** Credit goes negative. Staff sees red balance next time. |
+| Has active monthly pass (`valid_until >= class_date`) | Insert `transactions` row with `amount = 0, action = 'visit'`, `service_id = Spinning`. Pass is date-ranged, nothing to decrement. |
+| No pass, any credit balance              | Insert `transactions` with `amount = -price, action = 'visit'`, debit `cards.credit`. **Credit is allowed to go negative.** |
 
 - `Spinning` service price comes from `services.default_price` (already admin-editable, currently €5). No new config.
 - Bookings cancelled before T−4h move no money.
@@ -131,9 +130,9 @@ All new routes under `/api` behind existing staff/customer auth as appropriate.
 - Implementation: a `tokio::spawn` loop on server startup that ticks every **60 seconds**.
 - Each tick: `SELECT * FROM bookings WHERE cancelled_at IS NULL AND charged_at IS NULL AND datetime(date || ' ' || template.start_time, '-4 hours') <= datetime('now')` — join templates for the start time, left-join passes for active-pass lookup.
 - For each row:
-  - Active pass → insert `transactions` row with amount 0, action `visit`, link it via `charge_transaction_id`, decrement `passes.visits_remaining`.
-  - No pass → insert `transactions` row with amount = `service.default_price` (name=`Spinning`), debit `cards.credit` (allowed to go negative), link via `charge_transaction_id`.
-  - Set `bookings.charged_at = now`.
+  - Active pass (card's latest `transactions.valid_until >= bookings.date`) → insert `transactions` row with `amount = 0, action = 'visit', service_id = Spinning`, link via `charge_transaction_id`.
+  - No pass → insert `transactions` row with `amount = -price, action = 'visit', service_id = Spinning` (price from `services.default_price` where name = 'Spinning'), debit `cards.credit` (may go negative), link via `charge_transaction_id`.
+  - Set `bookings.charged_at = datetime('now')`.
 - Transaction per row (not per tick) so one failure doesn't block others.
 - Config: interval is a `const`, not env-driven. Tests override with a shorter interval via a dedicated test hook.
 
