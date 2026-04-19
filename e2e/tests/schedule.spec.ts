@@ -106,26 +106,25 @@ test.describe('Schedule and booking', () => {
         const loginData = await loginResp.json();
         const token = loginData.token;
 
-        // Determine a date that has a class (today's weekday or next weekday with a template)
+        // Pick a weekday with a template that sits inside the current week the
+        // day-picker shows (Mon-Sun). If today is Mon-Fri pick today; on
+        // Sat/Sun fall back to Friday of the same week so the booking lands on
+        // a day still visible in the picker.
         const now = new Date();
-        const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon..6=Sat
-        // Templates exist for Mon(0), Tue(1), Wed(2), Thu(3), Fri(4) — these are 0-indexed from Mon
-        // JS day: Mon=1, Tue=2, Wed=3, Thu=4, Fri=5
-        // Pick a weekday that has a template
-        const templateDays = [1, 2, 3, 4, 5]; // JS days Mon-Fri
-        let targetDay = dayOfWeek;
-        if (!templateDays.includes(targetDay)) {
-            targetDay = 1; // fallback to Monday
-        }
-        // Calculate date for this weekday in the current week
-        const diff = targetDay - dayOfWeek;
+        const templateDays = [1, 2, 3, 4, 5];
         const targetDate = new Date(now);
-        targetDate.setDate(now.getDate() + diff);
+        if (!templateDays.includes(now.getDay())) {
+            const dayOfWeek = now.getDay(); // 6=Sat, 0=Sun
+            const daysBackToFriday = dayOfWeek === 6 ? 1 : 2;
+            targetDate.setDate(now.getDate() - daysBackToFriday);
+        }
         const dateStr = targetDate.toISOString().split('T')[0];
 
-        // Get class list to find template_id
-        const from = new Date(now);
-        from.setDate(now.getDate() - ((dayOfWeek + 6) % 7)); // Monday of this week
+        // Query the Mon-Sun window of the target's week.
+        const targetDow = targetDate.getDay();
+        const daysSinceMonday = targetDow === 0 ? 6 : targetDow - 1;
+        const from = new Date(targetDate);
+        from.setDate(targetDate.getDate() - daysSinceMonday);
         const to = new Date(from);
         to.setDate(from.getDate() + 6);
         const fromStr = from.toISOString().split('T')[0];
@@ -165,9 +164,9 @@ test.describe('Schedule and booking', () => {
             return !document.querySelector('.spinner');
         }, { timeout: 10000 });
 
-        // Click the day that has the booked class
-        // targetDay is JS day (1=Mon..5=Fri), day picker buttons are indexed 0=Mon..4=Fri
-        const dayIdx = targetDay - 1; // 0-indexed Mon=0
+        // Click the day that has the booked class.
+        // targetDate weekday (1=Mon..5=Fri) maps to day-picker index (0=Mon..4=Fri).
+        const dayIdx = targetDate.getDay() - 1;
         const dayPicker = page.locator('.day-picker');
         await dayPicker.locator('button').nth(dayIdx).click();
         await page.waitForTimeout(500);
