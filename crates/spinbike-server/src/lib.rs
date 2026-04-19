@@ -1,5 +1,6 @@
 pub mod auth;
 pub mod db;
+pub mod jobs;
 pub mod routes;
 pub mod ws;
 
