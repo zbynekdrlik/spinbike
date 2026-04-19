@@ -9,6 +9,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{HtmlInputElement, HtmlSelectElement};
 
 use crate::api;
+use crate::components::UpcomingClasses;
 use crate::i18n::{self, Lang};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -563,6 +564,9 @@ fn ActionPanel(
     let (show_sell_pass, set_show_sell_pass) = signal(false);
     // Counter incremented after a log-visit to re-trigger the history fetch.
     let (txn_refresh, set_txn_refresh) = signal(0u32);
+    // Counter driving UpcomingClasses + PersistentToggles refetches after a
+    // book/cancel/toggle action updates underlying booking state.
+    let upc_tick = RwSignal::new(0u32);
 
     // Transaction history is the most-read piece of card context, so load it
     // as soon as the panel mounts and always render it below the actions.
@@ -670,6 +674,12 @@ fn ActionPanel(
                     .find(|s| s.name == "Monthly pass")
                     .map(|s| s.default_price)
                     .unwrap_or(35.0)
+            />
+
+            <UpcomingClasses
+                card_id=card_id
+                refresh_tick=upc_tick
+                on_changed=Callback::new(move |()| upc_tick.update(|n| *n += 1))
             />
 
             <div class="mt-2">
