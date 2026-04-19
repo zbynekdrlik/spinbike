@@ -227,8 +227,9 @@ pub async fn list_upcoming_for_card(
 
     let now = chrono::Local::now().naive_local();
     let mut out = Vec::new();
-    let mut d = from_d;
-    while d <= to_d {
+    let span_days = (to_d - from_d).num_days().max(0);
+    for offset in 0..=span_days {
+        let d = from_d + Duration::days(offset);
         for t in &templates {
             if d.weekday().num_days_from_monday() as i64 != t.weekday {
                 continue;
@@ -300,7 +301,6 @@ pub async fn list_upcoming_for_card(
                 booking_id: my_row.map(|(id, _)| id),
             });
         }
-        d += Duration::days(1);
     }
     out.sort_by(|a, b| a.date.cmp(&b.date).then(a.start_time.cmp(&b.start_time)));
     Ok(out)
