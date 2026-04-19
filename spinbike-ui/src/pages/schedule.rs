@@ -20,6 +20,7 @@ pub struct ClassSlot {
     pub cancelled: bool,
     pub user_booked: bool,
     pub user_booking_id: Option<i64>,
+    pub user_booking_source: Option<String>,
 }
 
 /// Compute current week (Mon-Sun) as Vec<(year, month, day)> and date strings.

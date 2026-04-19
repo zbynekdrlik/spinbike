@@ -19,6 +19,7 @@ pub struct BookingRow {
     pub date: String,
     pub user_id: i64,
     pub created_by: Option<i64>,
+    pub source: String,
     pub created_at: String,
     pub cancelled_at: Option<String>,
 }

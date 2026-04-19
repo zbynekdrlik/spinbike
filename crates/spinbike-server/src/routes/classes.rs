@@ -32,6 +32,7 @@ pub struct ClassOccurrenceResponse {
     pub cancelled: bool,
     pub user_booked: bool,
     pub user_booking_id: Option<i64>,
+    pub user_booking_source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -115,14 +116,18 @@ async fn list_classes(
                 .unwrap_or(0);
 
             // Check if authenticated user has a booking for this class.
-            let (user_booked, user_booking_id) = if let Some(ref c) = claims {
+            let (user_booked, user_booking_id, user_booking_source) = if let Some(ref c) = claims {
                 let bookings = db::list_bookings_for_class(&state.pool, tmpl.id, &date_str)
                     .await
                     .unwrap_or_default();
                 let user_booking = bookings.iter().find(|b| b.user_id == c.sub);
-                (user_booking.is_some(), user_booking.map(|b| b.id))
+                (
+                    user_booking.is_some(),
+                    user_booking.map(|b| b.id),
+                    user_booking.map(|b| b.source.clone()),
+                )
             } else {
-                (false, None)
+                (false, None, None)
             };
 
             occurrences.push(ClassOccurrenceResponse {
@@ -137,6 +142,7 @@ async fn list_classes(
                 cancelled,
                 user_booked,
                 user_booking_id,
+                user_booking_source,
             });
         }
 

@@ -74,11 +74,26 @@ pub fn ClassCard(
     let slot_cancelled = slot.cancelled;
     let slot_user_booked = slot.user_booked;
     let slot_full = slot.booked >= slot.capacity;
+    let slot_booking_source = slot.user_booking_source.clone();
 
     let action_view = if slot_cancelled {
         view! { <span class="badge badge-cancelled">{move || i18n::t(lang.get(), "cancelled")}</span> }.into_any()
     } else if !is_logged_in {
         view! { <a href="/login" class="btn btn-sm btn-outline">{move || i18n::t(lang.get(), "login_to_book")}</a> }.into_any()
+    } else if slot_user_booked && slot_booking_source.as_deref() == Some("persistent") {
+        view! {
+            <div>
+                <span class="badge badge-booked mb-1">{move || i18n::t(lang.get(), "booked")}</span>
+                <br/>
+                <button class="btn btn-outline btn-sm" on:click=on_cancel disabled=move || loading.get()>
+                    {move || if loading.get() { "..." } else {
+                        let auto = i18n::t(lang.get(), "auto");
+                        let skip = i18n::t(lang.get(), "skip_this_week");
+                        format!("{auto} — {skip}")
+                    }}
+                </button>
+            </div>
+        }.into_any()
     } else if slot_user_booked {
         view! {
             <div>

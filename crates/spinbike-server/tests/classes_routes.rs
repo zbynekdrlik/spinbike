@@ -166,6 +166,44 @@ async fn cancel_missing_booking_is_404() {
 }
 
 #[tokio::test]
+async fn list_classes_returns_persistent_source_for_customer_auto_booking() {
+    let app = TestApp::new().await;
+    let card_id = app.customer_card_id;
+
+    // V6 seeds a Monday 18:00 template.
+    let tid: i64 =
+        sqlx::query_scalar("SELECT id FROM class_templates WHERE weekday=0 AND start_time='18:00'")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+
+    // Create a persistent subscription and run the materialiser directly.
+    spinbike_server::db::persistent_bookings::create(&app.pool, card_id, tid)
+        .await
+        .unwrap();
+    spinbike_server::jobs::materialiser::sweep(&app.pool)
+        .await
+        .unwrap();
+
+    // Find the next Monday (strictly in future to avoid same-day flake).
+    use chrono::{Datelike, Duration, Local};
+    let today = Local::now().date_naive();
+    let m = (7 - today.weekday().num_days_from_monday() as i64) % 7;
+    let mon = today + Duration::days(if m == 0 { 7 } else { m });
+
+    let uri = format!("/api/classes?from={mon}&to={mon}");
+    let (status, resp) = app.request(get(&uri, &app.customer_token)).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let arr = resp.as_array().unwrap();
+    let monday = arr
+        .iter()
+        .find(|c| c["date"].as_str() == Some(&mon.to_string()))
+        .unwrap();
+    assert_eq!(monday["user_booking_source"].as_str(), Some("persistent"));
+    assert!(monday["user_booking_id"].is_i64());
+}
+
+#[tokio::test]
 async fn classes_routes_are_registered() {
     let app = TestApp::new().await;
     for path in [
