@@ -32,6 +32,7 @@ pub struct TestApp {
     pub admin_id: i64,
     pub staff_id: i64,
     pub customer_id: i64,
+    pub customer_card_id: i64,
 }
 
 impl TestApp {
@@ -84,6 +85,14 @@ impl TestApp {
         let customer_token =
             create_token(JWT_SECRET, customer_id, "user@test.com", &Role::Customer).unwrap();
 
+        let customer_card_id: i64 = sqlx::query_scalar(
+            "INSERT INTO cards (barcode, user_id, credit) VALUES ('CUST1', ?, 0) RETURNING id",
+        )
+        .bind(customer_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
         let (event_tx, _) = broadcast::channel(16);
         let state = AppState {
             pool: pool.clone(),
@@ -106,6 +115,7 @@ impl TestApp {
             admin_id,
             staff_id,
             customer_id,
+            customer_card_id,
         }
     }
 

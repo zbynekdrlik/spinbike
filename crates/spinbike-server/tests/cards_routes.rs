@@ -57,7 +57,8 @@ async fn list_cards_returns_all_cards_for_staff() {
     let (status, resp) = app.request(get("/api/cards", &app.staff_token)).await;
     assert_eq!(status, axum::http::StatusCode::OK);
     let arr = resp.as_array().unwrap();
-    assert_eq!(arr.len(), 2);
+    // 2 seeded here + 1 auto-seeded by TestApp::new (CUST1)
+    assert_eq!(arr.len(), 3);
 }
 
 #[tokio::test]
