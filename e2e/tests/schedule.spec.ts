@@ -106,28 +106,27 @@ test.describe('Schedule and booking', () => {
         const loginData = await loginResp.json();
         const token = loginData.token;
 
-        // Determine a date that has a class (today's weekday or next weekday with a template)
+        // Pick the next upcoming weekday that has a template (Mon-Fri).
+        // Templates use JS day numbers: Mon=1, Tue=2, Wed=3, Thu=4, Fri=5.
         const now = new Date();
-        const dayOfWeek = now.getDay(); // 0=Sun, 1=Mon..6=Sat
-        // Templates exist for Mon(0), Tue(1), Wed(2), Thu(3), Fri(4) — these are 0-indexed from Mon
-        // JS day: Mon=1, Tue=2, Wed=3, Thu=4, Fri=5
-        // Pick a weekday that has a template
-        const templateDays = [1, 2, 3, 4, 5]; // JS days Mon-Fri
-        let targetDay = dayOfWeek;
-        if (!templateDays.includes(targetDay)) {
-            targetDay = 1; // fallback to Monday
-        }
-        // Calculate date for this weekday in the current week
-        const diff = targetDay - dayOfWeek;
+        const templateDays = [1, 2, 3, 4, 5];
         const targetDate = new Date(now);
-        targetDate.setDate(now.getDate() + diff);
+        for (let offset = 0; offset < 7; offset++) {
+            const candidate = new Date(now);
+            candidate.setDate(now.getDate() + offset);
+            if (templateDays.includes(candidate.getDay())) {
+                targetDate.setTime(candidate.getTime());
+                break;
+            }
+        }
         const dateStr = targetDate.toISOString().split('T')[0];
 
-        // Get class list to find template_id
-        const from = new Date(now);
-        from.setDate(now.getDate() - ((dayOfWeek + 6) % 7)); // Monday of this week
-        const to = new Date(from);
-        to.setDate(from.getDate() + 6);
+        // Query a 14-day window centred on the target so we always include it
+        // regardless of where today falls in the week.
+        const from = new Date(targetDate);
+        from.setDate(targetDate.getDate() - 7);
+        const to = new Date(targetDate);
+        to.setDate(targetDate.getDate() + 7);
         const fromStr = from.toISOString().split('T')[0];
         const toStr = to.toISOString().split('T')[0];
 
