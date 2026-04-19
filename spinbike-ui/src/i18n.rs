@@ -264,6 +264,15 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("modal_confirm", ("Predat", "Sell pass"));
     m.insert("modal_cancel", ("Zrusit", "Cancel"));
 
+    // Upcoming classes + persistent booking
+    m.insert("upcoming_classes", ("Nadchadzajuce hodiny", "Upcoming classes"));
+    m.insert("persistent_booking", ("Trvala rezervacia", "Persistent booking"));
+    m.insert("auto", ("AUTO", "AUTO"));
+    m.insert("skip_this_week", ("Preskocit tento tyzden", "Skip this week"));
+    m.insert("past", ("UPLYNULE", "PAST"));
+    m.insert("turn_on", ("Zapnut", "On"));
+    m.insert("turn_off", ("Vypnut", "Off"));
+
     // General
     m.insert("loading", ("Nacitavanie...", "Loading..."));
     m.insert("page_not_found", ("Stranka nenajdena", "Page not found"));
