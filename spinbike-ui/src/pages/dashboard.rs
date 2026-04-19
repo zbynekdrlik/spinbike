@@ -72,14 +72,21 @@ struct TxnInfo {
 const QUICK_TOPUP: [f64; 4] = [5.0, 10.0, 20.0, 50.0];
 
 fn pass_is_active(card: &CardInfo) -> bool {
-    card.pass.as_ref().map(|p| p.days_remaining >= 0).unwrap_or(false)
+    card.pass
+        .as_ref()
+        .map(|p| p.days_remaining >= 0)
+        .unwrap_or(false)
 }
 
 fn full_name(c: &CardInfo) -> String {
     let f = c.first_name.clone().unwrap_or_default();
     let l = c.last_name.clone().unwrap_or_default();
     let combined = format!("{f} {l}").trim().to_string();
-    if combined.is_empty() { "—".into() } else { combined }
+    if combined.is_empty() {
+        "—".into()
+    } else {
+        combined
+    }
 }
 
 #[component]
@@ -141,7 +148,9 @@ pub fn DashboardPage() -> impl IntoView {
                 return;
             }
             let encoded = urlencoding_light(&q_at_start);
-            match api::get::<Vec<CardInfo>>(&format!("/api/cards/search?q={encoded}&limit=10")).await {
+            match api::get::<Vec<CardInfo>>(&format!("/api/cards/search?q={encoded}&limit=10"))
+                .await
+            {
                 Ok(list) => {
                     if query.get_untracked() == q_at_start {
                         set_results.set(list);
@@ -437,7 +446,13 @@ fn SellPassModal(
     let default_date = card
         .pass
         .as_ref()
-        .map(|p| if p.valid_until > today { p.valid_until } else { today })
+        .map(|p| {
+            if p.valid_until > today {
+                p.valid_until
+            } else {
+                today
+            }
+        })
         .unwrap_or(today)
         + chrono::Duration::days(30);
 
@@ -466,7 +481,11 @@ fn SellPassModal(
             }
             match api::post::<Req, Resp>(
                 "/api/payments/sell-pass",
-                &Req { card_id, price: p, valid_until: vu },
+                &Req {
+                    card_id,
+                    price: p,
+                    valid_until: vu,
+                },
             )
             .await
             {
@@ -777,10 +796,7 @@ mod date_tests {
 
     #[test]
     fn legacy_two_digit_year() {
-        assert_eq!(
-            format_sk_datetime("03/24/26 18:59:08"),
-            "24.03.2026 18:59"
-        );
+        assert_eq!(format_sk_datetime("03/24/26 18:59:08"), "24.03.2026 18:59");
     }
 
     #[test]
@@ -814,12 +830,19 @@ fn TopupSection(
         set_loading.set(true);
         spawn_local(async move {
             #[derive(serde::Serialize)]
-            struct Req { card_id: i64, amount: f64 }
+            struct Req {
+                card_id: i64,
+                amount: f64,
+            }
             match api::post::<Req, CardInfo>("/api/cards/topup", &Req { card_id, amount }).await {
                 Ok(c) => {
                     let credit = c.credit;
                     set_selected.set(Some(c));
-                    set_msg.set(i18n::tf(lang.get_untracked(), "topup_ok_format", &[&format!("{credit:.2}")]));
+                    set_msg.set(i18n::tf(
+                        lang.get_untracked(),
+                        "topup_ok_format",
+                        &[&format!("{credit:.2}")],
+                    ));
                 }
                 Err(e) => set_msg.set(format!("Error: {e}")),
             }
@@ -831,7 +854,10 @@ fn TopupSection(
         ev.prevent_default();
         let amount: f64 = custom_ref
             .get()
-            .map(|el| { let el: &HtmlInputElement = &el; el.value() })
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
             .unwrap_or_default()
             .parse()
             .unwrap_or(0.0);
@@ -896,7 +922,10 @@ fn ChargeSection(
     let on_service_change = move |_| {
         let id: i64 = service_ref
             .get()
-            .map(|el| { let el: &HtmlSelectElement = &el; el.value() })
+            .map(|el| {
+                let el: &HtmlSelectElement = &el;
+                el.value()
+            })
             .unwrap_or_default()
             .parse()
             .unwrap_or(0);
@@ -912,27 +941,51 @@ fn ChargeSection(
         ev.prevent_default();
         let amount: f64 = amount_ref
             .get()
-            .map(|el| { let el: &HtmlInputElement = &el; el.value() })
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
             .unwrap_or_default()
             .parse()
             .unwrap_or(0.0);
-        let service_id: Option<i64> = service_ref
-            .get()
-            .and_then(|el| { let el: &HtmlSelectElement = &el; el.value().parse().ok() });
+        let service_id: Option<i64> = service_ref.get().and_then(|el| {
+            let el: &HtmlSelectElement = &el;
+            el.value().parse().ok()
+        });
 
-        if amount <= 0.0 { return; }
+        if amount <= 0.0 {
+            return;
+        }
         set_loading.set(true);
 
         spawn_local(async move {
             #[derive(serde::Serialize)]
-            struct Req { card_id: i64, amount: f64, service_id: Option<i64> }
+            struct Req {
+                card_id: i64,
+                amount: f64,
+                service_id: Option<i64>,
+            }
             match api::post::<Req, PaymentResp>(
                 "/api/payments/charge",
-                &Req { card_id, amount, service_id },
-            ).await {
+                &Req {
+                    card_id,
+                    amount,
+                    service_id,
+                },
+            )
+            .await
+            {
                 Ok(r) => {
-                    set_msg.set(i18n::tf(lang.get_untracked(), "charge_ok_format", &[&format!("{:.2}", r.new_credit)]));
-                    set_selected.update(|s| { if let Some(c) = s { c.credit = r.new_credit; } });
+                    set_msg.set(i18n::tf(
+                        lang.get_untracked(),
+                        "charge_ok_format",
+                        &[&format!("{:.2}", r.new_credit)],
+                    ));
+                    set_selected.update(|s| {
+                        if let Some(c) = s {
+                            c.credit = r.new_credit;
+                        }
+                    });
                 }
                 Err(e) => set_msg.set(format!("Error: {e}")),
             }
@@ -945,10 +998,24 @@ fn ChargeSection(
         move |_: web_sys::MouseEvent| {
             spawn_local(async move {
                 #[derive(serde::Serialize)]
-                struct Req { card_id: i64, service_id: i64 }
+                struct Req {
+                    card_id: i64,
+                    service_id: i64,
+                }
                 #[derive(serde::Deserialize)]
-                struct Resp { #[allow(dead_code)] transaction_id: i64 }
-                match api::post::<Req, Resp>("/api/payments/log-visit", &Req { card_id, service_id }).await {
+                struct Resp {
+                    #[allow(dead_code)]
+                    transaction_id: i64,
+                }
+                match api::post::<Req, Resp>(
+                    "/api/payments/log-visit",
+                    &Req {
+                        card_id,
+                        service_id,
+                    },
+                )
+                .await
+                {
                     Ok(_) => {
                         set_txn_refresh.update(|n| *n += 1);
                     }
@@ -1029,15 +1096,30 @@ fn BlockButton(
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (loading, set_loading) = signal(false);
-    let btn_class = if blocked { "btn btn-sm btn-primary" } else { "btn btn-sm btn-outline" };
+    let btn_class = if blocked {
+        "btn btn-sm btn-primary"
+    } else {
+        "btn btn-sm btn-outline"
+    };
 
     let on_click = move |_| {
         set_loading.set(true);
         let new_blocked = !blocked;
         spawn_local(async move {
             #[derive(serde::Serialize)]
-            struct Req { card_id: i64, blocked: bool }
-            match api::post::<Req, CardInfo>("/api/cards/block", &Req { card_id, blocked: new_blocked }).await {
+            struct Req {
+                card_id: i64,
+                blocked: bool,
+            }
+            match api::post::<Req, CardInfo>(
+                "/api/cards/block",
+                &Req {
+                    card_id,
+                    blocked: new_blocked,
+                },
+            )
+            .await
+            {
                 Ok(c) => {
                     set_msg.set(if c.blocked {
                         i18n::t(lang.get_untracked(), "block_ok").to_string()
@@ -1081,7 +1163,14 @@ fn EditInfoForm(
 
     let on_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
-        let read = |n: &NodeRef<leptos::html::Input>| n.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
+        let read = |n: &NodeRef<leptos::html::Input>| {
+            n.get()
+                .map(|el| {
+                    let el: &HtmlInputElement = &el;
+                    el.value()
+                })
+                .unwrap_or_default()
+        };
         let first = read(&first_ref);
         let last = read(&last_ref);
         let company = read(&company_ref);
@@ -1090,11 +1179,20 @@ fn EditInfoForm(
         set_loading.set(true);
         spawn_local(async move {
             #[derive(serde::Serialize)]
-            struct Req { first_name: Option<String>, last_name: Option<String>, company: Option<String>, phone: Option<String> }
+            struct Req {
+                first_name: Option<String>,
+                last_name: Option<String>,
+                company: Option<String>,
+                phone: Option<String>,
+            }
             let req = Req {
                 first_name: if first.is_empty() { None } else { Some(first) },
                 last_name: if last.is_empty() { None } else { Some(last) },
-                company: if company.is_empty() { None } else { Some(company) },
+                company: if company.is_empty() {
+                    None
+                } else {
+                    Some(company)
+                },
                 phone: if phone.is_empty() { None } else { Some(phone) },
             };
             match api::put_json::<Req, CardInfo>(&format!("/api/cards/{card_id}"), &req).await {
@@ -1143,7 +1241,14 @@ fn ActivateCardForm(
 
     let on_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
-        let read = |n: &NodeRef<leptos::html::Input>| n.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
+        let read = |n: &NodeRef<leptos::html::Input>| {
+            n.get()
+                .map(|el| {
+                    let el: &HtmlInputElement = &el;
+                    el.value()
+                })
+                .unwrap_or_default()
+        };
         let barcode = read(&barcode_ref);
         let first = read(&first_ref);
         let last = read(&last_ref);
@@ -1151,20 +1256,30 @@ fn ActivateCardForm(
         let phone = read(&phone_ref);
         let credit: f64 = read(&credit_ref).parse().unwrap_or(0.0);
 
-        if barcode.is_empty() { return; }
+        if barcode.is_empty() {
+            return;
+        }
         set_loading.set(true);
         spawn_local(async move {
             #[derive(serde::Serialize)]
             struct Req {
-                barcode: String, initial_credit: f64,
-                first_name: Option<String>, last_name: Option<String>,
-                company: Option<String>, phone: Option<String>,
+                barcode: String,
+                initial_credit: f64,
+                first_name: Option<String>,
+                last_name: Option<String>,
+                company: Option<String>,
+                phone: Option<String>,
             }
             let req = Req {
-                barcode, initial_credit: credit,
+                barcode,
+                initial_credit: credit,
                 first_name: if first.is_empty() { None } else { Some(first) },
                 last_name: if last.is_empty() { None } else { Some(last) },
-                company: if company.is_empty() { None } else { Some(company) },
+                company: if company.is_empty() {
+                    None
+                } else {
+                    Some(company)
+                },
                 phone: if phone.is_empty() { None } else { Some(phone) },
             };
             match api::post::<Req, CardInfo>("/api/cards/activate", &req).await {

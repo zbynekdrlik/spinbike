@@ -1,6 +1,6 @@
 use gloo_net::http::RequestBuilder;
-use serde::de::DeserializeOwned;
 use serde::Serialize;
+use serde::de::DeserializeOwned;
 
 use crate::auth::{clear_auth, get_token};
 

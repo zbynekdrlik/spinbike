@@ -103,7 +103,12 @@ pub fn SchedulePage() -> impl IntoView {
         Effect::new(move || {
             if let Some(msg) = ws.get() {
                 match msg {
-                    ServerMsg::BookingUpdate { template_id, date, booked, capacity } => {
+                    ServerMsg::BookingUpdate {
+                        template_id,
+                        date,
+                        booked,
+                        capacity,
+                    } => {
                         set_classes.update(|list| {
                             for slot in list.iter_mut() {
                                 if slot.template_id == template_id && slot.date == date {

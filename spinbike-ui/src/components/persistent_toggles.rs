@@ -31,13 +31,9 @@ struct TemplateLite {
 }
 
 #[component]
-pub fn PersistentToggles(
-    card_id: i64,
-    #[prop(into)] on_changed: Callback<()>,
-) -> impl IntoView {
+pub fn PersistentToggles(card_id: i64, #[prop(into)] on_changed: Callback<()>) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
-    let (active_ids, set_active_ids) =
-        signal(std::collections::HashSet::<i64>::new());
+    let (active_ids, set_active_ids) = signal(std::collections::HashSet::<i64>::new());
     let (templates, set_templates) = signal(Vec::<TemplateLite>::new());
     let (msg, set_msg) = signal(String::new());
     let (version, set_version) = signal(0u32);
@@ -53,19 +49,16 @@ pub fn PersistentToggles(
             .await
             {
                 Ok(rs) => {
-                    let mut seen =
-                        std::collections::HashMap::<i64, TemplateLite>::new();
+                    let mut seen = std::collections::HashMap::<i64, TemplateLite>::new();
                     for r in rs {
                         seen.entry(r.template_id).or_insert_with(|| TemplateLite {
                             id: r.template_id,
-                            weekday: chrono::NaiveDate::parse_from_str(
-                                &r.date, "%Y-%m-%d",
-                            )
-                            .map(|d| {
-                                use chrono::Datelike;
-                                d.weekday().num_days_from_monday() as i64
-                            })
-                            .unwrap_or(0),
+                            weekday: chrono::NaiveDate::parse_from_str(&r.date, "%Y-%m-%d")
+                                .map(|d| {
+                                    use chrono::Datelike;
+                                    d.weekday().num_days_from_monday() as i64
+                                })
+                                .unwrap_or(0),
                             start_time: r.start_time.clone(),
                             instructor_name: r.instructor_name.clone(),
                         });
@@ -82,9 +75,7 @@ pub fn PersistentToggles(
             ))
             .await
             {
-                Ok(rs) => {
-                    set_active_ids.set(rs.into_iter().map(|r| r.template_id).collect())
-                }
+                Ok(rs) => set_active_ids.set(rs.into_iter().map(|r| r.template_id).collect()),
                 Err(e) => set_msg.set(format!("Error: {e}")),
             }
         });

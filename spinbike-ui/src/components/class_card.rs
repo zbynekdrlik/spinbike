@@ -7,10 +7,7 @@ use crate::i18n::{self, Lang};
 use crate::pages::schedule::ClassSlot;
 
 #[component]
-pub fn ClassCard(
-    slot: ClassSlot,
-    #[prop(into)] on_change: Callback<()>,
-) -> impl IntoView {
+pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let is_logged_in = auth::get_token().is_some();
 
@@ -45,9 +42,14 @@ pub fn ClassCard(
         set_error.set(String::new());
         spawn_local(async move {
             #[derive(serde::Serialize)]
-            struct Req { template_id: i64, date: String }
+            struct Req {
+                template_id: i64,
+                date: String,
+            }
             #[derive(serde::Deserialize)]
-            struct Resp { id: i64 }
+            struct Resp {
+                id: i64,
+            }
             match api::post::<Req, Resp>("/api/bookings", &Req { template_id, date }).await {
                 Ok(_) => on_change.run(()),
                 Err(e) => set_error.set(e),
@@ -105,13 +107,15 @@ pub fn ClassCard(
             </div>
         }.into_any()
     } else if slot_full {
-        view! { <span class="badge badge-full">{move || i18n::t(lang.get(), "full")}</span> }.into_any()
+        view! { <span class="badge badge-full">{move || i18n::t(lang.get(), "full")}</span> }
+            .into_any()
     } else {
         view! {
             <button class="btn btn-sm btn-primary" on:click=on_book disabled=move || loading.get()>
                 {move || if loading.get() { "..." } else { i18n::t(lang.get(), "book") }}
             </button>
-        }.into_any()
+        }
+        .into_any()
     };
 
     view! {

@@ -75,20 +75,28 @@ pub fn LoginPage() -> impl IntoView {
 
     let on_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
-        let email = email_ref.get().map(|el| {
-            let el: &HtmlInputElement = &el;
-            el.value()
-        }).unwrap_or_default();
-        let password = pass_ref.get().map(|el| {
-            let el: &HtmlInputElement = &el;
-            el.value()
-        }).unwrap_or_default();
+        let email = email_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
+            .unwrap_or_default();
+        let password = pass_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
+            .unwrap_or_default();
 
         set_loading.set(true);
         set_error.set(String::new());
 
         spawn_local(async move {
-            match api::post::<LoginReq, AuthResp>("/api/auth/login", &LoginReq { email, password }).await {
+            match api::post::<LoginReq, AuthResp>("/api/auth/login", &LoginReq { email, password })
+                .await
+            {
                 Ok(resp) => save_and_redirect(resp),
                 Err(e) => set_error.set(e),
             }
@@ -139,11 +147,39 @@ pub fn RegisterPage() -> impl IntoView {
 
     let on_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
-        let name = name_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
-        let email = email_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
-        let password = pass_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
-        let phone_val = phone_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
-        let phone = if phone_val.is_empty() { None } else { Some(phone_val) };
+        let name = name_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
+            .unwrap_or_default();
+        let email = email_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
+            .unwrap_or_default();
+        let password = pass_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
+            .unwrap_or_default();
+        let phone_val = phone_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
+            .unwrap_or_default();
+        let phone = if phone_val.is_empty() {
+            None
+        } else {
+            Some(phone_val)
+        };
 
         set_loading.set(true);
         set_error.set(String::new());
@@ -151,8 +187,15 @@ pub fn RegisterPage() -> impl IntoView {
         spawn_local(async move {
             match api::post::<RegisterReq, AuthResp>(
                 "/api/auth/register",
-                &RegisterReq { email, password, name, phone },
-            ).await {
+                &RegisterReq {
+                    email,
+                    password,
+                    name,
+                    phone,
+                },
+            )
+            .await
+            {
                 Ok(resp) => save_and_redirect(resp),
                 Err(e) => set_error.set(e),
             }
