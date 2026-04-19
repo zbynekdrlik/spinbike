@@ -106,27 +106,27 @@ test.describe('Schedule and booking', () => {
         const loginData = await loginResp.json();
         const token = loginData.token;
 
-        // Pick the next upcoming weekday that has a template (Mon-Fri).
-        // Templates use JS day numbers: Mon=1, Tue=2, Wed=3, Thu=4, Fri=5.
+        // Pick a weekday with a template that sits inside the current week the
+        // day-picker shows (Mon-Sun). If today is Mon-Fri pick today; on
+        // Sat/Sun fall back to Friday of the same week so the booking lands on
+        // a day still visible in the picker.
         const now = new Date();
         const templateDays = [1, 2, 3, 4, 5];
         const targetDate = new Date(now);
-        for (let offset = 0; offset < 7; offset++) {
-            const candidate = new Date(now);
-            candidate.setDate(now.getDate() + offset);
-            if (templateDays.includes(candidate.getDay())) {
-                targetDate.setTime(candidate.getTime());
-                break;
-            }
+        if (!templateDays.includes(now.getDay())) {
+            const dayOfWeek = now.getDay(); // 6=Sat, 0=Sun
+            const daysBackToFriday = dayOfWeek === 6 ? 1 : 2;
+            targetDate.setDate(now.getDate() - daysBackToFriday);
         }
         const dateStr = targetDate.toISOString().split('T')[0];
 
-        // Query a 14-day window centred on the target so we always include it
-        // regardless of where today falls in the week.
+        // Query the Mon-Sun window of the target's week.
+        const targetDow = targetDate.getDay();
+        const daysSinceMonday = targetDow === 0 ? 6 : targetDow - 1;
         const from = new Date(targetDate);
-        from.setDate(targetDate.getDate() - 7);
-        const to = new Date(targetDate);
-        to.setDate(targetDate.getDate() + 7);
+        from.setDate(targetDate.getDate() - daysSinceMonday);
+        const to = new Date(from);
+        to.setDate(from.getDate() + 6);
         const fromStr = from.toISOString().split('T')[0];
         const toStr = to.toISOString().split('T')[0];
 
