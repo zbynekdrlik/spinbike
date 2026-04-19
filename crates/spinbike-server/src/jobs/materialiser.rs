@@ -65,7 +65,21 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
                 .await?;
             let Some(uid) = user_id else { continue };
 
-            match crate::db::classes::create_booking(
+            // Check capacity up front so we don't rely on string-matching the
+            // create_booking error to detect a full class.
+            let booked: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM bookings
+                 WHERE template_id = ? AND date = ? AND cancelled_at IS NULL",
+            )
+            .bind(tpl.id)
+            .bind(&date_s)
+            .fetch_one(pool)
+            .await?;
+            if booked >= tpl.capacity {
+                continue;
+            }
+
+            crate::db::classes::create_booking(
                 pool,
                 tpl.id,
                 &date_s,
@@ -74,12 +88,8 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
                 None,
                 "persistent",
             )
-            .await
-            {
-                Ok(_) => created += 1,
-                Err(e) if e.to_string().contains("full") => {} // expected, keep sweeping
-                Err(e) => return Err(e),
-            }
+            .await?;
+            created += 1;
         }
     }
     Ok(created)

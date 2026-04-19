@@ -207,7 +207,7 @@ mod tests {
     async fn charger_debits_credit_without_pass() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let (cid, _bid) = seed_booking(&pool, false, 10.0).await;
+        let (cid, bid) = seed_booking(&pool, false, 10.0).await;
         tick_as_of(&pool, &now_at_14()).await.unwrap();
         let credit: f64 = sqlx::query_scalar("SELECT credit FROM cards WHERE id = ?")
             .bind(cid)
@@ -215,6 +215,20 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(credit, 5.0);
+        // Amount on the transaction must be NEGATIVE (debit), not positive.
+        let txn_id: i64 =
+            sqlx::query_scalar("SELECT charge_transaction_id FROM bookings WHERE id = ?")
+                .bind(bid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let amount: f64 = sqlx::query_scalar("SELECT amount FROM transactions WHERE id = ?")
+            .bind(txn_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(amount < 0.0, "charge amount must be negative (debit)");
+        assert_eq!(amount, -5.0);
     }
 
     #[tokio::test]
@@ -254,6 +268,60 @@ mod tests {
             .unwrap();
         let n = tick_as_of(&pool, &now_at_14()).await.unwrap();
         assert_eq!(n, 0);
+    }
+
+    /// Exercises the real-time `tick()` wrapper (not `tick_as_of`). Creates a
+    /// short-lead-time template scheduled 30 minutes from now; two bookings on
+    /// it must both get charged in a single call, proving `tick` actually
+    /// delegates to `tick_as_of(now)` and returns the real count.
+    #[tokio::test]
+    async fn tick_uses_real_now_and_returns_count() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let now = chrono::Local::now();
+        let today = now.date_naive();
+        let weekday = today.weekday().num_days_from_monday() as i64;
+        // 30 minutes from now — always inside the 4h window but unlikely to
+        // collide with V6's 18:00 seed (which, if matched, just yields a
+        // distinct template id with no bookings of its own).
+        let soon = (now + chrono::Duration::minutes(30))
+            .format("%H:%M")
+            .to_string();
+        let tid = crate::db::classes::create_template(&pool, weekday, &soon, 60, None, 10)
+            .await
+            .unwrap();
+
+        for i in 0..2 {
+            let uid: i64 =
+                sqlx::query_scalar("INSERT INTO users (email, name) VALUES (?, 'u') RETURNING id")
+                    .bind(format!("u{i}@x"))
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            let cid: i64 = sqlx::query_scalar(
+                "INSERT INTO cards (barcode, user_id, credit) VALUES (?, ?, 10.0) RETURNING id",
+            )
+            .bind(format!("B{i}"))
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            crate::db::classes::create_booking(
+                &pool,
+                tid,
+                &today.to_string(),
+                uid,
+                Some(cid),
+                None,
+                "manual",
+            )
+            .await
+            .unwrap();
+        }
+
+        let n = tick(&pool).await.unwrap();
+        assert_eq!(n, 2, "tick() must charge all imminent bookings");
     }
 
     #[tokio::test]
