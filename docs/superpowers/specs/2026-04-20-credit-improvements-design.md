@@ -63,13 +63,13 @@ Today the `{move || if pass_is_active() { log_visit_buttons } else { charge_form
 
 **Route:** `DELETE /api/transactions/{id}`
 - Staff-only
-- Sets `deleted_at = CURRENT_TIMESTAMP`
+- Atomic: set `deleted_at = datetime('now')` AND adjust `cards.credit` to reverse the transaction's impact: `UPDATE cards SET credit = ROUND(credit - transaction.amount, 2)`. Signed amounts already encode direction (charges are negative, topups positive), so subtracting the amount reverses every kind of transaction with one formula.
 - Returns 204
 
 **Read queries:**
 - Pass-validity query (`get_card_pass_valid_until`): add `AND deleted_at IS NULL` — voided pass sale no longer counts toward active pass
-- Credit balance query: add `AND deleted_at IS NULL` — voided transaction no longer affects credit
 - History list query: keep voided rows; return `deleted_at` in the response so UI can grey them out
+- Credit column (`cards.credit`) is stored, not computed — the DELETE handler updates it at the same time as the soft-delete so the running balance stays consistent
 
 ### 4. Tabs on card detail page
 
@@ -112,7 +112,7 @@ Tab switch:
 - PATCH valid-until happy path + role-forbidden + 404 + 400-when-not-pass
 - DELETE soft-delete happy path + role-forbidden + 404
 - After DELETE: pass-validity returns None (voided pass no longer active)
-- After DELETE: credit query excludes voided topup
+- After DELETE: `cards.credit` is adjusted to reverse the voided row (e.g. voiding a +10€ topup decreases credit by 10)
 
 **DB tests:**
 - Migration V7 is idempotent (run twice, schema unchanged)
