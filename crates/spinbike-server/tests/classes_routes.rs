@@ -27,19 +27,27 @@ async fn seed_monday_template(app: &TestApp) -> (i64, String) {
 
 #[tokio::test]
 async fn list_classes_returns_occurrences_in_range() {
+    // Exactly two templates match a Monday: the test-seeded 17:00 (cap 10)
+    // and the V6 seeded 18:00 (cap 19). Pinning the length + both entries
+    // kills mutations that drop the weekday guard or the capacity binding.
     let app = TestApp::new().await;
     let (_tid, date) = seed_monday_template(&app).await;
     let uri = format!("/api/classes?from={date}&to={date}");
     let (status, resp) = app.request(get(&uri, "")).await;
     assert_eq!(status, axum::http::StatusCode::OK);
     let arr = resp.as_array().unwrap();
-    // At least one occurrence on the seeded Monday.
-    assert!(
-        !arr.is_empty(),
-        "expected non-empty occurrences, got {arr:?}"
-    );
-    assert_eq!(arr[0]["date"].as_str().unwrap(), date);
-    assert_eq!(arr[0]["capacity"].as_i64().unwrap(), 10);
+    assert_eq!(arr.len(), 2, "expected 2 Monday occurrences, got {arr:?}");
+    for item in arr {
+        assert_eq!(item["date"].as_str().unwrap(), date);
+        assert_eq!(item["weekday"].as_i64().unwrap(), 0);
+    }
+    let cap_at = |time: &str| -> Option<i64> {
+        arr.iter()
+            .find(|c| c["start_time"].as_str() == Some(time))
+            .and_then(|c| c["capacity"].as_i64())
+    };
+    assert_eq!(cap_at("17:00"), Some(10));
+    assert_eq!(cap_at("18:00"), Some(19));
 }
 
 #[tokio::test]
@@ -247,6 +255,40 @@ async fn post_bookings_with_card_id_resolves_booking_user_from_card() {
     let arr = resp.as_array().unwrap();
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["user_email"].as_str(), Some("user@test.com"));
+}
+
+#[tokio::test]
+async fn staff_card_flow_booking_records_created_by() {
+    // Audit regression: when staff books for another user via card_id (no
+    // explicit user_id), the booking row must record `created_by = staff_id`
+    // so the audit trail distinguishes card-flow staff bookings from self-book.
+    let app = TestApp::new().await;
+    let (tid, date) = seed_monday_template(&app).await;
+
+    let body = serde_json::json!({
+        "template_id": tid,
+        "date": date,
+        "card_id": app.customer_card_id, // owned by customer_id
+    });
+    let (status, _resp) = app
+        .request(post_json("/api/bookings", &app.staff_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+
+    let created_by: Option<i64> = sqlx::query_scalar(
+        "SELECT created_by FROM bookings
+         WHERE template_id = ? AND date = ? AND cancelled_at IS NULL",
+    )
+    .bind(tid)
+    .bind(&date)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        created_by,
+        Some(app.staff_id),
+        "card-flow staff booking must stamp created_by with the staff id"
+    );
 }
 
 #[tokio::test]

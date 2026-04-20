@@ -44,11 +44,22 @@ async fn main() -> Result<()> {
         Err(e) => tracing::error!("startup materialiser sweep failed: {e}"),
     }
 
-    // Charger: every 60s.
+    // Run charger once at startup to cover bookings that became eligible while
+    // the server was down — otherwise a restart inside the 4-hour window skips
+    // them until the next scheduled tick.
+    match spinbike_server::jobs::charger::tick(&pool).await {
+        Ok(n) if n > 0 => tracing::info!("charged {n} bookings at startup"),
+        Ok(_) => {}
+        Err(e) => tracing::error!("startup charger tick failed: {e}"),
+    }
+
+    // Charger: every 60s. `Delay` skips back-to-back catch-up ticks if a tick
+    // runs long, preventing the same bookings from being reprocessed rapidly.
     {
         let pool = pool.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             interval.tick().await; // first tick fires immediately; ignore.
             loop {
                 interval.tick().await;
@@ -64,6 +75,7 @@ async fn main() -> Result<()> {
         let pool = pool.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             interval.tick().await;
             loop {
                 interval.tick().await;

@@ -53,10 +53,13 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
         }
 
         // Load card state and latest pass valid_until (may be NULL).
+        // `date(valid_until)` coerces legacy datetime strings to YYYY-MM-DD so
+        // the lexicographic string comparison below stays correct even if an
+        // importer ever stores a time component.
         let (user_id, _credit, pass_valid_until): (Option<i64>, f64, Option<String>) =
             sqlx::query_as(
                 "SELECT c.user_id, c.credit,
-                    (SELECT MAX(valid_until) FROM transactions
+                    (SELECT MAX(date(valid_until)) FROM transactions
                      WHERE card_id = c.id AND valid_until IS NOT NULL)
              FROM cards c WHERE c.id = ?",
             )
@@ -254,6 +257,38 @@ mod tests {
         let b = tick_as_of(&pool, &now_at_14()).await.unwrap();
         assert_eq!(a, 1);
         assert_eq!(b, 0);
+    }
+
+    #[tokio::test]
+    async fn charger_is_idempotent_on_credit_debit_path() {
+        // The pass-active idempotency test above exercises the `amount = 0`
+        // branch, which doesn't touch `cards.credit`. This one pins the
+        // credit-debit branch: a second tick must NOT re-debit, and the
+        // transactions table must contain exactly one charge row.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (cid, _bid) = seed_booking(&pool, false, 10.0).await;
+
+        let a = tick_as_of(&pool, &now_at_14()).await.unwrap();
+        let b = tick_as_of(&pool, &now_at_14()).await.unwrap();
+        assert_eq!(a, 1);
+        assert_eq!(b, 0);
+
+        let credit: f64 = sqlx::query_scalar("SELECT credit FROM cards WHERE id = ?")
+            .bind(cid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(credit, 5.0, "credit must be debited only once (10 -> 5)");
+
+        let visit_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM transactions WHERE card_id = ? AND action = 'visit'",
+        )
+        .bind(cid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(visit_count, 1, "exactly one visit transaction expected");
     }
 
     #[tokio::test]

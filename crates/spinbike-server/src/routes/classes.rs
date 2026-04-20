@@ -253,7 +253,10 @@ async fn create_booking(
         ));
     }
 
-    let created_by = if body.user_id.is_some() && body.user_id != Some(claims.sub) {
+    // Stamp `created_by` whenever the booking's user_id differs from the
+    // caller — covers both the explicit-user_id flow and the card-centric
+    // flow where user_id is resolved from the card.
+    let created_by = if booking_user_id != claims.sub {
         Some(claims.sub)
     } else {
         None

@@ -22,6 +22,13 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
 
     for p in &persistents {
         let Some(tpl) = templates.iter().find(|t| t.id == p.template_id) else {
+            // The subscription points at a template that has been deactivated
+            // or deleted. Log so staff can investigate; skip materialising.
+            tracing::warn!(
+                "persistent booking id={} references inactive/missing template {}",
+                p.id,
+                p.template_id
+            );
             continue;
         };
 
