@@ -1,5 +1,5 @@
 use futures::StreamExt;
-use gloo_net::websocket::{futures::WebSocket, Message};
+use gloo_net::websocket::{Message, futures::WebSocket};
 use leptos::prelude::*;
 use spinbike_core::ws::ServerMsg;
 use wasm_bindgen_futures::spawn_local;

@@ -1,6 +1,6 @@
 use leptos::prelude::*;
 
-use crate::i18n::{self, Lang, DAY_KEYS};
+use crate::i18n::{self, DAY_KEYS, Lang};
 
 #[component]
 pub fn DayPicker(

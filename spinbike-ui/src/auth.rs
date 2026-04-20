@@ -33,7 +33,10 @@ pub fn get_user() -> Option<UserInfo> {
 pub fn set_auth(data: &AuthData) {
     if let Some(s) = storage() {
         let _ = s.set_item(TOKEN_KEY, &data.token);
-        let _ = s.set_item(USER_KEY, &serde_json::to_string(&data.user).unwrap_or_default());
+        let _ = s.set_item(
+            USER_KEY,
+            &serde_json::to_string(&data.user).unwrap_or_default(),
+        );
     }
 }
 
@@ -51,7 +54,5 @@ pub fn is_staff_or_admin() -> bool {
 }
 
 pub fn is_admin() -> bool {
-    get_user()
-        .map(|u| u.role == "admin")
-        .unwrap_or(false)
+    get_user().map(|u| u.role == "admin").unwrap_or(false)
 }

@@ -3,7 +3,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{HtmlInputElement, HtmlSelectElement};
 
 use crate::api;
-use crate::i18n::{self, Lang, ADMIN_TAB_KEYS, WEEKDAY_KEYS};
+use crate::i18n::{self, ADMIN_TAB_KEYS, Lang, WEEKDAY_KEYS};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[allow(dead_code)]
@@ -52,19 +52,22 @@ pub fn AdminPage() -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (tab, set_tab) = signal("templates".to_string());
 
-    let tab_buttons: Vec<_> = ADMIN_TAB_KEYS.iter().map(|(id, key)| {
-        let id = id.to_string();
-        let id2 = id.clone();
-        let key = *key;
-        view! {
-            <button
-                class=move || if tab.get() == id { "tab-btn active" } else { "tab-btn" }
-                on:click=move |_| set_tab.set(id2.clone())
-            >
-                {move || i18n::t(lang.get(), key)}
-            </button>
-        }
-    }).collect();
+    let tab_buttons: Vec<_> = ADMIN_TAB_KEYS
+        .iter()
+        .map(|(id, key)| {
+            let id = id.to_string();
+            let id2 = id.clone();
+            let key = *key;
+            view! {
+                <button
+                    class=move || if tab.get() == id { "tab-btn active" } else { "tab-btn" }
+                    on:click=move |_| set_tab.set(id2.clone())
+                >
+                    {move || i18n::t(lang.get(), key)}
+                </button>
+            }
+        })
+        .collect();
 
     view! {
         <h1 class="page-title">{move || i18n::t(lang.get(), "admin")}</h1>
@@ -112,27 +115,79 @@ fn TemplatesTab() -> impl IntoView {
 
     let on_create = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
-        let weekday: i64 = weekday_ref.get().map(|el| { let el: &HtmlSelectElement = &el; el.value() }).unwrap_or_default().parse().unwrap_or(0);
-        let start_time = time_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
-        let duration: i64 = dur_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default().parse().unwrap_or(45);
-        let capacity: i64 = cap_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default().parse().unwrap_or(20);
-        let instructor_id: Option<i64> = instr_ref.get().and_then(|el| { let el: &HtmlInputElement = &el; el.value().parse().ok() });
+        let weekday: i64 = weekday_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlSelectElement = &el;
+                el.value()
+            })
+            .unwrap_or_default()
+            .parse()
+            .unwrap_or(0);
+        let start_time = time_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
+            .unwrap_or_default();
+        let duration: i64 = dur_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
+            .unwrap_or_default()
+            .parse()
+            .unwrap_or(45);
+        let capacity: i64 = cap_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
+            .unwrap_or_default()
+            .parse()
+            .unwrap_or(20);
+        let instructor_id: Option<i64> = instr_ref.get().and_then(|el| {
+            let el: &HtmlInputElement = &el;
+            el.value().parse().ok()
+        });
 
         spawn_local(async move {
             #[derive(serde::Serialize)]
-            struct Req { weekday: i64, start_time: String, duration_minutes: i64, instructor_id: Option<i64>, capacity: i64 }
-            match api::post::<Req, TemplateRow>("/api/admin/templates", &Req { weekday, start_time, duration_minutes: duration, instructor_id, capacity }).await {
+            struct Req {
+                weekday: i64,
+                start_time: String,
+                duration_minutes: i64,
+                instructor_id: Option<i64>,
+                capacity: i64,
+            }
+            match api::post::<Req, TemplateRow>(
+                "/api/admin/templates",
+                &Req {
+                    weekday,
+                    start_time,
+                    duration_minutes: duration,
+                    instructor_id,
+                    capacity,
+                },
+            )
+            .await
+            {
                 Ok(_) => set_ver.update(|v| *v += 1),
                 Err(e) => set_msg.set(format!("Error: {e}")),
             }
         });
     };
 
-    let weekday_options: Vec<_> = (0..7).map(|i: usize| {
-        let val = i.to_string();
-        let key = WEEKDAY_KEYS[i];
-        view! { <option value=val>{move || i18n::t(lang.get(), key)}</option> }
-    }).collect();
+    let weekday_options: Vec<_> = (0..7)
+        .map(|i: usize| {
+            let val = i.to_string();
+            let key = WEEKDAY_KEYS[i];
+            view! { <option value=val>{move || i18n::t(lang.get(), key)}</option> }
+        })
+        .collect();
 
     view! {
         {move || { let m = msg.get(); if m.is_empty() { view! { <span></span> }.into_any() } else { view! { <div class="alert alert-info">{m}</div> }.into_any() } }}
@@ -270,11 +325,21 @@ fn InstructorsTab() -> impl IntoView {
 
     let on_create = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
-        let name = name_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
-        if name.is_empty() { return; }
+        let name = name_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
+            .unwrap_or_default();
+        if name.is_empty() {
+            return;
+        }
         spawn_local(async move {
             #[derive(serde::Serialize)]
-            struct Req { name: String }
+            struct Req {
+                name: String,
+            }
             match api::post::<Req, InstructorRow>("/api/admin/instructors", &Req { name }).await {
                 Ok(_) => set_ver.update(|v| *v += 1),
                 Err(e) => set_msg.set(format!("Error: {e}")),
@@ -393,13 +458,40 @@ fn ServicesTab() -> impl IntoView {
 
     let on_create = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
-        let name = name_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
-        let price: f64 = price_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default().parse().unwrap_or(0.0);
-        if name.is_empty() { return; }
+        let name = name_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
+            .unwrap_or_default();
+        let price: f64 = price_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
+            .unwrap_or_default()
+            .parse()
+            .unwrap_or(0.0);
+        if name.is_empty() {
+            return;
+        }
         spawn_local(async move {
             #[derive(serde::Serialize)]
-            struct Req { name: String, default_price: f64 }
-            match api::post::<Req, ServiceRow>("/api/admin/services", &Req { name, default_price: price }).await {
+            struct Req {
+                name: String,
+                default_price: f64,
+            }
+            match api::post::<Req, ServiceRow>(
+                "/api/admin/services",
+                &Req {
+                    name,
+                    default_price: price,
+                },
+            )
+            .await
+            {
                 Ok(_) => set_ver.update(|v| *v += 1),
                 Err(e) => set_msg.set(format!("Error: {e}")),
             }
@@ -611,12 +703,29 @@ fn SettingsTab() -> impl IntoView {
 
     let on_save = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
-        let key = key_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
-        let value = val_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
-        if key.is_empty() { return; }
+        let key = key_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
+            .unwrap_or_default();
+        let value = val_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
+            .unwrap_or_default();
+        if key.is_empty() {
+            return;
+        }
         spawn_local(async move {
             #[derive(serde::Serialize)]
-            struct Req { key: String, value: String }
+            struct Req {
+                key: String,
+                value: String,
+            }
             match api::put("/api/admin/settings", &Req { key, value }).await {
                 Ok(_) => set_ver.update(|v| *v += 1),
                 Err(e) => set_msg.set(format!("Error: {e}")),

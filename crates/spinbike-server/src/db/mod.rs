@@ -1,6 +1,7 @@
 pub mod cards;
 pub mod classes;
 pub mod migrations;
+pub mod persistent_bookings;
 pub mod settings;
 pub mod transactions;
 pub mod users;
@@ -132,6 +133,7 @@ mod tests {
             "class_cancellations",
             "class_templates",
             "instructors",
+            "persistent_bookings",
             "schema_version",
             "services",
             "settings",
@@ -166,6 +168,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 6);
     }
 }

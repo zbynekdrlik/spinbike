@@ -153,6 +153,10 @@ async function globalSetup(_config: FullConfig) {
         });
     }
 
+    // Link Jana's card to the customer user so card-centric booking flows
+    // (which write bookings referencing the card's user_id) work in E2E.
+    execSync(`sqlite3 "${DB_PATH}" "UPDATE cards SET user_id = (SELECT id FROM users WHERE email='customer@test.com') WHERE barcode='70701001'"`);
+
     // Create a service for payment tests
     await fetch(`${API}/api/admin/services`, {
         method: 'POST',

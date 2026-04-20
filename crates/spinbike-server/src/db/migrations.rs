@@ -12,6 +12,16 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "monthly pass: valid_until + service seed",
         V4_MONTHLY_PASS,
     ),
+    (
+        5,
+        "spin booking: bookings extended + persistent_bookings",
+        V5_SPIN_BOOKING,
+    ),
+    (
+        6,
+        "seed 4 weekly spin classes + 2 instructors",
+        V6_SEED_SPIN_CLASSES,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -132,6 +142,60 @@ ALTER TABLE transactions ADD COLUMN valid_until TEXT;
 INSERT OR IGNORE INTO services (name, default_price, active) VALUES ('Monthly pass', 35.0, 1);
 "#;
 
+// Spin booking: extends bookings with card/charge columns and adds
+// persistent_bookings for recurring class subscriptions.
+const V5_SPIN_BOOKING: &str = r#"
+ALTER TABLE bookings ADD COLUMN card_id INTEGER REFERENCES cards(id);
+ALTER TABLE bookings ADD COLUMN source TEXT NOT NULL DEFAULT 'manual';
+ALTER TABLE bookings ADD COLUMN charged_at TEXT;
+ALTER TABLE bookings ADD COLUMN charge_transaction_id INTEGER REFERENCES transactions(id);
+
+UPDATE bookings
+  SET card_id = (SELECT c.id FROM cards c WHERE c.user_id = bookings.user_id LIMIT 1)
+  WHERE card_id IS NULL;
+
+CREATE TABLE IF NOT EXISTS persistent_bookings (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    card_id     INTEGER NOT NULL REFERENCES cards(id) ON DELETE CASCADE,
+    template_id INTEGER NOT NULL REFERENCES class_templates(id) ON DELETE CASCADE,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    ended_at    TEXT
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_persistent_bookings_card_id_template_id_active
+    ON persistent_bookings(card_id, template_id)
+    WHERE ended_at IS NULL;
+
+CREATE INDEX IF NOT EXISTS idx_bookings_uncharged_future
+    ON bookings(date, charged_at)
+    WHERE cancelled_at IS NULL AND charged_at IS NULL;
+"#;
+
+// Seed 2 instructors and 4 weekly Mon-Thu 18:00 class templates.
+// All inserts are conditional so re-running migrations is a no-op.
+const V6_SEED_SPIN_CLASSES: &str = r#"
+INSERT INTO instructors (name, active)
+SELECT 'Stevo', 1 WHERE NOT EXISTS (SELECT 1 FROM instructors WHERE name='Stevo');
+INSERT INTO instructors (name, active)
+SELECT 'Vlada', 1 WHERE NOT EXISTS (SELECT 1 FROM instructors WHERE name='Vlada');
+
+INSERT INTO class_templates (weekday, start_time, duration_minutes, instructor_id, capacity, active)
+SELECT 0, '18:00', 60, (SELECT id FROM instructors WHERE name='Stevo'), 19, 1
+WHERE NOT EXISTS (SELECT 1 FROM class_templates WHERE weekday=0 AND start_time='18:00');
+
+INSERT INTO class_templates (weekday, start_time, duration_minutes, instructor_id, capacity, active)
+SELECT 1, '18:00', 60, (SELECT id FROM instructors WHERE name='Vlada'), 19, 1
+WHERE NOT EXISTS (SELECT 1 FROM class_templates WHERE weekday=1 AND start_time='18:00');
+
+INSERT INTO class_templates (weekday, start_time, duration_minutes, instructor_id, capacity, active)
+SELECT 2, '18:00', 60, (SELECT id FROM instructors WHERE name='Stevo'), 19, 1
+WHERE NOT EXISTS (SELECT 1 FROM class_templates WHERE weekday=2 AND start_time='18:00');
+
+INSERT INTO class_templates (weekday, start_time, duration_minutes, instructor_id, capacity, active)
+SELECT 3, '18:00', 60, (SELECT id FROM instructors WHERE name='Vlada'), 19, 1
+WHERE NOT EXISTS (SELECT 1 FROM class_templates WHERE weekday=3 AND start_time='18:00');
+"#;
+
 #[cfg(test)]
 mod tests {
     use crate::db::{create_memory_pool, run_migrations};
@@ -180,5 +244,114 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(count, 1, "Monthly pass must be seeded exactly once");
+    }
+
+    #[tokio::test]
+    async fn v5_adds_booking_columns_and_persistent_table() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // bookings gained card_id, source, charged_at, charge_transaction_id
+        let cols: Vec<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('bookings')")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        let names: Vec<&str> = cols.iter().map(|(n,)| n.as_str()).collect();
+        for c in ["card_id", "source", "charged_at", "charge_transaction_id"] {
+            assert!(names.contains(&c), "bookings missing column {c}");
+        }
+
+        // persistent_bookings exists with the right unique index
+        let tbl: Option<(String,)> = sqlx::query_as(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='persistent_bookings'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(tbl.is_some(), "persistent_bookings table missing");
+
+        let idx: Vec<(String,)> = sqlx::query_as(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='persistent_bookings'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(
+            idx.iter().any(|(n,)| n.contains("card_id_template_id")),
+            "unique index on (card_id,template_id) missing"
+        );
+    }
+
+    #[tokio::test]
+    async fn v5_is_idempotent() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn v6_seeds_instructors_and_templates() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let stevo_id: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM instructors WHERE name='Stevo' AND active=1")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert!(stevo_id.is_some(), "Stevo must be seeded");
+
+        let vlada_id: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM instructors WHERE name='Vlada' AND active=1")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert!(vlada_id.is_some(), "Vlada must be seeded");
+
+        // Exactly 4 templates at 18:00 with capacity 19, one per weekday 0..=3.
+        let rows: Vec<(i64, String, i64, i64)> = sqlx::query_as(
+            "SELECT weekday, start_time, capacity, instructor_id
+             FROM class_templates
+             WHERE start_time = '18:00' AND active = 1
+             ORDER BY weekday",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(rows.len(), 4, "expected 4 seeded templates");
+        for (i, (wd, st, cap, inst)) in rows.iter().enumerate() {
+            assert_eq!(*wd, i as i64);
+            assert_eq!(st, "18:00");
+            assert_eq!(*cap, 19);
+            let expected = if *wd == 0 || *wd == 2 {
+                stevo_id.unwrap()
+            } else {
+                vlada_id.unwrap()
+            };
+            assert_eq!(*inst, expected, "wrong instructor for weekday {wd}");
+        }
+    }
+
+    #[tokio::test]
+    async fn v6_is_idempotent_and_does_not_duplicate() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM class_templates WHERE start_time='18:00' AND active=1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 4);
+
+        let instr_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM instructors WHERE name IN ('Stevo','Vlada')")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(instr_count, 2);
     }
 }

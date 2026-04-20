@@ -869,3 +869,36 @@ table tbody tr:last-child td,
         transition-duration: 0.01ms !important;
     }
 }
+
+/* Upcoming classes + persistent booking (staff card panel) */
+.upcoming-list, .persistent-list {
+    list-style: none; padding: 0; margin: 0;
+}
+.upcoming-row, .persistent-row {
+    display: grid;
+    grid-template-columns: 8em 5em 1fr auto auto;
+    gap: var(--s-3);
+    align-items: center;
+    padding: var(--s-2) var(--s-3);
+    border-top: 1px solid var(--border);
+    font-size: var(--fs-sm);
+}
+.persistent-row { grid-template-columns: 1fr auto; }
+.upcoming-row:first-child, .persistent-row:first-child { border-top: none; }
+.upcoming-row.state-past { opacity: 0.5; }
+.upcoming-row.state-cancelled { opacity: 0.6; }
+.upcoming-row .upcoming-count { color: var(--text-muted); }
+.upcoming-row .upcoming-instr { color: var(--text-muted); }
+
+.walkin-results {
+    list-style: none;
+    padding: 0;
+    margin: var(--s-2) 0 0 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-1);
+}
+.walkin-row .btn {
+    width: 100%;
+    text-align: left;
+}

@@ -7,10 +7,7 @@ use crate::i18n::{self, Lang};
 use crate::pages::schedule::ClassSlot;
 
 #[component]
-pub fn ClassCard(
-    slot: ClassSlot,
-    #[prop(into)] on_change: Callback<()>,
-) -> impl IntoView {
+pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let is_logged_in = auth::get_token().is_some();
 
@@ -45,9 +42,14 @@ pub fn ClassCard(
         set_error.set(String::new());
         spawn_local(async move {
             #[derive(serde::Serialize)]
-            struct Req { template_id: i64, date: String }
+            struct Req {
+                template_id: i64,
+                date: String,
+            }
             #[derive(serde::Deserialize)]
-            struct Resp { id: i64 }
+            struct Resp {
+                id: i64,
+            }
             match api::post::<Req, Resp>("/api/bookings", &Req { template_id, date }).await {
                 Ok(_) => on_change.run(()),
                 Err(e) => set_error.set(e),
@@ -74,11 +76,28 @@ pub fn ClassCard(
     let slot_cancelled = slot.cancelled;
     let slot_user_booked = slot.user_booked;
     let slot_full = slot.booked >= slot.capacity;
+    let slot_booking_source = slot.user_booking_source.clone();
 
     let action_view = if slot_cancelled {
         view! { <span class="badge badge-cancelled">{move || i18n::t(lang.get(), "cancelled")}</span> }.into_any()
     } else if !is_logged_in {
         view! { <a href="/login" class="btn btn-sm btn-outline">{move || i18n::t(lang.get(), "login_to_book")}</a> }.into_any()
+    } else if slot_user_booked && slot_booking_source.as_deref() == Some("persistent") {
+        view! {
+            <div>
+                <span class="badge badge-booked mb-1">{move || i18n::t(lang.get(), "booked")}</span>
+                <br/>
+                <button class="btn btn-outline btn-sm" on:click=on_cancel disabled=move || loading.get()>
+                    {move || if loading.get() {
+                        "...".to_string()
+                    } else {
+                        let auto = i18n::t(lang.get(), "auto");
+                        let skip = i18n::t(lang.get(), "skip_this_week");
+                        format!("{auto} — {skip}")
+                    }}
+                </button>
+            </div>
+        }.into_any()
     } else if slot_user_booked {
         view! {
             <div>
@@ -90,13 +109,15 @@ pub fn ClassCard(
             </div>
         }.into_any()
     } else if slot_full {
-        view! { <span class="badge badge-full">{move || i18n::t(lang.get(), "full")}</span> }.into_any()
+        view! { <span class="badge badge-full">{move || i18n::t(lang.get(), "full")}</span> }
+            .into_any()
     } else {
         view! {
             <button class="btn btn-sm btn-primary" on:click=on_book disabled=move || loading.get()>
                 {move || if loading.get() { "..." } else { i18n::t(lang.get(), "book") }}
             </button>
-        }.into_any()
+        }
+        .into_any()
     };
 
     view! {

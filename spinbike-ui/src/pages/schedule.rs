@@ -20,6 +20,7 @@ pub struct ClassSlot {
     pub cancelled: bool,
     pub user_booked: bool,
     pub user_booking_id: Option<i64>,
+    pub user_booking_source: Option<String>,
 }
 
 /// Compute current week (Mon-Sun) as Vec<(year, month, day)> and date strings.
@@ -53,17 +54,6 @@ fn current_week_dates() -> (Vec<(i32, u32, u32)>, Vec<String>) {
 
 #[component]
 pub fn SchedulePage() -> impl IntoView {
-    // Staff and admin users have the card dashboard as their actual home.
-    // Bounce them there so bookmarks / logo clicks / login redirects all land
-    // in the right place.
-    if let Some(u) = crate::auth::get_user() {
-        if u.role == "staff" || u.role == "admin" {
-            if let Some(w) = web_sys::window() {
-                let _ = w.location().set_href("/staff");
-            }
-        }
-    }
-
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (dates, date_strs) = current_week_dates();
     let date_strs_stored = date_strs.clone();
@@ -102,7 +92,12 @@ pub fn SchedulePage() -> impl IntoView {
         Effect::new(move || {
             if let Some(msg) = ws.get() {
                 match msg {
-                    ServerMsg::BookingUpdate { template_id, date, booked, capacity } => {
+                    ServerMsg::BookingUpdate {
+                        template_id,
+                        date,
+                        booked,
+                        capacity,
+                    } => {
                         set_classes.update(|list| {
                             for slot in list.iter_mut() {
                                 if slot.template_id == template_id && slot.date == date {
