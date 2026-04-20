@@ -250,6 +250,25 @@ async fn post_bookings_with_card_id_resolves_booking_user_from_card() {
 }
 
 #[tokio::test]
+async fn customer_can_book_own_card_via_card_id() {
+    // Kills classes.rs create_booking mutation `uid != claims.sub` -> `==`.
+    // With the mutant, a customer booking their own card would be rejected
+    // with 403 because `uid == claims.sub && !can_book_for_others()` holds.
+    let app = TestApp::new().await;
+    let (tid, date) = seed_monday_template(&app).await;
+
+    let body = serde_json::json!({
+        "template_id": tid,
+        "date": date,
+        "card_id": app.customer_card_id,
+    });
+    let (status, _) = app
+        .request(post_json("/api/bookings", &app.customer_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+}
+
+#[tokio::test]
 async fn post_bookings_with_card_id_for_unlinked_card_fails() {
     let app = TestApp::new().await;
     let (tid, date) = seed_monday_template(&app).await;
