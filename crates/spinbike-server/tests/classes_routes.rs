@@ -204,6 +204,83 @@ async fn list_classes_returns_persistent_source_for_customer_auto_booking() {
 }
 
 #[tokio::test]
+async fn post_bookings_with_card_id_resolves_booking_user_from_card() {
+    // Regression: the Upcoming-Classes panel on the staff card page sends only
+    // { template_id, date, card_id } (no explicit user_id). The server must
+    // derive user_id from cards.user_id so the booking attaches to the
+    // card-holder, not the staff caller.
+    let app = TestApp::new().await;
+    let (tid, date) = seed_monday_template(&app).await;
+
+    let body = serde_json::json!({
+        "template_id": tid,
+        "date": date,
+        "card_id": app.customer_card_id, // customer_card_id is owned by customer_id
+    });
+    let (status, _resp) = app
+        .request(post_json("/api/bookings", &app.staff_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+
+    // Verify the booking's user_id points at the card's user, not the staff
+    // caller.
+    let (booking_user_id, booking_card_id): (i64, Option<i64>) = sqlx::query_as(
+        "SELECT user_id, card_id FROM bookings
+         WHERE template_id = ? AND date = ? AND cancelled_at IS NULL",
+    )
+    .bind(tid)
+    .bind(&date)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        booking_user_id, app.customer_id,
+        "user_id must match card owner"
+    );
+    assert_eq!(booking_card_id, Some(app.customer_card_id));
+
+    // And the class participants list shows the card owner's name, not the
+    // staff member's.
+    let uri = format!("/api/classes/{tid}/{date}/participants");
+    let (status, resp) = app.request(get(&uri, &app.staff_token)).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let arr = resp.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["user_email"].as_str(), Some("user@test.com"));
+}
+
+#[tokio::test]
+async fn post_bookings_with_card_id_for_unlinked_card_fails() {
+    let app = TestApp::new().await;
+    let (tid, date) = seed_monday_template(&app).await;
+
+    // Seed a card with NO user_id.
+    let orphan_card_id: i64 = sqlx::query_scalar(
+        "INSERT INTO cards (barcode, user_id, credit) VALUES ('ORPH', NULL, 0) RETURNING id",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+
+    let body = serde_json::json!({
+        "template_id": tid,
+        "date": date,
+        "card_id": orphan_card_id,
+    });
+    let (status, resp) = app
+        .request(post_json("/api/bookings", &app.staff_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    assert!(
+        resp["error"]
+            .as_str()
+            .map(|s| s.to_lowercase().contains("linked user"))
+            .unwrap_or(false),
+        "expected 'no linked user' error, got {resp:?}"
+    );
+}
+
+#[tokio::test]
 async fn classes_routes_are_registered() {
     let app = TestApp::new().await;
     for path in [
