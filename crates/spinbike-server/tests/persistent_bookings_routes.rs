@@ -56,10 +56,25 @@ async fn delete_persistent_ends_it_and_removes_future_uncharged() {
         &serde_json::json!({"template_id": tid}),
     ))
     .await;
-    let before: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM bookings WHERE card_id=? AND source='persistent' AND cancelled_at IS NULL AND charged_at IS NULL"
-    ).bind(card_id).fetch_one(&app.pool).await.unwrap();
-    assert!(before >= 1);
+    // Count only FUTURE uncharged persistent bookings — by contract, the
+    // DELETE route leaves past (uncharged) bookings alone because they
+    // cannot meaningfully be cancelled. Without the future-only filter,
+    // this test flakes whenever CI runs after 18:00 local on a Monday
+    // (today's seeded 18:00 class is already past).
+    let future_count_sql = "SELECT COUNT(*) FROM bookings b \
+         JOIN class_templates t ON t.id = b.template_id \
+         WHERE b.card_id=? AND b.source='persistent' \
+           AND b.cancelled_at IS NULL AND b.charged_at IS NULL \
+           AND datetime(b.date || ' ' || t.start_time) > datetime('now')";
+    let before: i64 = sqlx::query_scalar(future_count_sql)
+        .bind(card_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert!(
+        before >= 1,
+        "materialiser must create at least one future booking"
+    );
 
     let (status, _) = app
         .request(delete(
@@ -69,10 +84,12 @@ async fn delete_persistent_ends_it_and_removes_future_uncharged() {
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let after: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM bookings WHERE card_id=? AND source='persistent' AND cancelled_at IS NULL AND charged_at IS NULL"
-    ).bind(card_id).fetch_one(&app.pool).await.unwrap();
-    assert_eq!(after, 0);
+    let after: i64 = sqlx::query_scalar(future_count_sql)
+        .bind(card_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(after, 0, "all future persistent bookings must be cancelled");
 
     let ended: Option<String> = sqlx::query_scalar(
         "SELECT ended_at FROM persistent_bookings WHERE card_id=? AND template_id=?",
