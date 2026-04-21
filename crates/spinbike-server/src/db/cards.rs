@@ -382,7 +382,7 @@ pub async fn get_card_pass_valid_until(
 ) -> Result<Option<chrono::NaiveDate>> {
     let row: Option<(Option<chrono::NaiveDate>,)> = sqlx::query_as(
         "SELECT MAX(valid_until) FROM transactions
-         WHERE card_id = ? AND valid_until IS NOT NULL",
+         WHERE card_id = ? AND valid_until IS NOT NULL AND deleted_at IS NULL",
     )
     .bind(card_id)
     .fetch_optional(pool)
@@ -844,6 +844,42 @@ mod tests {
             result,
             Some(pass_date),
             "MAX must return the pass date, ignoring rows with NULL valid_until"
+        );
+    }
+
+    #[tokio::test]
+    async fn pass_validity_ignores_soft_deleted_pass() {
+        use crate::db::transactions::create_transaction_with_valid_until;
+        let pool = setup().await;
+        let card_id = create_card(&pool, "PV-1").await.unwrap();
+        let future = chrono::Local::now().date_naive() + chrono::Duration::days(10);
+
+        let tx_id = create_transaction_with_valid_until(
+            &pool,
+            None,
+            Some(card_id),
+            None,
+            Some(1),
+            -35.0,
+            "charge",
+            Some(future),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            get_card_pass_valid_until(&pool, card_id).await.unwrap(),
+            Some(future)
+        );
+
+        crate::db::transactions::soft_delete(&pool, tx_id)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            get_card_pass_valid_until(&pool, card_id).await.unwrap(),
+            None,
+            "soft-deleted pass sale must not count as active pass"
         );
     }
 }

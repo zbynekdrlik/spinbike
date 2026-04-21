@@ -16,6 +16,7 @@ pub struct TransactionRow {
     // Joined from services — None when the transaction wasn't tied to a service.
     #[sqlx(default)]
     pub service_name: Option<String>,
+    pub deleted_at: Option<String>,
 }
 
 pub async fn create_transaction(
@@ -80,7 +81,7 @@ pub async fn list_transactions_for_card(
     let txns = sqlx::query_as::<_, TransactionRow>(
         "SELECT t.id, t.user_id, t.card_id, t.staff_id, t.service_id,
                 t.amount, t.action, t.created_at, t.valid_until,
-                s.name AS service_name
+                s.name AS service_name, t.deleted_at
          FROM transactions t
          LEFT JOIN services s ON s.id = t.service_id
          WHERE t.card_id = ?
@@ -100,7 +101,7 @@ pub async fn list_transactions_for_user(
     let txns = sqlx::query_as::<_, TransactionRow>(
         "SELECT t.id, t.user_id, t.card_id, t.staff_id, t.service_id,
                 t.amount, t.action, t.created_at, t.valid_until,
-                s.name AS service_name
+                s.name AS service_name, t.deleted_at
          FROM transactions t
          LEFT JOIN services s ON s.id = t.service_id
          WHERE t.user_id = ?
@@ -247,5 +248,26 @@ mod tests {
         let pool = setup().await;
         // Non-existent id must not error — no-op.
         soft_delete(&pool, 99999).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn list_transactions_returns_deleted_at_flag() {
+        let pool = setup().await;
+        let card_id = create_card(&pool, "SD-LIST").await.unwrap();
+        let tx_id = create_transaction(&pool, None, Some(card_id), None, None, 5.0, "topup")
+            .await
+            .unwrap();
+        soft_delete(&pool, tx_id).await.unwrap();
+
+        let rows = list_transactions_for_card(&pool, card_id).await.unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "soft-deleted rows must still appear in history"
+        );
+        assert!(
+            rows[0].deleted_at.is_some(),
+            "voided row must expose deleted_at"
+        );
     }
 }
