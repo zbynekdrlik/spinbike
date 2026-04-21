@@ -102,6 +102,7 @@ pub struct TransactionResponse {
     // Name of the service the transaction paid for, when applicable.
     pub service_name: Option<String>,
     pub valid_until: Option<chrono::NaiveDate>,
+    pub deleted_at: Option<String>,
 }
 
 // Replaces `impl From<&db::CardRow> for CardResponse`.
@@ -487,6 +488,7 @@ async fn card_transactions(
                 created_at: t.created_at,
                 service_name: t.service_name,
                 valid_until: t.valid_until,
+                deleted_at: t.deleted_at,
             })
             .collect(),
     ))
@@ -521,6 +523,7 @@ async fn my_balance(
                 created_at: t.created_at,
                 service_name: t.service_name,
                 valid_until: t.valid_until,
+                deleted_at: t.deleted_at,
             })
             .collect(),
     }))
