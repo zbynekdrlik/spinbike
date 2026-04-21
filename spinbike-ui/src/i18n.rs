@@ -346,6 +346,13 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
 
     // Visit logging (active pass flow)
     m.insert("log_visit", ("Zaznamenat navstevu", "Log visit"));
+    m.insert(
+        "charge_for_extras",
+        (
+            "Uctovat napoje / jedlo / ine",
+            "Charge for drinks / food / other",
+        ),
+    );
 
     // Sell pass modal
     m.insert(

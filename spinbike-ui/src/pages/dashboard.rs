@@ -1030,8 +1030,9 @@ fn ChargeSection(
             <div class="text-muted" style="font-size:0.85rem;margin-bottom:4px">
                 {move || i18n::t(lang.get(), "quick_charge")}
             </div>
+
+            // Log-visit primary buttons (ONLY when pass is active).
             {if pass_active {
-                // Pass is active: render one "Log visit" button per service.
                 view! {
                     <div class="flex gap-1" style="flex-wrap:wrap">
                         {services.get().into_iter()
@@ -1052,37 +1053,40 @@ fn ChargeSection(
                     </div>
                 }.into_any()
             } else {
-                // No active pass: existing charge form — unchanged.
-                view! {
-                    <form class="inline-form" on:submit=on_submit style="flex-wrap:wrap">
-                        <select class="form-control" node_ref=service_ref on:change=on_service_change data-testid="charge-service">
-                            <option value="">{move || i18n::t(lang.get(), "select_service")}</option>
-                            {move || {
-                                services.get().into_iter()
-                                    .filter(|s| s.name != "Monthly pass")
-                                    .map(|s| {
-                                        let val = s.id.to_string();
-                                        let label = format!("{} ({:.2} €)", s.name, s.default_price);
-                                        view! { <option value=val>{label}</option> }
-                                    }).collect::<Vec<_>>()
-                            }}
-                        </select>
-                        <input
-                            type="number"
-                            class="form-control"
-                            node_ref=amount_ref
-                            placeholder=move || i18n::t(lang.get(), "amount")
-                            step="0.01"
-                            min="0.01"
-                            style="width:8em"
-                            required
-                        />
-                        <button type="submit" class="btn btn-sm btn-danger" data-testid="charge-submit" disabled=move || loading.get()>
-                            {move || i18n::t(lang.get(), "charge")}
-                        </button>
-                    </form>
-                }.into_any()
+                view! { <div></div> }.into_any()
             }}
+
+            // Charge form — always visible, labelled for drinks/food.
+            <div class="text-muted" style="font-size:0.8rem;margin:6px 0 2px">
+                {move || i18n::t(lang.get(), "charge_for_extras")}
+            </div>
+            <form class="inline-form" on:submit=on_submit style="flex-wrap:wrap">
+                <select class="form-control" node_ref=service_ref on:change=on_service_change data-testid="charge-service">
+                    <option value="">{move || i18n::t(lang.get(), "select_service")}</option>
+                    {move || {
+                        services.get().into_iter()
+                            .filter(|s| s.name != "Monthly pass")
+                            .map(|s| {
+                                let val = s.id.to_string();
+                                let label = format!("{} ({:.2} €)", s.name, s.default_price);
+                                view! { <option value=val>{label}</option> }
+                            }).collect::<Vec<_>>()
+                    }}
+                </select>
+                <input
+                    type="number"
+                    class="form-control"
+                    node_ref=amount_ref
+                    placeholder=move || i18n::t(lang.get(), "amount")
+                    step="0.01"
+                    min="0.01"
+                    style="width:8em"
+                    required
+                />
+                <button type="submit" class="btn btn-sm btn-danger" data-testid="charge-submit" disabled=move || loading.get()>
+                    {move || i18n::t(lang.get(), "charge")}
+                </button>
+            </form>
         </div>
     }
 }
