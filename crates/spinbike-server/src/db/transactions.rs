@@ -113,6 +113,20 @@ pub async fn list_transactions_for_user(
     Ok(txns)
 }
 
+/// Mark a transaction as voided. Sets `deleted_at` to the current datetime
+/// if the row exists and is not already voided. No-op otherwise.
+pub async fn soft_delete(pool: &SqlitePool, id: i64) -> Result<()> {
+    sqlx::query(
+        "UPDATE transactions SET deleted_at = datetime('now') \
+         WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .context("Failed to soft-delete transaction")?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +221,31 @@ mod tests {
             .unwrap();
         let rows = list_transactions_for_card(&pool, card_id).await.unwrap();
         assert_eq!(rows[0].valid_until, None);
+    }
+
+    #[tokio::test]
+    async fn soft_delete_sets_deleted_at() {
+        let pool = setup().await;
+        let card_id = create_card(&pool, "SD-1").await.unwrap();
+        let tx_id = create_transaction(&pool, None, Some(card_id), None, None, 5.0, "topup")
+            .await
+            .unwrap();
+
+        soft_delete(&pool, tx_id).await.unwrap();
+
+        let deleted_at: Option<String> =
+            sqlx::query_scalar("SELECT deleted_at FROM transactions WHERE id = ?")
+                .bind(tx_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(deleted_at.is_some(), "deleted_at must be set");
+    }
+
+    #[tokio::test]
+    async fn soft_delete_is_idempotent_on_missing_row() {
+        let pool = setup().await;
+        // Non-existent id must not error — no-op.
+        soft_delete(&pool, 99999).await.unwrap();
     }
 }
