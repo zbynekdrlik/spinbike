@@ -779,6 +779,21 @@ table tbody tr:last-child td,
     font-style: italic;
 }
 
+/* Soft-deleted (voided) transaction rows stay visible but de-emphasised. */
+tr.txn-row--voided {
+    background: #f5f5f5;
+    color: #888;
+}
+tr.txn-row--voided td.txn-amount {
+    text-decoration: line-through;
+}
+.txn-voided-tag {
+    font-size: 0.75rem;
+    color: #b00020;
+    margin-left: 6px;
+    text-transform: uppercase;
+}
+
 /* Participants list on staff schedule details. */
 .participants-list {
     background: var(--surface-inset);

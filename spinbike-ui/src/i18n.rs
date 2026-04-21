@@ -348,6 +348,17 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         ("Zmenit koniec permanentky", "Change pass end date"),
     );
 
+    // Transaction history void
+    m.insert("void", ("Zrusit", "Void"));
+    m.insert("voided", ("zrusene", "voided"));
+    m.insert(
+        "confirm_void",
+        (
+            "Zrusit tento zaznam? Neda sa vratit.",
+            "Void this entry? This cannot be undone from the UI.",
+        ),
+    );
+
     // Visit logging (active pass flow)
     m.insert("log_visit", ("Zaznamenat navstevu", "Log visit"));
     m.insert(

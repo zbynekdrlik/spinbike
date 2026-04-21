@@ -148,6 +148,13 @@ pub async fn delete(path: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// DELETE request that expects a no-body success response (204). Alias over
+/// [`delete`] with an explicit name matching `post` / `patch` conventions used
+/// by call sites that want to emphasise the empty-body contract.
+pub async fn delete_empty(path: &str) -> Result<(), String> {
+    delete(path).await
+}
+
 fn extract_error(body: &str, status: u16) -> String {
     #[derive(serde::Deserialize)]
     struct ErrBody {

@@ -57,7 +57,6 @@ struct PaymentResp {
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct TxnInfo {
-    #[allow(dead_code)]
     id: i64,
     #[allow(dead_code)]
     card_id: Option<i64>,
@@ -68,6 +67,8 @@ struct TxnInfo {
     service_name: Option<String>,
     #[serde(default)]
     valid_until: Option<chrono::NaiveDate>,
+    #[serde(default)]
+    deleted_at: Option<String>,
 }
 
 const QUICK_TOPUP: [f64; 4] = [5.0, 10.0, 20.0, 50.0];
@@ -860,13 +861,57 @@ fn ActionPanel(
                             .unwrap_or_default();
                         let service = tx.service_name.clone().unwrap_or_else(|| "—".into());
                         let amount = format!("{:+.2}", tx.amount);
-                        let row_class = if tx.action == "visit" { "txn-row-visit" } else { "txn-row" };
+                        let is_voided = tx.deleted_at.is_some();
+                        let row_class = if is_voided {
+                            "txn-row--voided"
+                        } else if tx.action == "visit" {
+                            "txn-row-visit"
+                        } else {
+                            "txn-row"
+                        };
+                        let tx_id = tx.id;
+                        let voided_tag = if is_voided {
+                            view! {
+                                <span class="txn-voided-tag">{move || i18n::t(lang.get(), "voided")}</span>
+                            }.into_any()
+                        } else {
+                            view! { <span></span> }.into_any()
+                        };
+                        let action_cell = if is_voided {
+                            view! { <td></td> }.into_any()
+                        } else {
+                            let on_void = move |_| {
+                                let confirm_msg = i18n::t(lang.get(), "confirm_void");
+                                let win = leptos::prelude::window();
+                                if !win.confirm_with_message(confirm_msg).unwrap_or(false) {
+                                    return;
+                                }
+                                spawn_local(async move {
+                                    match api::delete_empty(&format!("/api/transactions/{tx_id}")).await {
+                                        Ok(()) => set_txn_refresh.update(|n| *n += 1),
+                                        Err(e) => set_msg.set(format!("Error: {e}")),
+                                    }
+                                });
+                            };
+                            view! {
+                                <td>
+                                    <button
+                                        class="btn btn-sm btn-outline"
+                                        data-testid="txn-void"
+                                        title=move || i18n::t(lang.get(), "void")
+                                        on:click=on_void
+                                        style="padding:2px 8px;font-size:0.85rem"
+                                    >"\u{2715}"</button>
+                                </td>
+                            }.into_any()
+                        };
                         view! {
                             <tr class=row_class>
                                 <td>{date}</td>
                                 <td>{action}{until_suffix}</td>
-                                <td>{service}</td>
-                                <td>{amount}</td>
+                                <td>{service}{voided_tag}</td>
+                                <td class="txn-amount">{amount}</td>
+                                {action_cell}
                             </tr>
                         }
                     }).collect();
@@ -879,6 +924,7 @@ fn ActionPanel(
                                         <th>{i18n::t(lang.get(), "action")}</th>
                                         <th>{i18n::t(lang.get(), "service")}</th>
                                         <th>{i18n::t(lang.get(), "amount")}</th>
+                                        <th></th>
                                     </tr>
                                 </thead>
                                 <tbody>{rows}</tbody>
