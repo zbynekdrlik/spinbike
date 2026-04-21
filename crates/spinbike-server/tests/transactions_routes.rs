@@ -2,7 +2,7 @@
 mod helpers;
 use axum::http::StatusCode;
 #[allow(unused_imports)]
-use helpers::{TestApp, delete, get};
+use helpers::{TestApp, delete, get, patch_json};
 
 async fn seed_topup(app: &TestApp, amount: f64) -> i64 {
     sqlx::query_scalar::<_, i64>(
@@ -112,4 +112,88 @@ async fn delete_charge_refunds_credit() {
         (credit - 10.0).abs() < 0.001,
         "voiding a charge must refund; got {credit}"
     );
+}
+
+#[tokio::test]
+async fn patch_valid_until_updates_pass_end_date() {
+    let app = TestApp::new().await;
+    let tx_id = sqlx::query_scalar::<_, i64>(
+        "INSERT INTO transactions (card_id, amount, action, valid_until)
+         VALUES (?, -35.0, 'charge', '2026-05-01') RETURNING id",
+    )
+    .bind(app.customer_card_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+
+    let body = serde_json::json!({ "valid_until": "2026-06-15" });
+    let (status, resp) = app
+        .request(patch_json(
+            &format!("/api/transactions/{tx_id}/valid-until"),
+            &app.staff_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resp["valid_until"].as_str(), Some("2026-06-15"));
+
+    let stored: Option<String> =
+        sqlx::query_scalar("SELECT valid_until FROM transactions WHERE id = ?")
+            .bind(tx_id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(stored.as_deref(), Some("2026-06-15"));
+}
+
+#[tokio::test]
+async fn patch_valid_until_rejects_non_pass_transaction() {
+    let app = TestApp::new().await;
+    let tx_id = seed_topup(&app, 5.0).await; // topup has valid_until = NULL
+    let body = serde_json::json!({ "valid_until": "2026-06-15" });
+    let (status, _) = app
+        .request(patch_json(
+            &format!("/api/transactions/{tx_id}/valid-until"),
+            &app.staff_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn patch_valid_until_forbidden_for_customer() {
+    let app = TestApp::new().await;
+    let tx_id = sqlx::query_scalar::<_, i64>(
+        "INSERT INTO transactions (card_id, amount, action, valid_until)
+         VALUES (?, -35.0, 'charge', '2026-05-01') RETURNING id",
+    )
+    .bind(app.customer_card_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+
+    let body = serde_json::json!({ "valid_until": "2026-06-15" });
+    let (status, _) = app
+        .request(patch_json(
+            &format!("/api/transactions/{tx_id}/valid-until"),
+            &app.customer_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn patch_valid_until_missing_returns_404() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({ "valid_until": "2026-06-15" });
+    let (status, _) = app
+        .request(patch_json(
+            "/api/transactions/999999/valid-until",
+            &app.staff_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
 }

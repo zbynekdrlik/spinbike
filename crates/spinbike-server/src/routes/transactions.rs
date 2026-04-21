@@ -4,6 +4,7 @@ use axum::{
     http::StatusCode,
     routing::{delete, patch},
 };
+use serde::Deserialize;
 
 use crate::AppState;
 use crate::auth::AuthUser;
@@ -23,6 +24,18 @@ struct TxMini {
     amount: f64,
     card_id: Option<i64>,
     deleted_at: Option<String>,
+    valid_until: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct PatchValidUntilReq {
+    valid_until: chrono::NaiveDate,
+}
+
+#[derive(serde::Serialize)]
+struct PatchValidUntilResp {
+    id: i64,
+    valid_until: chrono::NaiveDate,
 }
 
 async fn void_transaction(
@@ -39,12 +52,13 @@ async fn void_transaction(
 
     let mut tx = state.pool.begin().await.map_err(internal_error)?;
 
-    let row: Option<TxMini> =
-        sqlx::query_as("SELECT amount, card_id, deleted_at FROM transactions WHERE id = ?")
-            .bind(id)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(internal_error)?;
+    let row: Option<TxMini> = sqlx::query_as(
+        "SELECT amount, card_id, deleted_at, valid_until FROM transactions WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(internal_error)?;
 
     let Some(row) = row else {
         return Err((
@@ -78,14 +92,49 @@ async fn void_transaction(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// Stub that Task 6 replaces.
 async fn patch_valid_until(
-    State(_state): State<AppState>,
-    AuthUser(_claims): AuthUser,
-    Path(_id): Path<i64>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
-    Err((
-        StatusCode::NOT_IMPLEMENTED,
-        Json(serde_json::json!({"error": "Not yet implemented"})),
-    ))
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<i64>,
+    Json(body): Json<PatchValidUntilReq>,
+) -> Result<Json<PatchValidUntilResp>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_process_payments() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Staff access required"})),
+        ));
+    }
+
+    let row: Option<TxMini> = sqlx::query_as(
+        "SELECT amount, card_id, valid_until, deleted_at FROM transactions WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(internal_error)?;
+
+    let Some(row) = row else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Transaction not found"})),
+        ));
+    };
+    if row.valid_until.is_none() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Only pass transactions have valid_until"})),
+        ));
+    }
+
+    sqlx::query("UPDATE transactions SET valid_until = ? WHERE id = ?")
+        .bind(body.valid_until.to_string())
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .map_err(internal_error)?;
+
+    Ok(Json(PatchValidUntilResp {
+        id,
+        valid_until: body.valid_until,
+    }))
 }
