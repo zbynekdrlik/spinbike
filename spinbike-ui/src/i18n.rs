@@ -343,6 +343,10 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         "pass_last_valid_until",
         ("Naposledy platny do", "Last valid until"),
     );
+    m.insert(
+        "edit_pass_date",
+        ("Zmenit koniec permanentky", "Change pass end date"),
+    );
 
     // Visit logging (active pass flow)
     m.insert("log_visit", ("Zaznamenat navstevu", "Log visit"));

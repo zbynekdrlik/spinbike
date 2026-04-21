@@ -69,6 +69,7 @@ fn default_search_limit() -> i64 {
 pub struct CardPass {
     pub valid_until: chrono::NaiveDate,
     pub days_remaining: i32,
+    pub transaction_id: i64,
 }
 
 #[derive(Serialize)]
@@ -112,20 +113,21 @@ async fn card_response_from_row(
     pool: &sqlx::SqlitePool,
     c: &db::CardRow,
 ) -> anyhow::Result<CardResponse> {
-    let pass_valid_until = db::get_card_pass_valid_until(pool, c.id).await?;
-    Ok(card_response_from_row_with_pass(c, pass_valid_until))
+    let pass = db::get_card_pass_tx(pool, c.id).await?;
+    Ok(card_response_from_row_with_pass(c, pass))
 }
 
-/// Build a CardResponse from a pre-fetched pass date (avoids per-card DB round-trip).
-/// Used by list_cards and search_cards which retrieve pass info via a single GROUP BY query.
+/// Build a CardResponse from a pre-fetched pass (tx id + date) — avoids per-card DB round-trip.
+/// Used by list_cards and search_cards which retrieve pass info in a single query.
 fn card_response_from_row_with_pass(
     c: &db::CardRow,
-    pass_valid_until: Option<chrono::NaiveDate>,
+    pass: Option<(i64, chrono::NaiveDate)>,
 ) -> CardResponse {
     let today = chrono::Local::now().date_naive();
-    let pass = pass_valid_until.map(|d| CardPass {
+    let pass = pass.map(|(tx_id, d)| CardPass {
         valid_until: d,
         days_remaining: (d - today).num_days() as i32,
+        transaction_id: tx_id,
     });
     CardResponse {
         id: c.id,
@@ -175,7 +177,7 @@ async fn search_cards(
         .map_err(internal_error)?;
     let out = rows
         .iter()
-        .map(|(c, pass_valid_until)| card_response_from_row_with_pass(c, *pass_valid_until))
+        .map(|(c, pass)| card_response_from_row_with_pass(c, *pass))
         .collect();
     Ok(Json(out))
 }
@@ -196,7 +198,7 @@ async fn list_cards(
         .map_err(internal_error)?;
     let out = rows
         .iter()
-        .map(|(c, pass_valid_until)| card_response_from_row_with_pass(c, *pass_valid_until))
+        .map(|(c, pass)| card_response_from_row_with_pass(c, *pass))
         .collect();
     Ok(Json(out))
 }
@@ -508,7 +510,7 @@ async fn my_balance(
 
     let card_responses = rows
         .iter()
-        .map(|(c, pass_valid_until)| card_response_from_row_with_pass(c, *pass_valid_until))
+        .map(|(c, pass)| card_response_from_row_with_pass(c, *pass))
         .collect();
 
     Ok(Json(BalanceResponse {
