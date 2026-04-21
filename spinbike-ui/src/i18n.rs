@@ -397,6 +397,11 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("turn_on", ("Zapnut", "On"));
     m.insert("turn_off", ("Vypnut", "Off"));
 
+    // Card detail tabs
+    m.insert("tab_history", ("Historia", "History"));
+    m.insert("tab_upcoming", ("Pripravovane", "Upcoming"));
+    m.insert("tab_persistent", ("Opakovane", "Persistent"));
+
     // General
     m.insert("loading", ("Nacitavanie...", "Loading..."));
     m.insert("page_not_found", ("Stranka nenajdena", "Page not found"));

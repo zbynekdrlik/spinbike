@@ -726,6 +726,8 @@ fn ActionPanel(
     // Counter driving UpcomingClasses + PersistentToggles refetches after a
     // book/cancel/toggle action updates underlying booking state.
     let upc_tick = RwSignal::new(0u32);
+    // Active tab for the card detail (history default, then upcoming, persistent).
+    let (tab, set_tab) = signal("history".to_string());
 
     // Transaction history is the most-read piece of card context, so load it
     // as soon as the panel mounts and always render it below the actions.
@@ -835,102 +837,137 @@ fn ActionPanel(
                     .unwrap_or(35.0)
             />
 
-            <UpcomingClasses
-                card_id=card_id
-                refresh_tick=upc_tick
-                on_changed=Callback::new(move |()| upc_tick.update(|n| *n += 1))
-            />
-
-            <PersistentToggles
-                card_id=card_id
-                on_changed=Callback::new(move |()| upc_tick.update(|n| *n += 1))
-            />
-
-            <div class="mt-2">
-                <h3 style="font-size:0.95rem;margin-bottom:8px">{move || i18n::t(lang.get(), "transaction_history")}</h3>
+            <div class="tabbar">
+                <button
+                    class=move || if tab.get() == "history" { "tab tab--active" } else { "tab" }
+                    on:click=move |_| set_tab.set("history".to_string())
+                    data-testid="tab-history"
+                >
+                    {move || i18n::t(lang.get(), "tab_history")}
+                </button>
+                <button
+                    class=move || if tab.get() == "upcoming" { "tab tab--active" } else { "tab" }
+                    on:click=move |_| set_tab.set("upcoming".to_string())
+                    data-testid="tab-upcoming"
+                >
+                    {move || i18n::t(lang.get(), "tab_upcoming")}
+                </button>
+                <button
+                    class=move || if tab.get() == "persistent" { "tab tab--active" } else { "tab" }
+                    on:click=move |_| set_tab.set("persistent".to_string())
+                    data-testid="tab-persistent"
+                >
+                    {move || i18n::t(lang.get(), "tab_persistent")}
+                </button>
+            </div>
+            <div class="tab-body">
                 {move || {
-                    let t = txns.get();
-                    if t.is_empty() {
-                        return view! { <p class="text-muted">{i18n::t(lang.get(), "no_transactions_card")}</p> }.into_any();
-                    }
-                    let rows: Vec<_> = t.iter().map(|tx| {
-                        let date = format_sk_datetime(&tx.created_at);
-                        let action = tx.action.clone();
-                        let until_suffix = tx.valid_until
-                            .map(|d| format!(" · until {}", d.format("%d.%m")))
-                            .unwrap_or_default();
-                        let service = tx.service_name.clone().unwrap_or_else(|| "—".into());
-                        let amount = format!("{:+.2}", tx.amount);
-                        let is_voided = tx.deleted_at.is_some();
-                        let row_class = if is_voided {
-                            "txn-row--voided"
-                        } else if tx.action == "visit" {
-                            "txn-row-visit"
-                        } else {
-                            "txn-row"
-                        };
-                        let tx_id = tx.id;
-                        let voided_tag = if is_voided {
-                            view! {
-                                <span class="txn-voided-tag">{move || i18n::t(lang.get(), "voided")}</span>
-                            }.into_any()
-                        } else {
-                            view! { <span></span> }.into_any()
-                        };
-                        let action_cell = if is_voided {
-                            view! { <td></td> }.into_any()
-                        } else {
-                            let on_void = move |_| {
-                                let confirm_msg = i18n::t(lang.get(), "confirm_void");
-                                let win = leptos::prelude::window();
-                                if !win.confirm_with_message(confirm_msg).unwrap_or(false) {
-                                    return;
-                                }
-                                spawn_local(async move {
-                                    match api::delete_empty(&format!("/api/transactions/{tx_id}")).await {
-                                        Ok(()) => set_txn_refresh.update(|n| *n += 1),
-                                        Err(e) => set_msg.set(format!("Error: {e}")),
+                    let t = tab.get();
+                    match t.as_str() {
+                        "history" => view! {
+                            <div class="mt-2">
+                                <h3 style="font-size:0.95rem;margin-bottom:8px">{move || i18n::t(lang.get(), "transaction_history")}</h3>
+                                {move || {
+                                    let t = txns.get();
+                                    if t.is_empty() {
+                                        return view! { <p class="text-muted">{i18n::t(lang.get(), "no_transactions_card")}</p> }.into_any();
                                     }
-                                });
-                            };
-                            view! {
-                                <td>
-                                    <button
-                                        class="btn btn-sm btn-outline"
-                                        data-testid="txn-void"
-                                        title=move || i18n::t(lang.get(), "void")
-                                        on:click=on_void
-                                        style="padding:2px 8px;font-size:0.85rem"
-                                    >"\u{2715}"</button>
-                                </td>
-                            }.into_any()
-                        };
-                        view! {
-                            <tr class=row_class>
-                                <td>{date}</td>
-                                <td>{action}{until_suffix}</td>
-                                <td>{service}{voided_tag}</td>
-                                <td class="txn-amount">{amount}</td>
-                                {action_cell}
-                            </tr>
-                        }
-                    }).collect();
-                    view! {
-                        <div style="overflow-x:auto">
-                            <table class="data-table">
-                                <thead>
-                                    <tr>
-                                        <th>{i18n::t(lang.get(), "date")}</th>
-                                        <th>{i18n::t(lang.get(), "action")}</th>
-                                        <th>{i18n::t(lang.get(), "service")}</th>
-                                        <th>{i18n::t(lang.get(), "amount")}</th>
-                                        <th></th>
-                                    </tr>
-                                </thead>
-                                <tbody>{rows}</tbody>
-                            </table>
-                        </div>
-                    }.into_any()
+                                    let rows: Vec<_> = t.iter().map(|tx| {
+                                        let date = format_sk_datetime(&tx.created_at);
+                                        let action = tx.action.clone();
+                                        let until_suffix = tx.valid_until
+                                            .map(|d| format!(" · until {}", d.format("%d.%m")))
+                                            .unwrap_or_default();
+                                        let service = tx.service_name.clone().unwrap_or_else(|| "—".into());
+                                        let amount = format!("{:+.2}", tx.amount);
+                                        let is_voided = tx.deleted_at.is_some();
+                                        let row_class = if is_voided {
+                                            "txn-row--voided"
+                                        } else if tx.action == "visit" {
+                                            "txn-row-visit"
+                                        } else {
+                                            "txn-row"
+                                        };
+                                        let tx_id = tx.id;
+                                        let voided_tag = if is_voided {
+                                            view! {
+                                                <span class="txn-voided-tag">{move || i18n::t(lang.get(), "voided")}</span>
+                                            }.into_any()
+                                        } else {
+                                            view! { <span></span> }.into_any()
+                                        };
+                                        let action_cell = if is_voided {
+                                            view! { <td></td> }.into_any()
+                                        } else {
+                                            let on_void = move |_| {
+                                                let confirm_msg = i18n::t(lang.get(), "confirm_void");
+                                                let win = leptos::prelude::window();
+                                                if !win.confirm_with_message(confirm_msg).unwrap_or(false) {
+                                                    return;
+                                                }
+                                                spawn_local(async move {
+                                                    match api::delete_empty(&format!("/api/transactions/{tx_id}")).await {
+                                                        Ok(()) => set_txn_refresh.update(|n| *n += 1),
+                                                        Err(e) => set_msg.set(format!("Error: {e}")),
+                                                    }
+                                                });
+                                            };
+                                            view! {
+                                                <td>
+                                                    <button
+                                                        class="btn btn-sm btn-outline"
+                                                        data-testid="txn-void"
+                                                        title=move || i18n::t(lang.get(), "void")
+                                                        on:click=on_void
+                                                        style="padding:2px 8px;font-size:0.85rem"
+                                                    >"\u{2715}"</button>
+                                                </td>
+                                            }.into_any()
+                                        };
+                                        view! {
+                                            <tr class=row_class>
+                                                <td>{date}</td>
+                                                <td>{action}{until_suffix}</td>
+                                                <td>{service}{voided_tag}</td>
+                                                <td class="txn-amount">{amount}</td>
+                                                {action_cell}
+                                            </tr>
+                                        }
+                                    }).collect();
+                                    view! {
+                                        <div style="overflow-x:auto">
+                                            <table class="data-table">
+                                                <thead>
+                                                    <tr>
+                                                        <th>{i18n::t(lang.get(), "date")}</th>
+                                                        <th>{i18n::t(lang.get(), "action")}</th>
+                                                        <th>{i18n::t(lang.get(), "service")}</th>
+                                                        <th>{i18n::t(lang.get(), "amount")}</th>
+                                                        <th></th>
+                                                    </tr>
+                                                </thead>
+                                                <tbody>{rows}</tbody>
+                                            </table>
+                                        </div>
+                                    }.into_any()
+                                }}
+                            </div>
+                        }.into_any(),
+                        "upcoming" => view! {
+                            <UpcomingClasses
+                                card_id=card_id
+                                refresh_tick=upc_tick
+                                on_changed=Callback::new(move |()| upc_tick.update(|n| *n += 1))
+                            />
+                        }.into_any(),
+                        "persistent" => view! {
+                            <PersistentToggles
+                                card_id=card_id
+                                on_changed=Callback::new(move |()| upc_tick.update(|n| *n += 1))
+                            />
+                        }.into_any(),
+                        _ => view! { <div></div> }.into_any(),
+                    }
                 }}
             </div>
         </div>
