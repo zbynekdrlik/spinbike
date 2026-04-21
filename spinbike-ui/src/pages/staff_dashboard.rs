@@ -1,6 +1,6 @@
 use leptos::prelude::*;
-use wasm_bindgen_futures::spawn_local;
 use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
 
 use crate::api;
@@ -299,10 +299,8 @@ fn WalkinForm(
                 return;
             }
             let encoded = walkin_urlencode(&q_at_start);
-            match api::get::<Vec<WalkinCardHit>>(&format!(
-                "/api/cards/search?q={encoded}&limit=10"
-            ))
-            .await
+            match api::get::<Vec<WalkinCardHit>>(&format!("/api/cards/search?q={encoded}&limit=10"))
+                .await
             {
                 Ok(list) => {
                     if query.get_untracked() == q_at_start {
