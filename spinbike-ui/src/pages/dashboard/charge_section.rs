@@ -129,15 +129,15 @@ pub fn ChargeSection(
     };
 
     view! {
-        <div class="mt-2">
-            <div class="text-muted" style="font-size:0.85rem;margin-bottom:4px">
+        <div style="margin-top:var(--s-3)">
+            <div class="text-muted" style="font-size:var(--fs-sm);margin-bottom:var(--s-2)">
                 {move || i18n::t(lang.get(), "quick_charge")}
             </div>
 
             // Log-visit primary buttons (ONLY when pass is active).
             {if pass_active {
                 view! {
-                    <div class="flex gap-1" style="flex-wrap:wrap">
+                    <div style="display:flex;flex-wrap:wrap;gap:var(--s-2);margin-bottom:var(--s-2)">
                         {services.get().into_iter()
                             .filter(|svc| svc.name != "Monthly pass")
                             .map(|svc| {
@@ -145,7 +145,7 @@ pub fn ChargeSection(
                                 let svc_name = svc.name.clone();
                                 view! {
                                     <button
-                                        class="btn btn-sm btn-primary"
+                                        class="btn btn--compact btn--primary"
                                         data-testid="log-visit-btn"
                                         on:click=visit_click_for(service_id)
                                     >
@@ -160,10 +160,10 @@ pub fn ChargeSection(
             }}
 
             // Charge form — always visible, labelled for drinks/food.
-            <div class="text-muted" style="font-size:0.8rem;margin:6px 0 2px">
+            <div class="text-muted" style="font-size:var(--fs-sm);margin-bottom:var(--s-2)">
                 {move || i18n::t(lang.get(), "charge_for_extras")}
             </div>
-            <form class="inline-form" on:submit=on_submit style="flex-wrap:wrap">
+            <form class="inline-form" on:submit=on_submit>
                 <select class="form-control" node_ref=service_ref on:change=on_service_change data-testid="charge-service">
                     <option value="">{move || i18n::t(lang.get(), "select_service")}</option>
                     {move || {
@@ -186,7 +186,7 @@ pub fn ChargeSection(
                     style="width:8em"
                     required
                 />
-                <button type="submit" class="btn btn-sm btn-danger" data-testid="charge-submit" disabled=move || loading.get()>
+                <button type="submit" class="btn btn--primary" data-testid="charge-submit" disabled=move || loading.get()>
                     {move || i18n::t(lang.get(), "charge")}
                 </button>
             </form>

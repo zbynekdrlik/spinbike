@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
+use crate::components::Sheet;
 use crate::i18n::{self, Lang};
 
 use super::helpers::event_target_value;
@@ -85,64 +86,67 @@ pub fn SellPassModal(
     };
 
     view! {
-        {move || {
-            if !show.get() {
-                return view! { <div></div> }.into_any();
-            }
-            view! {
-                <div class="modal-overlay" data-testid="sell-pass-modal">
-                    <div class="modal">
-                        <h3>{move || i18n::t(lang.get(), "sell_monthly_pass")}</h3>
-                        <label>{move || i18n::t(lang.get(), "modal_price")}</label>
-                        <input
-                            type="number"
-                            step="0.01"
-                            min="0"
-                            data-testid="sell-pass-price"
-                            prop:value=move || format!("{:.2}", price.get())
-                            on:input=move |ev| {
-                                let ev: web_sys::Event = ev.into();
-                                if let Ok(v) = event_target_value(&ev).parse::<f64>() {
-                                    set_price.set(v);
-                                }
-                            }
-                        />
-                        <label>{move || i18n::t(lang.get(), "modal_valid_until")}</label>
-                        <input
-                            type="date"
-                            data-testid="sell-pass-date"
-                            prop:value=move || valid_until.get().format("%Y-%m-%d").to_string()
-                            on:input=move |ev| {
-                                let ev: web_sys::Event = ev.into();
-                                let s = event_target_value(&ev);
-                                if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-                                    set_valid_until.set(d);
-                                }
-                            }
-                        />
-                        {move || {
-                            if err.get().is_empty() {
-                                view! { <div></div> }.into_any()
-                            } else {
-                                view! { <div class="alert alert-error">{move || err.get()}</div> }.into_any()
-                            }
-                        }}
-                        <div class="modal-buttons">
-                            <button class="btn" on:click=move |_| set_show.set(false)>
-                                {move || i18n::t(lang.get(), "modal_cancel")}
-                            </button>
-                            <button
-                                class="btn btn-primary"
-                                data-testid="sell-pass-confirm"
-                                on:click=on_confirm
-                            >
-                                {move || i18n::t(lang.get(), "modal_confirm")}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            }
-            .into_any()
-        }}
+        <Sheet
+            show=Signal::derive(move || show.get())
+            on_close=Callback::new(move |()| set_show.set(false))
+            title=move || i18n::t(lang.get(), "sell_pass_label")
+            testid="sheet-sell-pass"
+        >
+            <div class="form-group">
+                <label>{move || i18n::t(lang.get(), "modal_price")}</label>
+                <input
+                    type="number"
+                    class="form-control"
+                    step="0.01"
+                    min="0"
+                    data-testid="sell-pass-price"
+                    prop:value=move || format!("{:.2}", price.get())
+                    on:input=move |ev| {
+                        let ev: web_sys::Event = ev.into();
+                        if let Ok(v) = event_target_value(&ev).parse::<f64>() {
+                            set_price.set(v);
+                        }
+                    }
+                />
+            </div>
+            <div class="form-group">
+                <label>{move || i18n::t(lang.get(), "modal_valid_until")}</label>
+                <input
+                    type="date"
+                    class="form-control"
+                    data-testid="sell-pass-date"
+                    prop:value=move || valid_until.get().format("%Y-%m-%d").to_string()
+                    on:input=move |ev| {
+                        let ev: web_sys::Event = ev.into();
+                        let s = event_target_value(&ev);
+                        if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
+                            set_valid_until.set(d);
+                        }
+                    }
+                />
+            </div>
+            {move || {
+                if err.get().is_empty() {
+                    view! { <div></div> }.into_any()
+                } else {
+                    view! { <div class="alert alert-error">{move || err.get()}</div> }.into_any()
+                }
+            }}
+            <div class="sheet__actions">
+                <button
+                    class="btn btn--ghost"
+                    on:click=move |_| set_show.set(false)
+                >
+                    {move || i18n::t(lang.get(), "modal_cancel")}
+                </button>
+                <button
+                    class="btn btn--primary"
+                    data-testid="sell-pass-confirm"
+                    on:click=on_confirm
+                >
+                    {move || i18n::t(lang.get(), "modal_confirm")}
+                </button>
+            </div>
+        </Sheet>
     }
 }

@@ -558,6 +558,9 @@ select.form-control {
 
 .card-balance--negative .card-balance__num { color: var(--danger); }
 
+.action-row        { display: flex; gap: var(--s-3); }
+.action-row > *    { flex: 1; }
+
 /* ========================================================================
    9. CLASS CARDS (schedule rows)
    Kept intact for transitional period — Task 14 migrates markup to .list-row

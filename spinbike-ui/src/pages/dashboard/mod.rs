@@ -10,6 +10,7 @@ pub mod edit_info_form;
 pub mod helpers;
 pub mod pass_banner;
 pub mod sell_pass_modal;
+pub mod sheets;
 pub mod topup_section;
 pub mod transactions_list;
 

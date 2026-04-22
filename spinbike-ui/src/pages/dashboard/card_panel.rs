@@ -1,7 +1,6 @@
 use leptos::prelude::*;
-use wasm_bindgen_futures::spawn_local;
 
-use crate::components::{PersistentToggles, UpcomingClasses};
+use crate::components::{PersistentToggles, Segmented, UpcomingClasses};
 use crate::i18n::{self, Lang};
 
 use super::block_button::BlockButton;
@@ -43,49 +42,73 @@ pub fn CardActionPanel(
     let card_pass = card.pass.clone();
     let card_for_edit = card.clone();
     let card_for_modal = card.clone();
+    let pass_active = pass_is_active(&card);
+
+    // Segmented tab items
+    let tab_items = vec![
+        ("history".to_string(), i18n::t(lang.get_untracked(), "tab_history").to_string()),
+        ("upcoming".to_string(), i18n::t(lang.get_untracked(), "tab_upcoming").to_string()),
+        ("persistent".to_string(), i18n::t(lang.get_untracked(), "tab_persistent").to_string()),
+    ];
 
     view! {
+        <>
         <div class="card mb-2" data-testid="action-panel">
-            <div class="card-header" style="display:flex;justify-content:space-between;align-items:flex-start;gap:8px">
-                <div>
-                    <div class="card-title" style="font-size:1.1rem">{name}</div>
-                    <div class="text-muted" style="font-size:0.85rem">
+            // ── Header bar ───────────────────────────────────────────────
+            <div class="card-header">
+                <div style="flex:1;min-width:0">
+                    <div class="card-title">{name}</div>
+                    <div class="text-muted" style="font-size:var(--fs-sm);margin-top:2px">
                         <code>{barcode.clone()}</code>
                         {if !company.is_empty() { format!(" · {company}") } else { String::new() }}
                         {if !phone.is_empty() { format!(" · {phone}") } else { String::new() }}
                     </div>
                 </div>
-                <button class="btn btn-sm btn-outline" on:click=move |e| on_close.run(e) title="close">"\u{2715}"</button>
+                <button
+                    class="btn btn--compact btn--ghost"
+                    on:click=move |e| on_close.run(e)
+                    title="close"
+                >"\u{2715}"</button>
             </div>
 
+            // ── Pass banner ───────────────────────────────────────────────
             <PassBanner pass=card_pass barcode=barcode.clone() set_selected=set_selected />
 
+            // ── Balance block ─────────────────────────────────────────────
             <div
-                class=if credit < 0.0 { "credit-negative" } else { "" }
-                style="font-size:1.4rem;font-weight:700;margin:8px 0"
+                class=if credit < 0.0 { "card-balance card-balance--negative" } else { "card-balance" }
                 data-testid="card-credit"
             >
-                {format!("{credit:.2} €")}
+                <span class="card-balance__num">{format!("{:.2}", credit)}</span>
+                <span class="card-balance__unit">"€"</span>
                 {if is_blocked {
-                    view! { <span class="badge badge-full" style="margin-left:8px;font-size:0.75rem">{i18n::t(lang.get(), "blocked")}</span> }.into_any()
-                } else { view! {}.into_any() }}
+                    view! {
+                        <span class="badge badge--full" style="margin-left:var(--s-2)">
+                            {move || i18n::t(lang.get(), "blocked")}
+                        </span>
+                    }.into_any()
+                } else {
+                    view! {}.into_any()
+                }}
             </div>
 
-            // Ordered by actual staff usage frequency: charge (pay-for-service)
-            // is the most-common action, then top-up. Edit/block stay secondary.
-            <ChargeSection
-                card_id=card_id
-                services=services
-                set_selected=set_selected
-                set_msg=set_msg
-                pass_active=pass_is_active(&card)
-                set_txn_refresh=txn_refresh.write_only()
-            />
-            <TopupSection card_id=card_id set_selected=set_selected set_msg=set_msg />
+            // ── Primary actions row (Charge + Topup side-by-side) ─────────
+            <div class="action-row">
+                <ChargeSection
+                    card_id=card_id
+                    services=services
+                    set_selected=set_selected
+                    set_msg=set_msg
+                    pass_active=pass_active
+                    set_txn_refresh=txn_refresh.write_only()
+                />
+                <TopupSection card_id=card_id set_selected=set_selected set_msg=set_msg />
+            </div>
 
-            <div class="mt-2">
+            // ── Sell pass button ──────────────────────────────────────────
+            <div style="margin-top:var(--s-3)">
                 <button
-                    class="btn btn-pass"
+                    class="btn btn--hero btn--pass btn--block"
                     data-testid="sell-pass-btn"
                     on:click=move |_| set_show_sell_pass.set(true)
                 >
@@ -94,89 +117,80 @@ pub fn CardActionPanel(
                             .find(|s| s.name == "Monthly pass")
                             .map(|s| s.default_price)
                             .unwrap_or(35.0);
-                        format!("{} {:.2}", i18n::t(lang.get(), "sell_monthly_pass"), price)
+                        format!("{} {:.2}", i18n::t(lang.get(), "sell_pass_label"), price)
                     }}
                 </button>
             </div>
 
-            <div class="flex gap-1 mt-2" style="flex-wrap:wrap">
+            // ── Secondary actions (Edit info + Block) ─────────────────────
+            <div class="action-row" style="margin-top:var(--s-3)">
                 <button
-                    class="btn btn-sm btn-outline"
+                    class="btn btn--ghost"
                     on:click=move |_| set_show_edit.update(|v| *v = !*v)
                 >
-                    {move || i18n::t(lang.get(), "edit")}
+                    {move || i18n::t(lang.get(), "edit_info")}
                 </button>
                 <BlockButton card_id=card_id blocked=is_blocked set_selected=set_selected set_msg=set_msg />
             </div>
 
-            {move || {
-                if show_edit.get() {
-                    view! { <EditInfoForm card=card_for_edit.clone() set_selected=set_selected set_msg=set_msg set_show_edit=set_show_edit /> }.into_any()
-                } else { view! { <span></span> }.into_any() }
-            }}
-
-            <SellPassModal
-                card=card_for_modal.clone()
-                set_selected=set_selected
-                show=show_sell_pass
-                set_show=set_show_sell_pass
-                monthly_pass_price=services.get_untracked().iter()
-                    .find(|s| s.name == "Monthly pass")
-                    .map(|s| s.default_price)
-                    .unwrap_or(35.0)
-            />
-
-            <div class="tabbar">
-                <button
-                    class=move || if tab.get() == "history" { "tab tab--active" } else { "tab" }
-                    on:click=move |_| set_tab.set("history".to_string())
-                    data-testid="tab-history"
-                >
-                    {move || i18n::t(lang.get(), "tab_history")}
-                </button>
-                <button
-                    class=move || if tab.get() == "upcoming" { "tab tab--active" } else { "tab" }
-                    on:click=move |_| set_tab.set("upcoming".to_string())
-                    data-testid="tab-upcoming"
-                >
-                    {move || i18n::t(lang.get(), "tab_upcoming")}
-                </button>
-                <button
-                    class=move || if tab.get() == "persistent" { "tab tab--active" } else { "tab" }
-                    on:click=move |_| set_tab.set("persistent".to_string())
-                    data-testid="tab-persistent"
-                >
-                    {move || i18n::t(lang.get(), "tab_persistent")}
-                </button>
-            </div>
-            <div class="tab-body">
-                {move || {
-                    let t = tab.get();
-                    match t.as_str() {
-                        "history" => view! {
-                            <TransactionsList
-                                card_id=card_id
-                                txn_refresh=txn_refresh
-                                set_msg=set_msg
-                            />
-                        }.into_any(),
-                        "upcoming" => view! {
-                            <UpcomingClasses
-                                card_id=card_id
-                                refresh_tick=upc_tick
-                                on_changed=Callback::new(move |()| upc_tick.update(|n| *n += 1))
-                            />
-                        }.into_any(),
-                        "persistent" => view! {
-                            <PersistentToggles
-                                card_id=card_id
-                                on_changed=Callback::new(move |()| upc_tick.update(|n| *n += 1))
-                            />
-                        }.into_any(),
-                        _ => view! { <div></div> }.into_any(),
-                    }
-                }}
+            // ── Segmented tab control ─────────────────────────────────────
+            <div style="margin-top:var(--s-4)">
+                <Segmented
+                    items=tab_items
+                    active=Signal::derive(move || tab.get())
+                    on_change=Callback::new(move |key: String| set_tab.set(key))
+                    testid_prefix="tab"
+                />
+                <div class="seg-body">
+                    {move || {
+                        let t = tab.get();
+                        match t.as_str() {
+                            "history" => view! {
+                                <TransactionsList
+                                    card_id=card_id
+                                    txn_refresh=txn_refresh
+                                    set_msg=set_msg
+                                />
+                            }.into_any(),
+                            "upcoming" => view! {
+                                <UpcomingClasses
+                                    card_id=card_id
+                                    refresh_tick=upc_tick
+                                    on_changed=Callback::new(move |()| upc_tick.update(|n| *n += 1))
+                                />
+                            }.into_any(),
+                            "persistent" => view! {
+                                <PersistentToggles
+                                    card_id=card_id
+                                    on_changed=Callback::new(move |()| upc_tick.update(|n| *n += 1))
+                                />
+                            }.into_any(),
+                            _ => view! { <div></div> }.into_any(),
+                        }
+                    }}
+                </div>
             </div>
         </div>
+
+        // ── Sheets (rendered outside the card, overlaid via CSS) ───────────
+        <EditInfoForm
+            card=card_for_edit.clone()
+            set_selected=set_selected
+            set_msg=set_msg
+            show=Signal::derive(move || show_edit.get())
+            on_close=Callback::new(move |()| set_show_edit.set(false))
+        />
+
+        <SellPassModal
+            card=card_for_modal.clone()
+            set_selected=set_selected
+            show=show_sell_pass
+            set_show=set_show_sell_pass
+            monthly_pass_price=services.get_untracked().iter()
+                .find(|s| s.name == "Monthly pass")
+                .map(|s| s.default_price)
+                .unwrap_or(35.0)
+        />
+        </>
     }
 }

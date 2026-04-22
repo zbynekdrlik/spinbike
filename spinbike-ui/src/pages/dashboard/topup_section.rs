@@ -66,24 +66,24 @@ pub fn TopupSection(
     };
 
     view! {
-        <div class="mt-2">
-            <div class="text-muted" style="font-size:0.85rem;margin-bottom:4px">
+        <div style="margin-top:var(--s-3)">
+            <div class="text-muted" style="font-size:var(--fs-sm);margin-bottom:var(--s-2)">
                 {move || i18n::t(lang.get(), "quick_topup")}
             </div>
-            <div class="flex gap-1" style="flex-wrap:wrap">
+            <div style="display:flex;flex-wrap:wrap;gap:var(--s-2)">
                 {QUICK_TOPUP.iter().map(|amt| {
                     let amount = *amt;
                     let label = format!("+{amount:.0} €");
                     view! {
                         <button
-                            class="btn btn-sm btn-primary"
+                            class="btn btn--compact btn--primary"
                             data-testid=format!("topup-{amount:.0}")
                             disabled=move || loading.get()
                             on:click=move |_| do_topup(amount)
                         >{label}</button>
                     }
                 }).collect::<Vec<_>>()}
-                <form class="inline-form" on:submit=on_custom style="display:inline-flex;gap:4px">
+                <form class="inline-form" on:submit=on_custom style="display:inline-flex;gap:var(--s-2)">
                     <input
                         type="number"
                         class="form-control"
@@ -93,7 +93,7 @@ pub fn TopupSection(
                         min="0.01"
                         style="width:8em"
                     />
-                    <button type="submit" class="btn btn-sm btn-primary" disabled=move || loading.get()>
+                    <button type="submit" class="btn btn--compact btn--primary" disabled=move || loading.get()>
                         {move || i18n::t(lang.get(), "topup")}
                     </button>
                 </form>
