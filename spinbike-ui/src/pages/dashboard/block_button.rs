@@ -16,9 +16,9 @@ pub fn BlockButton(
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (loading, set_loading) = signal(false);
     let btn_class = if blocked {
-        "btn btn-sm btn-primary"
+        "btn btn--primary btn--compact"
     } else {
-        "btn btn-sm btn-outline"
+        "btn btn--ghost btn--compact"
     };
 
     let on_click = move |_| {

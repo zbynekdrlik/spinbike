@@ -33,7 +33,7 @@ test.describe('Staff navigation', () => {
         // Wait for loading spinner to clear.
         await page.waitForFunction(() => !document.querySelector('.spinner'), { timeout: 10000 });
 
-        const hasCards = (await page.locator('.class-card').count()) > 0;
+        const hasCards = (await page.locator('.list-row').count()) > 0;
         const hasEmpty = (await page.locator('.empty-state').count()) > 0;
         expect(hasCards || hasEmpty).toBe(true);
 

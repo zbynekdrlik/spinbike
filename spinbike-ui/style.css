@@ -67,8 +67,8 @@
     --ring:          0 0 0 3px var(--brand-tint);
 
     /* Legacy semantic tokens — remapped to new canonical tokens.
-       Kept so existing .rs markup (btn-primary, btn-danger, etc.) continues
-       to compile correctly until per-page migration in Tasks 13-15. */
+       Kept because they are consumed by the colour-mix() expressions
+       in component rules (hover states, alerts, pass banner, etc.). */
     --primary:        var(--brand);
     --primary-hover:  color-mix(in srgb, var(--brand) 85%, black);
     --primary-fg:     #fff;
@@ -363,84 +363,6 @@ a:hover { text-decoration: underline; }
     color: var(--text);
 }
 
-/* ---- Legacy aliases — preserved until per-page migration (Tasks 13-15) ---- */
-
-/* DEPRECATED: use .btn.btn--compact */
-.btn-sm {
-    min-height: 36px;
-    padding: 0 var(--s-3);
-    font-size: var(--fs-xs);
-    border-radius: var(--r-sm);
-}
-
-/* DEPRECATED: small icon/action button */
-.btn-icon {
-    min-height: 36px;
-    padding: 0 var(--s-3);
-    font-size: var(--fs-xs);
-    background: var(--surface-2);
-    color: var(--text-muted);
-}
-
-.btn-icon:hover:not(:disabled) {
-    color: var(--text);
-    border-color: var(--border-strong);
-}
-
-/* DEPRECATED: use .btn.btn--primary */
-.btn-primary {
-    background: var(--brand);
-    border-color: var(--brand);
-    color: #0a1f10;
-    font-weight: 600;
-}
-
-.btn-primary:hover:not(:disabled) {
-    background: var(--primary-hover);
-    border-color: var(--primary-hover);
-    color: #fff;
-}
-
-/* DEPRECATED: use .btn.btn--danger */
-.btn-danger {
-    background: transparent;
-    border-color: var(--danger);
-    color: var(--danger);
-}
-
-.btn-danger:hover:not(:disabled) {
-    background: var(--danger);
-    border-color: var(--danger-hover);
-    color: #fff;
-}
-
-/* DEPRECATED: use .btn.btn--ghost */
-.btn-outline {
-    background: transparent;
-    border-color: var(--border-strong);
-    color: var(--text);
-}
-
-.btn-outline:hover:not(:disabled) {
-    background: var(--surface-2);
-    border-color: var(--brand);
-    color: var(--text);
-}
-
-/* DEPRECATED: use .btn.btn--pass */
-.btn-pass {
-    background: var(--pass);
-    border-color: var(--pass);
-    color: #1a2906;
-    font-weight: 600;
-}
-
-.btn-pass:hover:not(:disabled) {
-    filter: brightness(1.08);
-}
-
-/* DEPRECATED: use .btn.btn--block */
-.btn-block { width: 100%; }
 
 /* ========================================================================
    7. FORMS
@@ -561,60 +483,6 @@ select.form-control {
 .action-row        { display: flex; gap: var(--s-3); }
 .action-row > *    { flex: 1; }
 
-/* ========================================================================
-   9. CLASS CARDS (schedule rows)
-   Kept intact for transitional period — Task 14 migrates markup to .list-row
-   ======================================================================== */
-
-.class-card {
-    background: var(--surface);
-    border-left: 3px solid var(--border-strong);
-    border-top: 1px solid var(--border);
-    border-right: 1px solid var(--border);
-    border-bottom: 1px solid var(--border);
-    border-radius: var(--r);
-    padding: var(--s-3) var(--s-4);
-    margin-bottom: var(--s-2);
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: var(--s-3);
-    transition: border-color var(--dur-fast) var(--ease-out),
-                background var(--dur-fast) var(--ease-out);
-}
-
-.class-card:hover {
-    background: var(--surface-2);
-}
-
-.class-card.available { border-left-color: var(--brand); }
-.class-card.booked    { border-left-color: var(--info); background: color-mix(in srgb, var(--info) 8%, var(--surface)); }
-.class-card.full      { border-left-color: var(--danger); }
-.class-card.cancelled { border-left-color: var(--border-strong); opacity: 0.55; }
-
-.class-info { flex: 1; min-width: 0; }
-
-.class-time {
-    font-weight: 700;
-    font-size: var(--fs-md);
-    color: var(--text);
-    letter-spacing: -0.01em;
-}
-
-.class-instructor {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
-    margin-top: 2px;
-}
-
-.class-spots {
-    font-size: var(--fs-xs);
-    color: var(--text-dim);
-    margin-top: 2px;
-    letter-spacing: 0.02em;
-}
-
-.class-action { margin-left: var(--s-3); text-align: right; }
 
 /* ========================================================================
    10. DAY PICKER
@@ -708,74 +576,6 @@ select.form-control {
 
 .seg-body { padding-top: var(--s-3); }
 
-/* ========================================================================
-   12. LEGACY TABS — preserved as aliases until Task 16 cleanup
-   Migrated from hard-coded light-theme colours to token values.
-   ======================================================================== */
-
-.tabs {
-    display: flex;
-    gap: 0;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: var(--s-4);
-    overflow-x: auto;
-    scrollbar-width: thin;
-}
-
-.tab-btn {
-    padding: var(--s-3) var(--s-4);
-    border: none;
-    background: none;
-    color: var(--text-muted);
-    font-size: var(--fs-sm);
-    font-weight: 500;
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    font-family: inherit;
-    white-space: nowrap;
-    transition: color var(--dur-fast) var(--ease-out),
-                border-color var(--dur-fast) var(--ease-out);
-}
-
-.tab-btn:hover { color: var(--text); }
-
-.tab-btn.active {
-    color: var(--brand);
-    border-bottom-color: var(--brand);
-}
-
-/* Legacy .tabbar / .tab / .tab--active — used in dashboard.rs tabbar
-   Replaced in Task 13 with <Segmented> component + .seg. */
-.tabbar {
-    display: flex;
-    gap: 4px;
-    border-bottom: 1px solid var(--border);
-    margin-top: var(--s-3);
-}
-
-.tab {
-    background: transparent;
-    border: none;
-    padding: var(--s-2) var(--s-3);
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    color: var(--text-muted);
-    font-family: inherit;
-    font-size: var(--fs-sm);
-    font-weight: 500;
-    transition: color var(--dur-fast) var(--ease-out),
-                border-color var(--dur-fast) var(--ease-out);
-}
-
-.tab:hover { color: var(--text); }
-
-.tab--active {
-    color: var(--brand);
-    border-bottom-color: var(--brand);
-    font-weight: 600;
-}
-
-.tab-body { padding-top: var(--s-2); }
 
 /* ========================================================================
    13. BADGES
@@ -802,10 +602,6 @@ select.form-control {
 .badge--cancelled { background: var(--surface-3); color: var(--text-dim); }
 .badge--voided    { background: rgba(248, 113, 113, 0.14); color: var(--danger); }
 
-/* Legacy badge aliases — preserved until Tasks 13-15 per-page migration */
-.badge-booked    { background: rgba(96, 165, 250, 0.14); color: var(--info); border-color: rgba(96, 165, 250, 0.3); }
-.badge-full      { background: rgba(248, 113, 113, 0.14); color: var(--danger); border-color: rgba(248, 113, 113, 0.3); }
-.badge-cancelled { background: var(--surface-3); color: var(--text-dim); border-color: var(--border); }
 
 /* ========================================================================
    14. ALERTS
@@ -882,80 +678,6 @@ table tbody tr:last-child td,
     border-bottom: none;
 }
 
-/* ========================================================================
-   16. MODAL — preserved until Task 16 (sheet migration)
-   ======================================================================== */
-
-.modal-overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.65);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    padding: var(--s-4);
-    z-index: 200;
-    backdrop-filter: blur(2px);
-    -webkit-backdrop-filter: blur(2px);
-}
-
-.modal {
-    background: var(--surface);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--r-lg);
-    padding: var(--s-5);
-    min-width: 320px;
-    max-width: 480px;
-    width: 100%;
-    box-shadow: var(--shadow-lg);
-}
-
-.modal h3,
-.modal .modal-title {
-    font-size: var(--fs-md);
-    font-weight: 600;
-    margin-bottom: var(--s-3);
-    letter-spacing: -0.005em;
-}
-
-.modal label {
-    display: block;
-    margin-top: var(--s-3);
-    margin-bottom: var(--s-1);
-    color: var(--text-dim);
-    font-size: var(--fs-xs);
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-}
-
-.modal input {
-    width: 100%;
-    padding: var(--s-2) var(--s-3);
-    background: var(--surface-2);
-    color: var(--text);
-    border: 1px solid var(--border-strong);
-    border-radius: var(--r);
-    font-family: inherit;
-    font-size: var(--fs-base);
-    transition: border-color var(--dur-fast) var(--ease-out),
-                box-shadow var(--dur-fast) var(--ease-out);
-}
-
-.modal input:focus {
-    outline: none;
-    border-color: var(--brand);
-    box-shadow: var(--ring);
-}
-
-.modal-buttons {
-    display: flex;
-    gap: var(--s-2);
-    justify-content: flex-end;
-    margin-top: var(--s-4);
-    padding-top: var(--s-4);
-    border-top: 1px solid var(--border);
-}
 
 /* ========================================================================
    17. SHEET — bottom sheet on mobile, centered modal >= 768px (NEW)
@@ -1052,11 +774,8 @@ table tbody tr:last-child td,
     background: var(--surface-2);
 }
 
-/* .list-row: canonical flex row — also aliased by .upcoming-row, .persistent-row
-   so those selectors keep working until Task 14 migrates the markup. */
-.list-row,
-.upcoming-row,
-.persistent-row {
+/* .list-row: canonical flex row primitive. */
+.list-row {
     display: flex;
     align-items: center;
     gap: var(--s-3);
@@ -1065,9 +784,7 @@ table tbody tr:last-child td,
     border-top: 1px solid var(--border);
 }
 
-.list-row:first-child,
-.upcoming-row:first-child,
-.persistent-row:first-child { border-top: none; }
+.list-row:first-child { border-top: none; }
 
 .list-row--interactive {
     cursor: pointer;
@@ -1200,26 +917,6 @@ table tbody tr:last-child td,
     color: var(--text-muted);
 }
 
-/* ========================================================================
-   23. UPCOMING / PERSISTENT ROWS — legacy sub-selectors
-   The row itself is now a flex .list-row alias above.
-   These sub-class styles keep the content readable during the transition.
-   ======================================================================== */
-
-.upcoming-list, .persistent-list {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-}
-
-.upcoming-row.state-past      { opacity: 0.5; }
-.upcoming-row.state-cancelled { opacity: 0.6; }
-.upcoming-row .upcoming-count { color: var(--text-muted); }
-.upcoming-row .upcoming-instr { color: var(--text-muted); }
-.upcoming-row .upcoming-date  { font-size: var(--fs-sm); color: var(--text-muted); white-space: nowrap; }
-.upcoming-row .upcoming-time  { font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; }
-.upcoming-row .upcoming-action { margin-left: auto; }
-
 /* Walkin (staff schedule) */
 .walkin-results {
     list-style: none;
@@ -1303,16 +1000,6 @@ table tbody tr:last-child td,
 
     .inline-form { flex-direction: column; align-items: stretch; }
     .inline-form .form-group { min-width: 0; }
-
-    .class-card {
-        flex-direction: column;
-        align-items: stretch;
-    }
-
-    .class-action {
-        margin-left: 0;
-        text-align: left;
-    }
 
     .page-title { font-size: var(--fs-lg); }
 }

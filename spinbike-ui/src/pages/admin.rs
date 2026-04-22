@@ -3,6 +3,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{HtmlInputElement, HtmlSelectElement};
 
 use crate::api;
+use crate::components::Segmented;
 use crate::i18n::{self, ADMIN_TAB_KEYS, Lang, WEEKDAY_KEYS};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -52,26 +53,19 @@ pub fn AdminPage() -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (tab, set_tab) = signal("templates".to_string());
 
-    let tab_buttons: Vec<_> = ADMIN_TAB_KEYS
+    let seg_items: Vec<(String, String)> = ADMIN_TAB_KEYS
         .iter()
-        .map(|(id, key)| {
-            let id = id.to_string();
-            let id2 = id.clone();
-            let key = *key;
-            view! {
-                <button
-                    class=move || if tab.get() == id { "tab-btn active" } else { "tab-btn" }
-                    on:click=move |_| set_tab.set(id2.clone())
-                >
-                    {move || i18n::t(lang.get(), key)}
-                </button>
-            }
-        })
+        .map(|(id, key)| (id.to_string(), i18n::t(lang.get_untracked(), key).to_string()))
         .collect();
 
     view! {
         <h1 class="page-title">{move || i18n::t(lang.get(), "admin")}</h1>
-        <div class="tabs">{tab_buttons}</div>
+        <Segmented
+            items=seg_items
+            active=Signal::derive(move || tab.get())
+            on_change=Callback::new(move |key: String| set_tab.set(key))
+            testid_prefix="admin-tab"
+        />
         {move || {
             match tab.get().as_str() {
                 "templates" => TemplatesTab().into_any(),

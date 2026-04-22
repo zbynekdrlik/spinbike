@@ -27,7 +27,7 @@ test.describe('Admin pages', () => {
         await page.waitForSelector('h1.page-title');
 
         // Templates tab should be active by default
-        const activeTab = page.locator('.tab-btn.active');
+        const activeTab = page.locator('.seg__item[aria-selected="true"]');
         await expect(activeTab).toContainText(/templates/i);
 
         // Wait for templates to load
@@ -50,7 +50,7 @@ test.describe('Admin pages', () => {
         await page.waitForSelector('h1.page-title');
 
         // Click instructors tab using locator
-        await page.locator('.tab-btn', { hasText: /instructors/i }).click();
+        await page.locator('[data-testid="admin-tab-instructors"]').click();
 
         // Wait for data to load
         await page.waitForFunction(() => {
@@ -86,12 +86,12 @@ test.describe('Admin pages', () => {
         await page.waitForSelector('h1.page-title');
 
         // Verify all tab buttons are present
-        const tabs = page.locator('.tab-btn');
+        const tabs = page.locator('.seg__item');
         const tabCount = await tabs.count();
         expect(tabCount).toBe(5); // templates, instructors, services, users, settings
 
         // Click services tab
-        await page.locator('.tab-btn', { hasText: /services/i }).click();
+        await page.locator('[data-testid="admin-tab-services"]').click();
         await page.waitForFunction(() => {
             return !document.querySelector('.spinner');
         }, { timeout: 10000 });
@@ -101,7 +101,7 @@ test.describe('Admin pages', () => {
         await expect(priceInput.first()).toBeVisible();
 
         // Click users tab
-        await page.locator('.tab-btn', { hasText: /users/i }).click();
+        await page.locator('[data-testid="admin-tab-users"]').click();
         await page.waitForFunction(() => {
             return !document.querySelector('.spinner');
         }, { timeout: 10000 });
@@ -112,7 +112,7 @@ test.describe('Admin pages', () => {
         expect(await roleSelect.count()).toBeGreaterThan(0);
 
         // Click settings tab
-        await page.locator('.tab-btn', { hasText: /settings/i }).click();
+        await page.locator('[data-testid="admin-tab-settings"]').click();
         await page.waitForFunction(() => {
             return !document.querySelector('.spinner');
         }, { timeout: 10000 });
@@ -132,7 +132,7 @@ test.describe('Admin pages', () => {
         await page.waitForSelector('h1.page-title');
 
         // Click services tab
-        await page.locator('.tab-btn', { hasText: /services/i }).click();
+        await page.locator('[data-testid="admin-tab-services"]').click();
         await page.waitForFunction(() => {
             return !document.querySelector('.spinner');
         }, { timeout: 10000 });

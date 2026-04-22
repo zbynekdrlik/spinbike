@@ -280,7 +280,7 @@ pub fn DashboardPage() -> impl IntoView {
                                 <div style="font-weight:600">
                                     {name}
                                     {if is_blocked {
-                                        view! { <span class="badge badge-full" style="margin-left:8px;font-size:0.7rem">{i18n::t(lang.get(), "blocked")}</span> }.into_any()
+                                        view! { <span class="badge badge--full" style="margin-left:var(--s-2)">{i18n::t(lang.get(), "blocked")}</span> }.into_any()
                                     } else { view! {}.into_any() }}
                                 </div>
                                 <div class="text-muted" style="font-size:0.8rem">
@@ -304,7 +304,7 @@ pub fn DashboardPage() -> impl IntoView {
                     view! {
                         <div class="text-center mt-2">
                             <p class="text-muted">{i18n::t(lang.get(), "no_matches")}</p>
-                            <button class="btn btn-sm btn-primary" on:click=on_activate>
+                            <button class="btn btn--primary btn--compact" on:click=on_activate>
                                 {i18n::t(lang.get(), "activate_new_card")}
                             </button>
                         </div>
@@ -344,7 +344,7 @@ pub fn DashboardPage() -> impl IntoView {
 
         <div class="mt-2">
             <button
-                class="btn btn-sm btn-outline"
+                class="btn btn--ghost btn--compact"
                 on:click=move |_| set_show_activate.update(|v| *v = !*v)
             >
                 {move || if show_activate.get() {
@@ -448,7 +448,7 @@ fn ActivateCardForm(
                     <input type="text" class="form-control" node_ref=phone_ref /></div>
                 <div class="form-group"><label>{move || i18n::t(lang.get(), "initial_credit")}</label>
                     <input type="number" class="form-control" node_ref=credit_ref step="0.01" min="0" value="0" /></div>
-                <button type="submit" class="btn btn-sm btn-primary" disabled=move || loading.get()>
+                <button type="submit" class="btn btn--primary btn--compact" disabled=move || loading.get()>
                     {move || i18n::t(lang.get(), "activate")}
                 </button>
             </form>

@@ -136,11 +136,11 @@ pub fn StaffDashboardPage() -> impl IntoView {
                 let set_v = set_ver;
 
                 let card_class = if slot.cancelled {
-                    "class-card cancelled"
+                    "list-row list-row--cancelled"
                 } else if slot.booked >= slot.capacity {
-                    "class-card full"
+                    "list-row list-row--full"
                 } else {
-                    "class-card available"
+                    "list-row list-row--available"
                 };
 
                 let time_label = format!("{} {}", slot.date, slot.start_time);
@@ -203,11 +203,11 @@ pub fn StaffDashboardPage() -> impl IntoView {
                 view! {
                     <div>
                         <div class=card_class>
-                            <div class="class-info">
-                                <div class="class-time">{time_label}</div>
-                                <div class="class-spots">{move || i18n::tf(lang.get(), "booked_format", &[&booked.to_string(), &capacity.to_string()])}</div>
+                            <div class="list-row__main">
+                                <div class="list-row__title">{time_label}</div>
+                                <div class="list-row__sub">{move || i18n::tf(lang.get(), "booked_format", &[&booked.to_string(), &capacity.to_string()])}</div>
                             </div>
-                            <div class="class-action">
+                            <div class="list-row__end">
                                 {actions}
                             </div>
                         </div>
@@ -234,7 +234,7 @@ pub fn StaffDashboardPage() -> impl IntoView {
                                         <span class="badge" style="display:inline-flex;align-items:center;gap:4px;margin:2px 4px;padding:2px 8px;background:#e0e7ff;border-radius:12px;font-size:0.8rem">
                                             {name}
                                             <button
-                                                class="btn-icon"
+                                                class="btn btn--compact btn--ghost"
                                                 style="background:none;border:none;cursor:pointer;font-size:0.8rem;color:#dc2626;padding:0 2px"
                                                 on:click=on_cancel
                                                 title=move || i18n::t(lang.get(), "cancel_booking")
