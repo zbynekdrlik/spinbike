@@ -65,6 +65,12 @@ fn default_search_limit() -> i64 {
     10
 }
 
+#[derive(Deserialize)]
+pub struct TransactionsQuery {
+    pub limit: Option<usize>,
+    pub before: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct CardPass {
     pub valid_until: chrono::NaiveDate,
@@ -468,6 +474,7 @@ async fn card_transactions(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<i64>,
+    Query(params): Query<TransactionsQuery>,
 ) -> Result<Json<Vec<TransactionResponse>>, (StatusCode, Json<serde_json::Value>)> {
     if !claims.role.can_manage_cards() {
         return Err((
@@ -476,9 +483,14 @@ async fn card_transactions(
         ));
     }
 
-    let txns = transactions::list_transactions_for_card(&state.pool, id)
-        .await
-        .map_err(internal_error)?;
+    let txns = transactions::list_transactions_for_card_paginated(
+        &state.pool,
+        id,
+        params.limit,
+        params.before.as_deref(),
+    )
+    .await
+    .map_err(internal_error)?;
 
     Ok(Json(
         txns.into_iter()
