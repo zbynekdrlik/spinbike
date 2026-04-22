@@ -119,9 +119,9 @@ test.describe('redesign: sheets', () => {
         await page.locator('[data-testid="sell-pass-btn"]').click();
         await expect(page.locator('[data-testid="sheet-sell-pass"]')).toBeVisible();
 
-        // Click the backdrop (the overlay behind the sheet). The backdrop covers
-        // the full viewport; click a corner far from the sheet content.
-        await page.locator('.sheet-backdrop').click({ position: { x: 10, y: 10 }, force: true });
+        // Click the backdrop (the overlay behind the sheet). Each sheet has its own
+        // backdrop in the DOM; only the active one is display:block, so filter by :visible.
+        await page.locator('.sheet-backdrop:visible').click({ position: { x: 10, y: 10 }, force: true });
         await expect(page.locator('[data-testid="sheet-sell-pass"]')).not.toBeVisible({ timeout: 2000 });
 
         assertCleanConsole(msgs);

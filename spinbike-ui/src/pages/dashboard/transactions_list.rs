@@ -60,7 +60,13 @@ pub fn TransactionsList(
                 };
                 let amount_str = format!("{:+.2}", amount);
                 let is_voided = tx.deleted_at.is_some();
-                let row_class = if is_voided { "list-row txn-row--voided" } else { "list-row" };
+                let row_class = if is_voided {
+                    "list-row txn-row--voided"
+                } else if tx.action == "visit" {
+                    "list-row txn-row-visit"
+                } else {
+                    "list-row"
+                };
                 let tx_id = tx.id;
 
                 let voided_tag = if is_voided {

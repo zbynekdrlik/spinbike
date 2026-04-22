@@ -23,7 +23,7 @@ test.describe('Monthly pass — sell, banner, visit', () => {
 
         // Open the sell-pass modal
         await page.locator('[data-testid="sell-pass-btn"]').click();
-        const modal = page.locator('[data-testid="sell-pass-modal"]');
+        const modal = page.locator('[data-testid="sheet-sell-pass"]');
         await expect(modal).toBeVisible();
 
         // Default price should be 35, date should be today + 30

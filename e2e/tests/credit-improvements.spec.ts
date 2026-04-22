@@ -59,10 +59,10 @@ test.describe('credit improvements', () => {
         await page.locator('[data-testid="charge-submit"]').click();
 
         // After charge, a new "charge" row should appear in the history tab. Tab defaults
-        // to history; wait for the transactions table to include a row for Spinning at 2.00.
-        const historyTable = page.locator('table.data-table');
-        await expect(historyTable).toContainText('Spinning', { timeout: 5000 });
-        await expect(historyTable).toContainText('-2.00');
+        // to history; wait for the transactions list to include a row for Spinning at 2.00.
+        const panel = page.locator('[data-testid="action-panel"]');
+        await expect(panel).toContainText('Spinning', { timeout: 5000 });
+        await expect(panel).toContainText('-2.00');
 
         assertCleanConsole(consoleMessages);
     });
@@ -115,7 +115,7 @@ test.describe('credit improvements', () => {
         await voidBtn.click();
 
         // Voided row gets the .txn-row--voided class; the void button disappears for that row.
-        await expect(page.locator('tr.txn-row--voided').first()).toBeVisible({ timeout: 5000 });
+        await expect(page.locator('.txn-row--voided').first()).toBeVisible({ timeout: 5000 });
         await expect(page.locator('[data-testid="txn-void"]')).toHaveCount(0);
 
         assertCleanConsole(consoleMessages);
@@ -135,22 +135,22 @@ test.describe('credit improvements', () => {
         await expect(page.locator('[data-testid="tab-upcoming"]')).toBeVisible();
         await expect(page.locator('[data-testid="tab-persistent"]')).toBeVisible();
 
-        // Default = history → the transactions table is visible.
-        await expect(page.locator('table.data-table')).toBeVisible();
+        // Default = history → the transaction void button is present (history list rendered).
+        await expect(page.locator('[data-testid="txn-void"]').first()).toBeVisible();
 
-        // Upcoming tab → the upcoming-classes panel renders.
+        // Upcoming tab → the upcoming-classes panel renders, history void buttons gone.
         await page.locator('[data-testid="tab-upcoming"]').click();
         await expect(page.locator('[data-testid="upcoming-classes"]')).toBeVisible();
-        await expect(page.locator('table.data-table')).toHaveCount(0);
+        await expect(page.locator('[data-testid="txn-void"]')).toHaveCount(0);
 
-        // Persistent tab → the persistent-toggles panel renders.
+        // Persistent tab → the persistent-toggles panel renders, upcoming gone.
         await page.locator('[data-testid="tab-persistent"]').click();
         await expect(page.locator('[data-testid="persistent-toggles"]')).toBeVisible();
         await expect(page.locator('[data-testid="upcoming-classes"]')).toHaveCount(0);
 
         // Back to history.
         await page.locator('[data-testid="tab-history"]').click();
-        await expect(page.locator('table.data-table')).toBeVisible();
+        await expect(page.locator('[data-testid="txn-void"]').first()).toBeVisible();
 
         assertCleanConsole(consoleMessages);
     });
