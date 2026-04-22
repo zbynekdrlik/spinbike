@@ -80,6 +80,7 @@ pub fn CardActionPanel(
                 data-testid="card-credit"
             >
                 <span class="card-balance__num">{format!("{:.2}", credit)}</span>
+                " "
                 <span class="card-balance__unit">"€"</span>
                 {if is_blocked {
                     view! {
