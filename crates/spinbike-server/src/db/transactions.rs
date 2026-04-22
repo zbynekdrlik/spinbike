@@ -98,7 +98,7 @@ pub async fn list_transactions_for_card(
 ///
 /// * `limit`  — number of rows to return; defaults to 10, capped at 500.
 /// * `before` — ISO 8601 datetime cursor; when present, only rows with
-///              `created_at < before` are returned.
+///   `created_at < before` are returned.
 ///
 /// Soft-deleted rows are included (staff need to see voided entries).
 pub async fn list_transactions_for_card_paginated(
