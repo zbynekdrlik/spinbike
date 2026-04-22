@@ -10,6 +10,10 @@ use leptos::prelude::*;
 ///
 /// Accessibility: `role="dialog"` + `aria-modal="true"` on `.sheet`.
 /// Keyboard: Escape on the sheet element triggers `on_close`.
+///
+/// Visibility is driven by the `show` signal via inline CSS display
+/// rather than mount/unmount — children render once at mount, which
+/// keeps callers' view bodies free of `Fn` trait constraints.
 #[component]
 pub fn Sheet(
     /// Whether the sheet is visible.
@@ -24,39 +28,38 @@ pub fn Sheet(
     /// Optional `data-testid` placed on the `.sheet` element for Playwright selectors.
     #[prop(optional, into)]
     testid: Option<String>,
-    children: ChildrenFn,
+    children: Children,
 ) -> impl IntoView {
-    // Clone values that need to be moved into the closures below.
-    let title_stored = StoredValue::new(title);
-    let testid_stored = StoredValue::new(testid);
-    let on_close_backdrop = on_close.clone();
+    let on_close_backdrop = on_close;
+    let testid_value = testid.unwrap_or_default();
 
     view! {
-        <Show when=move || show.get() fallback=|| view! { <span></span> }>
+        <div
+            class="sheet-backdrop"
+            style=move || {
+                if show.get() { "display:block" } else { "display:none" }
+            }
+            on:click=move |_| on_close_backdrop.run(())
+        >
             <div
-                class="sheet-backdrop"
-                on:click=move |_| on_close_backdrop.run(())
-            >
-                <div
-                    class="sheet"
-                    role="dialog"
-                    aria-modal="true"
-                    tabindex="-1"
-                    data-testid=move || testid_stored.get_value()
-                    on:click=|ev| ev.stop_propagation()
-                    on:keydown=move |ev: ev::KeyboardEvent| {
-                        if ev.key() == "Escape" {
-                            on_close.run(());
-                        }
+                class="sheet"
+                role="dialog"
+                aria-modal="true"
+                tabindex="-1"
+                data-testid=testid_value
+                on:click=|ev: ev::MouseEvent| ev.stop_propagation()
+                on:keydown=move |ev: ev::KeyboardEvent| {
+                    if ev.key() == "Escape" {
+                        on_close.run(());
                     }
-                >
-                    <div class="sheet__grab"></div>
-                    <div class="sheet__title">{move || title_stored.get_value()}</div>
-                    <div class="sheet__body">
-                        {children()}
-                    </div>
+                }
+            >
+                <div class="sheet__grab"></div>
+                <div class="sheet__title">{title}</div>
+                <div class="sheet__body">
+                    {children()}
                 </div>
             </div>
-        </Show>
+        </div>
     }
 }
