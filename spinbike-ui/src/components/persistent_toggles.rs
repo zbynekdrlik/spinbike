@@ -82,7 +82,7 @@ pub fn PersistentToggles(card_id: i64, #[prop(into)] on_changed: Callback<()>) -
     });
 
     view! {
-        <div class="sheet" data-testid="persistent-toggles">
+        <div data-testid="persistent-toggles">
             <h3>{move || i18n::t(lang.get(), "persistent_booking")}</h3>
             <div class="group">
                 {move || {

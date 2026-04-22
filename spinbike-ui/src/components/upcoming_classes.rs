@@ -51,7 +51,7 @@ pub fn UpcomingClasses(
     });
 
     view! {
-        <div class="sheet" data-testid="upcoming-classes">
+        <div data-testid="upcoming-classes">
             <h3>{move || i18n::t(lang.get(), "upcoming_classes")}</h3>
             <div class="group">
                 {move || {
