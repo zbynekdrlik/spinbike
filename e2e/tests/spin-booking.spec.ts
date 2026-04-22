@@ -32,7 +32,7 @@ test.describe('spin booking', () => {
 
         // The row should now show a red Cancel button.
         await expect(
-            page.locator('[data-testid="upcoming-classes"] .btn-danger')
+            page.locator('[data-testid="upcoming-classes"] .btn--danger')
         ).toHaveCount(1, { timeout: 5000 });
 
         assertCleanConsole(consoleMessages);

@@ -11,14 +11,14 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let is_logged_in = auth::get_token().is_some();
 
-    let status_class = if slot.cancelled {
-        "class-card cancelled"
+    let state = if slot.cancelled {
+        "cancelled"
     } else if slot.user_booked {
-        "class-card booked"
+        "booked"
     } else if slot.booked >= slot.capacity {
-        "class-card full"
+        "full"
     } else {
-        "class-card available"
+        "available"
     };
 
     let (loading, set_loading) = signal(false);
@@ -78,42 +78,37 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
     let slot_full = slot.booked >= slot.capacity;
     let slot_booking_source = slot.user_booking_source.clone();
 
+    let cancel_testid = format!("cancel-{template_id}-{}", slot.date);
+    let book_testid = format!("book-{template_id}-{}", slot.date);
+
     let action_view = if slot_cancelled {
-        view! { <span class="badge badge-cancelled">{move || i18n::t(lang.get(), "cancelled")}</span> }.into_any()
+        view! { <span class="badge badge--cancelled">{move || i18n::t(lang.get(), "cancelled")}</span> }.into_any()
     } else if !is_logged_in {
-        view! { <a href="/login" class="btn btn-sm btn-outline">{move || i18n::t(lang.get(), "login_to_book")}</a> }.into_any()
+        view! { <a href="/login" class="btn btn--ghost">{move || i18n::t(lang.get(), "login_to_book")}</a> }.into_any()
     } else if slot_user_booked && slot_booking_source.as_deref() == Some("persistent") {
         view! {
-            <div>
-                <span class="badge badge-booked mb-1">{move || i18n::t(lang.get(), "booked")}</span>
-                <br/>
-                <button class="btn btn-outline btn-sm" on:click=on_cancel disabled=move || loading.get()>
-                    {move || if loading.get() {
-                        "...".to_string()
-                    } else {
-                        let auto = i18n::t(lang.get(), "auto");
-                        let skip = i18n::t(lang.get(), "skip_this_week");
-                        format!("{auto} — {skip}")
-                    }}
-                </button>
-            </div>
+            <button class="btn btn--danger btn--compact" data-testid=cancel_testid on:click=on_cancel disabled=move || loading.get()>
+                {move || if loading.get() {
+                    "...".to_string()
+                } else {
+                    let auto = i18n::t(lang.get(), "auto");
+                    let skip = i18n::t(lang.get(), "skip_this_week");
+                    format!("{auto} — {skip}")
+                }}
+            </button>
         }.into_any()
     } else if slot_user_booked {
         view! {
-            <div>
-                <span class="badge badge-booked mb-1">{move || i18n::t(lang.get(), "booked")}</span>
-                <br/>
-                <button class="btn btn-sm btn-danger" on:click=on_cancel disabled=move || loading.get()>
-                    {move || if loading.get() { "..." } else { i18n::t(lang.get(), "cancel") }}
-                </button>
-            </div>
+            <button class="btn btn--danger btn--compact" data-testid=cancel_testid on:click=on_cancel disabled=move || loading.get()>
+                {move || if loading.get() { "..." } else { i18n::t(lang.get(), "cancel") }}
+            </button>
         }.into_any()
     } else if slot_full {
-        view! { <span class="badge badge-full">{move || i18n::t(lang.get(), "full")}</span> }
+        view! { <button class="btn btn--ghost" disabled=true>{move || i18n::t(lang.get(), "full")}</button> }
             .into_any()
     } else {
         view! {
-            <button class="btn btn-sm btn-primary" on:click=on_book disabled=move || loading.get()>
+            <button class="btn btn--primary" data-testid=book_testid on:click=on_book disabled=move || loading.get()>
                 {move || if loading.get() { "..." } else { i18n::t(lang.get(), "book") }}
             </button>
         }
@@ -121,21 +116,22 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
     };
 
     view! {
-        <div class=status_class>
-            <div class="class-info">
-                <div class="class-time">{time_str}</div>
-                <div class="class-instructor">{move || i18n::tf(lang.get(), "instructor_format", &[&instructor_id.to_string()])}</div>
-                <div class="class-spots">{move || i18n::tf(lang.get(), "spots_format", &[&booked.to_string(), &capacity.to_string()])}</div>
+        <div class=format!("list-row list-row--{state}")>
+            <span class=format!("list-row__accent list-row__accent--{state}")></span>
+            <div class="list-row__main">
+                <div class="list-row__title">{time_str}</div>
+                <div class="list-row__sub">{move || i18n::tf(lang.get(), "instructor_format", &[&instructor_id.to_string()])}</div>
+                <div class="list-row__sub">{move || i18n::tf(lang.get(), "spots_format", &[&booked.to_string(), &capacity.to_string()])}</div>
                 {move || {
                     let e = error.get();
                     if e.is_empty() {
                         view! { <span></span> }.into_any()
                     } else {
-                        view! { <div class="alert alert-error" style="margin-top:4px;padding:4px 8px;font-size:0.75rem">{e}</div> }.into_any()
+                        view! { <div class="alert alert--error" style="margin-top:4px;padding:4px 8px;font-size:0.75rem">{e}</div> }.into_any()
                     }
                 }}
             </div>
-            <div class="class-action">
+            <div class="list-row__end">
                 {action_view}
             </div>
         </div>

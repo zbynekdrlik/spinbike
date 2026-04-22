@@ -1096,6 +1096,9 @@ table tbody tr:last-child td,
 .list-row__accent--full      { background: var(--danger); }
 .list-row__accent--cancelled { background: var(--border-strong); opacity: 0.5; }
 
+.list-row--past      { opacity: 0.5; }
+.list-row--cancelled { opacity: 0.55; }
+
 /* ========================================================================
    19. PASS BANNER
    ======================================================================== */

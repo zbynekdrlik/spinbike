@@ -51,9 +51,9 @@ pub fn UpcomingClasses(
     });
 
     view! {
-        <div class="card mb-2" data-testid="upcoming-classes">
+        <div class="sheet" data-testid="upcoming-classes">
             <h3>{move || i18n::t(lang.get(), "upcoming_classes")}</h3>
-            <ul class="upcoming-list">
+            <div class="group">
                 {move || {
                     let list = rows.get();
                     let items: Vec<_> = list.into_iter().map(|row| {
@@ -68,7 +68,7 @@ pub fn UpcomingClasses(
                                 let book_date = date.clone();
                                 view! {
                                     <button
-                                        class="btn btn-sm btn-primary"
+                                        class="btn btn--primary btn--compact"
                                         data-testid=format!("book-{tid}-{date}")
                                         on:click=move |_| {
                                             let d = book_date.clone();
@@ -97,7 +97,7 @@ pub fn UpcomingClasses(
                             }
                             "booked" => view! {
                                 <button
-                                    class="btn btn-sm btn-danger"
+                                    class="btn btn--danger btn--compact"
                                     on:click=move |_| {
                                         if let Some(b) = bid {
                                             spawn_local(async move {
@@ -118,7 +118,7 @@ pub fn UpcomingClasses(
                                 let testid_a = format!("auto-cancel-{tid}-{date}");
                                 view! {
                                     <button
-                                        class="btn btn-sm btn-outline"
+                                        class="btn btn--ghost btn--compact"
                                         data-testid=testid_a
                                         on:click=move |_| {
                                             if let Some(b) = bid {
@@ -144,12 +144,12 @@ pub fn UpcomingClasses(
                                 }.into_any()
                             }
                             "full" => view! {
-                                <span class="badge badge-full">
+                                <button class="btn btn--ghost btn--compact" disabled=true>
                                     {move || i18n::t(lang.get(), "full")}
-                                </span>
+                                </button>
                             }.into_any(),
                             "cancelled" => view! {
-                                <span class="badge badge-cancelled">
+                                <span class="badge badge--cancelled">
                                     {move || i18n::t(lang.get(), "cancelled")}
                                 </span>
                             }.into_any(),
@@ -162,23 +162,29 @@ pub fn UpcomingClasses(
 
                         let instr = row.instructor_name.clone().unwrap_or_default();
                         let count = format!("{}/{}", row.booked, row.capacity);
-                        let row_class = format!("upcoming-row state-{state}");
+                        let row_class = match state.as_str() {
+                            "past" => "list-row list-row--past".to_string(),
+                            "cancelled" => "list-row list-row--cancelled".to_string(),
+                            _ => "list-row list-row--interactive".to_string(),
+                        };
                         let date_cell = row.date.clone();
                         let time_cell = row.start_time.clone();
 
                         view! {
-                            <li class=row_class data-testid=testid>
-                                <span class="upcoming-date">{date_cell}</span>
-                                <span class="upcoming-time">{time_cell}</span>
-                                <span class="upcoming-instr">{instr}</span>
-                                <span class="upcoming-count">{count}</span>
-                                <span class="upcoming-action">{action}</span>
-                            </li>
+                            <div class=row_class data-testid=testid>
+                                <div class="list-row__main">
+                                    <div class="list-row__title">{date_cell} {" "} {time_cell}</div>
+                                    <div class="list-row__sub">{instr} {" "} {count}</div>
+                                </div>
+                                <div class="list-row__end">
+                                    {action}
+                                </div>
+                            </div>
                         }
                     }).collect();
                     items
                 }}
-            </ul>
+            </div>
             <div class="msg">{move || msg.get()}</div>
         </div>
     }

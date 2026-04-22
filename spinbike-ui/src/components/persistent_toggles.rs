@@ -82,9 +82,9 @@ pub fn PersistentToggles(card_id: i64, #[prop(into)] on_changed: Callback<()>) -
     });
 
     view! {
-        <div class="card mb-2" data-testid="persistent-toggles">
+        <div class="sheet" data-testid="persistent-toggles">
             <h3>{move || i18n::t(lang.get(), "persistent_booking")}</h3>
-            <ul class="persistent-list">
+            <div class="group">
                 {move || {
                     let list = templates.get();
                     let items: Vec<_> = list.into_iter().map(|tpl| {
@@ -95,64 +95,73 @@ pub fn PersistentToggles(card_id: i64, #[prop(into)] on_changed: Callback<()>) -
                             tpl.instructor_name.clone().unwrap_or_default(),
                             tpl.start_time,
                         );
-                        let row_testid = format!("persistent-row-{tid}");
                         let btn_testid = format!("persistent-toggle-{tid}");
 
                         view! {
-                            <li class="persistent-row" data-testid=row_testid>
-                                <span>{label}</span>
-                                <button
-                                    class="btn btn-sm btn-outline"
-                                    data-testid=btn_testid
-                                    on:click=move |_| {
-                                        let currently_on =
-                                            active_ids.get_untracked().contains(&tid);
-                                        spawn_local(async move {
-                                            let res = if currently_on {
-                                                api::delete(&format!(
-                                                    "/api/cards/{card_id}/persistent-bookings/{tid}"
-                                                )).await
+                            <div class="list-row">
+                                <div class="list-row__main">
+                                    <div class="list-row__title">{label}</div>
+                                </div>
+                                <div class="list-row__end">
+                                    <button
+                                        class=move || {
+                                            if active_ids.get().contains(&tid) {
+                                                "btn btn--compact btn--ghost"
                                             } else {
-                                                #[derive(serde::Serialize)]
-                                                struct Req { template_id: i64 }
-                                                #[derive(serde::Deserialize)]
-                                                struct Resp {
-                                                    #[allow(dead_code)]
-                                                    id: i64,
-                                                }
-                                                api::post::<Req, Resp>(
-                                                    &format!(
-                                                        "/api/cards/{card_id}/persistent-bookings"
-                                                    ),
-                                                    &Req { template_id: tid },
-                                                ).await.map(|_| ())
-                                            };
-                                            match res {
-                                                Ok(_) => {
-                                                    set_version.update(|n| *n += 1);
-                                                    on_changed.run(());
-                                                }
-                                                Err(e) => {
-                                                    set_msg.set(format!("Error: {e}"))
-                                                }
+                                                "btn btn--compact btn--primary"
                                             }
-                                        });
-                                    }
-                                >
-                                    {move || {
-                                        if active_ids.get().contains(&tid) {
-                                            i18n::t(lang.get(), "turn_off")
-                                        } else {
-                                            i18n::t(lang.get(), "turn_on")
                                         }
-                                    }}
-                                </button>
-                            </li>
+                                        data-testid=btn_testid
+                                        on:click=move |_| {
+                                            let currently_on =
+                                                active_ids.get_untracked().contains(&tid);
+                                            spawn_local(async move {
+                                                let res = if currently_on {
+                                                    api::delete(&format!(
+                                                        "/api/cards/{card_id}/persistent-bookings/{tid}"
+                                                    )).await
+                                                } else {
+                                                    #[derive(serde::Serialize)]
+                                                    struct Req { template_id: i64 }
+                                                    #[derive(serde::Deserialize)]
+                                                    struct Resp {
+                                                        #[allow(dead_code)]
+                                                        id: i64,
+                                                    }
+                                                    api::post::<Req, Resp>(
+                                                        &format!(
+                                                            "/api/cards/{card_id}/persistent-bookings"
+                                                        ),
+                                                        &Req { template_id: tid },
+                                                    ).await.map(|_| ())
+                                                };
+                                                match res {
+                                                    Ok(_) => {
+                                                        set_version.update(|n| *n += 1);
+                                                        on_changed.run(());
+                                                    }
+                                                    Err(e) => {
+                                                        set_msg.set(format!("Error: {e}"))
+                                                    }
+                                                }
+                                            });
+                                        }
+                                    >
+                                        {move || {
+                                            if active_ids.get().contains(&tid) {
+                                                i18n::t(lang.get(), "turn_off")
+                                            } else {
+                                                i18n::t(lang.get(), "turn_on")
+                                            }
+                                        }}
+                                    </button>
+                                </div>
+                            </div>
                         }
                     }).collect();
                     items
                 }}
-            </ul>
+            </div>
             <div class="msg">{move || msg.get()}</div>
         </div>
     }
