@@ -1347,3 +1347,10 @@ table tbody tr:last-child td,
         transition-duration: 0.01ms !important;
     }
 }
+
+/* ========================================================================
+   28. PAGE-FORM — centered narrow form layout (login, link-card)
+   ======================================================================== */
+
+.page-form { max-width: 420px; margin: 0 auto; }
+.page-form .form-group { margin-bottom: var(--s-4); }

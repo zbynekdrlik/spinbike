@@ -213,7 +213,7 @@ fn TemplatesTab() -> impl IntoView {
                 <label>{move || i18n::t(lang.get(), "instructor_id")}</label>
                 <input type="number" class="form-control" node_ref=instr_ref placeholder=move || i18n::t(lang.get(), "optional") />
             </div>
-            <button type="submit" class="btn btn-primary btn-sm">{move || i18n::t(lang.get(), "create")}</button>
+            <button type="submit" class="btn btn--primary btn--compact">{move || i18n::t(lang.get(), "create")}</button>
         </form>
 
         {move || {
@@ -265,8 +265,8 @@ fn TemplatesTab() -> impl IntoView {
                     </tr>
                     <tr>
                         <td colspan="6">
-                            <button class="btn btn-sm btn-danger" on:click=on_del>{move || i18n::t(lang.get(), "delete")}</button>
-                            <button class="btn btn-sm btn-outline" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
+                            <button class="btn btn--danger btn--compact" on:click=on_del>{move || i18n::t(lang.get(), "delete")}</button>
+                            <button class="btn btn--ghost btn--compact" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
                         </td>
                     </tr>
                     {move || {
@@ -280,7 +280,7 @@ fn TemplatesTab() -> impl IntoView {
                                             <input type="time" class="form-control" style="width:auto" node_ref=edit_time_ref value=time_val />
                                             <label>{i18n::t(lang.get(), "capacity")}</label>
                                             <input type="number" class="form-control" style="width:80px" node_ref=edit_cap_ref value=cap_for_edit min="1" />
-                                            <button class="btn btn-sm btn-primary" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
+                                            <button class="btn btn--primary btn--compact" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
                                         </div>
                                     </td>
                                 </tr>
@@ -354,7 +354,7 @@ fn InstructorsTab() -> impl IntoView {
                 <label>{move || i18n::t(lang.get(), "name")}</label>
                 <input type="text" class="form-control" node_ref=name_ref required />
             </div>
-            <button type="submit" class="btn btn-primary btn-sm">{move || i18n::t(lang.get(), "add_instructor")}</button>
+            <button type="submit" class="btn btn--primary btn--compact">{move || i18n::t(lang.get(), "add_instructor")}</button>
         </form>
 
         {move || {
@@ -399,8 +399,8 @@ fn InstructorsTab() -> impl IntoView {
                         <td>{name}</td>
                         <td>{move || if is_active { i18n::t(lang.get(), "active") } else { i18n::t(lang.get(), "inactive") }}</td>
                         <td>
-                            <button class="btn btn-sm btn-outline" on:click=on_toggle>{move || if is_active { i18n::t(lang.get(), "deactivate") } else { i18n::t(lang.get(), "activate") }}</button>
-                            <button class="btn btn-sm btn-outline" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
+                            <button class="btn btn--ghost btn--compact" on:click=on_toggle>{move || if is_active { i18n::t(lang.get(), "deactivate") } else { i18n::t(lang.get(), "activate") }}</button>
+                            <button class="btn btn--ghost btn--compact" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
                         </td>
                     </tr>
                     {move || {
@@ -412,7 +412,7 @@ fn InstructorsTab() -> impl IntoView {
                                         <div class="inline-form" style="display:flex;gap:8px;align-items:center;padding:4px 0">
                                             <label>{i18n::t(lang.get(), "name")}</label>
                                             <input type="text" class="form-control" style="width:auto" node_ref=edit_name_ref value=nval />
-                                            <button class="btn btn-sm btn-primary" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
+                                            <button class="btn btn--primary btn--compact" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
                                         </div>
                                     </td>
                                 </tr>
@@ -509,7 +509,7 @@ fn ServicesTab() -> impl IntoView {
                 <label>{move || i18n::t(lang.get(), "price_czk")}</label>
                 <input type="number" class="form-control" node_ref=price_ref step="1" min="0" required />
             </div>
-            <button type="submit" class="btn btn-primary btn-sm">{move || i18n::t(lang.get(), "add_service")}</button>
+            <button type="submit" class="btn btn--primary btn--compact">{move || i18n::t(lang.get(), "add_service")}</button>
         </form>
 
         {move || {
@@ -559,8 +559,8 @@ fn ServicesTab() -> impl IntoView {
                         <td>{price}</td>
                         <td>{move || if is_active { i18n::t(lang.get(), "active") } else { i18n::t(lang.get(), "inactive") }}</td>
                         <td>
-                            <button class="btn btn-sm btn-outline" on:click=on_toggle>{move || if is_active { i18n::t(lang.get(), "deactivate") } else { i18n::t(lang.get(), "activate") }}</button>
-                            <button class="btn btn-sm btn-outline" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
+                            <button class="btn btn--ghost btn--compact" on:click=on_toggle>{move || if is_active { i18n::t(lang.get(), "deactivate") } else { i18n::t(lang.get(), "activate") }}</button>
+                            <button class="btn btn--ghost btn--compact" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
                         </td>
                     </tr>
                     {move || {
@@ -574,7 +574,7 @@ fn ServicesTab() -> impl IntoView {
                                             <input type="text" class="form-control" style="width:auto" node_ref=edit_name_ref value=nval />
                                             <label>{i18n::t(lang.get(), "price")}</label>
                                             <input type="number" class="form-control" style="width:80px" node_ref=edit_price_ref value=price_for_edit step="1" min="0" />
-                                            <button class="btn btn-sm btn-primary" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
+                                            <button class="btn btn--primary btn--compact" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
                                         </div>
                                     </td>
                                 </tr>
@@ -744,7 +744,7 @@ fn SettingsTab() -> impl IntoView {
                 <label>{move || i18n::t(lang.get(), "value")}</label>
                 <input type="text" class="form-control" node_ref=val_ref required />
             </div>
-            <button type="submit" class="btn btn-primary btn-sm">{move || i18n::t(lang.get(), "save")}</button>
+            <button type="submit" class="btn btn--primary btn--compact">{move || i18n::t(lang.get(), "save")}</button>
         </form>
 
         {move || {

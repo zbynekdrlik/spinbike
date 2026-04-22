@@ -172,16 +172,16 @@ pub fn StaffDashboardPage() -> impl IntoView {
                 let actions = if !cancelled {
                     view! {
                         <div class="flex gap-1">
-                            <button class="btn btn-sm btn-outline" on:click=move |_| set_walkin_open.update(|v| *v = !*v)>
+                            <button class="btn btn--ghost btn--compact" on:click=move |_| set_walkin_open.update(|v| *v = !*v)>
                                 {move || i18n::t(lang.get(), "add_walk_in")}
                             </button>
-                            <button class="btn btn-sm btn-danger" on:click=on_cancel_class disabled=move || cancel_loading.get()>
+                            <button class="btn btn--danger btn--compact" on:click=on_cancel_class disabled=move || cancel_loading.get()>
                                 {move || i18n::t(lang.get(), "cancel_class")}
                             </button>
                         </div>
                     }.into_any()
                 } else {
-                    view! { <span class="badge badge-cancelled">{move || i18n::t(lang.get(), "cancelled")}</span> }.into_any()
+                    view! { <span class="badge badge--cancelled">{move || i18n::t(lang.get(), "cancelled")}</span> }.into_any()
                 };
 
                 // Fetch participants for this class
@@ -388,7 +388,7 @@ fn WalkinForm(
                             <li class="walkin-row" data-testid=format!("walkin-pick-{card_id}")>
                                 <button
                                     type="button"
-                                    class="btn btn-sm btn-primary"
+                                    class="btn btn--primary btn--compact"
                                     disabled=is_loading
                                     on:click=move |_| pick(card.clone())
                                 >

@@ -105,7 +105,7 @@ pub fn LoginPage() -> impl IntoView {
     };
 
     view! {
-        <div style="max-width:400px;margin:40px auto">
+        <div class="page-form">
             <h1 class="page-title">{move || i18n::t(lang.get(), "login")}</h1>
             {move || {
                 let e = error.get();
@@ -124,7 +124,7 @@ pub fn LoginPage() -> impl IntoView {
                     <label>{move || i18n::t(lang.get(), "password")}</label>
                     <input type="password" class="form-control" node_ref=pass_ref required />
                 </div>
-                <button type="submit" class="btn btn-primary btn-block" disabled=move || loading.get()>
+                <button type="submit" class="btn btn--primary btn--hero btn--block" disabled=move || loading.get()>
                     {move || if loading.get() { i18n::t(lang.get(), "logging_in") } else { i18n::t(lang.get(), "login") }}
                 </button>
             </form>
@@ -204,7 +204,7 @@ pub fn RegisterPage() -> impl IntoView {
     };
 
     view! {
-        <div style="max-width:400px;margin:40px auto">
+        <div class="page-form">
             <h1 class="page-title">{move || i18n::t(lang.get(), "register")}</h1>
             {move || {
                 let e = error.get();
@@ -231,7 +231,7 @@ pub fn RegisterPage() -> impl IntoView {
                     <label>{move || i18n::t(lang.get(), "phone_optional")}</label>
                     <input type="tel" class="form-control" node_ref=phone_ref />
                 </div>
-                <button type="submit" class="btn btn-primary btn-block" disabled=move || loading.get()>
+                <button type="submit" class="btn btn--primary btn--hero btn--block" disabled=move || loading.get()>
                     {move || if loading.get() { i18n::t(lang.get(), "creating_account") } else { i18n::t(lang.get(), "register") }}
                 </button>
             </form>
