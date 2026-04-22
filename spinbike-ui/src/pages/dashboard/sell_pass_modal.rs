@@ -89,7 +89,7 @@ pub fn SellPassModal(
         <Sheet
             show=Signal::derive(move || show.get())
             on_close=Callback::new(move |()| set_show.set(false))
-            title=move || i18n::t(lang.get(), "sell_pass_label")
+            title=i18n::t(lang.get_untracked(), "sell_pass_label").to_string()
             testid="sheet-sell-pass"
         >
             <div class="form-group">

@@ -76,7 +76,7 @@ pub fn EditPassDateSheet(
         <Sheet
             show=Signal::derive(move || show.get())
             on_close=Callback::new(move |()| show.set(false))
-            title=move || i18n::t(lang.get(), "edit_pass_date")
+            title=i18n::t(lang.get_untracked(), "edit_pass_date").to_string()
             testid="sheet-edit-pass-date"
         >
             <div class="form-group">

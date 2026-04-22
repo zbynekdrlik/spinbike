@@ -1,5 +1,4 @@
 use leptos::prelude::*;
-use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
 
@@ -86,7 +85,7 @@ pub fn EditInfoForm(
         <Sheet
             show=show
             on_close=Callback::new(move |()| on_close_cancel.run(()))
-            title=move || i18n::t(lang.get(), "edit_info")
+            title=i18n::t(lang.get_untracked(), "edit_info").to_string()
             testid="sheet-edit-info"
         >
             <form on:submit=on_submit>
