@@ -14,3 +14,8 @@ spinbike.db-wal
 *.db-shm
 *.db-wal
 .playwright-mcp/
+
+# Session / tooling artefacts
+.claude/
+*.png
+!spinbike-ui/static/**/*.png
