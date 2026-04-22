@@ -410,6 +410,21 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         ("Nepodarilo sa nacitat", "Unable to load"),
     );
 
+    // Redesign 2026: new UI strings
+    m.insert("show_older", ("Zobrazit starsie", "Show older"));
+    m.insert("close", ("Zatvorit", "Close"));
+    m.insert("edit_info", ("Upravit udaje", "Edit info"));
+    m.insert("customer_info", ("Udaje klienta", "Customer info"));
+    m.insert(
+        "sell_pass_label",
+        ("Predat mesacny preukaz", "Sell monthly pass"),
+    );
+    m.insert("pass_active_until", ("Aktivny do {}", "Active until {}"));
+    m.insert("pass_expired_on", ("Skoncil {}", "Expired {}"));
+    m.insert("days_left_short", ("{} d", "{}d"));
+    m.insert("days_ago_short", ("pred {} d", "{}d ago"));
+    m.insert("edit_pass_date", ("Upravit datum", "Edit date"));
+
     m
 });
 
