@@ -17,9 +17,9 @@ test.describe('Monthly pass — sell, banner, visit', () => {
         await page.locator('[data-testid="search-result"]').first().click();
 
         // Top up so the card has credit for the pass
-        // Jana starts with 50.00 initial credit; after +50 topup → 100.00
-        await page.locator('[data-testid="topup-50"]').click();
-        await expect(page.locator('[data-testid="card-credit"]')).toContainText('100.00');
+        // Jana starts with 50.00 initial credit; after +30 topup → 80.00
+        await page.locator('[data-testid="topup-30"]').click();
+        await expect(page.locator('[data-testid="card-credit"]')).toContainText('80.00');
 
         // Open the sell-pass modal
         await page.locator('[data-testid="sell-pass-btn"]').click();
@@ -40,16 +40,17 @@ test.describe('Monthly pass — sell, banner, visit', () => {
         await expect(banner).toContainText('Monthly pass valid until');
         await expect(banner).toContainText('days remaining');
 
-        // Credit dropped by 35: 100.00 - 35.00 = 65.00
-        await expect(page.locator('[data-testid="card-credit"]')).toContainText('65.00');
+        // Credit dropped by 35: 80.00 - 35.00 = 45.00
+        await expect(page.locator('[data-testid="card-credit"]')).toContainText('45.00');
 
         // Charge buttons are now "Log visit" buttons
         const visitBtn = page.locator('[data-testid="log-visit-btn"]').first();
         await expect(visitBtn).toBeVisible();
         await visitBtn.click();
 
-        // History shows a visit row with 0.00 amount
-        await expect(page.locator('.txn-row-visit')).toContainText('visit');
+        // History shows a visit row with 0.00 amount.
+        // .txn-row-visit class proves the row is a visit; the action label is
+        // i18n-translated (SK: "Navsteva", EN: "Visit") so we don't assert text.
         await expect(page.locator('.txn-row-visit')).toContainText('0.00');
 
         assertCleanConsole(consoleMessages);

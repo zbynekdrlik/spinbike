@@ -91,11 +91,11 @@ test.describe('Card dashboard (staff /staff)', () => {
         await expect(result).toBeVisible({ timeout: 3000 });
         await result.click();
 
-        await page.locator('[data-testid="topup-20"]').click();
+        await page.locator('[data-testid="topup-30"]').click();
 
         // Wait for panel to reflect the new credit.
         await expect(page.locator('[data-testid="action-panel"]')).toContainText(
-            `${(before + 20).toFixed(2)} €`,
+            `${(before + 30).toFixed(2)} €`,
             { timeout: 5000 }
         );
 

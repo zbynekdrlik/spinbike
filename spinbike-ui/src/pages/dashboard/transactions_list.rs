@@ -45,9 +45,20 @@ pub fn TransactionsList(
                 }.into_any();
             }
 
+            let l = lang.get();
             let rows: Vec<_> = t.iter().map(|tx| {
                 let date = format_sk_datetime(&tx.created_at);
-                let action = tx.action.clone();
+                let action_key = match tx.action.as_str() {
+                    "topup"  => "tx_action_topup",
+                    "charge" => "tx_action_charge",
+                    "visit"  => "tx_action_visit",
+                    _ => "",
+                };
+                let action = if action_key.is_empty() {
+                    tx.action.clone()
+                } else {
+                    i18n::t(l, action_key).to_string()
+                };
                 let until_suffix = tx.valid_until
                     .map(|d| format!(" · until {}", d.format("%d.%m")))
                     .unwrap_or_default();

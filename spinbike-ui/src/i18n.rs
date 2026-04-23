@@ -288,7 +288,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     // Payments
     m.insert("card_barcode_label", ("Ciarovy kod karty", "Card Barcode"));
     m.insert("scan_barcode", ("Naskenujte ciarovy kod", "Scan barcode"));
-    m.insert("charge", ("Uctovat", "Charge"));
+    m.insert("charge", ("Platba", "Charge"));
     m.insert("storno", ("Storno", "Storno"));
     m.insert("storno_refund", ("Storno (Vratenie)", "Storno (Refund)"));
     m.insert("service", ("Sluzba", "Service"));
@@ -364,10 +364,15 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "charge_for_extras",
         (
-            "Uctovat napoje / jedlo / ine",
+            "Platba za napoje / jedlo / ine",
             "Charge for drinks / food / other",
         ),
     );
+
+    // Transaction history action labels (DB stores raw English: topup/charge/visit).
+    m.insert("tx_action_topup", ("Dobitie", "Top-up"));
+    m.insert("tx_action_charge", ("Platba", "Charge"));
+    m.insert("tx_action_visit", ("Navsteva", "Visit"));
 
     // Sell pass modal
     m.insert(

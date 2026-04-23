@@ -7,7 +7,7 @@ use crate::i18n::{self, Lang};
 
 use super::CardInfo;
 
-const QUICK_TOPUP: [f64; 4] = [5.0, 10.0, 20.0, 50.0];
+const QUICK_TOPUP: [f64; 1] = [30.0];
 
 #[component]
 pub fn TopupSection(
