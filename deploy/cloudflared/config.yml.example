@@ -1,0 +1,12 @@
+# Template for ~/.cloudflared/config.yml. The real file lives on the runner
+# alongside the tunnel credentials JSON. Ingress rules match top-down;
+# http_status:404 is always the catch-all fallback for unknown hostnames.
+tunnel: 4093c494-b31d-4eb7-8fcb-6c5948f5d4b2
+credentials-file: /home/newlevel/.cloudflared/4093c494-b31d-4eb7-8fcb-6c5948f5d4b2.json
+
+ingress:
+  - hostname: spinbike.newlevel.media
+    service: http://localhost:8080
+  - hostname: spinbike-dev.newlevel.media
+    service: http://localhost:8081
+  - service: http_status:404
