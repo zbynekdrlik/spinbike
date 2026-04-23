@@ -59,8 +59,9 @@ pub fn TransactionsList(
                 } else {
                     i18n::t(l, action_key).to_string()
                 };
-                let until_suffix = tx.valid_until
-                    .map(|d| format!(" · until {}", d.format("%d.%m")))
+                let until_suffix = tx
+                    .valid_until
+                    .map(|d| format!(" · {} {}", i18n::t(l, "tx_until_short"), d.format("%d.%m")))
                     .unwrap_or_default();
                 let service = tx.service_name.clone().unwrap_or_else(|| "—".into());
                 let amount = tx.amount;
