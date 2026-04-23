@@ -107,7 +107,7 @@ test.describe('Card dashboard (staff /staff)', () => {
             });
             return (await r.json()).credit as number;
         });
-        expect(after).toBeCloseTo(before + 20, 2);
+        expect(after).toBeCloseTo(before + 30, 2);
 
         assertCleanConsole(consoleMessages);
     });
