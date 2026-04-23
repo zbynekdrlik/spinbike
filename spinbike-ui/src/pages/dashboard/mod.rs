@@ -227,18 +227,17 @@ pub fn DashboardPage() -> impl IntoView {
         <div class="card mb-2">
             <input
                 type="search"
-                class="form-control"
+                class="form-control search-input--lg"
                 node_ref=search_input_ref
                 inputmode="search"
                 prop:value=move || query.get()
                 placeholder=move || i18n::t(lang.get(), "search_cards_placeholder")
                 on:input=on_search_input
                 on:keydown=on_search_keydown
-                style="font-size:1.1rem;padding:12px"
             />
             {move || {
                 if searching.get() {
-                    view! { <div class="text-muted mt-1" style="font-size:0.8rem">{i18n::t(lang.get(), "searching")}</div> }.into_any()
+                    view! { <div class="search-hint mt-1">{i18n::t(lang.get(), "searching")}</div> }.into_any()
                 } else {
                     view! { <span></span> }.into_any()
                 }
@@ -264,35 +263,34 @@ pub fn DashboardPage() -> impl IntoView {
                         <div
                             class=move || {
                                 if highlighted_idx.get() == idx {
-                                    "search-result search-result-active"
+                                    "search-result-row search-result-active"
                                 } else {
-                                    "search-result"
+                                    "search-result-row"
                                 }
                             }
                             data-testid="search-result"
-                            style="display:flex;justify-content:space-between;align-items:center;padding:10px;border-bottom:1px solid var(--border);cursor:pointer;gap:8px"
                             on:click={
                                 let card = card_for_pick.clone();
                                 move |_| pick_card(card.clone())
                             }
                         >
                             <div>
-                                <div style="font-weight:600">
+                                <div class="search-result-name">
                                     {name}
                                     {if is_blocked {
-                                        view! { <span class="badge badge--full" style="margin-left:var(--s-2)">{i18n::t(lang.get(), "blocked")}</span> }.into_any()
+                                        view! { <span class="badge badge--full badge--inline">{i18n::t(lang.get(), "blocked")}</span> }.into_any()
                                     } else { view! {}.into_any() }}
                                 </div>
-                                <div class="text-muted" style="font-size:0.8rem">
+                                <div class="search-result-meta">
                                     <code>{format!("…{tail_str}")}</code>
                                     {if !company.is_empty() { format!(" · {company}") } else { String::new() }}
                                 </div>
                             </div>
-                            <div class=credit_class style="font-weight:600;white-space:nowrap">{credit}</div>
+                            <div class=format!("search-result-credit {credit_class}")>{credit}</div>
                         </div>
                     }
                 }).collect();
-                view! { <div class="mt-1" style="border-top:1px solid var(--border)">{items}</div> }.into_any()
+                view! { <div class="search-results-list">{items}</div> }.into_any()
             }}
             {move || {
                 let q = query.get();
@@ -427,7 +425,7 @@ fn ActivateCardForm(
                     set_selected.set(Some(c));
                     set_show_activate.set(false);
                 }
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
             set_loading.set(false);
         });

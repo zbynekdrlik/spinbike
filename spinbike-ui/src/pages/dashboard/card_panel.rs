@@ -56,9 +56,9 @@ pub fn CardActionPanel(
         <div class="card mb-2" data-testid="action-panel">
             // ── Header bar ───────────────────────────────────────────────
             <div class="card-header">
-                <div style="flex:1;min-width:0">
+                <div class="card-header__main">
                     <div class="card-title">{name}</div>
-                    <div class="text-muted" style="font-size:var(--fs-sm);margin-top:2px">
+                    <div class="card-header__meta">
                         <code>{barcode.clone()}</code>
                         {if !company.is_empty() { format!(" · {company}") } else { String::new() }}
                         {if !phone.is_empty() { format!(" · {phone}") } else { String::new() }}
@@ -84,7 +84,7 @@ pub fn CardActionPanel(
                 <span class="card-balance__unit">"€"</span>
                 {if is_blocked {
                     view! {
-                        <span class="badge badge--full" style="margin-left:var(--s-2)">
+                        <span class="badge badge--full badge--inline">
                             {move || i18n::t(lang.get(), "blocked")}
                         </span>
                     }.into_any()
@@ -107,7 +107,7 @@ pub fn CardActionPanel(
             </div>
 
             // ── Sell pass button ──────────────────────────────────────────
-            <div style="margin-top:var(--s-3)">
+            <div class="stack-12">
                 <button
                     class="btn btn--hero btn--pass btn--block"
                     data-testid="sell-pass-btn"
@@ -124,7 +124,7 @@ pub fn CardActionPanel(
             </div>
 
             // ── Secondary actions (Edit info + Block) ─────────────────────
-            <div class="action-row" style="margin-top:var(--s-3)">
+            <div class="action-row stack-12">
                 <button
                     class="btn btn--ghost"
                     on:click=move |_| set_show_edit.update(|v| *v = !*v)
@@ -135,7 +135,7 @@ pub fn CardActionPanel(
             </div>
 
             // ── Segmented tab control ─────────────────────────────────────
-            <div style="margin-top:var(--s-4)">
+            <div class="stack-16">
                 <Segmented
                     items=tab_items
                     active=Signal::derive(move || tab.get())

@@ -47,7 +47,7 @@ pub fn BlockButton(
                     });
                     set_selected.set(Some(c));
                 }
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
             set_loading.set(false);
         });

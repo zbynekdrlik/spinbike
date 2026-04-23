@@ -72,10 +72,10 @@ pub fn PassBanner(
     };
 
     view! {
-        <div class="group" style="margin-bottom: var(--s-3)">
-            <div class=banner_class data-testid=banner_testid style="margin-bottom:0;border-radius:0;border:none">
-                <div class="pass-banner-title" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                    <span style="flex:1">{title_view}</span>
+        <div class="group">
+            <div class=format!("{banner_class} pass-banner--in-group") data-testid=banner_testid>
+                <div class="pass-banner-title pass-banner__title-row">
+                    <span class="pass-banner__title-text">{title_view}</span>
                     <button
                         class="btn btn--compact btn--ghost"
                         data-testid="pass-date-edit"

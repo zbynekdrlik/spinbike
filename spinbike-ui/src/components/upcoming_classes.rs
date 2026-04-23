@@ -45,7 +45,7 @@ pub fn UpcomingClasses(
             .await
             {
                 Ok(v) => set_rows.set(v),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
         });
     });
@@ -86,7 +86,7 @@ pub fn UpcomingClasses(
                                                     &Req { template_id: tid, date: d, card_id },
                                                 ).await {
                                                     Ok(_) => on_changed.run(()),
-                                                    Err(e) => set_msg.set(format!("Error: {e}")),
+                                                    Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                                                 }
                                             });
                                         }
@@ -105,7 +105,7 @@ pub fn UpcomingClasses(
                                                     .await
                                                 {
                                                     Ok(_) => on_changed.run(()),
-                                                    Err(e) => set_msg.set(format!("Error: {e}")),
+                                                    Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                                                 }
                                             });
                                         }
@@ -129,7 +129,7 @@ pub fn UpcomingClasses(
                                                     .await
                                                     {
                                                         Ok(_) => on_changed.run(()),
-                                                        Err(e) => set_msg.set(format!("Error: {e}")),
+                                                        Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                                                     }
                                                 });
                                             }

@@ -95,7 +95,7 @@ fn TemplatesTab() -> impl IntoView {
         spawn_local(async move {
             match api::get::<Vec<TemplateRow>>("/api/admin/templates").await {
                 Ok(d) => set_items.set(d),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
             set_loading.set(false);
         });
@@ -170,7 +170,7 @@ fn TemplatesTab() -> impl IntoView {
             .await
             {
                 Ok(_) => set_ver.update(|v| *v += 1),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
         });
     };
@@ -244,7 +244,7 @@ fn TemplatesTab() -> impl IntoView {
                         struct Req { start_time: Option<String>, capacity: Option<i64> }
                         match api::put(&format!("/api/admin/templates/{tid}"), &Req { start_time: Some(new_time), capacity: Some(new_cap) }).await {
                             Ok(_) => { set_editing.set(false); set_v.update(|v| *v += 1); }
-                            Err(e) => set_m.set(format!("Error: {e}")),
+                            Err(e) => set_m.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                         }
                     });
                 };
@@ -311,7 +311,7 @@ fn InstructorsTab() -> impl IntoView {
         spawn_local(async move {
             match api::get::<Vec<InstructorRow>>("/api/admin/instructors").await {
                 Ok(d) => set_items.set(d),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
             set_loading.set(false);
         });
@@ -336,7 +336,7 @@ fn InstructorsTab() -> impl IntoView {
             }
             match api::post::<Req, InstructorRow>("/api/admin/instructors", &Req { name }).await {
                 Ok(_) => set_ver.update(|v| *v += 1),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
         });
     };
@@ -372,7 +372,7 @@ fn InstructorsTab() -> impl IntoView {
                         struct Req { active: Option<bool> }
                         match api::put(&format!("/api/admin/instructors/{iid}"), &Req { active: Some(new_active) }).await {
                             Ok(_) => set_v.update(|v| *v += 1),
-                            Err(e) => set_m.set(format!("Error: {e}")),
+                            Err(e) => set_m.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                         }
                     });
                 };
@@ -383,7 +383,7 @@ fn InstructorsTab() -> impl IntoView {
                         struct Req { name: Option<String> }
                         match api::put(&format!("/api/admin/instructors/{iid}"), &Req { name: Some(new_name) }).await {
                             Ok(_) => { set_editing.set(false); set_v.update(|v| *v += 1); }
-                            Err(e) => set_m.set(format!("Error: {e}")),
+                            Err(e) => set_m.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                         }
                     });
                 };
@@ -444,7 +444,7 @@ fn ServicesTab() -> impl IntoView {
         spawn_local(async move {
             match api::get::<Vec<ServiceRow>>("/api/admin/services").await {
                 Ok(d) => set_items.set(d),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
             set_loading.set(false);
         });
@@ -487,7 +487,7 @@ fn ServicesTab() -> impl IntoView {
             .await
             {
                 Ok(_) => set_ver.update(|v| *v += 1),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
         });
     };
@@ -530,7 +530,7 @@ fn ServicesTab() -> impl IntoView {
                         struct Req { active: Option<bool> }
                         match api::put(&format!("/api/admin/services/{sid}"), &Req { active: Some(new_active) }).await {
                             Ok(_) => set_v.update(|v| *v += 1),
-                            Err(e) => set_m.set(format!("Error: {e}")),
+                            Err(e) => set_m.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                         }
                     });
                 };
@@ -542,7 +542,7 @@ fn ServicesTab() -> impl IntoView {
                         struct Req { name: Option<String>, default_price: Option<f64> }
                         match api::put(&format!("/api/admin/services/{sid}"), &Req { name: Some(new_name), default_price: Some(new_price) }).await {
                             Ok(_) => { set_editing.set(false); set_v.update(|v| *v += 1); }
-                            Err(e) => set_m.set(format!("Error: {e}")),
+                            Err(e) => set_m.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                         }
                     });
                 };
@@ -592,7 +592,7 @@ fn ServicesTab() -> impl IntoView {
 
 #[component]
 fn UsersTab() -> impl IntoView {
-    let _lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (items, set_items) = signal(Vec::<UserRow>::new());
     let (loading, set_loading) = signal(true);
     let (ver, set_ver) = signal(0u32);
@@ -604,7 +604,7 @@ fn UsersTab() -> impl IntoView {
         spawn_local(async move {
             match api::get::<Vec<UserRow>>("/api/admin/users").await {
                 Ok(d) => set_items.set(d),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
             set_loading.set(false);
         });
@@ -635,7 +635,7 @@ fn UsersTab() -> impl IntoView {
                         struct Req { role: String }
                         match api::put(&format!("/api/admin/users/{uid}/role"), &Req { role: role.clone() }).await {
                             Ok(_) => { set_m.set(format!("User {uid} role updated")); set_v.update(|v| *v += 1); }
-                            Err(e) => set_m.set(format!("Error: {e}")),
+                            Err(e) => set_m.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                         }
                     });
                 };
@@ -689,7 +689,7 @@ fn SettingsTab() -> impl IntoView {
         spawn_local(async move {
             match api::get::<Vec<SettingRow>>("/api/admin/settings").await {
                 Ok(d) => set_items.set(d),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
             set_loading.set(false);
         });
@@ -722,7 +722,7 @@ fn SettingsTab() -> impl IntoView {
             }
             match api::put("/api/admin/settings", &Req { key, value }).await {
                 Ok(_) => set_ver.update(|v| *v += 1),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
         });
     };

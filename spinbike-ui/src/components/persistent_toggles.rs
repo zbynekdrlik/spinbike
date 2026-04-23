@@ -67,7 +67,7 @@ pub fn PersistentToggles(card_id: i64, #[prop(into)] on_changed: Callback<()>) -
                     v.sort_by_key(|t| (t.weekday, t.start_time.clone()));
                     set_templates.set(v);
                 }
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
 
             match api::get::<Vec<PersistentRow>>(&format!(
@@ -76,7 +76,7 @@ pub fn PersistentToggles(card_id: i64, #[prop(into)] on_changed: Callback<()>) -
             .await
             {
                 Ok(rs) => set_active_ids.set(rs.into_iter().map(|r| r.template_id).collect()),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
         });
     });
@@ -141,7 +141,7 @@ pub fn PersistentToggles(card_id: i64, #[prop(into)] on_changed: Callback<()>) -
                                                         on_changed.run(());
                                                     }
                                                     Err(e) => {
-                                                        set_msg.set(format!("Error: {e}"))
+                                                        set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e]))
                                                     }
                                                 }
                                             });

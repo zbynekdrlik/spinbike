@@ -11,14 +11,23 @@ use leptos::prelude::*;
 /// Accessibility: `role="dialog"` + `aria-modal="true"` on `.sheet`.
 /// Keyboard: Escape on the sheet element triggers `on_close`.
 ///
-/// Visibility is driven by the `show` signal via inline CSS display
-/// rather than mount/unmount — children render once at mount, which
-/// keeps callers' view bodies free of `Fn` trait constraints.
+/// **Mounting:** the Sheet renders unconditionally when instantiated.
+/// Callers control visibility by mounting/unmounting the Sheet inside
+/// a reactive closure, e.g.:
+///
+/// ```ignore
+/// {move || if show.get() {
+///     view! { <Sheet on_close title testid>{children}</Sheet> }.into_any()
+/// } else {
+///     ().into_any()
+/// }}
+/// ```
+///
+/// The `title` and any locale-dependent text are re-evaluated on each
+/// re-instantiation, so toggling `show` after a language change yields
+/// a fresh, correctly-localised sheet.
 #[component]
 pub fn Sheet(
-    /// Whether the sheet is visible.
-    #[prop(into)]
-    show: Signal<bool>,
     /// Called when the user closes the sheet (backdrop click or Escape key).
     #[prop(into)]
     on_close: Callback<()>,
@@ -30,15 +39,13 @@ pub fn Sheet(
     testid: Option<String>,
     children: Children,
 ) -> impl IntoView {
-    let on_close_backdrop = on_close;
+    let on_close_backdrop = on_close.clone();
+    let on_close_keyboard = on_close.clone();
     let testid_value = testid.unwrap_or_default();
 
     view! {
         <div
             class="sheet-backdrop"
-            style=move || {
-                if show.get() { "display:block" } else { "display:none" }
-            }
             on:click=move |_| on_close_backdrop.run(())
         >
             <div
@@ -50,7 +57,7 @@ pub fn Sheet(
                 on:click=|ev: ev::MouseEvent| ev.stop_propagation()
                 on:keydown=move |ev: ev::KeyboardEvent| {
                     if ev.key() == "Escape" {
-                        on_close.run(());
+                        on_close_keyboard.run(());
                     }
                 }
             >

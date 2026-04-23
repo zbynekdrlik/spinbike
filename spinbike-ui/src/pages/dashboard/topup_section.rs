@@ -40,7 +40,7 @@ pub fn TopupSection(
                         &[&format!("{credit:.2}")],
                     ));
                 }
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
             set_loading.set(false);
         });
@@ -65,11 +65,11 @@ pub fn TopupSection(
     };
 
     view! {
-        <div style="margin-top:var(--s-3)">
-            <div class="text-muted" style="font-size:var(--fs-sm);margin-bottom:var(--s-2)">
+        <div class="stack-12">
+            <div class="section-label">
                 {move || i18n::t(lang.get(), "quick_topup")}
             </div>
-            <div style="display:flex;flex-wrap:wrap;gap:var(--s-2)">
+            <div class="chip-row">
                 {QUICK_TOPUP.iter().map(|amt| {
                     let amount = *amt;
                     let label = format!("+{amount:.0} €");
@@ -82,15 +82,14 @@ pub fn TopupSection(
                         >{label}</button>
                     }
                 }).collect::<Vec<_>>()}
-                <form class="inline-form" on:submit=on_custom style="display:inline-flex;gap:var(--s-2)">
+                <form class="inline-form inline-row" on:submit=on_custom>
                     <input
                         type="number"
-                        class="form-control"
+                        class="form-control input--narrow"
                         node_ref=custom_ref
                         placeholder=move || i18n::t(lang.get(), "custom_amount")
                         step="0.01"
                         min="0.01"
-                        style="width:8em"
                     />
                     <button type="submit" class="btn btn--compact btn--primary" disabled=move || loading.get()>
                         {move || i18n::t(lang.get(), "topup")}

@@ -80,6 +80,11 @@ async fn void_transaction(
         .map_err(internal_error)?;
 
     if let Some(card_id) = row.card_id {
+        // Single-formula credit reversal works because amounts are SIGNED
+        // in the transactions table:
+        //   - charges/visits store NEGATIVE amounts → `credit - (-X)` = `credit + X` (refund)
+        //   - top-ups       store POSITIVE amounts → `credit - (+X)` = `credit - X` (claw-back)
+        // ROUND keeps SQLite from drifting on float math.
         sqlx::query("UPDATE cards SET credit = ROUND(credit - ?, 2) WHERE id = ?")
             .bind(row.amount)
             .bind(card_id)

@@ -22,12 +22,20 @@ pub fn Segmented(
     #[prop(optional, into)]
     testid_prefix: Option<String>,
 ) -> impl IntoView {
-    let prefix_stored = StoredValue::new(testid_prefix);
+    let prefix = testid_prefix.unwrap_or_default();
 
     let buttons: Vec<_> = items
         .into_iter()
         .map(|(key, label)| {
-            let key_stored = StoredValue::new(key.clone());
+            // Pre-compute the per-button data-testid once at render time;
+            // empty string when no prefix is configured (Leptos drops empty
+            // attributes), avoiding the closure-returning-Option pattern.
+            let testid = if prefix.is_empty() {
+                String::new()
+            } else {
+                format!("{prefix}-{key}")
+            };
+            let key_stored = StoredValue::new(key);
             let label_stored = StoredValue::new(label);
             let on_change = on_change.clone();
 
@@ -38,9 +46,7 @@ pub fn Segmented(
                     aria-selected=move || {
                         if active.get() == key_stored.get_value() { "true" } else { "false" }
                     }
-                    data-testid=move || {
-                        prefix_stored.get_value().map(|p| format!("{}-{}", p, key_stored.get_value()))
-                    }
+                    data-testid=testid
                     on:click=move |_| on_change.run(key_stored.get_value())
                 >
                     {move || label_stored.get_value()}

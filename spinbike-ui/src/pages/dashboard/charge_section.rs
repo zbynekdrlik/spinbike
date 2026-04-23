@@ -89,7 +89,7 @@ pub fn ChargeSection(
                         }
                     });
                 }
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
             set_loading.set(false);
         });
@@ -121,22 +121,22 @@ pub fn ChargeSection(
                     Ok(_) => {
                         set_txn_refresh.update(|n| *n += 1);
                     }
-                    Err(e) => set_msg.set(format!("Error: {e}")),
+                    Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                 }
             });
         }
     };
 
     view! {
-        <div style="margin-top:var(--s-3)">
-            <div class="text-muted" style="font-size:var(--fs-sm);margin-bottom:var(--s-2)">
+        <div class="stack-12">
+            <div class="section-label">
                 {move || i18n::t(lang.get(), "quick_charge")}
             </div>
 
             // Log-visit primary buttons (ONLY when pass is active).
             {if pass_active {
                 view! {
-                    <div style="display:flex;flex-wrap:wrap;gap:var(--s-2);margin-bottom:var(--s-2)">
+                    <div class="chip-row chip-row--spaced">
                         {services.get().into_iter()
                             .filter(|svc| svc.name != "Monthly pass")
                             .map(|svc| {
@@ -159,7 +159,7 @@ pub fn ChargeSection(
             }}
 
             // Charge form — always visible, labelled for drinks/food.
-            <div class="text-muted" style="font-size:var(--fs-sm);margin-bottom:var(--s-2)">
+            <div class="section-label">
                 {move || i18n::t(lang.get(), "charge_for_extras")}
             </div>
             <form class="inline-form" on:submit=on_submit>
@@ -177,12 +177,11 @@ pub fn ChargeSection(
                 </select>
                 <input
                     type="number"
-                    class="form-control"
+                    class="form-control input--narrow"
                     node_ref=amount_ref
                     placeholder=move || i18n::t(lang.get(), "amount")
                     step="0.01"
                     min="0.01"
-                    style="width:8em"
                     required
                 />
                 <button type="submit" class="btn btn--primary" data-testid="charge-submit" disabled=move || loading.get()>

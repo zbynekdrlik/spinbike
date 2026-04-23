@@ -374,6 +374,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("tx_action_charge", ("Platba", "Charge"));
     m.insert("tx_action_visit", ("Navsteva", "Visit"));
     m.insert("tx_until_short", ("do", "until"));
+    m.insert("error_format", ("Chyba: {}", "Error: {}"));
 
     // Sell pass modal
     m.insert(

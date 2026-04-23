@@ -1041,3 +1041,73 @@ table tbody tr:last-child td,
 
 .page-form { max-width: 420px; margin: 0 auto; }
 .page-form .form-group { margin-bottom: var(--s-4); }
+
+/* ========================================================================
+   29. DASHBOARD HELPERS — small named classes hoisted from inline styles
+   ======================================================================== */
+
+/* Vertical rhythm helpers — finer-grained than .mt-1/-2/-3 (which use s-2/4/5). */
+.stack-12 { margin-top: var(--s-3); }       /* 12px */
+.stack-16 { margin-top: var(--s-4); }       /* 16px */
+.stack-24 { margin-top: var(--s-5); }       /* 24px — same as .mt-3 */
+
+/* Chip / button row that wraps. */
+.chip-row { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.chip-row--spaced { margin-bottom: var(--s-2); }
+
+/* Inline form (custom-amount input + submit button side-by-side). */
+.inline-row { display: inline-flex; gap: var(--s-2); }
+
+/* Narrow numeric input for amount fields. */
+.input--narrow { width: 8em; }
+
+/* Subdued section label sitting above a chip-row of buttons. */
+.section-label {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    margin-bottom: var(--s-2);
+}
+
+/* Card header layout: title block grows, close button stays compact. */
+.card-header__main { flex: 1; min-width: 0; }
+.card-header__meta {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+/* Pass banner sits inside .group; cancel its own border/radius/margin
+   so the .group wrapper provides the visual container. */
+.pass-banner--in-group {
+    margin-bottom: 0;
+    border-radius: 0;
+    border: none;
+}
+.pass-banner__title-row {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+}
+.pass-banner__title-row > .pass-banner__title-text { flex: 1; }
+
+/* Search results list (renders before the action panel). */
+.search-input--lg { font-size: var(--fs-md); padding: var(--s-3); }
+.search-results-list {
+    margin-top: var(--s-2);
+    border-top: 1px solid var(--border);
+}
+.search-result-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--s-3);
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    gap: var(--s-2);
+}
+.search-result-name   { font-weight: 600; }
+.search-result-meta   { font-size: var(--fs-sm); color: var(--text-muted); }
+.search-result-credit { font-weight: 600; white-space: nowrap; }
+.search-hint          { font-size: var(--fs-sm); color: var(--text-muted); }
+.badge--inline        { margin-left: var(--s-2); }

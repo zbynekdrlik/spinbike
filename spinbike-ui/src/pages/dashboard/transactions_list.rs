@@ -18,6 +18,7 @@ pub fn TransactionsList(
     let (limit, set_limit) = signal(10usize);
     let (has_more, set_has_more) = signal(false);
 
+    let lang_for_fetch = lang;
     Effect::new(move |_| {
         let _ = txn_refresh.get(); // reactive dependency — re-runs on increment
         let l = limit.get();
@@ -31,7 +32,11 @@ pub fn TransactionsList(
                     set_has_more.set(t.len() >= l);
                     set_txns.set(t);
                 }
-                Err(_) => {}
+                Err(e) => set_msg.set(i18n::tf(
+                    lang_for_fetch.get_untracked(),
+                    "error_format",
+                    &[&e],
+                )),
             }
         });
     });
@@ -101,7 +106,7 @@ pub fn TransactionsList(
                         spawn_local(async move {
                             match api::delete_empty(&format!("/api/transactions/{tx_id}")).await {
                                 Ok(()) => txn_refresh.update(|n| *n += 1),
-                                Err(e) => set_msg.set(format!("Error: {e}")),
+                                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                             }
                         });
                     };
