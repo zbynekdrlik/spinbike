@@ -219,12 +219,11 @@ jobs:
             --package spinbike-core \
             --package spinbike-server
 
-  deploy:
-    name: Deploy (self-hosted)
+  deploy-dev:
+    name: Deploy (dev)
     runs-on: [self-hosted, spinbike-deploy]
     needs: [test, build-wasm, e2e]
     timeout-minutes: 30
-    # Only auto-deploy on direct pushes to dev; PR runs and other branches skip.
     if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     steps:
       - uses: actions/checkout@v4
@@ -235,36 +234,90 @@ jobs:
           trunk build --release
 
       - name: Force rust-embed to re-bake dist
-        # Cargo's incremental compilation doesn't track dist/ content, so the
-        # server binary skips re-embedding unless a tracked file changes.
         run: touch crates/spinbike-server/src/routes/static_files.rs
 
       - name: Build release server
         run: cargo build --release --bin spinbike-server
 
-      - name: Install binary and restart service
+      - name: Install dev binary and restart dev service
         run: |
-          # `install` unlinks the destination first, so the running process
-          # keeps its mmap to the old inode while the new file takes over the
-          # path — avoids ETXTBSY on the in-use binary.
           install -Dm 755 target/release/spinbike-server \
-            /home/newlevel/devel/spinbike/target/release/spinbike-server
-          sudo -n systemctl restart spinbike.service
+            /opt/spinbike/dev/spinbike-server
+          sudo -n systemctl restart spinbike-dev.service
 
-      - name: Wait for live site health
+      - name: Wait for dev site health
         run: |
           for i in $(seq 1 30); do
-            if curl -sfI https://spinbike.newlevel.media > /dev/null; then
-              echo "Live site responding (attempt $i)"
+            if curl -sfI https://spinbike-dev.newlevel.media > /dev/null; then
+              echo "Dev site responding (attempt $i)"
               exit 0
             fi
             sleep 2
           done
-          echo "ERROR: live site did not respond within 60s"
+          echo "ERROR: dev site did not respond within 60s"
+          sudo -n systemctl status spinbike-dev.service --no-pager || true
+          exit 1
+
+      - name: Post-deploy smoke tests (Playwright against dev)
+        run: |
+          cd e2e
+          npm ci
+          npx playwright install --with-deps chromium
+          SMOKE_BASE_URL=https://spinbike-dev.newlevel.media \
+            npx playwright test -g '@smoke'
+
+  deploy-prod:
+    name: Deploy (prod)
+    runs-on: [self-hosted, spinbike-deploy]
+    needs: [test, build-wasm, e2e]
+    timeout-minutes: 30
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Backup prod DB (timestamped, keep last 10)
+        run: |
+          ts=$(date +%Y%m%d-%H%M%S)
+          cp /opt/spinbike/prod/spinbike.db \
+             /opt/spinbike/prod/backups/spinbike-${ts}.db
+          # Keep only the 10 most recent; delete older ones.
+          ls -t /opt/spinbike/prod/backups/spinbike-*.db 2>/dev/null \
+            | tail -n +11 \
+            | xargs -r rm -f
+          echo "Backup written: spinbike-${ts}.db"
+          ls -lh /opt/spinbike/prod/backups/
+
+      - name: Build WASM frontend (Trunk)
+        run: |
+          cd spinbike-ui
+          trunk build --release
+
+      - name: Force rust-embed to re-bake dist
+        run: touch crates/spinbike-server/src/routes/static_files.rs
+
+      - name: Build release server
+        run: cargo build --release --bin spinbike-server
+
+      - name: Install prod binary and restart prod service
+        run: |
+          install -Dm 755 target/release/spinbike-server \
+            /opt/spinbike/prod/spinbike-server
+          sudo -n systemctl restart spinbike.service
+
+      - name: Wait for prod site health
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sfI https://spinbike.newlevel.media > /dev/null; then
+              echo "Prod site responding (attempt $i)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ERROR: prod site did not respond within 60s"
           sudo -n systemctl status spinbike.service --no-pager || true
           exit 1
 
-      - name: Post-deploy smoke tests (Playwright against live)
+      - name: Post-deploy smoke tests (Playwright against prod)
         run: |
           cd e2e
           npm ci
