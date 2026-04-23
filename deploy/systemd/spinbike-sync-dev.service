@@ -1,0 +1,11 @@
+[Unit]
+Description=Copy prod DB to dev and restart dev service
+After=spinbike.service
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/cp /opt/spinbike/prod/spinbike.db /opt/spinbike/dev/spinbike-dev.db.tmp
+ExecStart=/bin/chown newlevel:newlevel /opt/spinbike/dev/spinbike-dev.db.tmp
+ExecStart=/usr/bin/mv -f /opt/spinbike/dev/spinbike-dev.db.tmp /opt/spinbike/dev/spinbike-dev.db
+ExecStart=/usr/bin/systemctl restart spinbike-dev.service
