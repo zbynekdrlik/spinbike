@@ -165,7 +165,7 @@ pub fn SchedulePage() -> impl IntoView {
             }).collect();
 
             view! {
-                <div>{cards}</div>
+                <div class="group">{cards}</div>
             }.into_any()
         }}
     }

@@ -61,7 +61,7 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
                                 view! {}.into_any()
                             }}
                             <span class="navbar-user">{u.name.clone()}</span>
-                            <button on:click=on_logout>{move || i18n::t(lang.get(), "logout")}</button>
+                            <button class="btn btn--compact btn--ghost" on:click=on_logout>{move || i18n::t(lang.get(), "logout")}</button>
                         }.into_any()
                     } else {
                         view! {
@@ -71,8 +71,7 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
                     }
                 }}
                 <button
-                    class="lang-toggle"
-                    style="margin-left:8px;padding:2px 8px;font-size:0.75rem;border:1px solid var(--border);border-radius:4px;background:transparent;cursor:pointer"
+                    class="btn btn--compact btn--ghost lang-toggle"
                     on:click=on_toggle_lang
                 >
                     {move || match lang.get() {

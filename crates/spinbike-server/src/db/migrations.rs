@@ -22,6 +22,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "seed 4 weekly spin classes + 2 instructors",
         V6_SEED_SPIN_CLASSES,
     ),
+    (
+        7,
+        "transactions: soft-delete column",
+        V7_TRANSACTIONS_SOFT_DELETE,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -196,6 +201,10 @@ SELECT 3, '18:00', 60, (SELECT id FROM instructors WHERE name='Vlada'), 19, 1
 WHERE NOT EXISTS (SELECT 1 FROM class_templates WHERE weekday=3 AND start_time='18:00');
 "#;
 
+const V7_TRANSACTIONS_SOFT_DELETE: &str = r#"
+ALTER TABLE transactions ADD COLUMN deleted_at TEXT;
+"#;
+
 #[cfg(test)]
 mod tests {
     use crate::db::{create_memory_pool, run_migrations};
@@ -353,5 +362,28 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(instr_count, 2);
+    }
+
+    #[tokio::test]
+    async fn v7_adds_deleted_at_to_transactions() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let cols: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('transactions')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let names: Vec<_> = cols.into_iter().map(|(n,)| n).collect();
+        assert!(
+            names.iter().any(|n| n == "deleted_at"),
+            "transactions should have deleted_at column after V7 migrations, got {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v7_migration_is_idempotent() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap(); // second run must not error
     }
 }

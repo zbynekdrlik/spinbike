@@ -250,7 +250,7 @@ async fn card_response_includes_pass_field_when_pass_active() {
     let card_id = app
         .seed_card("PASS-RESP-1", 50.0, None, None, None, None)
         .await;
-    let (status, _) = app
+    let (status, sell_resp) = app
         .request(post_json(
             "/api/payments/sell-pass",
             &app.staff_token,
@@ -258,6 +258,7 @@ async fn card_response_includes_pass_field_when_pass_active() {
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
+    let expected_tx_id = sell_resp["transaction_id"].as_i64().unwrap();
 
     let (status, body) = app
         .request(get("/api/cards/lookup/PASS-RESP-1", &app.staff_token))
@@ -268,6 +269,58 @@ async fn card_response_includes_pass_field_when_pass_active() {
     assert!(
         days > 0,
         "days_remaining must be positive for an active pass"
+    );
+    // Task 8: response must carry the transaction_id so the UI can PATCH the
+    // correct row when staff edits the pass end date.
+    assert_eq!(
+        body["pass"]["transaction_id"].as_i64().unwrap(),
+        expected_tx_id,
+        "pass.transaction_id must match the sell-pass transaction id"
+    );
+}
+
+/// Regression guard for Task 8: when a card has multiple pass sales, the
+/// response must surface the id of the LATEST (max valid_until) one — that's
+/// the one the UI pencil icon will PATCH.
+#[tokio::test]
+async fn card_response_pass_has_transaction_id_of_latest_pass_sale() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("PASS-LATEST", 100.0, None, None, None, None)
+        .await;
+
+    // First pass: earlier valid_until.
+    let (status, first) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "price": 35.0, "valid_until": "2030-02-01" }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let first_tx_id = first["transaction_id"].as_i64().unwrap();
+
+    // Second pass: later valid_until — this is the one the UI must see.
+    let (status, second) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "price": 35.0, "valid_until": "2030-06-01" }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let second_tx_id = second["transaction_id"].as_i64().unwrap();
+    assert_ne!(first_tx_id, second_tx_id);
+
+    let (status, body) = app
+        .request(get("/api/cards/lookup/PASS-LATEST", &app.staff_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["pass"]["valid_until"], "2030-06-01");
+    assert_eq!(
+        body["pass"]["transaction_id"].as_i64().unwrap(),
+        second_tx_id,
+        "pass.transaction_id must be from the LATEST pass sale, not the first"
     );
 }
 

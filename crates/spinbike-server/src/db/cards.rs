@@ -156,8 +156,8 @@ pub async fn list_all_cards(pool: &SqlitePool) -> Result<Vec<CardRow>> {
     Ok(cards)
 }
 
-/// Card row + its current monthly-pass end date (computed as MAX across the
-/// card's transactions). Populated by a single GROUP BY query to avoid N+1.
+/// Card row + its current monthly-pass (id + end date) — populated by a single
+/// query with correlated subquery to pull the row with MAX(valid_until) per card.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct CardRowWithPass {
     pub id: i64,
@@ -172,11 +172,16 @@ pub struct CardRowWithPass {
     pub company: Option<String>,
     pub phone: Option<String>,
     pub pass_valid_until: Option<chrono::NaiveDate>,
+    pub pass_tx_id: Option<i64>,
 }
 
 impl CardRowWithPass {
-    /// Decompose into the card portion and the pass date.
-    pub fn into_parts(self) -> (CardRow, Option<chrono::NaiveDate>) {
+    /// Decompose into the card portion and the pass (id + date).
+    pub fn into_parts(self) -> (CardRow, Option<(i64, chrono::NaiveDate)>) {
+        let pass = match (self.pass_tx_id, self.pass_valid_until) {
+            (Some(id), Some(date)) => Some((id, date)),
+            _ => None,
+        };
         (
             CardRow {
                 id: self.id,
@@ -191,24 +196,28 @@ impl CardRowWithPass {
                 company: self.company,
                 phone: self.phone,
             },
-            self.pass_valid_until,
+            pass,
         )
     }
 }
 
-/// Return all cards with their current monthly-pass end date in a single JOIN query,
-/// avoiding N+1 queries when building a list of CardResponse objects.
+/// Return all cards with their current monthly-pass (tx id + end date) in a
+/// single query. Uses correlated subqueries to pick the newest non-voided pass
+/// transaction per card (ties broken by id DESC).
 pub async fn list_all_cards_with_pass(
     pool: &SqlitePool,
-) -> Result<Vec<(CardRow, Option<chrono::NaiveDate>)>> {
+) -> Result<Vec<(CardRow, Option<(i64, chrono::NaiveDate)>)>> {
     let rows: Vec<CardRowWithPass> = sqlx::query_as(
         "SELECT c.id, c.barcode, c.user_id, c.blocked, c.credit, c.allow_debit,
                 c.created_at, c.first_name, c.last_name, c.company, c.phone,
-                MAX(t.valid_until) AS pass_valid_until
+                (SELECT MAX(valid_until) FROM transactions
+                 WHERE card_id = c.id AND valid_until IS NOT NULL AND deleted_at IS NULL
+                ) AS pass_valid_until,
+                (SELECT id FROM transactions
+                 WHERE card_id = c.id AND valid_until IS NOT NULL AND deleted_at IS NULL
+                 ORDER BY valid_until DESC, id DESC LIMIT 1
+                ) AS pass_tx_id
          FROM cards c
-         LEFT JOIN transactions t
-           ON t.card_id = c.id AND t.valid_until IS NOT NULL
-         GROUP BY c.id
          ORDER BY c.barcode",
     )
     .fetch_all(pool)
@@ -217,12 +226,12 @@ pub async fn list_all_cards_with_pass(
     Ok(rows.into_iter().map(CardRowWithPass::into_parts).collect())
 }
 
-/// Search cards with their monthly-pass end date — single JOIN query to avoid N+1.
+/// Search cards with their monthly-pass (tx id + end date) — single query to avoid N+1.
 pub async fn search_cards_with_pass(
     pool: &SqlitePool,
     query: &str,
     limit: i64,
-) -> Result<Vec<(CardRow, Option<chrono::NaiveDate>)>> {
+) -> Result<Vec<(CardRow, Option<(i64, chrono::NaiveDate)>)>> {
     let q = query.trim();
     if q.is_empty() {
         return Ok(Vec::new());
@@ -233,12 +242,15 @@ pub async fn search_cards_with_pass(
     let rows: Vec<CardRowWithPass> = sqlx::query_as(
         "SELECT c.id, c.barcode, c.user_id, c.blocked, c.credit, c.allow_debit,
                 c.created_at, c.first_name, c.last_name, c.company, c.phone,
-                MAX(t.valid_until) AS pass_valid_until
+                (SELECT MAX(valid_until) FROM transactions
+                 WHERE card_id = c.id AND valid_until IS NOT NULL AND deleted_at IS NULL
+                ) AS pass_valid_until,
+                (SELECT id FROM transactions
+                 WHERE card_id = c.id AND valid_until IS NOT NULL AND deleted_at IS NULL
+                 ORDER BY valid_until DESC, id DESC LIMIT 1
+                ) AS pass_tx_id
          FROM cards c
-         LEFT JOIN transactions t
-           ON t.card_id = c.id AND t.valid_until IS NOT NULL
          WHERE c.search_text LIKE ?
-         GROUP BY c.id
          ORDER BY
            CASE WHEN c.barcode LIKE ? THEN 0 ELSE 1 END,
            c.last_name IS NULL, c.last_name ASC,
@@ -305,20 +317,23 @@ pub async fn get_card_by_user(pool: &SqlitePool, user_id: i64) -> Result<Vec<Car
     Ok(cards)
 }
 
-/// Return cards linked to a user with their monthly-pass end date in a single query.
+/// Return cards linked to a user with their monthly-pass (tx id + end date) in a single query.
 pub async fn get_cards_with_pass_by_user(
     pool: &SqlitePool,
     user_id: i64,
-) -> Result<Vec<(CardRow, Option<chrono::NaiveDate>)>> {
+) -> Result<Vec<(CardRow, Option<(i64, chrono::NaiveDate)>)>> {
     let rows: Vec<CardRowWithPass> = sqlx::query_as(
         "SELECT c.id, c.barcode, c.user_id, c.blocked, c.credit, c.allow_debit,
                 c.created_at, c.first_name, c.last_name, c.company, c.phone,
-                MAX(t.valid_until) AS pass_valid_until
+                (SELECT MAX(valid_until) FROM transactions
+                 WHERE card_id = c.id AND valid_until IS NOT NULL AND deleted_at IS NULL
+                ) AS pass_valid_until,
+                (SELECT id FROM transactions
+                 WHERE card_id = c.id AND valid_until IS NOT NULL AND deleted_at IS NULL
+                 ORDER BY valid_until DESC, id DESC LIMIT 1
+                ) AS pass_tx_id
          FROM cards c
-         LEFT JOIN transactions t
-           ON t.card_id = c.id AND t.valid_until IS NOT NULL
-         WHERE c.user_id = ?
-         GROUP BY c.id",
+         WHERE c.user_id = ?",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -382,13 +397,30 @@ pub async fn get_card_pass_valid_until(
 ) -> Result<Option<chrono::NaiveDate>> {
     let row: Option<(Option<chrono::NaiveDate>,)> = sqlx::query_as(
         "SELECT MAX(valid_until) FROM transactions
-         WHERE card_id = ? AND valid_until IS NOT NULL",
+         WHERE card_id = ? AND valid_until IS NOT NULL AND deleted_at IS NULL",
     )
     .bind(card_id)
     .fetch_optional(pool)
     .await
     .context("Failed to compute pass valid_until")?;
     Ok(row.and_then(|(d,)| d))
+}
+
+/// Return the latest non-voided pass transaction as (id, valid_until), or None.
+pub async fn get_card_pass_tx(
+    pool: &SqlitePool,
+    card_id: i64,
+) -> Result<Option<(i64, chrono::NaiveDate)>> {
+    let row: Option<(i64, chrono::NaiveDate)> = sqlx::query_as(
+        "SELECT id, valid_until FROM transactions
+         WHERE card_id = ? AND valid_until IS NOT NULL AND deleted_at IS NULL
+         ORDER BY valid_until DESC LIMIT 1",
+    )
+    .bind(card_id)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to fetch latest pass transaction")?;
+    Ok(row)
 }
 
 #[cfg(test)]
@@ -844,6 +876,42 @@ mod tests {
             result,
             Some(pass_date),
             "MAX must return the pass date, ignoring rows with NULL valid_until"
+        );
+    }
+
+    #[tokio::test]
+    async fn pass_validity_ignores_soft_deleted_pass() {
+        use crate::db::transactions::create_transaction_with_valid_until;
+        let pool = setup().await;
+        let card_id = create_card(&pool, "PV-1").await.unwrap();
+        let future = chrono::Local::now().date_naive() + chrono::Duration::days(10);
+
+        let tx_id = create_transaction_with_valid_until(
+            &pool,
+            None,
+            Some(card_id),
+            None,
+            Some(1),
+            -35.0,
+            "charge",
+            Some(future),
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            get_card_pass_valid_until(&pool, card_id).await.unwrap(),
+            Some(future)
+        );
+
+        crate::db::transactions::soft_delete(&pool, tx_id)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            get_card_pass_valid_until(&pool, card_id).await.unwrap(),
+            None,
+            "soft-deleted pass sale must not count as active pass"
         );
     }
 }

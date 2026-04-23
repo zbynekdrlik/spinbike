@@ -288,7 +288,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     // Payments
     m.insert("card_barcode_label", ("Ciarovy kod karty", "Card Barcode"));
     m.insert("scan_barcode", ("Naskenujte ciarovy kod", "Scan barcode"));
-    m.insert("charge", ("Uctovat", "Charge"));
+    m.insert("charge", ("Platba", "Charge"));
     m.insert("storno", ("Storno", "Storno"));
     m.insert("storno_refund", ("Storno (Vratenie)", "Storno (Refund)"));
     m.insert("service", ("Sluzba", "Service"));
@@ -343,9 +343,38 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         "pass_last_valid_until",
         ("Naposledy platny do", "Last valid until"),
     );
+    m.insert(
+        "edit_pass_date",
+        ("Zmenit koniec permanentky", "Change pass end date"),
+    );
+
+    // Transaction history void
+    m.insert("void", ("Zrusit", "Void"));
+    m.insert("voided", ("zrusene", "voided"));
+    m.insert(
+        "confirm_void",
+        (
+            "Zrusit tento zaznam? Neda sa vratit.",
+            "Void this entry? This cannot be undone from the UI.",
+        ),
+    );
 
     // Visit logging (active pass flow)
     m.insert("log_visit", ("Zaznamenat navstevu", "Log visit"));
+    m.insert(
+        "charge_for_extras",
+        (
+            "Platba za napoje / jedlo / ine",
+            "Charge for drinks / food / other",
+        ),
+    );
+
+    // Transaction history action labels (DB stores raw English: topup/charge/visit).
+    m.insert("tx_action_topup", ("Dobitie", "Top-up"));
+    m.insert("tx_action_charge", ("Platba", "Charge"));
+    m.insert("tx_action_visit", ("Navsteva", "Visit"));
+    m.insert("tx_until_short", ("do", "until"));
+    m.insert("error_format", ("Chyba: {}", "Error: {}"));
 
     // Sell pass modal
     m.insert(
@@ -375,6 +404,11 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("turn_on", ("Zapnut", "On"));
     m.insert("turn_off", ("Vypnut", "Off"));
 
+    // Card detail tabs
+    m.insert("tab_history", ("Historia", "History"));
+    m.insert("tab_upcoming", ("Pripravovane", "Upcoming"));
+    m.insert("tab_persistent", ("Opakovane", "Persistent"));
+
     // General
     m.insert("loading", ("Nacitavanie...", "Loading..."));
     m.insert("page_not_found", ("Stranka nenajdena", "Page not found"));
@@ -382,6 +416,21 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         "unable_to_load",
         ("Nepodarilo sa nacitat", "Unable to load"),
     );
+
+    // Redesign 2026: new UI strings
+    m.insert("show_older", ("Zobrazit starsie", "Show older"));
+    m.insert("close", ("Zatvorit", "Close"));
+    m.insert("edit_info", ("Upravit udaje", "Edit info"));
+    m.insert("customer_info", ("Udaje klienta", "Customer info"));
+    m.insert(
+        "sell_pass_label",
+        ("Predat mesacny preukaz", "Sell monthly pass"),
+    );
+    m.insert("pass_active_until", ("Aktivny do {}", "Active until {}"));
+    m.insert("pass_expired_on", ("Skoncil {}", "Expired {}"));
+    m.insert("days_left_short", ("{} d", "{}d"));
+    m.insert("days_ago_short", ("pred {} d", "{}d ago"));
+    m.insert("edit_pass_date", ("Upravit datum", "Edit date"));
 
     m
 });

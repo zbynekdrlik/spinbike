@@ -12,6 +12,9 @@ async function openJanaCard(page: import('@playwright/test').Page) {
     await expect(result).toBeVisible({ timeout: 3000 });
     await result.click();
     await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+    // The card detail now defaults to the History tab; the spin-booking tests
+    // operate on Upcoming/Persistent so switch over up front.
+    await page.locator('[data-testid="tab-upcoming"]').click();
     await expect(page.locator('[data-testid="upcoming-classes"]')).toBeVisible();
 }
 
@@ -29,7 +32,7 @@ test.describe('spin booking', () => {
 
         // The row should now show a red Cancel button.
         await expect(
-            page.locator('[data-testid="upcoming-classes"] .btn-danger')
+            page.locator('[data-testid="upcoming-classes"] .btn--danger')
         ).toHaveCount(1, { timeout: 5000 });
 
         assertCleanConsole(consoleMessages);
@@ -39,11 +42,14 @@ test.describe('spin booking', () => {
         const consoleMessages = setupConsoleCheck(page);
         await openJanaCard(page);
 
-        // Persistent-toggles panel is visible below Upcoming classes.
+        // Switch to the Persistent tab for the toggle interactions.
+        await page.locator('[data-testid="tab-persistent"]').click();
         await expect(page.locator('[data-testid="persistent-toggles"]')).toBeVisible();
 
-        // Pick the first toggle that reads "On" (i.e. currently off — clicking turns persistent ON).
+        // The toggle buttons are populated by an async fetch — wait for the
+        // first one before counting, otherwise count() races the fetch.
         const toggles = page.locator('[data-testid^="persistent-toggle-"]');
+        await expect(toggles.first()).toBeVisible({ timeout: 10000 });
         const n = await toggles.count();
         expect(n).toBeGreaterThan(0);
 
@@ -60,7 +66,8 @@ test.describe('spin booking', () => {
         }
         expect(flipped).toBe(true);
 
-        // At least one AUTO row should now exist in the upcoming-classes panel.
+        // Switch back to Upcoming to verify AUTO rows materialised for the flipped subscription.
+        await page.locator('[data-testid="tab-upcoming"]').click();
         await expect(page.locator('[data-testid^="auto-cancel-"]').first()).toBeVisible({
             timeout: 5000,
         });
@@ -70,12 +77,16 @@ test.describe('spin booking', () => {
 
     test('staff skips one AUTO week, seat returns to BOOK', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
-        await openJanaCard(page);
+        await openJanaCard(page); // leaves us on the Upcoming tab
 
         // Ensure at least one AUTO row exists; if not, flip a persistent toggle ON first.
+        // The upcoming-classes fetch is async — give it room before deciding it's empty.
+        await page.waitForTimeout(500);
         let autoBtn = page.locator('[data-testid^="auto-cancel-"]').first();
         if ((await autoBtn.count()) === 0) {
+            await page.locator('[data-testid="tab-persistent"]').click();
             const toggles = page.locator('[data-testid^="persistent-toggle-"]');
+            await expect(toggles.first()).toBeVisible({ timeout: 10000 });
             const n = await toggles.count();
             for (let i = 0; i < n; i++) {
                 const t = toggles.nth(i);
@@ -85,8 +96,9 @@ test.describe('spin booking', () => {
                     break;
                 }
             }
+            await page.locator('[data-testid="tab-upcoming"]').click();
             autoBtn = page.locator('[data-testid^="auto-cancel-"]').first();
-            await expect(autoBtn).toBeVisible({ timeout: 5000 });
+            await expect(autoBtn).toBeVisible({ timeout: 10000 });
         }
 
         const dataId = await autoBtn.getAttribute('data-testid');
@@ -105,9 +117,14 @@ test.describe('spin booking', () => {
         const consoleMessages = setupConsoleCheck(page);
         await openJanaCard(page);
 
+        // Switch to the Persistent tab for the toggle interactions.
+        await page.locator('[data-testid="tab-persistent"]').click();
+        await expect(page.locator('[data-testid="persistent-toggles"]')).toBeVisible();
+
         // Find a toggle currently showing "Off" (i.e. subscription IS active — click to turn OFF).
         // If none, turn one ON first so we have something to turn off.
         const toggles = page.locator('[data-testid^="persistent-toggle-"]');
+        await expect(toggles.first()).toBeVisible({ timeout: 10000 });
         const n = await toggles.count();
         let hasOff = false;
         for (let i = 0; i < n; i++) {
@@ -141,6 +158,7 @@ test.describe('spin booking', () => {
         // at least one fewer than before — simpler: count == 0 after all are off.
         // (Conservative: assert the count is <= 0, allowing for timing.)
         await page.waitForTimeout(500);
+        await page.locator('[data-testid="tab-upcoming"]').click();
         const autoCount = await page.locator('[data-testid^="auto-cancel-"]').count();
         // If there were multiple persistent subscriptions we only turned one off; assert it went DOWN.
         // Simpler: assert the number of Off toggles now equals zero OR some templates still have auto rows.

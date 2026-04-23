@@ -66,25 +66,32 @@ pub fn MyBalancePage() -> impl IntoView {
                 Some(balance) => {
                     if balance.cards.is_empty() {
                         view! {
-                            <div class="card">
-                                <p class="text-muted">{move || i18n::t(lang.get(), "no_card_linked")}</p>
-                                <a href="/link-card" class="btn btn-primary mt-2">{move || i18n::t(lang.get(), "link_a_card")}</a>
+                            <div class="group">
+                                <div class="list-row">
+                                    <div class="list-row__main">
+                                        <p class="text-muted">{move || i18n::t(lang.get(), "no_card_linked")}</p>
+                                    </div>
+                                    <div class="list-row__end">
+                                        <a href="/link-card" class="btn btn--primary btn--compact">{move || i18n::t(lang.get(), "link_a_card")}</a>
+                                    </div>
+                                </div>
                             </div>
                         }.into_any()
                     } else {
                         let card_views: Vec<_> = balance.cards.iter().map(|c| {
                             let barcode = c.barcode.clone();
-                            let credit_str = format!("{:.0} CZK", c.credit);
+                            let credit_val = format!("{:.0}", c.credit);
                             let is_blocked = c.blocked;
                             view! {
-                                <div class="card mb-2">
-                                    <div class="flex justify-between items-center">
-                                        <div>
-                                            <div class="card-title">{format!("Card: {barcode}")}</div>
-                                            <div class="text-muted">{move || if is_blocked { i18n::t(lang.get(), "blocked") } else { i18n::t(lang.get(), "active") }}</div>
+                                <div class="group mb-2">
+                                    <div class="list-row">
+                                        <div class="list-row__main">
+                                            <div class="list-row__title">{format!("Card: {barcode}")}</div>
+                                            <div class="list-row__sub">{move || if is_blocked { i18n::t(lang.get(), "blocked") } else { i18n::t(lang.get(), "active") }}</div>
                                         </div>
-                                        <div style="font-size:1.5rem;font-weight:700;color:var(--primary)">
-                                            {credit_str}
+                                        <div class="card-balance">
+                                            <span class="card-balance__num">{credit_val}</span>
+                                            <span class="card-balance__unit">"CZK"</span>
                                         </div>
                                     </div>
                                 </div>
@@ -98,14 +105,27 @@ pub fn MyBalancePage() -> impl IntoView {
                                 let date = tx.created_at.clone();
                                 let action = tx.action.clone();
                                 let amount = format!("{:.0} CZK", tx.amount);
-                                view! { <tr><td>{date}</td><td>{action}</td><td>{amount}</td></tr> }
+                                view! {
+                                    <div class="list-row">
+                                        <div class="list-row__main">
+                                            <div class="list-row__title">{action}</div>
+                                            <div class="list-row__sub">{date}</div>
+                                        </div>
+                                        <div class="list-row__amount">{amount}</div>
+                                    </div>
+                                }
                             }).collect();
                             view! {
-                                <div>
-                                    <h2 style="font-size:1rem;font-weight:700;margin:16px 0 8px">{i18n::t(lang.get(), "transactions")}</h2>
-                                    <table>
-                                        <tbody>{tx_rows}</tbody>
-                                    </table>
+                                <div class="group">
+                                    <div class="group__head">{i18n::t(lang.get(), "transactions")}</div>
+                                    {tx_rows}
+                                    <div class="list-row">
+                                        <div class="list-row__end">
+                                            <button class="btn btn--compact btn--ghost" data-testid="show-older">
+                                                {i18n::t(lang.get(), "show_older")}
+                                            </button>
+                                        </div>
+                                    </div>
                                 </div>
                             }.into_any()
                         };

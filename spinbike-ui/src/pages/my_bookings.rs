@@ -58,7 +58,7 @@ pub fn MyBookingsPage() -> impl IntoView {
                 return view! { <div class="empty-state">{move || i18n::t(lang.get(), "no_bookings")}</div> }.into_any();
             }
 
-            let cards: Vec<_> = list.iter().map(|b| {
+            let rows: Vec<_> = list.iter().map(|b| {
                 let bid = b.id;
                 let template_id = b.template_id;
                 let date = b.date.clone();
@@ -81,25 +81,31 @@ pub fn MyBookingsPage() -> impl IntoView {
                 let title = format!("Class #{template_id} — {date}");
 
                 view! {
-                    <div class="card">
-                        <div class="card-header">
-                            <div class="card-title">{title}</div>
-                            <button class="btn btn-sm btn-danger" on:click=on_cancel disabled=move || cancel_loading.get()>
+                    <div class="list-row">
+                        <div class="list-row__main">
+                            <div class="list-row__title">{title}</div>
+                            {move || {
+                                let ce = cancel_err.get();
+                                if ce.is_empty() {
+                                    view! { <span></span> }.into_any()
+                                } else {
+                                    view! { <div class="alert alert-error">{ce}</div> }.into_any()
+                                }
+                            }}
+                        </div>
+                        <div class="list-row__end">
+                            <button class="btn btn--danger btn--compact" on:click=on_cancel disabled=move || cancel_loading.get()>
                                 {move || if cancel_loading.get() { "..." } else { i18n::t(lang.get(), "cancel") }}
                             </button>
                         </div>
-                        {move || {
-                            let ce = cancel_err.get();
-                            if ce.is_empty() {
-                                view! { <span></span> }.into_any()
-                            } else {
-                                view! { <div class="alert alert-error">{ce}</div> }.into_any()
-                            }
-                        }}
                     </div>
                 }.into_any()
             }).collect();
-            view! { <div>{cards}</div> }.into_any()
+            view! {
+                <div class="group">
+                    {rows}
+                </div>
+            }.into_any()
         }}
     }
 }

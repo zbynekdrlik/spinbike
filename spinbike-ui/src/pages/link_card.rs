@@ -57,7 +57,7 @@ pub fn LinkCardPage() -> impl IntoView {
     };
 
     view! {
-        <div style="max-width:400px;margin:0 auto">
+        <div class="page-form">
             <h1 class="page-title">{move || i18n::t(lang.get(), "link_card")}</h1>
 
             {move || {
@@ -83,7 +83,7 @@ pub fn LinkCardPage() -> impl IntoView {
                     <label>{move || i18n::t(lang.get(), "card_barcode")}</label>
                     <input type="text" class="form-control" node_ref=barcode_ref placeholder=move || i18n::t(lang.get(), "scan_or_enter") required />
                 </div>
-                <button type="submit" class="btn btn-primary btn-block" disabled=move || loading.get()>
+                <button type="submit" class="btn btn--primary btn--hero btn--block" disabled=move || loading.get()>
                     {move || if loading.get() { i18n::t(lang.get(), "linking") } else { i18n::t(lang.get(), "link_card") }}
                 </button>
             </form>

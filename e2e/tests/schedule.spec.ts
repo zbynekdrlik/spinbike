@@ -48,14 +48,14 @@ test.describe('Schedule and booking', () => {
             // Wait a moment for reactivity
             await page.waitForTimeout(300);
 
-            const classCards = page.locator('.class-card');
+            const classCards = page.locator('.list-row');
             const count = await classCards.count();
             if (count > 0) {
                 foundClass = true;
                 // Verify class card has expected structure
                 const firstCard = classCards.first();
-                await expect(firstCard.locator('.class-time')).toBeVisible();
-                await expect(firstCard.locator('.class-spots')).toBeVisible();
+                await expect(firstCard.locator('.list-row__title')).toBeVisible();
+                await expect(firstCard.locator('.list-row__sub').nth(1)).toBeVisible();
                 break;
             }
         }
@@ -82,7 +82,7 @@ test.describe('Schedule and booking', () => {
         for (let i = 0; i < 5; i++) {
             await dayButtons.nth(i).click();
             await page.waitForTimeout(300);
-            const classCards = page.locator('.class-card');
+            const classCards = page.locator('.list-row');
             if ((await classCards.count()) > 0) {
                 // Should have "Login to book" link
                 const loginLink = page.locator('a[href="/login"]', { hasText: 'Login to book' });
@@ -171,10 +171,9 @@ test.describe('Schedule and booking', () => {
         await dayPicker.locator('button').nth(dayIdx).click();
         await page.waitForTimeout(500);
 
-        // Verify BOOKED badge is visible
-        const bookedBadge = page.locator('.badge-booked');
-        await expect(bookedBadge.first()).toBeVisible({ timeout: 10000 });
-        await expect(bookedBadge.first()).toContainText('BOOKED');
+        // Verify CANCEL button is visible (booked state shows cancel button)
+        const cancelBtn = page.locator('.list-row--booked .btn--danger');
+        await expect(cancelBtn.first()).toBeVisible({ timeout: 10000 });
 
         // Cancel the booking via API
         const cancelResp = await fetch(`${BASE_URL}/api/bookings/${bookingId}`, {
@@ -193,7 +192,7 @@ test.describe('Schedule and booking', () => {
         await page.waitForTimeout(500);
 
         // BOOK button should be visible again
-        const bookButton = page.locator('.class-card .class-action button', { hasText: 'BOOK' });
+        const bookButton = page.locator('.list-row .btn--primary', { hasText: 'BOOK' });
         await expect(bookButton.first()).toBeVisible({ timeout: 10000 });
 
         assertCleanConsole(consoleMessages);

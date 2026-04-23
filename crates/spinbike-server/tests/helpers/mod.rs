@@ -199,6 +199,20 @@ pub fn put_json<B: serde::Serialize>(
         .unwrap()
 }
 
+pub fn patch_json<B: serde::Serialize>(
+    uri: &str,
+    token: &str,
+    body: &B,
+) -> axum::http::Request<Body> {
+    axum::http::Request::builder()
+        .method("PATCH")
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", "application/json")
+        .body(Body::from(serde_json::to_vec(body).unwrap()))
+        .unwrap()
+}
+
 pub fn delete(uri: &str, token: &str) -> axum::http::Request<Body> {
     axum::http::Request::builder()
         .method("DELETE")

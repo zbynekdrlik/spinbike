@@ -6,6 +6,7 @@ pub mod payments;
 pub mod persistent_bookings;
 pub mod static_files;
 pub mod test_fixtures;
+pub mod transactions;
 pub mod upcoming_classes;
 
 use axum::{Json, Router, http::StatusCode};
@@ -31,6 +32,7 @@ pub fn api_routes() -> Router<AppState> {
         .merge(payments::routes())
         .merge(admin::routes())
         .merge(persistent_bookings::routes())
+        .merge(transactions::routes())
         .merge(upcoming_classes::routes())
 }
 

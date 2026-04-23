@@ -268,6 +268,36 @@ async fn block_and_unblock_toggles() {
     assert!(!resp["blocked"].as_bool().unwrap());
 }
 
+#[tokio::test]
+async fn transactions_endpoint_returns_deleted_at_field() {
+    let app = TestApp::new().await;
+    // Create a topup then soft-delete it.
+    let tx_id = sqlx::query_scalar::<_, i64>(
+        "INSERT INTO transactions (card_id, amount, action) VALUES (?, 5.0, 'topup') RETURNING id",
+    )
+    .bind(app.customer_card_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    spinbike_server::db::transactions::soft_delete(&app.pool, tx_id)
+        .await
+        .unwrap();
+
+    let uri = format!("/api/cards/{}/transactions", app.customer_card_id);
+    let (status, resp) = app.request(get(&uri, &app.staff_token)).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let row = resp
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"].as_i64() == Some(tx_id))
+        .expect("deleted row must still be listed");
+    assert!(
+        row.get("deleted_at").and_then(|v| v.as_str()).is_some(),
+        "response must include deleted_at string"
+    );
+}
+
 /// Existence check: keep cards routes mounted. Kills Router::new() mutants.
 /// We only probe endpoints whose handler cannot legitimately return 404 —
 /// otherwise a handler-level 404 is indistinguishable from a missing route.

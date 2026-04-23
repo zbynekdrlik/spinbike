@@ -3,6 +3,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::{HtmlInputElement, HtmlSelectElement};
 
 use crate::api;
+use crate::components::Segmented;
 use crate::i18n::{self, ADMIN_TAB_KEYS, Lang, WEEKDAY_KEYS};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -52,26 +53,19 @@ pub fn AdminPage() -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (tab, set_tab) = signal("templates".to_string());
 
-    let tab_buttons: Vec<_> = ADMIN_TAB_KEYS
+    let seg_items: Vec<(String, String)> = ADMIN_TAB_KEYS
         .iter()
-        .map(|(id, key)| {
-            let id = id.to_string();
-            let id2 = id.clone();
-            let key = *key;
-            view! {
-                <button
-                    class=move || if tab.get() == id { "tab-btn active" } else { "tab-btn" }
-                    on:click=move |_| set_tab.set(id2.clone())
-                >
-                    {move || i18n::t(lang.get(), key)}
-                </button>
-            }
-        })
+        .map(|(id, key)| (id.to_string(), i18n::t(lang.get_untracked(), key).to_string()))
         .collect();
 
     view! {
         <h1 class="page-title">{move || i18n::t(lang.get(), "admin")}</h1>
-        <div class="tabs">{tab_buttons}</div>
+        <Segmented
+            items=seg_items
+            active=Signal::derive(move || tab.get())
+            on_change=Callback::new(move |key: String| set_tab.set(key))
+            testid_prefix="admin-tab"
+        />
         {move || {
             match tab.get().as_str() {
                 "templates" => TemplatesTab().into_any(),
@@ -101,7 +95,7 @@ fn TemplatesTab() -> impl IntoView {
         spawn_local(async move {
             match api::get::<Vec<TemplateRow>>("/api/admin/templates").await {
                 Ok(d) => set_items.set(d),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
             set_loading.set(false);
         });
@@ -176,7 +170,7 @@ fn TemplatesTab() -> impl IntoView {
             .await
             {
                 Ok(_) => set_ver.update(|v| *v += 1),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
         });
     };
@@ -213,7 +207,7 @@ fn TemplatesTab() -> impl IntoView {
                 <label>{move || i18n::t(lang.get(), "instructor_id")}</label>
                 <input type="number" class="form-control" node_ref=instr_ref placeholder=move || i18n::t(lang.get(), "optional") />
             </div>
-            <button type="submit" class="btn btn-primary btn-sm">{move || i18n::t(lang.get(), "create")}</button>
+            <button type="submit" class="btn btn--primary btn--compact">{move || i18n::t(lang.get(), "create")}</button>
         </form>
 
         {move || {
@@ -250,7 +244,7 @@ fn TemplatesTab() -> impl IntoView {
                         struct Req { start_time: Option<String>, capacity: Option<i64> }
                         match api::put(&format!("/api/admin/templates/{tid}"), &Req { start_time: Some(new_time), capacity: Some(new_cap) }).await {
                             Ok(_) => { set_editing.set(false); set_v.update(|v| *v += 1); }
-                            Err(e) => set_m.set(format!("Error: {e}")),
+                            Err(e) => set_m.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                         }
                     });
                 };
@@ -265,8 +259,8 @@ fn TemplatesTab() -> impl IntoView {
                     </tr>
                     <tr>
                         <td colspan="6">
-                            <button class="btn btn-sm btn-danger" on:click=on_del>{move || i18n::t(lang.get(), "delete")}</button>
-                            <button class="btn btn-sm btn-outline" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
+                            <button class="btn btn--danger btn--compact" on:click=on_del>{move || i18n::t(lang.get(), "delete")}</button>
+                            <button class="btn btn--ghost btn--compact" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
                         </td>
                     </tr>
                     {move || {
@@ -280,7 +274,7 @@ fn TemplatesTab() -> impl IntoView {
                                             <input type="time" class="form-control" style="width:auto" node_ref=edit_time_ref value=time_val />
                                             <label>{i18n::t(lang.get(), "capacity")}</label>
                                             <input type="number" class="form-control" style="width:80px" node_ref=edit_cap_ref value=cap_for_edit min="1" />
-                                            <button class="btn btn-sm btn-primary" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
+                                            <button class="btn btn--primary btn--compact" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
                                         </div>
                                     </td>
                                 </tr>
@@ -317,7 +311,7 @@ fn InstructorsTab() -> impl IntoView {
         spawn_local(async move {
             match api::get::<Vec<InstructorRow>>("/api/admin/instructors").await {
                 Ok(d) => set_items.set(d),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
             set_loading.set(false);
         });
@@ -342,7 +336,7 @@ fn InstructorsTab() -> impl IntoView {
             }
             match api::post::<Req, InstructorRow>("/api/admin/instructors", &Req { name }).await {
                 Ok(_) => set_ver.update(|v| *v += 1),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
         });
     };
@@ -354,7 +348,7 @@ fn InstructorsTab() -> impl IntoView {
                 <label>{move || i18n::t(lang.get(), "name")}</label>
                 <input type="text" class="form-control" node_ref=name_ref required />
             </div>
-            <button type="submit" class="btn btn-primary btn-sm">{move || i18n::t(lang.get(), "add_instructor")}</button>
+            <button type="submit" class="btn btn--primary btn--compact">{move || i18n::t(lang.get(), "add_instructor")}</button>
         </form>
 
         {move || {
@@ -378,7 +372,7 @@ fn InstructorsTab() -> impl IntoView {
                         struct Req { active: Option<bool> }
                         match api::put(&format!("/api/admin/instructors/{iid}"), &Req { active: Some(new_active) }).await {
                             Ok(_) => set_v.update(|v| *v += 1),
-                            Err(e) => set_m.set(format!("Error: {e}")),
+                            Err(e) => set_m.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                         }
                     });
                 };
@@ -389,7 +383,7 @@ fn InstructorsTab() -> impl IntoView {
                         struct Req { name: Option<String> }
                         match api::put(&format!("/api/admin/instructors/{iid}"), &Req { name: Some(new_name) }).await {
                             Ok(_) => { set_editing.set(false); set_v.update(|v| *v += 1); }
-                            Err(e) => set_m.set(format!("Error: {e}")),
+                            Err(e) => set_m.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                         }
                     });
                 };
@@ -399,8 +393,8 @@ fn InstructorsTab() -> impl IntoView {
                         <td>{name}</td>
                         <td>{move || if is_active { i18n::t(lang.get(), "active") } else { i18n::t(lang.get(), "inactive") }}</td>
                         <td>
-                            <button class="btn btn-sm btn-outline" on:click=on_toggle>{move || if is_active { i18n::t(lang.get(), "deactivate") } else { i18n::t(lang.get(), "activate") }}</button>
-                            <button class="btn btn-sm btn-outline" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
+                            <button class="btn btn--ghost btn--compact" on:click=on_toggle>{move || if is_active { i18n::t(lang.get(), "deactivate") } else { i18n::t(lang.get(), "activate") }}</button>
+                            <button class="btn btn--ghost btn--compact" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
                         </td>
                     </tr>
                     {move || {
@@ -412,7 +406,7 @@ fn InstructorsTab() -> impl IntoView {
                                         <div class="inline-form" style="display:flex;gap:8px;align-items:center;padding:4px 0">
                                             <label>{i18n::t(lang.get(), "name")}</label>
                                             <input type="text" class="form-control" style="width:auto" node_ref=edit_name_ref value=nval />
-                                            <button class="btn btn-sm btn-primary" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
+                                            <button class="btn btn--primary btn--compact" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
                                         </div>
                                     </td>
                                 </tr>
@@ -450,7 +444,7 @@ fn ServicesTab() -> impl IntoView {
         spawn_local(async move {
             match api::get::<Vec<ServiceRow>>("/api/admin/services").await {
                 Ok(d) => set_items.set(d),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
             set_loading.set(false);
         });
@@ -493,7 +487,7 @@ fn ServicesTab() -> impl IntoView {
             .await
             {
                 Ok(_) => set_ver.update(|v| *v += 1),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
         });
     };
@@ -509,7 +503,7 @@ fn ServicesTab() -> impl IntoView {
                 <label>{move || i18n::t(lang.get(), "price_czk")}</label>
                 <input type="number" class="form-control" node_ref=price_ref step="1" min="0" required />
             </div>
-            <button type="submit" class="btn btn-primary btn-sm">{move || i18n::t(lang.get(), "add_service")}</button>
+            <button type="submit" class="btn btn--primary btn--compact">{move || i18n::t(lang.get(), "add_service")}</button>
         </form>
 
         {move || {
@@ -536,7 +530,7 @@ fn ServicesTab() -> impl IntoView {
                         struct Req { active: Option<bool> }
                         match api::put(&format!("/api/admin/services/{sid}"), &Req { active: Some(new_active) }).await {
                             Ok(_) => set_v.update(|v| *v += 1),
-                            Err(e) => set_m.set(format!("Error: {e}")),
+                            Err(e) => set_m.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                         }
                     });
                 };
@@ -548,7 +542,7 @@ fn ServicesTab() -> impl IntoView {
                         struct Req { name: Option<String>, default_price: Option<f64> }
                         match api::put(&format!("/api/admin/services/{sid}"), &Req { name: Some(new_name), default_price: Some(new_price) }).await {
                             Ok(_) => { set_editing.set(false); set_v.update(|v| *v += 1); }
-                            Err(e) => set_m.set(format!("Error: {e}")),
+                            Err(e) => set_m.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                         }
                     });
                 };
@@ -559,8 +553,8 @@ fn ServicesTab() -> impl IntoView {
                         <td>{price}</td>
                         <td>{move || if is_active { i18n::t(lang.get(), "active") } else { i18n::t(lang.get(), "inactive") }}</td>
                         <td>
-                            <button class="btn btn-sm btn-outline" on:click=on_toggle>{move || if is_active { i18n::t(lang.get(), "deactivate") } else { i18n::t(lang.get(), "activate") }}</button>
-                            <button class="btn btn-sm btn-outline" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
+                            <button class="btn btn--ghost btn--compact" on:click=on_toggle>{move || if is_active { i18n::t(lang.get(), "deactivate") } else { i18n::t(lang.get(), "activate") }}</button>
+                            <button class="btn btn--ghost btn--compact" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
                         </td>
                     </tr>
                     {move || {
@@ -574,7 +568,7 @@ fn ServicesTab() -> impl IntoView {
                                             <input type="text" class="form-control" style="width:auto" node_ref=edit_name_ref value=nval />
                                             <label>{i18n::t(lang.get(), "price")}</label>
                                             <input type="number" class="form-control" style="width:80px" node_ref=edit_price_ref value=price_for_edit step="1" min="0" />
-                                            <button class="btn btn-sm btn-primary" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
+                                            <button class="btn btn--primary btn--compact" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
                                         </div>
                                     </td>
                                 </tr>
@@ -598,7 +592,7 @@ fn ServicesTab() -> impl IntoView {
 
 #[component]
 fn UsersTab() -> impl IntoView {
-    let _lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (items, set_items) = signal(Vec::<UserRow>::new());
     let (loading, set_loading) = signal(true);
     let (ver, set_ver) = signal(0u32);
@@ -610,7 +604,7 @@ fn UsersTab() -> impl IntoView {
         spawn_local(async move {
             match api::get::<Vec<UserRow>>("/api/admin/users").await {
                 Ok(d) => set_items.set(d),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
             set_loading.set(false);
         });
@@ -641,7 +635,7 @@ fn UsersTab() -> impl IntoView {
                         struct Req { role: String }
                         match api::put(&format!("/api/admin/users/{uid}/role"), &Req { role: role.clone() }).await {
                             Ok(_) => { set_m.set(format!("User {uid} role updated")); set_v.update(|v| *v += 1); }
-                            Err(e) => set_m.set(format!("Error: {e}")),
+                            Err(e) => set_m.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                         }
                     });
                 };
@@ -695,7 +689,7 @@ fn SettingsTab() -> impl IntoView {
         spawn_local(async move {
             match api::get::<Vec<SettingRow>>("/api/admin/settings").await {
                 Ok(d) => set_items.set(d),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
             set_loading.set(false);
         });
@@ -728,7 +722,7 @@ fn SettingsTab() -> impl IntoView {
             }
             match api::put("/api/admin/settings", &Req { key, value }).await {
                 Ok(_) => set_ver.update(|v| *v += 1),
-                Err(e) => set_msg.set(format!("Error: {e}")),
+                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
         });
     };
@@ -744,7 +738,7 @@ fn SettingsTab() -> impl IntoView {
                 <label>{move || i18n::t(lang.get(), "value")}</label>
                 <input type="text" class="form-control" node_ref=val_ref required />
             </div>
-            <button type="submit" class="btn btn-primary btn-sm">{move || i18n::t(lang.get(), "save")}</button>
+            <button type="submit" class="btn btn--primary btn--compact">{move || i18n::t(lang.get(), "save")}</button>
         </form>
 
         {move || {

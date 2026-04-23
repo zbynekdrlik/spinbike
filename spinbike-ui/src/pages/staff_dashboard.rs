@@ -1,6 +1,6 @@
 use leptos::prelude::*;
-use wasm_bindgen_futures::spawn_local;
 use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
 
 use crate::api;
@@ -136,11 +136,11 @@ pub fn StaffDashboardPage() -> impl IntoView {
                 let set_v = set_ver;
 
                 let card_class = if slot.cancelled {
-                    "class-card cancelled"
+                    "list-row list-row--cancelled"
                 } else if slot.booked >= slot.capacity {
-                    "class-card full"
+                    "list-row list-row--full"
                 } else {
-                    "class-card available"
+                    "list-row list-row--available"
                 };
 
                 let time_label = format!("{} {}", slot.date, slot.start_time);
@@ -172,16 +172,16 @@ pub fn StaffDashboardPage() -> impl IntoView {
                 let actions = if !cancelled {
                     view! {
                         <div class="flex gap-1">
-                            <button class="btn btn-sm btn-outline" on:click=move |_| set_walkin_open.update(|v| *v = !*v)>
+                            <button class="btn btn--ghost btn--compact" on:click=move |_| set_walkin_open.update(|v| *v = !*v)>
                                 {move || i18n::t(lang.get(), "add_walk_in")}
                             </button>
-                            <button class="btn btn-sm btn-danger" on:click=on_cancel_class disabled=move || cancel_loading.get()>
+                            <button class="btn btn--danger btn--compact" on:click=on_cancel_class disabled=move || cancel_loading.get()>
                                 {move || i18n::t(lang.get(), "cancel_class")}
                             </button>
                         </div>
                     }.into_any()
                 } else {
-                    view! { <span class="badge badge-cancelled">{move || i18n::t(lang.get(), "cancelled")}</span> }.into_any()
+                    view! { <span class="badge badge--cancelled">{move || i18n::t(lang.get(), "cancelled")}</span> }.into_any()
                 };
 
                 // Fetch participants for this class
@@ -203,11 +203,11 @@ pub fn StaffDashboardPage() -> impl IntoView {
                 view! {
                     <div>
                         <div class=card_class>
-                            <div class="class-info">
-                                <div class="class-time">{time_label}</div>
-                                <div class="class-spots">{move || i18n::tf(lang.get(), "booked_format", &[&booked.to_string(), &capacity.to_string()])}</div>
+                            <div class="list-row__main">
+                                <div class="list-row__title">{time_label}</div>
+                                <div class="list-row__sub">{move || i18n::tf(lang.get(), "booked_format", &[&booked.to_string(), &capacity.to_string()])}</div>
                             </div>
-                            <div class="class-action">
+                            <div class="list-row__end">
                                 {actions}
                             </div>
                         </div>
@@ -234,7 +234,7 @@ pub fn StaffDashboardPage() -> impl IntoView {
                                         <span class="badge" style="display:inline-flex;align-items:center;gap:4px;margin:2px 4px;padding:2px 8px;background:#e0e7ff;border-radius:12px;font-size:0.8rem">
                                             {name}
                                             <button
-                                                class="btn-icon"
+                                                class="btn btn--compact btn--ghost"
                                                 style="background:none;border:none;cursor:pointer;font-size:0.8rem;color:#dc2626;padding:0 2px"
                                                 on:click=on_cancel
                                                 title=move || i18n::t(lang.get(), "cancel_booking")
@@ -299,10 +299,8 @@ fn WalkinForm(
                 return;
             }
             let encoded = walkin_urlencode(&q_at_start);
-            match api::get::<Vec<WalkinCardHit>>(&format!(
-                "/api/cards/search?q={encoded}&limit=10"
-            ))
-            .await
+            match api::get::<Vec<WalkinCardHit>>(&format!("/api/cards/search?q={encoded}&limit=10"))
+                .await
             {
                 Ok(list) => {
                     if query.get_untracked() == q_at_start {
@@ -390,7 +388,7 @@ fn WalkinForm(
                             <li class="walkin-row" data-testid=format!("walkin-pick-{card_id}")>
                                 <button
                                     type="button"
-                                    class="btn btn-sm btn-primary"
+                                    class="btn btn--primary btn--compact"
                                     disabled=is_loading
                                     on:click=move |_| pick(card.clone())
                                 >

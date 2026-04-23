@@ -89,6 +89,25 @@ pub async fn put<B: Serialize>(path: &str, body: &B) -> Result<(), String> {
     Ok(())
 }
 
+pub async fn patch<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Result<T, String> {
+    let url = format!("{}{}", base_url(), path);
+    let req = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::PATCH))
+        .json(body)
+        .map_err(|e| e.to_string())?;
+
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+
+    if !resp.ok() {
+        if handle_unauthorized(resp.status(), get_token().is_some()) {
+            return Err("Session expired, redirecting to login...".into());
+        }
+        let text = resp.text().await.unwrap_or_default();
+        return Err(extract_error(&text, resp.status()));
+    }
+
+    resp.json::<T>().await.map_err(|e| e.to_string())
+}
+
 pub async fn put_json<B: Serialize, T: DeserializeOwned>(
     path: &str,
     body: &B,
@@ -127,6 +146,13 @@ pub async fn delete(path: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// DELETE request that expects a no-body success response (204). Alias over
+/// [`delete`] with an explicit name matching `post` / `patch` conventions used
+/// by call sites that want to emphasise the empty-body contract.
+pub async fn delete_empty(path: &str) -> Result<(), String> {
+    delete(path).await
 }
 
 fn extract_error(body: &str, status: u16) -> String {
