@@ -234,6 +234,8 @@ jobs:
           trunk build --release
 
       - name: Force rust-embed to re-bake dist
+        # Cargo's incremental compilation doesn't track dist/ content, so the
+        # server binary skips re-embedding unless a tracked file changes.
         run: touch crates/spinbike-server/src/routes/static_files.rs
 
       - name: Build release server
@@ -293,6 +295,8 @@ jobs:
           trunk build --release
 
       - name: Force rust-embed to re-bake dist
+        # Cargo's incremental compilation doesn't track dist/ content, so the
+        # server binary skips re-embedding unless a tracked file changes.
         run: touch crates/spinbike-server/src/routes/static_files.rs
 
       - name: Build release server
