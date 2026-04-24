@@ -1,0 +1,16 @@
+[Unit]
+Description=SpinBike PWA Server (prod)
+After=network.target
+
+[Service]
+Type=simple
+User=newlevel
+Environment=PORT=8080
+Environment=DATABASE_PATH=/opt/spinbike/prod/spinbike.db
+EnvironmentFile=/etc/default/spinbike-prod
+ExecStart=/opt/spinbike/prod/spinbike-server
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

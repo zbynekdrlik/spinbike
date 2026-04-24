@@ -1,0 +1,14 @@
+[Unit]
+Description=Sync prod DB to dev via SQLite online backup and restart dev service
+After=spinbike.service
+
+[Service]
+Type=oneshot
+User=root
+# SQLite online backup — safe against concurrent writes in WAL mode. Plain cp
+# would risk copying .db pages that reference uncopied WAL frames, producing
+# a snapshot that cannot be restored cleanly.
+ExecStart=/usr/bin/sqlite3 /opt/spinbike/prod/spinbike.db ".timeout 5000" ".backup /opt/spinbike/dev/spinbike-dev.db.tmp"
+ExecStart=/bin/chown newlevel:newlevel /opt/spinbike/dev/spinbike-dev.db.tmp
+ExecStart=/usr/bin/mv -f /opt/spinbike/dev/spinbike-dev.db.tmp /opt/spinbike/dev/spinbike-dev.db
+ExecStart=/usr/bin/systemctl restart spinbike-dev.service
