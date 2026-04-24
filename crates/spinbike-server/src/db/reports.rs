@@ -101,10 +101,10 @@ pub async fn day_report(
     // KPIs — a separate aggregation over the entire day (not just this page).
     let kpi_row: DbKpiRow = sqlx::query_as::<_, DbKpiRow>(
         "SELECT
-            COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END), 0.0) AS revenue_eur,
+            COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0.0 END), 0.0) AS revenue_eur,
             COALESCE(SUM(CASE WHEN amount < 0 AND valid_until IS NULL THEN 1 ELSE 0 END), 0)   AS attendance,
             COALESCE(SUM(CASE WHEN valid_until IS NOT NULL THEN 1 ELSE 0 END), 0) AS passes_sold,
-            COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0.0) AS cash_in_eur
+            COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0.0 END), 0.0) AS cash_in_eur
          FROM transactions
          WHERE date(created_at) = ?1 AND deleted_at IS NULL",
     )
@@ -208,10 +208,10 @@ pub async fn range_report(
 
     let kpi_row: DbKpiRow = sqlx::query_as::<_, DbKpiRow>(
         "SELECT
-            COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END), 0.0) AS revenue_eur,
+            COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0.0 END), 0.0) AS revenue_eur,
             COALESCE(SUM(CASE WHEN amount < 0 AND valid_until IS NULL THEN 1 ELSE 0 END), 0) AS attendance,
             COALESCE(SUM(CASE WHEN valid_until IS NOT NULL THEN 1 ELSE 0 END), 0) AS passes_sold,
-            COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0.0) AS cash_in_eur
+            COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0.0 END), 0.0) AS cash_in_eur
          FROM transactions
          WHERE date(created_at) BETWEEN ?1 AND ?2 AND deleted_at IS NULL",
     )
@@ -525,7 +525,27 @@ fn pick_current_and_next(
 
 #[cfg(test)]
 mod tests {
-    use super::pick_current_and_next;
+    use super::{parse_hhmm_to_mins, pick_current_and_next};
+
+    #[test]
+    fn parse_hhmm_to_mins_basic() {
+        assert_eq!(parse_hhmm_to_mins("00:00"), 0);
+        assert_eq!(parse_hhmm_to_mins("00:30"), 30);
+        assert_eq!(parse_hhmm_to_mins("01:00"), 60);
+        assert_eq!(parse_hhmm_to_mins("18:00"), 1080);
+        assert_eq!(parse_hhmm_to_mins("23:59"), 1439);
+    }
+
+    // Two templates at the same start; ensures `<` (strict) rather than `<=`
+    // at the `else if` boundary — a `<=` mutant would set next on the second
+    // equal-start template after current was already taken by the first.
+    #[test]
+    fn equal_start_templates_only_first_becomes_current_no_next() {
+        let tmpls = vec![(1080, 60), (1080, 60)];
+        let (current, next) = pick_current_and_next(&tmpls, 1080);
+        assert_eq!(current, Some(0));
+        assert_eq!(next, None);
+    }
 
     // now = 18:30 (1110 min); class 18:00-19:00 (1080..1140) is current.
     #[test]

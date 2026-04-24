@@ -305,3 +305,166 @@ async fn now_panel_returns_current_or_next_class() {
         "expected at least current_class or next_class to be set"
     );
 }
+
+#[tokio::test]
+async fn day_report_pagination_has_more_true_when_more_than_limit() {
+    let app = TestApp::new().await;
+    let card_id = app.customer_card_id;
+    for _ in 0..3 {
+        sqlx::query(
+            "INSERT INTO transactions (card_id, amount, action, created_at) VALUES (?1, -5.0, 'charge', datetime('now'))",
+        )
+        .bind(card_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    }
+    let today = chrono::Local::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let (status, body) = app
+        .request(get(
+            &format!("/api/reports/day?date={today}&limit=2"),
+            &app.admin_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["events"].as_array().unwrap().len(), 2);
+    assert!(body["has_more"].as_bool().unwrap());
+
+    let (status, body) = app
+        .request(get(
+            &format!("/api/reports/day?date={today}&limit=3"),
+            &app.admin_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["events"].as_array().unwrap().len(), 3);
+    assert!(!body["has_more"].as_bool().unwrap());
+}
+
+#[tokio::test]
+async fn day_report_card_name_is_null_when_names_empty() {
+    let app = TestApp::new().await;
+    let card_id = app.customer_card_id;
+    sqlx::query(
+        "INSERT INTO transactions (card_id, amount, action, created_at) VALUES (?1, -5.0, 'charge', datetime('now'))",
+    )
+    .bind(card_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let today = chrono::Local::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    let (status, body) = app
+        .request(get(
+            &format!("/api/reports/day?date={today}"),
+            &app.admin_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["events"][0]["card_name"].is_null());
+}
+
+#[tokio::test]
+async fn range_report_pagination_has_more_true_when_more_than_limit() {
+    let app = TestApp::new().await;
+    let card_id = app.customer_card_id;
+    for d in 1..=3 {
+        sqlx::query(&format!(
+            "INSERT INTO transactions (card_id, amount, action, created_at) VALUES (?1, -5.0, 'charge', datetime('now','-{d} days'))"
+        ))
+        .bind(card_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    }
+    let today = chrono::Local::now().date_naive();
+    let from = (today - chrono::Duration::days(7))
+        .format("%Y-%m-%d")
+        .to_string();
+    let to = today.format("%Y-%m-%d").to_string();
+
+    let (status, body) = app
+        .request(get(
+            &format!("/api/reports/range?from={from}&to={to}&limit=2"),
+            &app.admin_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["events"].as_array().unwrap().len(), 2);
+    assert!(body["has_more"].as_bool().unwrap());
+
+    let (status, body) = app
+        .request(get(
+            &format!("/api/reports/range?from={from}&to={to}&limit=3"),
+            &app.admin_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["events"].as_array().unwrap().len(), 3);
+    assert!(!body["has_more"].as_bool().unwrap());
+}
+
+// Kills `require_admin -> Ok(())` mutant.
+#[tokio::test]
+async fn non_admin_gets_403_on_reports_day() {
+    let app = TestApp::new().await;
+    let today = chrono::Local::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    // staff token is Role::Staff, not Admin — must be rejected.
+    let (status, _) = app
+        .request(get(
+            &format!("/api/reports/day?date={today}"),
+            &app.staff_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // customer too
+    let (status, _) = app
+        .request(get(
+            &format!("/api/reports/day?date={today}"),
+            &app.customer_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+// Kills `< 0` / `<= 0` and `> RANGE_MAX_DAYS` / `>= RANGE_MAX_DAYS` mutants in the range handler.
+#[tokio::test]
+async fn range_rejects_to_before_from() {
+    let app = TestApp::new().await;
+    // to < from → 400
+    let (status, _) = app
+        .request(get(
+            "/api/reports/range?from=2026-04-15&to=2026-04-10",
+            &app.admin_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    // to == from → OK (guards `<` → `<=`)
+    let (status, _) = app
+        .request(get(
+            "/api/reports/range?from=2026-04-15&to=2026-04-15",
+            &app.admin_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+
+    // exactly 93 days → OK (guards `>` → `>=`)
+    let (status, _) = app
+        .request(get(
+            "/api/reports/range?from=2026-01-01&to=2026-04-04",
+            &app.admin_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+}
