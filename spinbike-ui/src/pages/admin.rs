@@ -5,6 +5,7 @@ use web_sys::{HtmlInputElement, HtmlSelectElement};
 use crate::api;
 use crate::components::Segmented;
 use crate::i18n::{self, ADMIN_TAB_KEYS, Lang, WEEKDAY_KEYS};
+use crate::pages::dashboard::helpers::parse_money;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[allow(dead_code)]
@@ -459,15 +460,14 @@ fn ServicesTab() -> impl IntoView {
                 el.value()
             })
             .unwrap_or_default();
-        let price: f64 = price_ref
+        let price_str = price_ref
             .get()
             .map(|el| {
                 let el: &HtmlInputElement = &el;
                 el.value()
             })
-            .unwrap_or_default()
-            .parse()
-            .unwrap_or(0.0);
+            .unwrap_or_default();
+        let price = parse_money(&price_str).unwrap_or(0.0);
         if name.is_empty() {
             return;
         }
@@ -501,7 +501,7 @@ fn ServicesTab() -> impl IntoView {
             </div>
             <div class="form-group">
                 <label>{move || i18n::t(lang.get(), "price_czk")}</label>
-                <input type="number" class="form-control" node_ref=price_ref step="1" min="0" required />
+                <input type="text" inputmode="decimal" autocomplete="off" class="form-control" node_ref=price_ref required />
             </div>
             <button type="submit" class="btn btn--primary btn--compact">{move || i18n::t(lang.get(), "add_service")}</button>
         </form>
@@ -536,7 +536,9 @@ fn ServicesTab() -> impl IntoView {
                 };
                 let on_save = move |_| {
                     let new_name = edit_name_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
-                    let new_price: f64 = edit_price_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default().parse().unwrap_or(0.0);
+                    let new_price = parse_money(
+                        &edit_price_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default()
+                    ).unwrap_or(0.0);
                     spawn_local(async move {
                         #[derive(serde::Serialize)]
                         struct Req { name: Option<String>, default_price: Option<f64> }
@@ -567,7 +569,7 @@ fn ServicesTab() -> impl IntoView {
                                             <label>{i18n::t(lang.get(), "name")}</label>
                                             <input type="text" class="form-control" style="width:auto" node_ref=edit_name_ref value=nval />
                                             <label>{i18n::t(lang.get(), "price")}</label>
-                                            <input type="number" class="form-control" style="width:80px" node_ref=edit_price_ref value=price_for_edit step="1" min="0" />
+                                            <input type="text" inputmode="decimal" autocomplete="off" class="form-control" style="width:80px" node_ref=edit_price_ref value=price_for_edit.to_string() />
                                             <button class="btn btn--primary btn--compact" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
                                         </div>
                                     </td>

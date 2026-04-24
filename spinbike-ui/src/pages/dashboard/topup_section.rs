@@ -5,6 +5,7 @@ use web_sys::HtmlInputElement;
 use crate::api;
 use crate::i18n::{self, Lang};
 
+use super::helpers::parse_money;
 use super::CardInfo;
 
 const QUICK_TOPUP: [f64; 1] = [30.0];
@@ -48,15 +49,14 @@ pub fn TopupSection(
 
     let on_custom = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
-        let amount: f64 = custom_ref
+        let typed = custom_ref
             .get()
             .map(|el| {
                 let el: &HtmlInputElement = &el;
                 el.value()
             })
-            .unwrap_or_default()
-            .parse()
-            .unwrap_or(0.0);
+            .unwrap_or_default();
+        let amount = parse_money(&typed).unwrap_or(0.0);
         do_topup(amount);
         if let Some(el) = custom_ref.get() {
             let el: &HtmlInputElement = &el;
@@ -84,12 +84,12 @@ pub fn TopupSection(
                 }).collect::<Vec<_>>()}
                 <form class="inline-form inline-row" on:submit=on_custom>
                     <input
-                        type="number"
+                        type="text"
+                        inputmode="decimal"
+                        autocomplete="off"
                         class="form-control input--narrow"
                         node_ref=custom_ref
                         placeholder=move || i18n::t(lang.get(), "custom_amount")
-                        step="0.01"
-                        min="0.01"
                     />
                     <button type="submit" class="btn btn--compact btn--primary" disabled=move || loading.get()>
                         {move || i18n::t(lang.get(), "topup")}

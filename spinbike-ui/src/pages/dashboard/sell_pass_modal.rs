@@ -1,11 +1,12 @@
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
+use web_sys::HtmlInputElement;
 
 use crate::api;
 use crate::components::Sheet;
 use crate::i18n::{self, Lang};
 
-use super::helpers::event_target_value;
+use super::helpers::{event_target_value, parse_money};
 use super::{CardInfo, CardPass};
 
 #[component]
@@ -40,14 +41,25 @@ pub fn SellPassModal(
                 return ().into_any();
             }
 
-            // Per-mount form state — each open of the sheet starts fresh.
-            let (price, set_price) = signal(monthly_pass_price);
+            let price_ref = NodeRef::<leptos::html::Input>::new();
             let (valid_until, set_valid_until) = signal(default_date);
             let (err, set_err) = signal(String::new());
+            let default_price_str = format!("{monthly_pass_price:.2}");
 
             let on_confirm = move |_| {
-                let p = price.get();
                 let vu = valid_until.get();
+                let typed = price_ref
+                    .get()
+                    .map(|el| {
+                        let el: &HtmlInputElement = &el;
+                        el.value()
+                    })
+                    .unwrap_or_default();
+                let p = parse_money(&typed).unwrap_or(monthly_pass_price);
+                if p <= 0.0 {
+                    set_err.set(i18n::t(lang.get_untracked(), "price_must_be_positive").to_string());
+                    return;
+                }
                 spawn_local(async move {
                     #[derive(serde::Serialize)]
                     struct Req {
@@ -99,18 +111,13 @@ pub fn SellPassModal(
                     <div class="form-group">
                         <label>{i18n::t(lang.get(), "modal_price")}</label>
                         <input
-                            type="number"
+                            type="text"
+                            inputmode="decimal"
+                            autocomplete="off"
                             class="form-control"
-                            step="0.01"
-                            min="0"
                             data-testid="sell-pass-price"
-                            prop:value=move || format!("{:.2}", price.get())
-                            on:input=move |ev| {
-                                let ev: web_sys::Event = ev.into();
-                                if let Ok(v) = event_target_value(&ev).parse::<f64>() {
-                                    set_price.set(v);
-                                }
-                            }
+                            node_ref=price_ref
+                            value=default_price_str.clone()
                         />
                     </div>
                     <div class="form-group">

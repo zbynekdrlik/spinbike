@@ -5,6 +5,7 @@ use web_sys::{HtmlInputElement, HtmlSelectElement};
 use crate::api;
 use crate::i18n::{self, Lang};
 
+use super::helpers::parse_money;
 use super::{CardInfo, PaymentResp, ServiceInfo};
 
 #[component]
@@ -41,15 +42,14 @@ pub fn ChargeSection(
 
     let on_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
-        let amount: f64 = amount_ref
+        let typed = amount_ref
             .get()
             .map(|el| {
                 let el: &HtmlInputElement = &el;
                 el.value()
             })
-            .unwrap_or_default()
-            .parse()
-            .unwrap_or(0.0);
+            .unwrap_or_default();
+        let amount = parse_money(&typed).unwrap_or(0.0);
         let service_id: Option<i64> = service_ref.get().and_then(|el| {
             let el: &HtmlSelectElement = &el;
             el.value().parse().ok()
@@ -176,12 +176,12 @@ pub fn ChargeSection(
                     }}
                 </select>
                 <input
-                    type="number"
+                    type="text"
+                    inputmode="decimal"
+                    autocomplete="off"
                     class="form-control input--narrow"
                     node_ref=amount_ref
                     placeholder=move || i18n::t(lang.get(), "amount")
-                    step="0.01"
-                    min="0.01"
                     required
                 />
                 <button type="submit" class="btn btn--primary" data-testid="charge-submit" disabled=move || loading.get()>
