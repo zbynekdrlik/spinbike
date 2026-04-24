@@ -561,13 +561,13 @@ fn translations() -> &'static TransMap {
 /// Get the short day name keys in order Mon-Sun
 pub static DAY_KEYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
-/// Admin tab name translations
+/// Admin tab name translations (keys map to settings_tab_* in TRANSLATIONS).
 pub static ADMIN_TAB_KEYS: [(&str, &str); 5] = [
-    ("templates", "templates"),
-    ("instructors", "instructors"),
-    ("services", "services"),
-    ("users", "users"),
-    ("settings", "settings"),
+    ("templates", "settings_tab_templates"),
+    ("instructors", "settings_tab_instructors"),
+    ("services", "settings_tab_services"),
+    ("users", "settings_tab_users"),
+    ("settings", "settings_tab_center"),
 ];
 
 /// Weekday names used in admin (short) - same as DAY_KEYS
