@@ -71,19 +71,19 @@ pub async fn day_report(
     // Events — paginated with optional `before` cursor.
     let mut query = String::from(
         "SELECT t.id, t.card_id, t.amount, t.action, t.created_at, t.valid_until, t.deleted_at,
-                COALESCE(TRIM(c.first_name || ' ' || c.last_name), NULL) AS card_name,
+                TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')) AS card_name,
                 c.barcode,
                 s.name AS service_name
          FROM transactions t
          LEFT JOIN cards c ON c.id = t.card_id
          LEFT JOIN services s ON s.id = t.service_id
-         WHERE date(t.created_at) = ?1
+         WHERE date(t.created_at) = ?
            AND t.deleted_at IS NULL",
     );
     if before.is_some() {
-        query.push_str(" AND t.created_at < ?2");
+        query.push_str(" AND t.created_at < ?");
     }
-    query.push_str(" ORDER BY t.created_at DESC LIMIT ?3");
+    query.push_str(" ORDER BY t.created_at DESC LIMIT ?");
 
     let mut q = sqlx::query_as::<_, DbEventRow>(&query).bind(&date_str);
     if let Some(ref b) = before {
@@ -177,19 +177,19 @@ pub async fn range_report(
 
     let mut query = String::from(
         "SELECT t.id, t.card_id, t.amount, t.action, t.created_at, t.valid_until, t.deleted_at,
-                COALESCE(TRIM(c.first_name || ' ' || c.last_name), NULL) AS card_name,
+                TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')) AS card_name,
                 c.barcode,
                 s.name AS service_name
          FROM transactions t
          LEFT JOIN cards c ON c.id = t.card_id
          LEFT JOIN services s ON s.id = t.service_id
-         WHERE date(t.created_at) BETWEEN ?1 AND ?2
+         WHERE date(t.created_at) BETWEEN ? AND ?
            AND t.deleted_at IS NULL",
     );
     if before.is_some() {
-        query.push_str(" AND t.created_at < ?3");
+        query.push_str(" AND t.created_at < ?");
     }
-    query.push_str(" ORDER BY t.created_at DESC LIMIT ?4");
+    query.push_str(" ORDER BY t.created_at DESC LIMIT ?");
 
     let mut q = sqlx::query_as::<_, DbEventRow>(&query)
         .bind(&from_str)
