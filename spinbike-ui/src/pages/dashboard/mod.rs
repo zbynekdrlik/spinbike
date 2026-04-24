@@ -223,6 +223,7 @@ pub fn DashboardPage() -> impl IntoView {
     };
 
     view! {
+        <crate::pages::NowPanel />
         <h1 class="page-title">{move || i18n::t(lang.get(), "card_dashboard")}</h1>
 
         <div class="card mb-2">
