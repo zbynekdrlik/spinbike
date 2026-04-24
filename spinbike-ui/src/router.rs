@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use leptos_router::components::{Route, Router, Routes};
 use leptos_router::path;
 
+use crate::components::AdaptiveNav;
 use crate::components::nav::Navbar;
 use crate::i18n;
 use crate::pages::admin::AdminPage;
@@ -10,6 +11,7 @@ use crate::pages::link_card::LinkCardPage;
 use crate::pages::login::{LoginPage, RegisterPage};
 use crate::pages::my_balance::MyBalancePage;
 use crate::pages::my_bookings::MyBookingsPage;
+use crate::pages::reports::ReportsPage;
 use crate::pages::schedule::SchedulePage;
 use crate::pages::staff_dashboard::StaffDashboardPage;
 
@@ -33,6 +35,7 @@ pub fn App() -> impl IntoView {
         <Router>
             <div class="app-shell">
                 <Navbar auth_ver=auth_ver />
+                <AdaptiveNav auth_ver=auth_ver />
                 <div class="page">
                     <Routes fallback=move || view! { <p class="text-center text-muted mt-3">{move || i18n::t(lang_signal.get(), "page_not_found")}</p> }>
                         <Route path=path!("/") view=SchedulePage />
@@ -43,6 +46,9 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/link-card") view=LinkCardPage />
                         <Route path=path!("/staff") view=DashboardPage />
                         <Route path=path!("/staff/classes") view=StaffDashboardPage />
+                        <Route path=path!("/schedule") view=SchedulePage />
+                        <Route path=path!("/reports") view=ReportsPage />
+                        <Route path=path!("/settings") view=AdminPage />
                         <Route path=path!("/admin") view=AdminPage />
                     </Routes>
                 </div>
