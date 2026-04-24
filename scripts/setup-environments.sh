@@ -17,9 +17,12 @@ require_command() {
 require_command systemctl
 require_command openssl
 require_command install
+require_command sqlite3
 
 echo "==> Creating /opt/spinbike directory tree"
-sudo install -d -o newlevel -g newlevel "$PROD_DIR" "$PROD_DIR/backups" "$DEV_DIR"
+sudo install -d -o newlevel -g newlevel "$PROD_DIR" "$DEV_DIR"
+# Backups hold customer data — tighten to owner-only access.
+sudo install -d -o newlevel -g newlevel -m 0700 "$PROD_DIR/backups"
 
 if [ ! -f "$PROD_DIR/spinbike.db" ]; then
     echo "==> Copying existing prod DB to $PROD_DIR"
@@ -84,6 +87,17 @@ for i in $(seq 1 15); do
     [ "$i" -eq 15 ] && { echo "ERROR: services failed to respond on 8080/8081"; exit 1; }
     sleep 2
 done
+
+echo "==> Checking for orphan cloudflared processes"
+# A non-systemd `cloudflared tunnel run spinbike` racing the managed one will
+# silently serve stale ingress config and break new hostnames with 404s.
+systemd_pid=$(systemctl show spinbike-tunnel.service -p MainPID --value || echo 0)
+extras=$(pgrep -af 'cloudflared tunnel run spinbike' | awk -v pid="$systemd_pid" '$1 != pid' | wc -l)
+if [ "$extras" -gt 0 ]; then
+    echo "WARN: $extras non-systemd cloudflared process(es) detected:"
+    pgrep -af 'cloudflared tunnel run spinbike' | awk -v pid="$systemd_pid" '$1 != pid'
+    echo "     Kill them to avoid ingress drift: kill <pid>"
+fi
 
 echo "==> Done. Next steps (manual, require Cloudflare auth):"
 echo "  1. Edit ~/.cloudflared/config.yml per deploy/cloudflared/config.yml.example"

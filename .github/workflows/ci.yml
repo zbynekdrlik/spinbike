@@ -224,7 +224,12 @@ jobs:
     runs-on: [self-hosted, spinbike-deploy]
     needs: [test, build-wasm, e2e]
     timeout-minutes: 30
+    # Only auto-deploy on direct pushes to dev; PR runs and other branches skip.
     if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    # Per-job concurrency so rapid dev pushes queue instead of cancelling mid-install.
+    concurrency:
+      group: deploy-dev
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
@@ -243,7 +248,7 @@ jobs:
 
       - name: Install dev binary and restart dev service
         run: |
-          install -Dm 755 target/release/spinbike-server \
+          install -Dm755 target/release/spinbike-server \
             /opt/spinbike/dev/spinbike-server
           sudo -n systemctl restart spinbike-dev.service
 
@@ -273,15 +278,28 @@ jobs:
     runs-on: [self-hosted, spinbike-deploy]
     needs: [test, build-wasm, e2e]
     timeout-minutes: 30
+    # Only auto-deploy on direct pushes to main; PR runs and other branches skip.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    # Per-job concurrency so rapid main pushes queue instead of cancelling
+    # mid-deploy. A cancel between backup + binary replace + restart would
+    # leave prod on the old binary but with a confusingly-timestamped backup.
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v4
 
-      - name: Backup prod DB (timestamped, keep last 10)
+      - name: Backup prod DB (online SQLite backup, timestamped, keep last 10)
         run: |
           ts=$(date +%Y%m%d-%H%M%S)
-          cp /opt/spinbike/prod/spinbike.db \
-             /opt/spinbike/prod/backups/spinbike-${ts}.db
+          dest=/opt/spinbike/prod/backups/spinbike-${ts}.db
+          # sqlite3 .backup uses SQLite's online backup API — it acquires a
+          # shared lock, handles WAL checkpointing, and produces a complete,
+          # restore-consistent copy even while spinbike.service is writing.
+          # Plain cp on a WAL-mode DB can capture an inconsistent snapshot.
+          sqlite3 /opt/spinbike/prod/spinbike.db ".timeout 5000" ".backup '${dest}'"
+          # Customer data — lock down read perms.
+          chmod 0600 "${dest}"
           # Keep only the 10 most recent; delete older ones.
           ls -t /opt/spinbike/prod/backups/spinbike-*.db 2>/dev/null \
             | tail -n +11 \
@@ -304,7 +322,7 @@ jobs:
 
       - name: Install prod binary and restart prod service
         run: |
-          install -Dm 755 target/release/spinbike-server \
+          install -Dm755 target/release/spinbike-server \
             /opt/spinbike/prod/spinbike-server
           sudo -n systemctl restart spinbike.service
 
