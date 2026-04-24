@@ -1,6 +1,6 @@
 mod helpers;
 use axum::http::StatusCode;
-use chrono::Datelike;
+use chrono::{Datelike, Timelike};
 use helpers::{TestApp, get};
 
 #[tokio::test]
@@ -303,6 +303,142 @@ async fn now_panel_returns_current_or_next_class() {
     assert!(
         has_any,
         "expected at least current_class or next_class to be set"
+    );
+    // Kills `booking_count -> Ok(0/1/-1)` and `roster_for -> Ok(vec![])`:
+    // exactly one booking was seeded, so whichever branch fired must reflect it.
+    if !body["current_class"].is_null() {
+        let roster = body["current_class"]["roster"].as_array().unwrap();
+        assert_eq!(roster.len(), 1, "roster must contain the seeded booking");
+    } else {
+        let booked = body["next_class"]["booked"].as_i64().unwrap();
+        assert_eq!(
+            booked, 1,
+            "next_class booked must equal the seeded booking count"
+        );
+    }
+}
+
+// Kills `next_class_future -> Ok(None)` and `next_class_future +` arithmetic mutants.
+// Seed a template on tomorrow's weekday only — no class today — and assert
+// /api/reports/now returns next_class pointing at that future template.
+#[tokio::test]
+async fn now_panel_finds_future_class_when_none_today() {
+    let app = TestApp::new().await;
+    let today = chrono::Local::now().date_naive();
+    let tomorrow_weekday = today.succ_opt().unwrap().weekday().num_days_from_monday() as i64;
+    // Delete any seeded templates that could match today, then add one for tomorrow.
+    sqlx::query("DELETE FROM class_templates")
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO class_templates (weekday, start_time, duration_minutes, capacity, active) \
+         VALUES (?1, '18:00', 60, 12, 1)",
+    )
+    .bind(tomorrow_weekday)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, body) = app.request(get("/api/reports/now", &app.admin_token)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(body["current_class"].is_null());
+    assert!(
+        !body["next_class"].is_null(),
+        "next_class must be set via next_class_future"
+    );
+    let date_str = body["next_class"]["date"].as_str().unwrap();
+    assert_eq!(
+        date_str,
+        today.succ_opt().unwrap().format("%Y-%m-%d").to_string()
+    );
+}
+
+// Kills `total_alert_count -> Ok(0/1/-1)` and internal `+` mutants.
+// Seed 2 low-credit cards and 1 expiring pass card → alerts_count should be 3.
+#[tokio::test]
+async fn day_report_alerts_count_reflects_underlying_alerts() {
+    let app = TestApp::new().await;
+    // 2 low-credit cards
+    sqlx::query(
+        "INSERT INTO cards (barcode, first_name, last_name, credit, blocked) VALUES \
+                 ('ALC1','LC','A',2.0,0), ('ALC2','LC','B',3.0,0)",
+    )
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    // 1 expiring pass card
+    let card_exp: i64 = sqlx::query_scalar(
+        "INSERT INTO cards (barcode, first_name, last_name, credit) VALUES ('AEX','Exp','P',10) RETURNING id",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO transactions (card_id, amount, action, valid_until, created_at) VALUES (?1, -35.0, 'charge', date('now','+3 days'), datetime('now','-10 days'))",
+    )
+    .bind(card_exp)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let today = chrono::Local::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+    let (status, body) = app
+        .request(get(
+            &format!("/api/reports/day?date={today}"),
+            &app.admin_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let count = body["alerts_count"].as_i64().unwrap();
+    // 2 low-credit + 1 expiring = 3 (plus possibly inactive customers from seeding).
+    assert!(count >= 3, "expected ≥3 alerts, got {count}");
+}
+
+// Kills `Some(i) == current_idx` → `!=` mutant in now_panel.
+// Seed two templates on today at different start_times; ensure current points
+// at the one whose window contains now and next at the later one — NOT inverted.
+#[tokio::test]
+async fn now_panel_selects_correct_template_when_multiple_exist() {
+    let app = TestApp::new().await;
+    let now = chrono::Local::now();
+    let weekday = now.weekday().num_days_from_monday() as i64;
+    // Clear seeds, add one past (ended) and one matching now.
+    sqlx::query("DELETE FROM class_templates")
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    // Past template: started 2h ago, already ended (duration=60min).
+    let mins_now = (now.hour() as i64) * 60 + (now.minute() as i64);
+    let past_start = if mins_now >= 120 { mins_now - 120 } else { 0 };
+    let past_h = past_start / 60;
+    let past_m = past_start % 60;
+    sqlx::query(&format!(
+        "INSERT INTO class_templates (weekday, start_time, duration_minutes, capacity, active) VALUES ({weekday}, '{past_h:02}:{past_m:02}', 60, 12, 1)"
+    ))
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    // Current template: started exactly now, duration 60.
+    let cur_h = now.hour();
+    let cur_m = now.minute();
+    let cur_tmpl_id: i64 = sqlx::query_scalar(&format!(
+        "INSERT INTO class_templates (weekday, start_time, duration_minutes, capacity, active) VALUES ({weekday}, '{cur_h:02}:{cur_m:02}', 60, 12, 1) RETURNING id"
+    ))
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, body) = app.request(get("/api/reports/now", &app.admin_token)).await;
+    assert_eq!(status, StatusCode::OK);
+    // current_class must point at the second template (the one that just started).
+    assert_eq!(
+        body["current_class"]["template_id"].as_i64(),
+        Some(cur_tmpl_id),
+        "current_class must be the template whose window contains now"
     );
 }
 
