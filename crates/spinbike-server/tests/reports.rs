@@ -267,3 +267,42 @@ async fn alerts_inactive_60_days_excludes_zero_credit_and_blocked() {
     assert!(!names.iter().any(|n| n.contains("Act")));
     assert!(!names.iter().any(|n| n.contains("Zero")));
 }
+
+#[tokio::test]
+async fn now_panel_returns_current_or_next_class() {
+    let app = TestApp::new().await;
+
+    let now = chrono::Local::now();
+    let weekday = now.weekday().num_days_from_monday() as i64;
+    let start_time = now.format("%H:00").to_string();
+    let template_id: i64 = sqlx::query_scalar(
+        "INSERT INTO class_templates (weekday, start_time, duration_minutes, capacity, active) \
+         VALUES (?1, ?2, 60, 12, 1) RETURNING id",
+    )
+    .bind(weekday)
+    .bind(&start_time)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+
+    let today = now.date_naive().format("%Y-%m-%d").to_string();
+    sqlx::query(
+        "INSERT INTO bookings (template_id, date, user_id, source) VALUES (?1, ?2, ?3, 'staff')",
+    )
+    .bind(template_id)
+    .bind(&today)
+    .bind(app.customer_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, body) = app
+        .request(get("/api/reports/now", &app.admin_token))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let has_any = !body["current_class"].is_null() || !body["next_class"].is_null();
+    assert!(
+        has_any,
+        "expected at least current_class or next_class to be set"
+    );
+}

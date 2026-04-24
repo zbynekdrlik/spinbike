@@ -2,7 +2,8 @@ use anyhow::Result;
 use sqlx::SqlitePool;
 
 use spinbike_core::reports::{
-    AlertsResponse, ExpiringPass, InactiveCustomer, KpiSummary, LowCreditCard, ReportEvent,
+    AlertsResponse, CurrentClass, ExpiringPass, InactiveCustomer, KpiSummary, LowCreditCard,
+    NextClass, NowResponse, ReportEvent, RosterEntry, RosterStatus,
 };
 
 /// Fetch all non-voided transactions for a single day, joined with card + service data.
@@ -295,4 +296,198 @@ async fn inactive(pool: &SqlitePool) -> Result<Vec<InactiveCustomer>> {
             last_visit: r.last_visit,
         })
         .collect())
+}
+
+pub async fn now_panel(pool: &SqlitePool) -> Result<NowResponse> {
+    let now = chrono::Local::now();
+    let today: chrono::NaiveDate = now.date_naive();
+    let weekday: i64 = now.weekday().num_days_from_monday() as i64;
+    let hhmm = now.format("%H:%M").to_string();
+
+    #[derive(sqlx::FromRow)]
+    struct Tmpl {
+        id: i64,
+        start_time: String,
+        duration_minutes: i64,
+        capacity: i64,
+        instructor_name: Option<String>,
+    }
+
+    let templates: Vec<Tmpl> = sqlx::query_as::<_, Tmpl>(
+        "SELECT ct.id, ct.start_time, ct.duration_minutes, ct.capacity,
+                i.name AS instructor_name
+         FROM class_templates ct
+         LEFT JOIN instructors i ON i.id = ct.instructor_id
+         WHERE ct.active = 1 AND ct.weekday = ?1
+         ORDER BY ct.start_time ASC",
+    )
+    .bind(weekday)
+    .fetch_all(pool)
+    .await?;
+
+    let mut current: Option<Tmpl> = None;
+    let mut next: Option<Tmpl> = None;
+    for t in templates {
+        let start_mins = parse_hhmm_to_mins(&t.start_time);
+        let now_mins = parse_hhmm_to_mins(&hhmm);
+        let end_mins = start_mins + t.duration_minutes;
+        if now_mins >= start_mins && now_mins < end_mins && current.is_none() {
+            current = Some(t);
+        } else if now_mins < start_mins && next.is_none() {
+            next = Some(t);
+        }
+    }
+
+    let current_class = if let Some(t) = current {
+        let roster = roster_for(pool, t.id, today).await?;
+        Some(CurrentClass {
+            template_id: t.id,
+            date: today,
+            start_time: t.start_time.clone(),
+            service_name: "Spinning".to_string(),
+            instructor_name: t.instructor_name.clone(),
+            capacity: t.capacity,
+            roster,
+        })
+    } else {
+        None
+    };
+
+    let next_class = if let Some(t) = next {
+        let booked = booking_count(pool, t.id, today).await?;
+        Some(NextClass {
+            template_id: t.id,
+            date: today,
+            start_time: t.start_time,
+            service_name: "Spinning".to_string(),
+            instructor_name: t.instructor_name,
+            booked,
+            capacity: t.capacity,
+        })
+    } else {
+        next_class_future(pool, today).await?
+    };
+
+    Ok(NowResponse {
+        current_class,
+        next_class,
+    })
+}
+
+fn parse_hhmm_to_mins(s: &str) -> i64 {
+    let (h, m) = s.split_once(':').unwrap_or(("0", "0"));
+    h.parse::<i64>().unwrap_or(0) * 60 + m.parse::<i64>().unwrap_or(0)
+}
+
+async fn roster_for(
+    pool: &SqlitePool,
+    template_id: i64,
+    date: chrono::NaiveDate,
+) -> Result<Vec<RosterEntry>> {
+    #[derive(sqlx::FromRow)]
+    struct R {
+        card_id: Option<i64>,
+        name: String,
+        barcode: Option<String>,
+        booking_id: i64,
+        cancelled_at: Option<String>,
+        charge_transaction_id: Option<i64>,
+    }
+    let date_str = date.format("%Y-%m-%d").to_string();
+    let rows: Vec<R> = sqlx::query_as::<_, R>(
+        "SELECT b.card_id,
+                COALESCE(NULLIF(TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')), ''),
+                         u.name,
+                         '(unknown)') AS name,
+                c.barcode,
+                b.id AS booking_id,
+                b.cancelled_at,
+                b.charge_transaction_id
+         FROM bookings b
+         LEFT JOIN cards c ON c.id = b.card_id
+         LEFT JOIN users u ON u.id = b.user_id
+         WHERE b.template_id = ?1 AND b.date = ?2
+         ORDER BY b.created_at ASC",
+    )
+    .bind(template_id)
+    .bind(&date_str)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|r| {
+            let status = if r.cancelled_at.is_some() {
+                RosterStatus::Cancelled
+            } else if r.charge_transaction_id.is_some() {
+                RosterStatus::CheckedIn
+            } else {
+                RosterStatus::Booked
+            };
+            RosterEntry {
+                card_id: r.card_id,
+                name: r.name,
+                barcode: r.barcode,
+                booking_id: r.booking_id,
+                status,
+            }
+        })
+        .collect())
+}
+
+async fn booking_count(
+    pool: &SqlitePool,
+    template_id: i64,
+    date: chrono::NaiveDate,
+) -> Result<i64> {
+    let date_str = date.format("%Y-%m-%d").to_string();
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM bookings WHERE template_id = ?1 AND date = ?2 AND cancelled_at IS NULL",
+    )
+    .bind(template_id)
+    .bind(&date_str)
+    .fetch_one(pool)
+    .await?;
+    Ok(n)
+}
+
+async fn next_class_future(
+    pool: &SqlitePool,
+    today: chrono::NaiveDate,
+) -> Result<Option<NextClass>> {
+    for off in 1..=7 {
+        let d = today + chrono::Duration::days(off);
+        let weekday = d.weekday().num_days_from_monday() as i64;
+        #[derive(sqlx::FromRow)]
+        struct Tmpl {
+            id: i64,
+            start_time: String,
+            capacity: i64,
+            instructor_name: Option<String>,
+        }
+        let opt: Option<Tmpl> = sqlx::query_as::<_, Tmpl>(
+            "SELECT ct.id, ct.start_time, ct.capacity,
+                    i.name AS instructor_name
+             FROM class_templates ct
+             LEFT JOIN instructors i ON i.id = ct.instructor_id
+             WHERE ct.active = 1 AND ct.weekday = ?1
+             ORDER BY ct.start_time ASC LIMIT 1",
+        )
+        .bind(weekday)
+        .fetch_optional(pool)
+        .await?;
+        if let Some(t) = opt {
+            let booked = booking_count(pool, t.id, d).await?;
+            return Ok(Some(NextClass {
+                template_id: t.id,
+                date: d,
+                start_time: t.start_time,
+                service_name: "Spinning".to_string(),
+                instructor_name: t.instructor_name,
+                booked,
+                capacity: t.capacity,
+            }));
+        }
+    }
+    Ok(None)
 }
