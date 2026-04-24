@@ -239,10 +239,10 @@ async fn sell_pass(
             Json(serde_json::json!({"error": "Staff access required"})),
         ));
     }
-    if body.price <= 0.0 {
+    if body.price < 0.0 {
         return Err((
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Price must be greater than 0"})),
+            Json(serde_json::json!({"error": "Price must be zero or greater"})),
         ));
     }
     let today = chrono::Local::now().date_naive();

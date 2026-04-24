@@ -59,12 +59,14 @@ pub fn SellPassModal(
                 // Empty or unparseable → surface error instead of silently
                 // falling back to the default price (user cleared the field
                 // deliberately; we shouldn't sell a pass they didn't confirm).
+                // An explicit 0 is allowed here — the backend accepts zero
+                // as a valid promotional-pass price; negatives are rejected
+                // server-side with a clear message.
                 let p = match parse_money(&typed) {
-                    Some(v) if v > 0.0 => v,
-                    _ => {
-                        set_err.set(
-                            i18n::t(lang.get_untracked(), "price_must_be_positive").to_string(),
-                        );
+                    Some(v) => v,
+                    None => {
+                        set_err
+                            .set(i18n::t(lang.get_untracked(), "price_required").to_string());
                         return;
                     }
                 };
