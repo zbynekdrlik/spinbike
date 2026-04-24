@@ -105,3 +105,74 @@ impl From<DbEventRow> for ReportEvent {
         }
     }
 }
+
+pub const RANGE_MAX_DAYS: i64 = 93;
+
+/// Fetch all non-voided transactions across a date range, aggregated.
+/// Caller is responsible for enforcing `RANGE_MAX_DAYS`.
+pub async fn range_report(
+    pool: &SqlitePool,
+    from: chrono::NaiveDate,
+    to: chrono::NaiveDate,
+    limit: i64,
+    before: Option<String>,
+) -> Result<(KpiSummary, Vec<ReportEvent>, bool)> {
+    let from_str = from.format("%Y-%m-%d").to_string();
+    let to_str = to.format("%Y-%m-%d").to_string();
+
+    let mut query = String::from(
+        "SELECT t.id, t.card_id, t.amount, t.action, t.created_at, t.valid_until, t.deleted_at,
+                COALESCE(TRIM(c.first_name || ' ' || c.last_name), NULL) AS card_name,
+                c.barcode,
+                s.name AS service_name
+         FROM transactions t
+         LEFT JOIN cards c ON c.id = t.card_id
+         LEFT JOIN services s ON s.id = t.service_id
+         WHERE date(t.created_at) BETWEEN ?1 AND ?2
+           AND t.deleted_at IS NULL",
+    );
+    if before.is_some() {
+        query.push_str(" AND t.created_at < ?3");
+    }
+    query.push_str(" ORDER BY t.created_at DESC LIMIT ?4");
+
+    let mut q = sqlx::query_as::<_, DbEventRow>(&query)
+        .bind(&from_str)
+        .bind(&to_str);
+    if let Some(ref b) = before {
+        q = q.bind(b);
+    }
+    q = q.bind(limit + 1);
+
+    let mut rows = q.fetch_all(pool).await?;
+    let has_more = rows.len() as i64 > limit;
+    if has_more {
+        rows.pop();
+    }
+    let events: Vec<ReportEvent> = rows.into_iter().map(Into::into).collect();
+
+    let kpi_row: DbKpiRow = sqlx::query_as::<_, DbKpiRow>(
+        "SELECT
+            COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END), 0.0) AS revenue_eur,
+            COALESCE(SUM(CASE WHEN amount < 0 AND valid_until IS NULL THEN 1 ELSE 0 END), 0) AS attendance,
+            COALESCE(SUM(CASE WHEN valid_until IS NOT NULL THEN 1 ELSE 0 END), 0) AS passes_sold,
+            COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END), 0.0) AS cash_in_eur
+         FROM transactions
+         WHERE date(created_at) BETWEEN ?1 AND ?2 AND deleted_at IS NULL",
+    )
+    .bind(&from_str)
+    .bind(&to_str)
+    .fetch_one(pool)
+    .await?;
+
+    Ok((
+        KpiSummary {
+            revenue_eur: kpi_row.revenue_eur,
+            attendance: kpi_row.attendance,
+            passes_sold: kpi_row.passes_sold,
+            cash_in_eur: kpi_row.cash_in_eur,
+        },
+        events,
+        has_more,
+    ))
+}

@@ -79,3 +79,48 @@ async fn day_report_aggregates_charges_topups_passes_and_excludes_voided() {
         "voided excluded"
     );
 }
+
+#[tokio::test]
+async fn range_report_aggregates_across_days_and_rejects_over_93_days() {
+    let app = TestApp::new().await;
+    let card_id = app.customer_card_id;
+
+    sqlx::query(
+        "INSERT INTO transactions (card_id, amount, action, created_at) VALUES \
+                 (?1, -5.0, 'charge', datetime('now','-3 days')), \
+                 (?1, -5.0, 'charge', datetime('now','-2 days')), \
+                 (?1, 20.0, 'topup', datetime('now','-1 days'))",
+    )
+    .bind(card_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let today = chrono::Local::now().date_naive();
+    let from = (today - chrono::Duration::days(5))
+        .format("%Y-%m-%d")
+        .to_string();
+    let to = today.format("%Y-%m-%d").to_string();
+    let (status, body) = app
+        .request(get(
+            &format!("/api/reports/range?from={from}&to={to}"),
+            &app.admin_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["kpi"]["attendance"].as_i64().unwrap(), 2);
+    assert_eq!(body["kpi"]["revenue_eur"].as_f64().unwrap(), 10.0);
+    assert_eq!(body["kpi"]["cash_in_eur"].as_f64().unwrap(), 20.0);
+
+    // Over-range rejection
+    let from_too_far = (today - chrono::Duration::days(120))
+        .format("%Y-%m-%d")
+        .to_string();
+    let (status, _) = app
+        .request(get(
+            &format!("/api/reports/range?from={from_too_far}&to={to}"),
+            &app.admin_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
