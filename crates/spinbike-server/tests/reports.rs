@@ -333,7 +333,7 @@ async fn day_report_pagination_has_more_true_when_more_than_limit() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["events"].as_array().unwrap().len(), 2);
-    assert_eq!(body["has_more"].as_bool().unwrap(), true);
+    assert!(body["has_more"].as_bool().unwrap());
 
     // limit=3, seeded=3 → events.len()=3, has_more=false
     let (status, body) = app
@@ -344,7 +344,7 @@ async fn day_report_pagination_has_more_true_when_more_than_limit() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["events"].as_array().unwrap().len(), 3);
-    assert_eq!(body["has_more"].as_bool().unwrap(), false);
+    assert!(!body["has_more"].as_bool().unwrap());
 }
 
 #[tokio::test]
@@ -405,7 +405,7 @@ async fn range_report_pagination_has_more_true_when_more_than_limit() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["events"].as_array().unwrap().len(), 2);
-    assert_eq!(body["has_more"].as_bool().unwrap(), true);
+    assert!(body["has_more"].as_bool().unwrap());
 
     let (status, body) = app
         .request(get(
@@ -415,5 +415,5 @@ async fn range_report_pagination_has_more_true_when_more_than_limit() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["events"].as_array().unwrap().len(), 3);
-    assert_eq!(body["has_more"].as_bool().unwrap(), false);
+    assert!(!body["has_more"].as_bool().unwrap());
 }

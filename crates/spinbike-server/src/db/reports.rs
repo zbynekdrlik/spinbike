@@ -540,7 +540,7 @@ mod tests {
     #[test]
     fn start_boundary_is_inclusive() {
         let tmpls = vec![(1080, 60)];
-        let (current, next) = pick_current_and_next(&tmpls, 1080);
+        let (current, _next) = pick_current_and_next(&tmpls, 1080);
         assert_eq!(current, Some(0)); // guards against `>=` → `>` mutation
     }
 
