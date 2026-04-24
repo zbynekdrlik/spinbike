@@ -296,9 +296,7 @@ async fn now_panel_returns_current_or_next_class() {
     .await
     .unwrap();
 
-    let (status, body) = app
-        .request(get("/api/reports/now", &app.admin_token))
-        .await;
+    let (status, body) = app.request(get("/api/reports/now", &app.admin_token)).await;
     assert_eq!(status, StatusCode::OK);
     let has_any = !body["current_class"].is_null() || !body["next_class"].is_null();
     assert!(
