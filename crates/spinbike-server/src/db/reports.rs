@@ -1,10 +1,62 @@
 use anyhow::Result;
+use chrono::Datelike;
 use sqlx::SqlitePool;
 
 use spinbike_core::reports::{
     AlertsResponse, CurrentClass, ExpiringPass, InactiveCustomer, KpiSummary, LowCreditCard,
     NextClass, NowResponse, ReportEvent, RosterEntry, RosterStatus,
 };
+
+#[derive(sqlx::FromRow)]
+struct ExpiringRow {
+    card_id: i64,
+    name: String,
+    barcode: String,
+    pass_valid_until: Option<chrono::NaiveDate>,
+}
+
+#[derive(sqlx::FromRow)]
+struct LowCreditRow {
+    card_id: i64,
+    name: String,
+    barcode: String,
+    credit: f64,
+}
+
+#[derive(sqlx::FromRow)]
+struct InactiveRow {
+    card_id: i64,
+    name: String,
+    barcode: String,
+    last_visit: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct NowTmplRow {
+    id: i64,
+    start_time: String,
+    duration_minutes: i64,
+    capacity: i64,
+    instructor_name: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct NowRosterRow {
+    card_id: Option<i64>,
+    name: String,
+    barcode: Option<String>,
+    booking_id: i64,
+    cancelled_at: Option<String>,
+    charge_transaction_id: Option<i64>,
+}
+
+#[derive(sqlx::FromRow)]
+struct NowFutureTmplRow {
+    id: i64,
+    start_time: String,
+    capacity: i64,
+    instructor_name: Option<String>,
+}
 
 /// Fetch all non-voided transactions for a single day, joined with card + service data.
 /// Returns events sorted by created_at DESC and a KpiSummary aggregated over the whole day.
@@ -189,15 +241,7 @@ pub async fn alerts_report(pool: &SqlitePool) -> Result<AlertsResponse> {
 }
 
 async fn expiring_passes(pool: &SqlitePool) -> Result<Vec<ExpiringPass>> {
-    #[derive(sqlx::FromRow)]
-    struct Row {
-        card_id: i64,
-        name: String,
-        barcode: String,
-        pass_valid_until: Option<chrono::NaiveDate>,
-    }
-
-    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
+    let rows: Vec<ExpiringRow> = sqlx::query_as::<_, ExpiringRow>(
         "SELECT c.id AS card_id,
                 TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')) AS name,
                 c.barcode,
@@ -233,14 +277,7 @@ async fn expiring_passes(pool: &SqlitePool) -> Result<Vec<ExpiringPass>> {
 }
 
 async fn low_credit(pool: &SqlitePool) -> Result<Vec<LowCreditCard>> {
-    #[derive(sqlx::FromRow)]
-    struct Row {
-        card_id: i64,
-        name: String,
-        barcode: String,
-        credit: f64,
-    }
-    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
+    let rows: Vec<LowCreditRow> = sqlx::query_as::<_, LowCreditRow>(
         "SELECT c.id AS card_id,
                 TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')) AS name,
                 c.barcode,
@@ -264,14 +301,7 @@ async fn low_credit(pool: &SqlitePool) -> Result<Vec<LowCreditCard>> {
 }
 
 async fn inactive(pool: &SqlitePool) -> Result<Vec<InactiveCustomer>> {
-    #[derive(sqlx::FromRow)]
-    struct Row {
-        card_id: i64,
-        name: String,
-        barcode: String,
-        last_visit: Option<String>,
-    }
-    let rows: Vec<Row> = sqlx::query_as::<_, Row>(
+    let rows: Vec<InactiveRow> = sqlx::query_as::<_, InactiveRow>(
         "SELECT c.id AS card_id,
                 TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')) AS name,
                 c.barcode,
@@ -304,16 +334,7 @@ pub async fn now_panel(pool: &SqlitePool) -> Result<NowResponse> {
     let weekday: i64 = now.weekday().num_days_from_monday() as i64;
     let hhmm = now.format("%H:%M").to_string();
 
-    #[derive(sqlx::FromRow)]
-    struct Tmpl {
-        id: i64,
-        start_time: String,
-        duration_minutes: i64,
-        capacity: i64,
-        instructor_name: Option<String>,
-    }
-
-    let templates: Vec<Tmpl> = sqlx::query_as::<_, Tmpl>(
+    let templates: Vec<NowTmplRow> = sqlx::query_as::<_, NowTmplRow>(
         "SELECT ct.id, ct.start_time, ct.duration_minutes, ct.capacity,
                 i.name AS instructor_name
          FROM class_templates ct
@@ -325,8 +346,8 @@ pub async fn now_panel(pool: &SqlitePool) -> Result<NowResponse> {
     .fetch_all(pool)
     .await?;
 
-    let mut current: Option<Tmpl> = None;
-    let mut next: Option<Tmpl> = None;
+    let mut current: Option<NowTmplRow> = None;
+    let mut next: Option<NowTmplRow> = None;
     for t in templates {
         let start_mins = parse_hhmm_to_mins(&t.start_time);
         let now_mins = parse_hhmm_to_mins(&hhmm);
@@ -384,17 +405,8 @@ async fn roster_for(
     template_id: i64,
     date: chrono::NaiveDate,
 ) -> Result<Vec<RosterEntry>> {
-    #[derive(sqlx::FromRow)]
-    struct R {
-        card_id: Option<i64>,
-        name: String,
-        barcode: Option<String>,
-        booking_id: i64,
-        cancelled_at: Option<String>,
-        charge_transaction_id: Option<i64>,
-    }
     let date_str = date.format("%Y-%m-%d").to_string();
-    let rows: Vec<R> = sqlx::query_as::<_, R>(
+    let rows: Vec<NowRosterRow> = sqlx::query_as::<_, NowRosterRow>(
         "SELECT b.card_id,
                 COALESCE(NULLIF(TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')), ''),
                          u.name,
@@ -458,14 +470,7 @@ async fn next_class_future(
     for off in 1..=7 {
         let d = today + chrono::Duration::days(off);
         let weekday = d.weekday().num_days_from_monday() as i64;
-        #[derive(sqlx::FromRow)]
-        struct Tmpl {
-            id: i64,
-            start_time: String,
-            capacity: i64,
-            instructor_name: Option<String>,
-        }
-        let opt: Option<Tmpl> = sqlx::query_as::<_, Tmpl>(
+        let opt: Option<NowFutureTmplRow> = sqlx::query_as::<_, NowFutureTmplRow>(
             "SELECT ct.id, ct.start_time, ct.capacity,
                     i.name AS instructor_name
              FROM class_templates ct
