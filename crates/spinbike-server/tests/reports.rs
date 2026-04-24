@@ -339,17 +339,17 @@ async fn now_panel_finds_future_class_when_none_today() {
     .fetch_one(&app.pool)
     .await
     .unwrap();
-    // Seed one booking on the future template so booking_count can be asserted
-    // (kills `booking_count -> Ok(0/-1)` mutants; the Ok(1) constant is still
-    //  technically equivalent to the real result here, but the multi-booking
-    //  test above also exercises this with roster.len()).
+    // Seed TWO bookings on the future template (different user_ids to avoid
+    // the unique index) so booking_count must return 2 — killing the
+    // `booking_count -> Ok(0/1/-1)` constant-return mutants.
     let tomorrow = today.succ_opt().unwrap().format("%Y-%m-%d").to_string();
     sqlx::query(
-        "INSERT INTO bookings (template_id, date, user_id, source) VALUES (?1, ?2, ?3, 'staff')",
+        "INSERT INTO bookings (template_id, date, user_id, source) VALUES (?1, ?2, ?3, 'staff'), (?1, ?2, ?4, 'staff')",
     )
     .bind(tpl_id)
     .bind(&tomorrow)
     .bind(app.customer_id)
+    .bind(app.staff_id)
     .execute(&app.pool)
     .await
     .unwrap();
@@ -368,8 +368,8 @@ async fn now_panel_finds_future_class_when_none_today() {
     );
     assert_eq!(
         body["next_class"]["booked"].as_i64().unwrap(),
-        1,
-        "booking_count must return seeded booking count"
+        2,
+        "booking_count must return seeded booking count (kills Ok(0/1/-1))"
     );
 }
 
