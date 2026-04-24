@@ -2,6 +2,7 @@ pub mod cards;
 pub mod classes;
 pub mod migrations;
 pub mod persistent_bookings;
+pub mod reports;
 pub mod settings;
 pub mod transactions;
 pub mod users;
