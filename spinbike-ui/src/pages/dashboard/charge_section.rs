@@ -5,8 +5,8 @@ use web_sys::{HtmlInputElement, HtmlSelectElement};
 use crate::api;
 use crate::i18n::{self, Lang};
 
-use super::helpers::parse_money;
 use super::{CardInfo, PaymentResp, ServiceInfo};
+use crate::util::parse_money;
 
 #[component]
 pub fn ChargeSection(

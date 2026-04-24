@@ -90,6 +90,39 @@ test.describe('Monthly pass — price input UX', () => {
         assertCleanConsole(consoleMessages);
     });
 
+    test('empty price field shows error and does NOT sell pass', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+
+        const { lastName } = await activateUniqueCard(token, 80.0);
+        await page.goto('/staff');
+        await openCardByLastName(page, lastName);
+        await expect(page.locator('[data-testid="card-credit"]')).toContainText('80.00');
+
+        await page.locator('[data-testid="sell-pass-btn"]').click();
+        const modal = page.locator('[data-testid="sheet-sell-pass"]');
+        await expect(modal).toBeVisible();
+
+        // Clear the price field deliberately, then hit confirm.
+        const priceInput = page.locator('[data-testid="sell-pass-price"]');
+        await priceInput.focus();
+        await priceInput.press('ControlOrMeta+a');
+        await priceInput.press('Delete');
+        await expect(priceInput).toHaveValue('');
+
+        await page.locator('[data-testid="sell-pass-confirm"]').click();
+
+        // Error surfaces in the modal, modal stays open, NO pass is created,
+        // credit is unchanged — this is the regression we protect against
+        // (previously the code silently fell back to the default 35.00).
+        await expect(modal.locator('.alert-error')).toBeVisible();
+        await expect(modal).toBeVisible();
+        await expect(page.locator('[data-testid="pass-banner-active"]')).not.toBeVisible();
+        await expect(page.locator('[data-testid="card-credit"]')).toContainText('80.00');
+
+        assertCleanConsole(consoleMessages);
+    });
+
     test('comma decimal separator is accepted', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');

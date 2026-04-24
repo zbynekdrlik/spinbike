@@ -113,6 +113,24 @@ async fn sell_pass_rejects_negative_price() {
 }
 
 #[tokio::test]
+async fn sell_pass_rejects_zero_price() {
+    // A 0 EUR pass means "free pass" — never what the staff meant; almost
+    // always a typo / empty-field bypass. Enforce strictly > 0.
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("SELL-ZERO", 100.0, None, None, None, None)
+        .await;
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "price": 0.0, "valid_until": "2030-01-01" }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
 async fn sell_pass_rejects_blocked_card() {
     let app = TestApp::new().await;
     let card_id = app

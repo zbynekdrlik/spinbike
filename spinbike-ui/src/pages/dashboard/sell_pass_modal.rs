@@ -6,8 +6,9 @@ use crate::api;
 use crate::components::Sheet;
 use crate::i18n::{self, Lang};
 
-use super::helpers::{event_target_value, parse_money};
+use super::helpers::event_target_value;
 use super::{CardInfo, CardPass};
+use crate::util::parse_money;
 
 #[component]
 pub fn SellPassModal(
@@ -55,11 +56,18 @@ pub fn SellPassModal(
                         el.value()
                     })
                     .unwrap_or_default();
-                let p = parse_money(&typed).unwrap_or(monthly_pass_price);
-                if p <= 0.0 {
-                    set_err.set(i18n::t(lang.get_untracked(), "price_must_be_positive").to_string());
-                    return;
-                }
+                // Empty or unparseable → surface error instead of silently
+                // falling back to the default price (user cleared the field
+                // deliberately; we shouldn't sell a pass they didn't confirm).
+                let p = match parse_money(&typed) {
+                    Some(v) if v > 0.0 => v,
+                    _ => {
+                        set_err.set(
+                            i18n::t(lang.get_untracked(), "price_must_be_positive").to_string(),
+                        );
+                        return;
+                    }
+                };
                 spawn_local(async move {
                     #[derive(serde::Serialize)]
                     struct Req {

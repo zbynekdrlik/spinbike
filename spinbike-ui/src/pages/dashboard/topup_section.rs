@@ -5,8 +5,8 @@ use web_sys::HtmlInputElement;
 use crate::api;
 use crate::i18n::{self, Lang};
 
-use super::helpers::parse_money;
 use super::CardInfo;
+use crate::util::parse_money;
 
 const QUICK_TOPUP: [f64; 1] = [30.0];
 

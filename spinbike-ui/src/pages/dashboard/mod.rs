@@ -25,7 +25,8 @@ use web_sys::HtmlInputElement;
 use crate::api;
 use crate::i18n::{self, Lang};
 
-use helpers::{full_name, parse_money, urlencoding_light};
+use crate::util::parse_money;
+use helpers::{full_name, urlencoding_light};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct CardPass {

@@ -5,7 +5,7 @@ use web_sys::{HtmlInputElement, HtmlSelectElement};
 use crate::api;
 use crate::components::Segmented;
 use crate::i18n::{self, ADMIN_TAB_KEYS, Lang, WEEKDAY_KEYS};
-use crate::pages::dashboard::helpers::parse_money;
+use crate::util::parse_money;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 #[allow(dead_code)]
@@ -569,7 +569,7 @@ fn ServicesTab() -> impl IntoView {
                                             <label>{i18n::t(lang.get(), "name")}</label>
                                             <input type="text" class="form-control" style="width:auto" node_ref=edit_name_ref value=nval />
                                             <label>{i18n::t(lang.get(), "price")}</label>
-                                            <input type="text" inputmode="decimal" autocomplete="off" class="form-control" style="width:80px" node_ref=edit_price_ref value=price_for_edit.to_string() />
+                                            <input type="text" inputmode="decimal" autocomplete="off" class="form-control" style="width:80px" node_ref=edit_price_ref value=format!("{price_for_edit:.2}") />
                                             <button class="btn btn--primary btn--compact" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
                                         </div>
                                     </td>
