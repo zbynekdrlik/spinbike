@@ -139,7 +139,7 @@ test.describe('Card dashboard (staff /staff)', () => {
 
         // The amount input should auto-fill from default_price. Override to 5 for a
         // deterministic charge that never exceeds the card balance.
-        const amountInput = page.locator('[data-testid="charge-submit"]').locator('xpath=ancestor::form').locator('input[type="number"]');
+        const amountInput = page.locator('[data-testid="charge-amount"]');
         await amountInput.fill('5');
         await page.locator('[data-testid="charge-submit"]').click();
 
