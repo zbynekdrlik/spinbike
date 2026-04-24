@@ -4,6 +4,7 @@ pub mod cards;
 pub mod classes;
 pub mod payments;
 pub mod persistent_bookings;
+pub mod reports;
 pub mod static_files;
 pub mod test_fixtures;
 pub mod transactions;
@@ -32,6 +33,7 @@ pub fn api_routes() -> Router<AppState> {
         .merge(payments::routes())
         .merge(admin::routes())
         .merge(persistent_bookings::routes())
+        .merge(reports::routes())
         .merge(transactions::routes())
         .merge(upcoming_classes::routes())
 }
