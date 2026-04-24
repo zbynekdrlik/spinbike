@@ -436,6 +436,121 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("days_ago_short", ("pred {} d", "{}d ago"));
     m.insert("edit_pass_date", ("Upravit datum", "Edit date"));
 
+    // --- Staff/CEO redesign (v0.10.0) ---
+
+    // Nav (bottom tabs + sidebar labels)
+    m.insert("nav_desk", ("Desk", "Desk"));
+    m.insert("nav_schedule", ("Plan", "Schedule"));
+    m.insert("nav_reports", ("Vykazy", "Reports"));
+    m.insert("nav_settings", ("Nastavenia", "Settings"));
+
+    // Reports — date navigation
+    m.insert("reports_yesterday", ("Vcera", "Yesterday"));
+    m.insert("reports_today", ("Dnes", "Today"));
+    m.insert("reports_tomorrow", ("Zajtra", "Tomorrow"));
+    m.insert("reports_week", ("Tyzden", "Week"));
+    m.insert("reports_month", ("Mesiac", "Month"));
+    m.insert("reports_pick_date", ("Zvolit datum", "Pick date"));
+
+    // Reports — KPI cards
+    m.insert("kpi_revenue", ("TRZBA", "REVENUE"));
+    m.insert("kpi_attendance", ("NAVSTEVY", "ATTENDANCE"));
+    m.insert("kpi_passes", ("PERMANENTKY", "PASSES"));
+    m.insert("kpi_cash_in", ("VKLADY", "CASH IN"));
+
+    // Reports — alerts banner
+    m.insert(
+        "alerts_title",
+        ("Potrebuje pozornost", "Needs attention"),
+    );
+    m.insert(
+        "alerts_expiring_passes",
+        (
+            "{n} permanentiek vyprsi do 7 dni",
+            "{n} passes expire within 7 days",
+        ),
+    );
+    m.insert(
+        "alerts_low_credit",
+        (
+            "{n} kariet s kreditom pod 5 EUR",
+            "{n} cards below EUR 5 credit",
+        ),
+    );
+    m.insert(
+        "alerts_inactive",
+        (
+            "{n} zakaznikov neaktivnych 60+ dni",
+            "{n} customers inactive 60+ days",
+        ),
+    );
+    m.insert("alerts_dismiss", ("Skryt", "Dismiss"));
+
+    // Reports — filters
+    m.insert("filters_label", ("Filtre", "Filters"));
+    m.insert("filters_reset", ("Zrusit filtre", "Reset"));
+    m.insert("filters_event_all", ("Vsetko", "All"));
+    m.insert("filters_event_payments", ("Platby", "Payments"));
+    m.insert("filters_event_topups", ("Vklady", "Top-ups"));
+    m.insert("filters_event_passes", ("Permanentky", "Passes"));
+    m.insert("filters_service_spinning", ("Spinning", "Spinning"));
+    m.insert("filters_service_fitness", ("Fitness", "Fitness"));
+    m.insert("filters_service_pass", ("Permanentka", "Pass"));
+    m.insert(
+        "filters_search_placeholder",
+        (
+            "Hladat meno, ciarovy kod, telefon",
+            "Search name, barcode, phone",
+        ),
+    );
+
+    // Reports — feed
+    m.insert("feed_load_older", ("Nacitat starsie", "Load older"));
+    m.insert(
+        "feed_empty_day",
+        ("Na tento den nie je ziadna aktivita.", "No activity on this day."),
+    );
+    m.insert(
+        "feed_empty_filter",
+        (
+            "Ziadne vysledky pre tieto filtre.",
+            "No results for these filters.",
+        ),
+    );
+
+    // Desk — Now panel
+    m.insert(
+        "now_no_more_today",
+        ("Dnes uz ziadne hodiny.", "No more classes today."),
+    );
+    m.insert(
+        "now_next_on",
+        ("Dalsia hodina: {when}", "Next class: {when}"),
+    );
+    m.insert("now_walk_in", ("Bez rezervacie", "Walk-in"));
+    m.insert("now_cancel_class", ("Zrusit hodinu", "Cancel class"));
+    m.insert("now_collapse", ("Skryt", "Hide"));
+    m.insert("now_expand", ("Zobrazit", "Show"));
+
+    // Roster status badges
+    m.insert("status_booked", ("Rezervovane", "Booked"));
+    m.insert("status_checked_in", ("Prisiel", "Checked in"));
+    m.insert("status_cancelled", ("Zrusene", "Cancelled"));
+
+    // Card detail (collapsed contact)
+    m.insert(
+        "card_show_contact",
+        ("Zobrazit kontakt", "Show contact"),
+    );
+    m.insert("card_hide_contact", ("Skryt kontakt", "Hide contact"));
+
+    // Settings (renamed /admin) tabs
+    m.insert("settings_tab_center", ("Centrum", "Center"));
+    m.insert("settings_tab_services", ("Sluzby", "Services"));
+    m.insert("settings_tab_templates", ("Permanentky", "Templates"));
+    m.insert("settings_tab_instructors", ("Instruktori", "Instructors"));
+    m.insert("settings_tab_users", ("Pouzivatelia", "Users"));
+
     m
 });
 
