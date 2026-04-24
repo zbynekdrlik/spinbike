@@ -45,8 +45,10 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/my/balance") view=MyBalancePage />
                         <Route path=path!("/link-card") view=LinkCardPage />
                         <Route path=path!("/staff") view=DashboardPage />
+                        // Admin schedule view (rosters, walk-in, cancel) lives at /schedule.
+                        // /staff/classes kept as alias for back-compat.
                         <Route path=path!("/staff/classes") view=StaffDashboardPage />
-                        <Route path=path!("/schedule") view=SchedulePage />
+                        <Route path=path!("/schedule") view=StaffDashboardPage />
                         <Route path=path!("/reports") view=ReportsPage />
                         <Route path=path!("/settings") view=AdminPage />
                         <Route path=path!("/admin") view=AdminPage />
