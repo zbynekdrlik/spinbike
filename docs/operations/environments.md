@@ -16,13 +16,36 @@ runner machine:
 ./scripts/setup-environments.sh
 ```
 
-Then do the Cloudflare steps manually (need Cloudflare auth):
+Then do the Cloudflare steps manually (need Cloudflare auth). **Ordering
+matters**: the tunnel must be restarted *after* the DNS CNAME exists,
+otherwise the edge caches a "hostname exists but no WebSocket" state for
+the new hostname and `/api/ws` upgrades return 400 until the next tunnel
+restart.
 
 ```bash
-# Edit ~/.cloudflared/config.yml per deploy/cloudflared/config.yml.example
+# 1. Create the DNS CNAME first
 cloudflared tunnel route dns spinbike spinbike-dev.newlevel.media
+
+# 2. Edit ~/.cloudflared/config.yml per deploy/cloudflared/config.yml.example
+
+# 3. Restart the tunnel LAST so it re-registers with the edge against the
+#    hostname that now exists in DNS
 sudo systemctl restart spinbike-tunnel.service
 ```
+
+### Adding another env hostname later
+
+Same ordering. If you ever see `400 Bad Request` on `/api/ws` for a newly-
+added hostname while regular HTTP works fine, fix with:
+
+```bash
+sudo systemctl restart spinbike-tunnel.service
+```
+
+The edge's per-hostname WebSocket registration refreshes on connector
+re-announcement. Deploy CI's `Wait for <env> site health` step now probes
+the WS upgrade as part of readiness, so a stuck edge state will fail the
+deploy loudly rather than poison post-deploy smoke tests.
 
 ## Daily operations
 

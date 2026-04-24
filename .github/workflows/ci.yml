@@ -252,16 +252,42 @@ jobs:
             /opt/spinbike/dev/spinbike-server
           sudo -n systemctl restart spinbike-dev.service
 
-      - name: Wait for dev site health
+      - name: Wait for dev site health (HTTP + WebSocket upgrade)
         run: |
+          # HTTP readiness
           for i in $(seq 1 30); do
             if curl -sfI https://spinbike-dev.newlevel.media > /dev/null; then
-              echo "Dev site responding (attempt $i)"
-              exit 0
+              echo "HTTP ready (attempt $i)"
+              break
             fi
+            [ "$i" -eq 30 ] && {
+              echo "ERROR: dev HTTP did not respond within 60s"
+              sudo -n systemctl status spinbike-dev.service --no-pager || true
+              exit 1
+            }
             sleep 2
           done
-          echo "ERROR: dev site did not respond within 60s"
+          # WebSocket upgrade readiness. The app opens wss://.../api/ws on page
+          # load; if Cloudflare edge hasn't registered WS support for a newly
+          # added tunnel hostname, it returns 400 and the browser console
+          # logs an error, failing clean-console smoke assertions. Retry
+          # until the edge returns 101 Switching Protocols.
+          for i in $(seq 1 30); do
+            first_line=$(curl -s --http1.1 \
+              -H "Connection: Upgrade" \
+              -H "Upgrade: websocket" \
+              -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+              -H "Sec-WebSocket-Version: 13" \
+              -H "Origin: https://spinbike-dev.newlevel.media" \
+              --max-time 5 -i https://spinbike-dev.newlevel.media/api/ws 2>&1 | head -1)
+            if echo "$first_line" | grep -q '101'; then
+              echo "WS upgrade ready (attempt $i): $first_line"
+              exit 0
+            fi
+            echo "WS not ready (attempt $i): $first_line"
+            sleep 2
+          done
+          echo "ERROR: dev WS upgrade did not reach 101 within 60s"
           sudo -n systemctl status spinbike-dev.service --no-pager || true
           exit 1
 
@@ -326,16 +352,40 @@ jobs:
             /opt/spinbike/prod/spinbike-server
           sudo -n systemctl restart spinbike.service
 
-      - name: Wait for prod site health
+      - name: Wait for prod site health (HTTP + WebSocket upgrade)
         run: |
+          # HTTP readiness
           for i in $(seq 1 30); do
             if curl -sfI https://spinbike.newlevel.media > /dev/null; then
-              echo "Prod site responding (attempt $i)"
-              exit 0
+              echo "HTTP ready (attempt $i)"
+              break
             fi
+            [ "$i" -eq 30 ] && {
+              echo "ERROR: prod HTTP did not respond within 60s"
+              sudo -n systemctl status spinbike.service --no-pager || true
+              exit 1
+            }
             sleep 2
           done
-          echo "ERROR: prod site did not respond within 60s"
+          # WebSocket upgrade readiness — see matching step in deploy-dev for
+          # rationale. Same guard ensures smoke clean-console assertion won't
+          # flake on a cold WS-upgrade path.
+          for i in $(seq 1 30); do
+            first_line=$(curl -s --http1.1 \
+              -H "Connection: Upgrade" \
+              -H "Upgrade: websocket" \
+              -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
+              -H "Sec-WebSocket-Version: 13" \
+              -H "Origin: https://spinbike.newlevel.media" \
+              --max-time 5 -i https://spinbike.newlevel.media/api/ws 2>&1 | head -1)
+            if echo "$first_line" | grep -q '101'; then
+              echo "WS upgrade ready (attempt $i): $first_line"
+              exit 0
+            fi
+            echo "WS not ready (attempt $i): $first_line"
+            sleep 2
+          done
+          echo "ERROR: prod WS upgrade did not reach 101 within 60s"
           sudo -n systemctl status spinbike.service --no-pager || true
           exit 1
 
