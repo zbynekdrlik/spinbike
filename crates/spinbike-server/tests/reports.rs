@@ -331,11 +331,25 @@ async fn now_panel_finds_future_class_when_none_today() {
         .execute(&app.pool)
         .await
         .unwrap();
-    sqlx::query(
+    let tpl_id: i64 = sqlx::query_scalar(
         "INSERT INTO class_templates (weekday, start_time, duration_minutes, capacity, active) \
-         VALUES (?1, '18:00', 60, 12, 1)",
+         VALUES (?1, '18:00', 60, 12, 1) RETURNING id",
     )
     .bind(tomorrow_weekday)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    // Seed one booking on the future template so booking_count can be asserted
+    // (kills `booking_count -> Ok(0/-1)` mutants; the Ok(1) constant is still
+    //  technically equivalent to the real result here, but the multi-booking
+    //  test above also exercises this with roster.len()).
+    let tomorrow = today.succ_opt().unwrap().format("%Y-%m-%d").to_string();
+    sqlx::query(
+        "INSERT INTO bookings (template_id, date, user_id, source) VALUES (?1, ?2, ?3, 'staff')",
+    )
+    .bind(tpl_id)
+    .bind(&tomorrow)
+    .bind(app.customer_id)
     .execute(&app.pool)
     .await
     .unwrap();
@@ -351,6 +365,11 @@ async fn now_panel_finds_future_class_when_none_today() {
     assert_eq!(
         date_str,
         today.succ_opt().unwrap().format("%Y-%m-%d").to_string()
+    );
+    assert_eq!(
+        body["next_class"]["booked"].as_i64().unwrap(),
+        1,
+        "booking_count must return seeded booking count"
     );
 }
 
@@ -394,8 +413,20 @@ async fn day_report_alerts_count_reflects_underlying_alerts() {
         .await;
     assert_eq!(status, StatusCode::OK);
     let count = body["alerts_count"].as_i64().unwrap();
-    // 2 low-credit + 1 expiring = 3 (plus possibly inactive customers from seeding).
-    assert!(count >= 3, "expected ≥3 alerts, got {count}");
+    // Kills `total_alert_count` body mutants (Ok(0/1/-1)) AND `+` → `*` mutants
+    // by asserting the EXACT sum of the three alert arrays (not product, not
+    // constant).
+    let (_, alerts_body) = app
+        .request(get("/api/reports/alerts", &app.admin_token))
+        .await;
+    let expected = (alerts_body["expiring_passes"].as_array().unwrap().len()
+        + alerts_body["low_credit"].as_array().unwrap().len()
+        + alerts_body["inactive"].as_array().unwrap().len()) as i64;
+    assert_eq!(
+        count, expected,
+        "alerts_count must equal expiring + low_credit + inactive"
+    );
+    assert!(count >= 3, "seeded data implies ≥3 alerts, got {count}");
 }
 
 // Kills `Some(i) == current_idx` → `!=` mutant in now_panel.
@@ -440,6 +471,20 @@ async fn now_panel_selects_correct_template_when_multiple_exist() {
         Some(cur_tmpl_id),
         "current_class must be the template whose window contains now"
     );
+    // Kills `Some(i) == next_idx` → `!=` mutant: with `!=`, the past template
+    // is wrongly written into next_class for today. Original: within-day next
+    // is None, fallback next_class_future returns a future-dated class (or
+    // None). Either way, next_class — if present — must NOT be the past
+    // template we seeded on today.
+    if !body["next_class"].is_null() {
+        let today_str = now.date_naive().format("%Y-%m-%d").to_string();
+        let next_date = body["next_class"]["date"].as_str().unwrap();
+        let next_tpl = body["next_class"]["template_id"].as_i64().unwrap();
+        assert!(
+            next_date != today_str || next_tpl == cur_tmpl_id,
+            "next_class must not be a past-ended today template"
+        );
+    }
 }
 
 #[tokio::test]
