@@ -97,7 +97,7 @@ test.describe('Admin pages', () => {
         }, { timeout: 10000 });
 
         // Verify services tab shows (check for price field in the form)
-        const priceInput = page.locator('input[type="number"]');
+        const priceInput = page.locator('[data-testid="service-price"]');
         await expect(priceInput.first()).toBeVisible();
 
         // Click users tab
@@ -138,10 +138,10 @@ test.describe('Admin pages', () => {
         }, { timeout: 10000 });
 
         // Fill service form
-        const nameInput = page.locator('.inline-form input[type="text"]');
+        const nameInput = page.locator('[data-testid="service-name"]');
         await nameInput.fill('Pilates');
 
-        const priceInput = page.locator('.inline-form input[type="number"]');
+        const priceInput = page.locator('[data-testid="service-price"]');
         await priceInput.fill('150');
 
         // Click Add Service

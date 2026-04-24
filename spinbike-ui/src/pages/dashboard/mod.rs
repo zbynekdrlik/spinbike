@@ -25,6 +25,7 @@ use web_sys::HtmlInputElement;
 use crate::api;
 use crate::i18n::{self, Lang};
 
+use crate::util::parse_money;
 use helpers::{full_name, urlencoding_light};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -391,7 +392,7 @@ fn ActivateCardForm(
         let last = read(&last_ref);
         let company = read(&company_ref);
         let phone = read(&phone_ref);
-        let credit: f64 = read(&credit_ref).parse().unwrap_or(0.0);
+        let credit: f64 = parse_money(&read(&credit_ref)).unwrap_or(0.0);
 
         if barcode.is_empty() {
             return;
@@ -445,7 +446,7 @@ fn ActivateCardForm(
                 <div class="form-group"><label>{move || i18n::t(lang.get(), "phone")}</label>
                     <input type="text" class="form-control" node_ref=phone_ref /></div>
                 <div class="form-group"><label>{move || i18n::t(lang.get(), "initial_credit")}</label>
-                    <input type="number" class="form-control" node_ref=credit_ref step="0.01" min="0" value="0" /></div>
+                    <input type="text" inputmode="decimal" autocomplete="off" class="form-control" node_ref=credit_ref value="0" /></div>
                 <button type="submit" class="btn btn--primary btn--compact" disabled=move || loading.get()>
                     {move || i18n::t(lang.get(), "activate")}
                 </button>

@@ -54,7 +54,7 @@ test.describe('credit improvements', () => {
         // only service besides "Monthly pass"; the select filters out "Monthly pass"
         // so the first real option (index 1, skipping the "select…" placeholder) is Spinning.
         await page.locator('[data-testid="charge-service"]').selectOption({ index: 1 });
-        const amountInput = page.locator('form.inline-form input[type="number"]').first();
+        const amountInput = page.locator('[data-testid="charge-amount"]');
         await amountInput.fill('2');
         await page.locator('[data-testid="charge-submit"]').click();
 

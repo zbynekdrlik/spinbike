@@ -385,6 +385,10 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("modal_valid_until", ("Platny do", "Valid until"));
     m.insert("modal_confirm", ("Predat", "Sell pass"));
     m.insert("modal_cancel", ("Zrusit", "Cancel"));
+    m.insert(
+        "price_required",
+        ("Zadajte cenu", "Please enter a price"),
+    );
 
     // Upcoming classes + persistent booking
     m.insert(
