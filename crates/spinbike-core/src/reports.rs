@@ -136,3 +136,49 @@ pub struct NowResponse {
     pub current_class: Option<CurrentClass>,
     pub next_class: Option<NextClass>,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ev(amount: f64, valid_until: Option<chrono::NaiveDate>) -> ReportEvent {
+        ReportEvent {
+            id: 1,
+            card_id: None,
+            card_name: None,
+            barcode: None,
+            action: "x".into(),
+            amount,
+            service_name: None,
+            created_at: "2026-04-24 12:00:00".into(),
+            valid_until,
+            voided: false,
+        }
+    }
+
+    #[test]
+    fn kind_pass_sold_regardless_of_amount_when_valid_until_set() {
+        let d = chrono::NaiveDate::from_ymd_opt(2026, 5, 24).unwrap();
+        assert_eq!(ev(-35.0, Some(d)).kind(), EventKind::PassSold);
+        assert_eq!(ev(0.0, Some(d)).kind(), EventKind::PassSold);
+        assert_eq!(ev(35.0, Some(d)).kind(), EventKind::PassSold);
+    }
+
+    #[test]
+    fn kind_charge_when_amount_strictly_negative_and_no_pass() {
+        assert_eq!(ev(-5.0, None).kind(), EventKind::Charge);
+        assert_eq!(ev(-0.01, None).kind(), EventKind::Charge);
+    }
+
+    #[test]
+    fn kind_topup_when_amount_strictly_positive_and_no_pass() {
+        assert_eq!(ev(5.0, None).kind(), EventKind::TopUp);
+        assert_eq!(ev(0.01, None).kind(), EventKind::TopUp);
+    }
+
+    #[test]
+    fn kind_other_when_amount_is_exactly_zero_and_no_pass() {
+        // Guards against `<` → `<=` and `>` → `>=` mutants.
+        assert_eq!(ev(0.0, None).kind(), EventKind::Other);
+    }
+}

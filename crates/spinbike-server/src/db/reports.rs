@@ -346,15 +346,21 @@ pub async fn now_panel(pool: &SqlitePool) -> Result<NowResponse> {
     .fetch_all(pool)
     .await?;
 
+    let now_mins = parse_hhmm_to_mins(&hhmm);
+    let (current_idx, next_idx) = pick_current_and_next(
+        &templates
+            .iter()
+            .map(|t| (parse_hhmm_to_mins(&t.start_time), t.duration_minutes))
+            .collect::<Vec<_>>(),
+        now_mins,
+    );
+    let mut templates_iter = templates.into_iter().enumerate();
     let mut current: Option<NowTmplRow> = None;
     let mut next: Option<NowTmplRow> = None;
-    for t in templates {
-        let start_mins = parse_hhmm_to_mins(&t.start_time);
-        let now_mins = parse_hhmm_to_mins(&hhmm);
-        let end_mins = start_mins + t.duration_minutes;
-        if now_mins >= start_mins && now_mins < end_mins && current.is_none() {
+    for (i, t) in templates_iter.by_ref() {
+        if Some(i) == current_idx {
             current = Some(t);
-        } else if now_mins < start_mins && next.is_none() {
+        } else if Some(i) == next_idx {
             next = Some(t);
         }
     }
@@ -495,4 +501,113 @@ async fn next_class_future(
         }
     }
     Ok(None)
+}
+
+/// Pure logic for picking the currently-running and next-upcoming class template
+/// from a list of (start_mins, duration_minutes) pairs relative to `now_mins`.
+/// Extracted so time-window behaviour can be unit-tested without a clock dependency.
+fn pick_current_and_next(
+    templates: &[(i64, i64)],
+    now_mins: i64,
+) -> (Option<usize>, Option<usize>) {
+    let mut current: Option<usize> = None;
+    let mut next: Option<usize> = None;
+    for (i, &(start_mins, duration_minutes)) in templates.iter().enumerate() {
+        let end_mins = start_mins + duration_minutes;
+        if now_mins >= start_mins && now_mins < end_mins && current.is_none() {
+            current = Some(i);
+        } else if now_mins < start_mins && next.is_none() {
+            next = Some(i);
+        }
+    }
+    (current, next)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::pick_current_and_next;
+
+    // now = 18:30 (1110 min); class 18:00-19:00 (1080..1140) is current.
+    #[test]
+    fn picks_current_when_inside_window() {
+        let tmpls = vec![(1080, 60)]; // 18:00 + 60 min
+        let (current, next) = pick_current_and_next(&tmpls, 1110);
+        assert_eq!(current, Some(0));
+        assert_eq!(next, None);
+    }
+
+    // now = 18:00 exactly; inclusive on start — current.
+    #[test]
+    fn start_boundary_is_inclusive() {
+        let tmpls = vec![(1080, 60)];
+        let (current, next) = pick_current_and_next(&tmpls, 1080);
+        assert_eq!(current, Some(0)); // guards against `>=` → `>` mutation
+    }
+
+    // now = 19:00 exactly; end is EXCLUSIVE — class has just ended.
+    #[test]
+    fn end_boundary_is_exclusive() {
+        let tmpls = vec![(1080, 60)];
+        let (current, next) = pick_current_and_next(&tmpls, 1140);
+        assert_eq!(current, None); // guards against `<` → `<=`
+        assert_eq!(next, None);
+    }
+
+    // now = 17:00 (1020); class 18:00 is upcoming → next.
+    #[test]
+    fn picks_next_when_before_start() {
+        let tmpls = vec![(1080, 60)];
+        let (current, next) = pick_current_and_next(&tmpls, 1020);
+        assert_eq!(current, None);
+        assert_eq!(next, Some(0));
+    }
+
+    // Two classes today: current running, later one is next.
+    #[test]
+    fn picks_current_and_next_distinctly() {
+        let tmpls = vec![(1080, 60), (1260, 60)]; // 18:00 and 21:00
+        let (current, next) = pick_current_and_next(&tmpls, 1110); // 18:30
+        assert_eq!(current, Some(0));
+        assert_eq!(next, Some(1));
+    }
+
+    // Guards against `&&` → `||` mutations at the window check.
+    // now=12:00 (720): template at 18:00 is neither current (12 < 18) nor current
+    // by end (12 < 19). With `||`, a false-false-true `current.is_none()` would
+    // flip the branch incorrectly. We want this to pick next, not current.
+    #[test]
+    fn before_window_never_classifies_as_current() {
+        let tmpls = vec![(1080, 60)];
+        let (current, next) = pick_current_and_next(&tmpls, 720);
+        assert_eq!(current, None);
+        assert_eq!(next, Some(0));
+    }
+
+    // Guards against `+` → `-` or `*` at end_mins computation. With `-`,
+    // end_mins = 1080-60 = 1020, so now=1090 would be >= start (1080) and
+    // >= end (1020) → original says NOT current (1090 !< 1020), mutant same.
+    // Need a case where original says current and mutant says not-current.
+    // now = 1100, start = 1080, dur = 60 → end = 1140. 1100 >= 1080 AND 1100 < 1140 → current.
+    // Mutant `-`: end = 1020. 1100 >= 1080 AND 1100 < 1020 (false) → not current.
+    // Mutant `*`: end = 64800. still current. So `*` won't be killed by this test alone;
+    // we cover it via `end_boundary_is_exclusive` which passes with `*` (since 1140 < 64800).
+    // For `*`, use a now strictly past the true end but well below any inflated end:
+    #[test]
+    fn after_end_is_not_current() {
+        // start=1080, duration=60, true end=1140. now=1200 (20:00).
+        // Original: 1200 < 1140 false → not current. ✓
+        // Mutant `+` → `-`: end = 1020. 1200 < 1020 false → not current. (no change)
+        // Mutant `+` → `*`: end = 64800. 1200 < 64800 true AND 1200 >= 1080 → CURRENT!
+        // This test asserts current=None which would fail on the `*` mutant. ✓
+        let tmpls = vec![(1080, 60)];
+        let (current, next) = pick_current_and_next(&tmpls, 1200);
+        assert_eq!(current, None);
+        assert_eq!(next, None);
+    }
+
+    // Combine with above: `+` → `-` caught when now is within the real window
+    // but below the mutated (start-duration) end. Already covered by
+    // `picks_current_when_inside_window`: now=1110, start=1080, dur=60, true end=1140.
+    // `+` → `-` mutant: end = 1020. 1110 < 1020 false → not current. Test asserts
+    // current=Some(0), fails on mutant. ✓
 }
