@@ -181,6 +181,7 @@ pub fn ChargeSection(
                     autocomplete="off"
                     class="form-control input--narrow"
                     node_ref=amount_ref
+                    data-testid="charge-amount"
                     placeholder=move || i18n::t(lang.get(), "amount")
                     required
                 />

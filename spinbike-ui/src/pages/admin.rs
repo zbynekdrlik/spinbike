@@ -497,11 +497,11 @@ fn ServicesTab() -> impl IntoView {
         <form class="inline-form mb-2" on:submit=on_create>
             <div class="form-group">
                 <label>{move || i18n::t(lang.get(), "name")}</label>
-                <input type="text" class="form-control" node_ref=name_ref required />
+                <input type="text" class="form-control" node_ref=name_ref data-testid="service-name" required />
             </div>
             <div class="form-group">
                 <label>{move || i18n::t(lang.get(), "price_czk")}</label>
-                <input type="text" inputmode="decimal" autocomplete="off" class="form-control" node_ref=price_ref required />
+                <input type="text" inputmode="decimal" autocomplete="off" class="form-control" node_ref=price_ref data-testid="service-price" required />
             </div>
             <button type="submit" class="btn btn--primary btn--compact">{move || i18n::t(lang.get(), "add_service")}</button>
         </form>

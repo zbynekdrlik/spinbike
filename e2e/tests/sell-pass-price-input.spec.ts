@@ -1,28 +1,63 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
 // Regression: the sell-pass price input used a controlled prop:value with
-// `format!("{:.2}", price)` so every keystroke reformatted the field back to
-// the current f64 with 2 decimals, making it impossible to type a custom
-// price char-by-char (trailing digits lost, caret jumped). The fix switched
-// the input to uncontrolled (node_ref + read on submit) with a text/decimal
-// inputmode for better mobile UX.
+// `format!("{:.2}", price)`, so every keystroke parsed → reformatted the
+// field back to 2-decimal form. Users could not clear the field or type
+// digit-by-digit — trailing characters were lost and the caret jumped.
+// The fix switched to an uncontrolled node_ref + read on submit, with
+// `type="text" inputmode="decimal"` for better mobile UX and comma
+// decimal support (Slovak keyboards).
+
+// Activates a fresh card with a unique barcode so this file's tests never
+// share state with the other E2E files (which all contend for the three
+// seeded cards and race on credit values under parallel execution).
+async function activateUniqueCard(
+    token: string,
+    initialCredit: number,
+): Promise<{ barcode: string; lastName: string }> {
+    const suffix = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
+    const barcode = `PASS-${suffix}`;
+    const lastName = `Passtest${suffix}`;
+    const resp = await fetch(`${BASE_URL}/api/cards/activate`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+            barcode,
+            initial_credit: initialCredit,
+            first_name: 'SellPass',
+            last_name: lastName,
+        }),
+    });
+    if (!resp.ok) {
+        throw new Error(`activate failed: ${resp.status} ${await resp.text()}`);
+    }
+    return { barcode, lastName };
+}
+
+async function openCardByLastName(page: Page, lastName: string) {
+    const searchInput = page.locator('input[type="search"]');
+    await searchInput.waitFor();
+    await searchInput.focus();
+    await page.keyboard.type(lastName, { delay: 30 });
+    await page.locator('[data-testid="search-result"]').first().click();
+    await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+}
+
 test.describe('Monthly pass — price input UX', () => {
     test('typing a custom price char-by-char survives and is charged', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
-        await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        await page.goto('/staff');
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
 
-        // Pick a test card and top it up so it has enough credit (80 EUR) to
-        // afford any price we might type below.
-        const searchInput = page.locator('input[type="search"]');
-        await searchInput.waitFor();
-        await searchInput.focus();
-        await page.keyboard.type('TestCorp', { delay: 30 });
-        await page.locator('[data-testid="search-result"]').first().click();
-        await page.locator('[data-testid="topup-30"]').click();
+        // Fresh card, known starting credit — no parallel test can touch it.
+        const { lastName } = await activateUniqueCard(token, 80.0);
+        await page.goto('/staff');
+        await openCardByLastName(page, lastName);
         await expect(page.locator('[data-testid="card-credit"]')).toContainText('80.00');
 
         // Open the sell-pass modal.
@@ -57,16 +92,12 @@ test.describe('Monthly pass — price input UX', () => {
 
     test('comma decimal separator is accepted', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
-        await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        await page.goto('/staff');
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
 
-        const searchInput = page.locator('input[type="search"]');
-        await searchInput.waitFor();
-        await searchInput.focus();
-        // Use a different seeded card to avoid state leakage between tests.
-        await page.keyboard.type('Vzorny', { delay: 30 });
-        await page.locator('[data-testid="search-result"]').first().click();
-        await page.locator('[data-testid="topup-30"]').click();
+        const { lastName } = await activateUniqueCard(token, 50.0);
+        await page.goto('/staff');
+        await openCardByLastName(page, lastName);
+        await expect(page.locator('[data-testid="card-credit"]')).toContainText('50.00');
 
         await page.locator('[data-testid="sell-pass-btn"]').click();
         const priceInput = page.locator('[data-testid="sell-pass-price"]');
@@ -80,6 +111,8 @@ test.describe('Monthly pass — price input UX', () => {
         await page.locator('[data-testid="sell-pass-confirm"]').click();
         await expect(page.locator('[data-testid="sheet-sell-pass"]')).not.toBeVisible();
         await expect(page.locator('[data-testid="pass-banner-active"]')).toBeVisible();
+        // 50.00 - 25.50 = 24.50 → comma normalized to dot on the backend.
+        await expect(page.locator('[data-testid="card-credit"]')).toContainText('24.50');
 
         assertCleanConsole(consoleMessages);
     });
