@@ -1,10 +1,12 @@
 import { test, expect } from '@playwright/test';
-import { loginViaUI, setupConsoleCheck, assertCleanConsole } from './helpers';
+import { loginViaAPI, setupConsoleCheck, assertCleanConsole } from './helpers';
+
+const BASE_URL = 'http://localhost:8099';
 
 test.describe('Reports page', () => {
-    test('loads with date strip, KPI cards, feed, filters', async ({ page }) => {
+    test('loads with KPI cards, feed, filters', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
-        await loginViaUI(page, 'admin@test.com', 'admin123');
+        await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
         await page.goto('/reports');
 
         await expect(page.locator('[data-testid="reports-page"]')).toBeVisible();
@@ -19,7 +21,7 @@ test.describe('Reports page', () => {
 
     test('date prev/next buttons change the label', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
-        await loginViaUI(page, 'admin@test.com', 'admin123');
+        await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
         await page.goto('/reports');
 
         const initial = await page.locator('[data-testid="date-label"]').innerText();
@@ -32,9 +34,9 @@ test.describe('Reports page', () => {
         assertCleanConsole(consoleMessages);
     });
 
-    test('Week/Month range buttons toggle active state', async ({ page }) => {
+    test('Week/Month range buttons toggle', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
-        await loginViaUI(page, 'admin@test.com', 'admin123');
+        await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
         await page.goto('/reports');
 
         await page.locator('[data-testid="range-week"]').click();
@@ -49,7 +51,7 @@ test.describe('Reports page', () => {
 
     test('calendar picker sheet opens and sets anchor', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
-        await loginViaUI(page, 'admin@test.com', 'admin123');
+        await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
         await page.goto('/reports');
 
         await page.locator('[data-testid="date-label"]').click();

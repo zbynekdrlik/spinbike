@@ -60,7 +60,7 @@ pub fn AdminPage() -> impl IntoView {
         .collect();
 
     view! {
-        <h1 class="page-title">{move || i18n::t(lang.get(), "nav_settings")}</h1>
+        <h1 class="page-title">{move || i18n::t(lang.get(), "admin")}</h1>
         <Segmented
             items=seg_items
             active=Signal::derive(move || tab.get())

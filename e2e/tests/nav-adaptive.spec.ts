@@ -1,11 +1,14 @@
 import { test, expect } from '@playwright/test';
-import { loginViaUI, setupConsoleCheck, assertCleanConsole } from './helpers';
+import { loginViaAPI, setupConsoleCheck, assertCleanConsole } from './helpers';
+
+const BASE_URL = 'http://localhost:8099';
 
 test.describe('Adaptive nav', () => {
     test('bottom tabs on mobile viewport', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
         await page.setViewportSize({ width: 375, height: 812 });
-        await loginViaUI(page, 'admin@test.com', 'admin123');
+        await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+        await page.goto('/staff');
         await expect(page.locator('[data-testid="adaptive-nav"]')).toBeVisible();
         await expect(page.locator('[data-testid="nav-desk"]')).toBeVisible();
         await expect(page.locator('[data-testid="nav-schedule"]')).toBeVisible();
@@ -27,7 +30,8 @@ test.describe('Adaptive nav', () => {
     test('sidebar layout on desktop viewport', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
         await page.setViewportSize({ width: 1280, height: 800 });
-        await loginViaUI(page, 'admin@test.com', 'admin123');
+        await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+        await page.goto('/staff');
         await expect(page.locator('[data-testid="adaptive-nav"]')).toBeVisible();
         await page.locator('[data-testid="nav-reports"]').click();
         await expect(page).toHaveURL(/\/reports/);
