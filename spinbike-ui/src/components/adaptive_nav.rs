@@ -22,9 +22,14 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
     view! {
         {move || {
             let Some(u) = user() else { return ().into_any(); };
-            if u.role != "admin" && u.role != "staff" {
+            // Staff and admin both see Desk + Schedule. Reports + Settings are
+            // admin-only on the server (require_admin) — hide them for staff
+            // to avoid 403s in the browser console.
+            let is_staff_or_admin = u.role == "admin" || u.role == "staff";
+            if !is_staff_or_admin {
                 return ().into_any();
             }
+            let is_admin = u.role == "admin";
             let path = current_path();
             let desk_active = path.starts_with("/staff") || path == "/";
             let schedule_active = path.starts_with("/schedule");
@@ -45,18 +50,22 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
                         <span class="adaptive-nav__icon">"📅"</span>
                         <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_schedule")}</span>
                     </a>
-                    <a href="/reports" class="adaptive-nav__item"
-                       data-testid="nav-reports"
-                       aria-current=if reports_active { "page" } else { "false" }>
-                        <span class="adaptive-nav__icon">"📊"</span>
-                        <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_reports")}</span>
-                    </a>
-                    <a href="/settings" class="adaptive-nav__item"
-                       data-testid="nav-settings"
-                       aria-current=if settings_active { "page" } else { "false" }>
-                        <span class="adaptive-nav__icon">"⚙"</span>
-                        <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_settings")}</span>
-                    </a>
+                    {if is_admin {
+                        view! {
+                            <a href="/reports" class="adaptive-nav__item"
+                               data-testid="nav-reports"
+                               aria-current=if reports_active { "page" } else { "false" }>
+                                <span class="adaptive-nav__icon">"📊"</span>
+                                <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_reports")}</span>
+                            </a>
+                            <a href="/settings" class="adaptive-nav__item"
+                               data-testid="nav-settings"
+                               aria-current=if settings_active { "page" } else { "false" }>
+                                <span class="adaptive-nav__icon">"⚙"</span>
+                                <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_settings")}</span>
+                            </a>
+                        }.into_any()
+                    } else { ().into_any() }}
                 </nav>
             }.into_any()
         }}

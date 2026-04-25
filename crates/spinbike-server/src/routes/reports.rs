@@ -119,8 +119,7 @@ async fn now(
 }
 
 async fn total_alert_count(state: &AppState) -> anyhow::Result<i64> {
-    let a = db::reports::alerts_report(&state.pool).await?;
-    Ok(a.expiring_passes.len() as i64 + a.low_credit.len() as i64 + a.inactive.len() as i64)
+    db::reports::alerts_count(&state.pool).await
 }
 
 fn bad_request(msg: &str) -> (StatusCode, Json<serde_json::Value>) {

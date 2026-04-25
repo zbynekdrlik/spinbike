@@ -7,6 +7,21 @@ use spinbike_core::reports::{EventKind, ReportEvent, ReportResponse};
 
 use super::{FiltersState, RangeMode};
 
+/// Percent-encode unreserved-set non-conformant chars in a query value.
+/// Minimal hand-roll — avoids adding the urlencoding crate just for this.
+fn url_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
+}
+
 #[component]
 pub fn ActivityFeed(
     events: ReadSignal<Vec<ReportEvent>>,
@@ -67,16 +82,21 @@ pub fn ActivityFeed(
     };
 
     let load_older = move |_| {
-        let before = events
+        // Composite cursor "<created_at>|<id>"; URL-encode because created_at
+        // contains a space.
+        let before_encoded = events
             .get_untracked()
             .last()
-            .map(|e| e.created_at.clone())
+            .map(|e| {
+                let raw = format!("{}|{}", e.created_at, e.id);
+                url_encode(&raw)
+            })
             .unwrap_or_default();
         let url = match mode.get_untracked() {
             RangeMode::Day => format!(
                 "/api/reports/day?date={}&before={}",
                 anchor.get_untracked().format("%Y-%m-%d"),
-                before
+                before_encoded
             ),
             other => {
                 let (from, to) = match other {
@@ -94,7 +114,7 @@ pub fn ActivityFeed(
                     "/api/reports/range?from={}&to={}&before={}",
                     from.format("%Y-%m-%d"),
                     to.format("%Y-%m-%d"),
-                    before
+                    before_encoded
                 )
             }
         };

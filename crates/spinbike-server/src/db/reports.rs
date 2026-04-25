@@ -58,8 +58,22 @@ struct NowFutureTmplRow {
     instructor_name: Option<String>,
 }
 
+/// Pagination cursor: `(created_at, id)` from the last row of the prior page.
+/// Encoded over the wire as `"<created_at>|<id>"`. Composite key avoids
+/// dropping rows when SQLite's second-precision `datetime('now')` produces
+/// duplicate `created_at` values across the page boundary.
+pub fn parse_before_cursor(before: &str) -> Option<(String, i64)> {
+    let (ts, id) = before.split_once('|')?;
+    let id: i64 = id.parse().ok()?;
+    Some((ts.to_string(), id))
+}
+
+pub fn make_before_cursor(created_at: &str, id: i64) -> String {
+    format!("{created_at}|{id}")
+}
+
 /// Fetch all non-voided transactions for a single day, joined with card + service data.
-/// Returns events sorted by created_at DESC and a KpiSummary aggregated over the whole day.
+/// Returns events sorted by (created_at, id) DESC and a KpiSummary aggregated over the whole day.
 pub async fn day_report(
     pool: &SqlitePool,
     date: chrono::NaiveDate,
@@ -67,8 +81,10 @@ pub async fn day_report(
     before: Option<String>,
 ) -> Result<(KpiSummary, Vec<ReportEvent>, bool)> {
     let date_str = date.format("%Y-%m-%d").to_string();
+    let before_parsed = before.as_deref().and_then(parse_before_cursor);
 
-    // Events — paginated with optional `before` cursor.
+    // Events — paginated with composite (created_at, id) cursor for stable
+    // ordering even when multiple rows share a second-precision timestamp.
     let mut query = String::from(
         "SELECT t.id, t.card_id, t.amount, t.action, t.created_at, t.valid_until, t.deleted_at,
                 TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')) AS card_name,
@@ -80,14 +96,15 @@ pub async fn day_report(
          WHERE date(t.created_at) = ?
            AND t.deleted_at IS NULL",
     );
-    if before.is_some() {
-        query.push_str(" AND t.created_at < ?");
+    if before_parsed.is_some() {
+        // (created_at, id) < (cursor_ts, cursor_id) in lexicographic order.
+        query.push_str(" AND (t.created_at < ? OR (t.created_at = ? AND t.id < ?))");
     }
-    query.push_str(" ORDER BY t.created_at DESC LIMIT ?");
+    query.push_str(" ORDER BY t.created_at DESC, t.id DESC LIMIT ?");
 
     let mut q = sqlx::query_as::<_, DbEventRow>(&query).bind(&date_str);
-    if let Some(ref b) = before {
-        q = q.bind(b);
+    if let Some((ref ts, id)) = before_parsed {
+        q = q.bind(ts).bind(ts).bind(id);
     }
     q = q.bind(limit + 1); // fetch one extra to know if there's more
 
@@ -177,6 +194,7 @@ pub async fn range_report(
 ) -> Result<(KpiSummary, Vec<ReportEvent>, bool)> {
     let from_str = from.format("%Y-%m-%d").to_string();
     let to_str = to.format("%Y-%m-%d").to_string();
+    let before_parsed = before.as_deref().and_then(parse_before_cursor);
 
     let mut query = String::from(
         "SELECT t.id, t.card_id, t.amount, t.action, t.created_at, t.valid_until, t.deleted_at,
@@ -189,16 +207,16 @@ pub async fn range_report(
          WHERE date(t.created_at) BETWEEN ? AND ?
            AND t.deleted_at IS NULL",
     );
-    if before.is_some() {
-        query.push_str(" AND t.created_at < ?");
+    if before_parsed.is_some() {
+        query.push_str(" AND (t.created_at < ? OR (t.created_at = ? AND t.id < ?))");
     }
-    query.push_str(" ORDER BY t.created_at DESC LIMIT ?");
+    query.push_str(" ORDER BY t.created_at DESC, t.id DESC LIMIT ?");
 
     let mut q = sqlx::query_as::<_, DbEventRow>(&query)
         .bind(&from_str)
         .bind(&to_str);
-    if let Some(ref b) = before {
-        q = q.bind(b);
+    if let Some((ref ts, id)) = before_parsed {
+        q = q.bind(ts).bind(ts).bind(id);
     }
     q = q.bind(limit + 1);
 
@@ -233,6 +251,36 @@ pub async fn range_report(
         events,
         has_more,
     ))
+}
+
+/// Lightweight aggregate — sum of the three alert counts. Used by day/range
+/// handlers to populate `alerts_count` without materialising the full
+/// `AlertsResponse` (which is fetched separately by the banner).
+pub async fn alerts_count(pool: &SqlitePool) -> Result<i64> {
+    let n: i64 = sqlx::query_scalar(
+        "SELECT
+            (SELECT COUNT(*) FROM cards c
+             WHERE c.blocked = 0
+               AND EXISTS (SELECT 1 FROM transactions t
+                           WHERE t.card_id = c.id
+                             AND t.valid_until IS NOT NULL
+                             AND t.deleted_at IS NULL
+                             AND t.valid_until BETWEEN date('now') AND date('now','+7 days'))) +
+            (SELECT COUNT(*) FROM cards c
+             WHERE c.blocked = 0 AND c.credit < 5.0) +
+            (SELECT COUNT(*) FROM (
+                SELECT c.id
+                FROM cards c
+                LEFT JOIN transactions t
+                  ON t.card_id = c.id AND t.amount < 0 AND t.deleted_at IS NULL
+                WHERE c.blocked = 0 AND c.credit > 0
+                GROUP BY c.id
+                HAVING MAX(t.created_at) IS NULL OR MAX(t.created_at) < datetime('now','-60 days')
+            ))",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(n)
 }
 
 pub async fn alerts_report(pool: &SqlitePool) -> Result<AlertsResponse> {
@@ -337,15 +385,21 @@ pub async fn now_panel(pool: &SqlitePool) -> Result<NowResponse> {
     let weekday: i64 = now.weekday().num_days_from_monday() as i64;
     let hhmm = now.format("%H:%M").to_string();
 
+    // Exclude templates whose occurrence has been explicitly cancelled today —
+    // a cancelled class must not show as the running/next class on the Desk.
+    let today_str = today.format("%Y-%m-%d").to_string();
     let templates: Vec<NowTmplRow> = sqlx::query_as::<_, NowTmplRow>(
         "SELECT ct.id, ct.start_time, ct.duration_minutes, ct.capacity,
                 i.name AS instructor_name
          FROM class_templates ct
          LEFT JOIN instructors i ON i.id = ct.instructor_id
-         WHERE ct.active = 1 AND ct.weekday = ?1
+         WHERE ct.active = 1 AND ct.weekday = ?
+           AND NOT EXISTS (SELECT 1 FROM class_cancellations cc
+                           WHERE cc.template_id = ct.id AND cc.date = ?)
          ORDER BY ct.start_time ASC",
     )
     .bind(weekday)
+    .bind(&today_str)
     .fetch_all(pool)
     .await?;
 
@@ -479,15 +533,19 @@ async fn next_class_future(
     for off in 1..=7 {
         let d = today + chrono::Duration::days(off);
         let weekday = d.weekday().num_days_from_monday() as i64;
+        let date_str = d.format("%Y-%m-%d").to_string();
         let opt: Option<NowFutureTmplRow> = sqlx::query_as::<_, NowFutureTmplRow>(
             "SELECT ct.id, ct.start_time, ct.capacity,
                     i.name AS instructor_name
              FROM class_templates ct
              LEFT JOIN instructors i ON i.id = ct.instructor_id
-             WHERE ct.active = 1 AND ct.weekday = ?1
+             WHERE ct.active = 1 AND ct.weekday = ?
+               AND NOT EXISTS (SELECT 1 FROM class_cancellations cc
+                               WHERE cc.template_id = ct.id AND cc.date = ?)
              ORDER BY ct.start_time ASC LIMIT 1",
         )
         .bind(weekday)
+        .bind(&date_str)
         .fetch_optional(pool)
         .await?;
         if let Some(t) = opt {

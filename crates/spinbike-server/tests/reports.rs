@@ -318,6 +318,59 @@ async fn now_panel_returns_current_or_next_class() {
     }
 }
 
+// Cancelled today's class must NOT show as the running/next class on the Desk.
+#[tokio::test]
+async fn now_panel_excludes_cancelled_class_today() {
+    let app = TestApp::new().await;
+    let now = chrono::Local::now();
+    let weekday = now.weekday().num_days_from_monday() as i64;
+    let start_time = now.format("%H:00").to_string();
+    sqlx::query("DELETE FROM class_templates")
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let template_id: i64 = sqlx::query_scalar(
+        "INSERT INTO class_templates (weekday, start_time, duration_minutes, capacity, active) \
+         VALUES (?1, ?2, 60, 12, 1) RETURNING id",
+    )
+    .bind(weekday)
+    .bind(&start_time)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    let today = now.date_naive().format("%Y-%m-%d").to_string();
+    sqlx::query(
+        "INSERT INTO class_cancellations (template_id, date, reason) VALUES (?1, ?2, 'test')",
+    )
+    .bind(template_id)
+    .bind(&today)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, body) = app.request(get("/api/reports/now", &app.admin_token)).await;
+    assert_eq!(status, StatusCode::OK);
+    // The cancelled template must not be picked as current_class.
+    if !body["current_class"].is_null() {
+        assert_ne!(
+            body["current_class"]["template_id"].as_i64(),
+            Some(template_id),
+            "cancelled class must not appear as current"
+        );
+    }
+    // Nor as today's next_class.
+    if !body["next_class"].is_null() {
+        let next_date = body["next_class"]["date"].as_str().unwrap();
+        if next_date == today {
+            assert_ne!(
+                body["next_class"]["template_id"].as_i64(),
+                Some(template_id),
+                "cancelled class must not appear as today's next"
+            );
+        }
+    }
+}
+
 // Kills `next_class_future -> Ok(None)` and `next_class_future +` arithmetic mutants.
 // Seed a template on tomorrow's weekday only — no class today — and assert
 // /api/reports/now returns next_class pointing at that future template.
@@ -549,6 +602,84 @@ async fn day_report_card_name_is_null_when_names_empty() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert!(body["events"][0]["card_name"].is_null());
+}
+
+// Composite cursor pagination: many transactions sharing an identical
+// `created_at` (SQLite has second precision) must NOT be silently dropped
+// across page boundaries.
+#[tokio::test]
+async fn day_report_pagination_does_not_drop_rows_with_duplicate_timestamps() {
+    let app = TestApp::new().await;
+    let card_id = app.customer_card_id;
+    // Seed 5 charges all at the same datetime('now').
+    sqlx::query(
+        "INSERT INTO transactions (card_id, amount, action, created_at) VALUES \
+         (?1, -5.0, 'charge', datetime('now')), \
+         (?1, -5.0, 'charge', datetime('now')), \
+         (?1, -5.0, 'charge', datetime('now')), \
+         (?1, -5.0, 'charge', datetime('now')), \
+         (?1, -5.0, 'charge', datetime('now'))",
+    )
+    .bind(card_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let today = chrono::Local::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string();
+
+    // Page 1 with limit=2 → 2 rows + has_more=true.
+    let (status, body) = app
+        .request(get(
+            &format!("/api/reports/day?date={today}&limit=2"),
+            &app.admin_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let evts1 = body["events"].as_array().unwrap();
+    assert_eq!(evts1.len(), 2);
+    let last = &evts1[evts1.len() - 1];
+    let created_at = last["created_at"].as_str().unwrap();
+    let id = last["id"].as_i64().unwrap();
+    let cursor = format!("{created_at}|{id}");
+
+    // Page 2 using composite cursor: must return the next 2 rows, NOT empty.
+    let (status, body) = app
+        .request(get(
+            &format!(
+                "/api/reports/day?date={today}&limit=2&before={}",
+                urlencoding_min(&cursor)
+            ),
+            &app.admin_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let evts2 = body["events"].as_array().unwrap();
+    assert_eq!(
+        evts2.len(),
+        2,
+        "page 2 must contain remaining rows even with duplicate timestamps"
+    );
+    // Page 2 ids must be distinct from page 1 ids.
+    let p1_ids: Vec<i64> = evts1.iter().map(|e| e["id"].as_i64().unwrap()).collect();
+    for e in evts2 {
+        let id2 = e["id"].as_i64().unwrap();
+        assert!(!p1_ids.contains(&id2), "row {id2} appeared on both pages");
+    }
+}
+
+fn urlencoding_min(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }
 
 #[tokio::test]
