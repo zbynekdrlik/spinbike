@@ -383,8 +383,9 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     );
     m.insert("modal_price", ("Cena (EUR)", "Price (EUR)"));
     m.insert("modal_valid_until", ("Platny do", "Valid until"));
-    m.insert("modal_confirm", ("Predat", "Sell pass"));
+    m.insert("modal_confirm", ("Potvrdit", "OK"));
     m.insert("modal_cancel", ("Zrusit", "Cancel"));
+    m.insert("sell_pass_action", ("Predat", "Sell pass"));
     m.insert(
         "price_required",
         ("Zadajte cenu", "Please enter a price"),
@@ -441,7 +442,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     // Nav (bottom tabs + sidebar labels)
     m.insert("nav_desk", ("Desk", "Desk"));
     m.insert("nav_schedule", ("Plan", "Schedule"));
-    m.insert("nav_reports", ("Vykazy", "Reports"));
+    m.insert("nav_reports", ("Prehlad", "Reports"));
     m.insert("nav_settings", ("Nastavenia", "Settings"));
 
     // Reports — date navigation
@@ -504,6 +505,11 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         ),
     );
 
+    // Reports — feed event labels (used as the row title prefix when service is unknown)
+    m.insert("event_charge",   ("Návšteva",     "Visit"));
+    m.insert("event_topup",    ("Vklad",        "Top-up"));
+    m.insert("event_pass",     ("Permanentka",  "Pass sale"));
+    m.insert("event_other",    ("Iné",          "Other"));
     // Reports — feed
     m.insert("feed_load_older", ("Nacitat starsie", "Load older"));
     m.insert(

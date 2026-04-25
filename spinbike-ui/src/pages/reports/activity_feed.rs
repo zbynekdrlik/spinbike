@@ -159,11 +159,19 @@ pub fn ActivityFeed(
 }
 
 fn render_row(e: ReportEvent) -> impl IntoView {
-    let kind_class = match e.kind() {
+    let lang = use_context::<ReadSignal<crate::i18n::Lang>>().expect("Lang context");
+    let kind = e.kind();
+    let kind_class = match kind {
         EventKind::Charge => "feed-dot feed-dot--charge",
         EventKind::TopUp => "feed-dot feed-dot--topup",
         EventKind::PassSold => "feed-dot feed-dot--pass",
         EventKind::Other => "feed-dot feed-dot--voided",
+    };
+    let event_label_key = match kind {
+        EventKind::Charge => "event_charge",
+        EventKind::TopUp => "event_topup",
+        EventKind::PassSold => "event_pass",
+        EventKind::Other => "event_other",
     };
     let amount_class = if e.amount < 0.0 {
         "list-row__amount list-row__amount--neg"
@@ -188,13 +196,50 @@ fn render_row(e: ReportEvent) -> impl IntoView {
     } else {
         ().into_any()
     };
+
+    // Click → jump to Desk and pre-fill search by barcode (or name fallback).
+    let q_value = e
+        .barcode
+        .clone()
+        .or_else(|| e.card_name.clone())
+        .unwrap_or_default();
+    let on_row_click = move |_| {
+        if q_value.is_empty() {
+            return;
+        }
+        if let Some(w) = web_sys::window() {
+            let encoded = q_value
+                .replace('%', "%25")
+                .replace(' ', "%20")
+                .replace('&', "%26");
+            let _ = w.location().set_href(&format!("/staff?q={encoded}"));
+        }
+    };
+
+    let name = e.card_name.clone().unwrap_or_else(|| "—".to_string());
+    let service = e.service_name.clone();
+    // Subtitle: "<event_label> · <service>" — never empty.
+    let subtitle = move || {
+        let svc_str = service
+            .as_deref()
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        let prefix = i18n::t(lang.get(), event_label_key);
+        if svc_str.is_empty() {
+            prefix.to_string()
+        } else {
+            format!("{prefix} · {svc_str}")
+        }
+    };
+
     view! {
-        <div class="list-row" data-testid="feed-row">
+        <div class="list-row list-row--interactive" data-testid="feed-row"
+             on:click=on_row_click>
             <div class=kind_class></div>
             <div class="list-row__sub" style="min-width: 48px;">{time_only}</div>
             <div class="list-row__main">
-                <div class="list-row__title">{e.card_name.clone().unwrap_or_default()}</div>
-                <div class="list-row__sub">{e.service_name.clone().unwrap_or_default()}</div>
+                <div class="list-row__title">{name}</div>
+                <div class="list-row__sub">{subtitle}</div>
             </div>
             <div class=amount_class>{amount_display}</div>
             {voided_badge}

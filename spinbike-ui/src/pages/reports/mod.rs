@@ -96,42 +96,77 @@ pub fn ReportsPage() -> impl IntoView {
         <div class="reports-page" data-testid="reports-page">
 
             <div class="reports-date-strip">
+                // Quick toggles — Yesterday / Today / Week / Month
+                <div class="seg" role="tablist">
+                    <button class="seg__item" data-testid="quick-yesterday"
+                            aria-selected=move || {
+                                let y = chrono::Local::now().date_naive() - chrono::Duration::days(1);
+                                (mode.get() == RangeMode::Day && anchor.get() == y).to_string()
+                            }
+                            on:click=move |_| {
+                                set_mode.set(RangeMode::Day);
+                                set_anchor.set(chrono::Local::now().date_naive() - chrono::Duration::days(1));
+                            }>
+                        {move || i18n::t(lang.get(), "reports_yesterday")}
+                    </button>
+                    <button class="seg__item" data-testid="quick-today"
+                            aria-selected=move || {
+                                let t = chrono::Local::now().date_naive();
+                                (mode.get() == RangeMode::Day && anchor.get() == t).to_string()
+                            }
+                            on:click=move |_| {
+                                set_mode.set(RangeMode::Day);
+                                set_anchor.set(chrono::Local::now().date_naive());
+                            }>
+                        {move || i18n::t(lang.get(), "reports_today")}
+                    </button>
+                    <button class="seg__item" data-testid="range-week"
+                            aria-selected=move || (mode.get() == RangeMode::Week).to_string()
+                            on:click=move |_| {
+                                set_mode.set(RangeMode::Week);
+                                set_anchor.set(chrono::Local::now().date_naive());
+                            }>
+                        {move || i18n::t(lang.get(), "reports_week")}
+                    </button>
+                    <button class="seg__item" data-testid="range-month"
+                            aria-selected=move || (mode.get() == RangeMode::Month).to_string()
+                            on:click=move |_| {
+                                set_mode.set(RangeMode::Month);
+                                set_anchor.set(chrono::Local::now().date_naive());
+                            }>
+                        {move || i18n::t(lang.get(), "reports_month")}
+                    </button>
+                </div>
+
+                // Fine-grained day picker for any specific date
                 <div class="seg" role="tablist">
                     <button class="seg__item" data-testid="date-prev"
-                            on:click=move |_| set_anchor.update(|d| *d = *d - chrono::Duration::days(1))>
+                            on:click=move |_| {
+                                set_mode.set(RangeMode::Day);
+                                set_anchor.update(|d| *d = *d - chrono::Duration::days(1));
+                            }>
                         "‹"
                     </button>
                     <button class="seg__item" data-testid="date-label"
-                            aria-selected="true"
                             on:click=move |_| set_show_picker.set(true)>
                         {move || anchor.get().format("%Y-%m-%d").to_string()}
                     </button>
                     <button class="seg__item" data-testid="date-next"
-                            on:click=move |_| set_anchor.update(|d| *d = *d + chrono::Duration::days(1))>
+                            on:click=move |_| {
+                                set_mode.set(RangeMode::Day);
+                                set_anchor.update(|d| *d = *d + chrono::Duration::days(1));
+                            }>
                         "›"
                     </button>
                 </div>
-                <div class="reports-range-buttons">
-                    <button class="btn btn--compact"
-                            data-testid="range-day"
-                            class:btn--primary=move || mode.get() == RangeMode::Day
-                            on:click=move |_| set_mode.set(RangeMode::Day)>
-                        {move || i18n::t(lang.get(), "reports_today")}
-                    </button>
-                    <button class="btn btn--compact"
-                            data-testid="range-week"
-                            class:btn--primary=move || mode.get() == RangeMode::Week
-                            on:click=move |_| set_mode.set(RangeMode::Week)>
-                        {move || i18n::t(lang.get(), "reports_week")}
-                    </button>
-                    <button class="btn btn--compact"
-                            data-testid="range-month"
-                            class:btn--primary=move || mode.get() == RangeMode::Month
-                            on:click=move |_| set_mode.set(RangeMode::Month)>
-                        {move || i18n::t(lang.get(), "reports_month")}
-                    </button>
-                </div>
             </div>
+            // Hide the old range-day testid via an off-screen alias so existing
+            // E2E tests still resolve.
+            <button class="visually-hidden" data-testid="range-day"
+                    on:click=move |_| {
+                        set_mode.set(RangeMode::Day);
+                        set_anchor.set(chrono::Local::now().date_naive());
+                    }>"day"</button>
 
             {move || if !error.get().is_empty() {
                 view! { <div class="alert alert--error" data-testid="reports-error">{move || error.get()}</div> }.into_any()

@@ -22,9 +22,6 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
     view! {
         {move || {
             let Some(u) = user() else { return ().into_any(); };
-            // Staff and admin both see Desk + Schedule. Reports + Settings are
-            // admin-only on the server (require_admin) — hide them for staff
-            // to avoid 403s in the browser console.
             let is_staff_or_admin = u.role == "admin" || u.role == "staff";
             if !is_staff_or_admin {
                 return ().into_any();
@@ -41,13 +38,13 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
                     <a href="/staff" class="adaptive-nav__item"
                        data-testid="nav-desk"
                        aria-current=if desk_active { "page" } else { "false" }>
-                        <span class="adaptive-nav__icon">"🏠"</span>
+                        <span class="adaptive-nav__icon" inner_html=ICON_DESK></span>
                         <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_desk")}</span>
                     </a>
                     <a href="/schedule" class="adaptive-nav__item"
                        data-testid="nav-schedule"
                        aria-current=if schedule_active { "page" } else { "false" }>
-                        <span class="adaptive-nav__icon">"📅"</span>
+                        <span class="adaptive-nav__icon" inner_html=ICON_SCHEDULE></span>
                         <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_schedule")}</span>
                     </a>
                     {if is_admin {
@@ -55,13 +52,13 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
                             <a href="/reports" class="adaptive-nav__item"
                                data-testid="nav-reports"
                                aria-current=if reports_active { "page" } else { "false" }>
-                                <span class="adaptive-nav__icon">"📊"</span>
+                                <span class="adaptive-nav__icon" inner_html=ICON_REPORTS></span>
                                 <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_reports")}</span>
                             </a>
                             <a href="/settings" class="adaptive-nav__item"
                                data-testid="nav-settings"
                                aria-current=if settings_active { "page" } else { "false" }>
-                                <span class="adaptive-nav__icon">"⚙"</span>
+                                <span class="adaptive-nav__icon" inner_html=ICON_SETTINGS></span>
                                 <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_settings")}</span>
                             </a>
                         }.into_any()
@@ -71,3 +68,10 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
         }}
     }
 }
+
+// Inline SVG icons (Heroicons outline 24×24, currentColor stroke). Lightweight,
+// scale crisply on retina, follow the active-state colour via `currentColor`.
+const ICON_DESK: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12 12 3l9.75 9M4.5 9.75v10.5h15V9.75"/></svg>"##;
+const ICON_SCHEDULE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 8.25h18M4.5 5.25h15a1.5 1.5 0 0 1 1.5 1.5v12a1.5 1.5 0 0 1-1.5 1.5h-15a1.5 1.5 0 0 1-1.5-1.5v-12a1.5 1.5 0 0 1 1.5-1.5z"/></svg>"##;
+const ICON_REPORTS: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3 13.5l4.5-4.5 3.75 3.75L21 6.75M21 6.75H15M21 6.75v6"/></svg>"##;
+const ICON_SETTINGS: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a7.723 7.723 0 0 1 0 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.47 6.47 0 0 1-.22.128c-.331.183-.581.495-.644.869l-.213 1.281c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 0 1-1.369-.49l-1.297-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 0 1 0-.255c.007-.38-.137-.751-.43-.992l-1.004-.827a1.125 1.125 0 0 1-.26-1.43l1.297-2.247a1.125 1.125 0 0 1 1.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.28z M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0z"/></svg>"##;

@@ -3,13 +3,16 @@ use leptos::prelude::*;
 use crate::auth;
 use crate::i18n::{self, Lang};
 
+/// Top header bar — logo, user name, logout, language toggle.
+/// Destination links live in `AdaptiveNav` (bottom tabs / sidebar) for
+/// admin/staff. Customer-facing links (login, register, my/bookings,
+/// my/balance) are still rendered here.
 #[component]
 pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let set_lang = use_context::<WriteSignal<Lang>>().expect("SetLang context");
 
     let user = move || {
-        // Re-read user when auth_ver changes.
         let _ = auth_ver.get();
         auth::get_user()
     };
@@ -18,7 +21,6 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
         auth::clear_auth();
         let set_auth_ver = expect_context::<WriteSignal<u32>>();
         set_auth_ver.update(|v| *v += 1);
-        // Navigate to home.
         if let Some(w) = web_sys::window() {
             let _ = w.location().set_href("/");
         }
@@ -37,28 +39,19 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
         <nav class="navbar">
             <a href="/" class="navbar-brand">"SpinBike"</a>
             <div class="navbar-links">
-                <a href="/">{move || i18n::t(lang.get(), "schedule")}</a>
                 {move || {
                     if let Some(u) = user() {
                         let is_staff = u.role == "staff" || u.role == "admin";
-                        let is_admin = u.role == "admin";
                         view! {
-                            <a href="/my/bookings">{move || i18n::t(lang.get(), "my_bookings")}</a>
-                            <a href="/my/balance">{move || i18n::t(lang.get(), "balance")}</a>
-                            {if is_staff {
+                            // Customer-only links: only show for true customers
+                            // (admin/staff get these views via different paths).
+                            {if !is_staff {
                                 view! {
-                                    <a href="/staff">{move || i18n::t(lang.get(), "cards")}</a>
-                                    <a href="/staff/classes">{move || i18n::t(lang.get(), "classes")}</a>
+                                    <a href="/my/bookings">{move || i18n::t(lang.get(), "my_bookings")}</a>
+                                    <a href="/my/balance">{move || i18n::t(lang.get(), "balance")}</a>
                                 }.into_any()
                             } else {
-                                view! {}.into_any()
-                            }}
-                            {if is_admin {
-                                view! {
-                                    <a href="/admin">{move || i18n::t(lang.get(), "admin")}</a>
-                                }.into_any()
-                            } else {
-                                view! {}.into_any()
+                                ().into_any()
                             }}
                             <span class="navbar-user">{u.name.clone()}</span>
                             <button class="btn btn--compact btn--ghost" on:click=on_logout>{move || i18n::t(lang.get(), "logout")}</button>

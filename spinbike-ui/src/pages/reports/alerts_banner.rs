@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 
+use super::sheets::alert_detail::{AlertDetailSheet, AlertType};
 use crate::i18n::{self, Lang};
 use spinbike_core::reports::AlertsResponse;
 
@@ -31,15 +32,15 @@ fn dismiss(kind: &str) {
 }
 
 /// Presentational banner. Data is fetched by the parent and passed in via the
-/// `data` signal — this avoids duplicate `/api/reports/alerts` calls.
+/// `data` signal — no duplicate `/api/reports/alerts` call.
 #[component]
 pub fn AlertsBanner(data: ReadSignal<Option<AlertsResponse>>) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (ver, set_ver) = signal(0u32);
+    let (open_sheet, set_open_sheet) = signal(None::<AlertType>);
 
     view! {
         {move || {
-            // Bump on dismiss so the banner re-evaluates is_dismissed().
             let _ = ver.get();
             let Some(a) = data.get() else { return ().into_any(); };
             let expiring_n = a.expiring_passes.len();
@@ -61,7 +62,8 @@ pub fn AlertsBanner(data: ReadSignal<Option<AlertsResponse>>) -> impl IntoView {
                     {if show_expiring {
                         let n = expiring_n;
                         view! {
-                            <div class="alerts-banner__row" data-testid="alert-expiring">
+                            <div class="alerts-banner__row" data-testid="alert-expiring"
+                                 on:click=move |_| set_open_sheet.set(Some(AlertType::Expiring))>
                                 <div class="alerts-banner__body">
                                     {move || i18n::t(lang.get(), "alerts_expiring_passes").replace("{n}", &n.to_string())}
                                 </div>
@@ -79,7 +81,8 @@ pub fn AlertsBanner(data: ReadSignal<Option<AlertsResponse>>) -> impl IntoView {
                     {if show_low {
                         let n = low_n;
                         view! {
-                            <div class="alerts-banner__row" data-testid="alert-low-credit">
+                            <div class="alerts-banner__row" data-testid="alert-low-credit"
+                                 on:click=move |_| set_open_sheet.set(Some(AlertType::LowCredit))>
                                 <div class="alerts-banner__body">
                                     {move || i18n::t(lang.get(), "alerts_low_credit").replace("{n}", &n.to_string())}
                                 </div>
@@ -97,7 +100,8 @@ pub fn AlertsBanner(data: ReadSignal<Option<AlertsResponse>>) -> impl IntoView {
                     {if show_inactive {
                         let n = inactive_n;
                         view! {
-                            <div class="alerts-banner__row" data-testid="alert-inactive">
+                            <div class="alerts-banner__row" data-testid="alert-inactive"
+                                 on:click=move |_| set_open_sheet.set(Some(AlertType::Inactive))>
                                 <div class="alerts-banner__body">
                                     {move || i18n::t(lang.get(), "alerts_inactive").replace("{n}", &n.to_string())}
                                 </div>
@@ -113,6 +117,18 @@ pub fn AlertsBanner(data: ReadSignal<Option<AlertsResponse>>) -> impl IntoView {
                     } else { ().into_any() }}
                 </div>
             }.into_any()
+        }}
+
+        // Detail sheet — opens when an alert row is clicked.
+        {move || match (open_sheet.get(), data.get()) {
+            (Some(t), Some(d)) => view! {
+                <AlertDetailSheet
+                    alert_type=t
+                    data=d
+                    on_close=Callback::new(move |_| set_open_sheet.set(None))
+                />
+            }.into_any(),
+            _ => ().into_any(),
         }}
     }
 }

@@ -165,7 +165,7 @@ pub fn SellPassModal(
                             data-testid="sell-pass-confirm"
                             on:click=on_confirm
                         >
-                            {i18n::t(lang.get(), "modal_confirm")}
+                            {i18n::t(lang.get(), "sell_pass_action")}
                         </button>
                     </div>
                 </Sheet>

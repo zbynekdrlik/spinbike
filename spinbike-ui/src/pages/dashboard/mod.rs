@@ -28,6 +28,15 @@ use crate::i18n::{self, Lang};
 use crate::util::parse_money;
 use helpers::{full_name, urlencoding_light};
 
+fn decode_uri_component(s: &str) -> String {
+    // Browser global decodeURIComponent via JsCast.
+    if let Ok(v) = js_sys::decode_uri_component(s) {
+        v.as_string().unwrap_or_default()
+    } else {
+        s.replace('+', " ")
+    }
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct CardPass {
     pub valid_until: chrono::NaiveDate,
@@ -109,6 +118,24 @@ pub fn DashboardPage() -> impl IntoView {
     Effect::new(move |_| {
         if let Some(el) = search_input_ref.get() {
             let _ = el.focus();
+        }
+    });
+
+    // Prefill search from `?q=…` query param (used by Reports → row click jump).
+    Effect::new(move |_| {
+        if let Some(w) = web_sys::window() {
+            let search = w.location().search().unwrap_or_default();
+            if let Some(stripped) = search.strip_prefix('?') {
+                for kv in stripped.split('&') {
+                    if let Some(rest) = kv.strip_prefix("q=") {
+                        let decoded = decode_uri_component(rest);
+                        if !decoded.is_empty() {
+                            set_query.set(decoded);
+                        }
+                        break;
+                    }
+                }
+            }
         }
     });
 
