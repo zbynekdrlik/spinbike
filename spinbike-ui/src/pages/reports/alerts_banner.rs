@@ -1,14 +1,15 @@
 use leptos::prelude::*;
-use wasm_bindgen_futures::spawn_local;
 
-use crate::api;
 use crate::i18n::{self, Lang};
 use spinbike_core::reports::AlertsResponse;
 
 const LS_PREFIX: &str = "reports_alerts_dismissed";
 
 fn today_key() -> String {
-    chrono::Local::now().date_naive().format("%Y-%m-%d").to_string()
+    chrono::Local::now()
+        .date_naive()
+        .format("%Y-%m-%d")
+        .to_string()
 }
 
 fn is_dismissed(kind: &str) -> bool {
@@ -29,23 +30,17 @@ fn dismiss(kind: &str) {
     }
 }
 
+/// Presentational banner. Data is fetched by the parent and passed in via the
+/// `data` signal — this avoids duplicate `/api/reports/alerts` calls.
 #[component]
-pub fn AlertsBanner() -> impl IntoView {
+pub fn AlertsBanner(data: ReadSignal<Option<AlertsResponse>>) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
-    let (data, set_data) = signal(None::<AlertsResponse>);
     let (ver, set_ver) = signal(0u32);
-
-    Effect::new(move |_| {
-        let _ = ver.get();
-        spawn_local(async move {
-            if let Ok(a) = api::get::<AlertsResponse>("/api/reports/alerts").await {
-                set_data.set(Some(a));
-            }
-        });
-    });
 
     view! {
         {move || {
+            // Bump on dismiss so the banner re-evaluates is_dismissed().
+            let _ = ver.get();
             let Some(a) = data.get() else { return ().into_any(); };
             let expiring_n = a.expiring_passes.len();
             let low_n = a.low_credit.len();

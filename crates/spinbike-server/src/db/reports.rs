@@ -99,6 +99,9 @@ pub async fn day_report(
     let events: Vec<ReportEvent> = rows.into_iter().map(Into::into).collect();
 
     // KPIs — a separate aggregation over the entire day (not just this page).
+    // NOTE: `ELSE 0.0` (not `ELSE 0`) is required — otherwise SQLite returns an
+    // INTEGER for the SUM when no rows match, and sqlx refuses to decode that
+    // into f64 (the KPI struct's revenue_eur/cash_in_eur fields).
     let kpi_row: DbKpiRow = sqlx::query_as::<_, DbKpiRow>(
         "SELECT
             COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0.0 END), 0.0) AS revenue_eur,
@@ -347,17 +350,17 @@ pub async fn now_panel(pool: &SqlitePool) -> Result<NowResponse> {
     .await?;
 
     let now_mins = parse_hhmm_to_mins(&hhmm);
-    let (current_idx, next_idx) = pick_current_and_next(
-        &templates
-            .iter()
-            .map(|t| (parse_hhmm_to_mins(&t.start_time), t.duration_minutes))
-            .collect::<Vec<_>>(),
-        now_mins,
-    );
-    let mut templates_iter = templates.into_iter().enumerate();
+    let summary: Vec<(i64, i64)> = templates
+        .iter()
+        .map(|t| (parse_hhmm_to_mins(&t.start_time), t.duration_minutes))
+        .collect();
+    let (current_idx, next_idx) = pick_current_and_next(&summary, now_mins);
+
+    // Single-pass extraction: consume `templates` once, splitting out the
+    // current and next rows by index without intermediate allocations.
     let mut current: Option<NowTmplRow> = None;
     let mut next: Option<NowTmplRow> = None;
-    for (i, t) in templates_iter.by_ref() {
+    for (i, t) in templates.into_iter().enumerate() {
         if Some(i) == current_idx {
             current = Some(t);
         } else if Some(i) == next_idx {

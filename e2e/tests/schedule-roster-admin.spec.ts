@@ -23,12 +23,11 @@ test.describe('Schedule (admin view)', () => {
         assertCleanConsole(consoleMessages);
     });
 
-    test('admin /admin alias resolves to settings page', async ({ page }) => {
+    test('admin /admin redirects to /settings', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
         await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
         await page.goto('/admin');
-        // /admin currently routes to AdminPage directly (same component as /settings).
-        await expect(page).toHaveURL(/\/admin/);
+        await expect(page).toHaveURL(/\/settings$/);
         await expect(page.locator('h1.page-title')).toBeVisible();
         assertCleanConsole(consoleMessages);
     });

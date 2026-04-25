@@ -1,6 +1,34 @@
 use leptos::prelude::*;
 use leptos_router::components::{Route, Router, Routes};
+use leptos_router::hooks::use_navigate;
 use leptos_router::path;
+
+/// Imperative redirect — runs once on mount, navigates to `to`.
+#[component]
+fn RedirectTo(#[prop(into)] to: String) -> impl IntoView {
+    let nav = use_navigate();
+    let to_clone = to.clone();
+    Effect::new(move |_| {
+        nav(&to_clone, Default::default());
+    });
+    view! { <span></span> }
+}
+
+/// Role-aware /schedule: admin/staff see the rich roster view (StaffDashboardPage);
+/// customers (and logged-out visitors) see the public week schedule (SchedulePage).
+#[component]
+fn ScheduleRoute() -> impl IntoView {
+    let user = crate::auth::get_user();
+    let is_staff = user
+        .as_ref()
+        .map(|u| u.role == "staff" || u.role == "admin")
+        .unwrap_or(false);
+    if is_staff {
+        StaffDashboardPage().into_any()
+    } else {
+        SchedulePage().into_any()
+    }
+}
 
 use crate::components::AdaptiveNav;
 use crate::components::nav::Navbar;
@@ -48,10 +76,10 @@ pub fn App() -> impl IntoView {
                         // Admin schedule view (rosters, walk-in, cancel) lives at /schedule.
                         // /staff/classes kept as alias for back-compat.
                         <Route path=path!("/staff/classes") view=StaffDashboardPage />
-                        <Route path=path!("/schedule") view=StaffDashboardPage />
+                        <Route path=path!("/schedule") view=ScheduleRoute />
                         <Route path=path!("/reports") view=ReportsPage />
                         <Route path=path!("/settings") view=AdminPage />
-                        <Route path=path!("/admin") view=AdminPage />
+                        <Route path=path!("/admin") view=|| view! { <RedirectTo to="/settings".to_string()/> } />
                     </Routes>
                 </div>
             </div>
