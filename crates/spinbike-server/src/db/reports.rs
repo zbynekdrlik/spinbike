@@ -249,21 +249,25 @@ pub async fn range_report(
     ))
 }
 
-/// Lightweight aggregate — sum of the three alert counts. Used by day/range
-/// handlers to populate `alerts_count` without materialising the full
-/// `AlertsResponse` (which is fetched separately by the banner).
+/// Lightweight aggregate — sum of the three alert counts, capped per category
+/// at 100 to match `alerts_report`'s LIMIT 100 (so the banner number cannot
+/// exceed what the detail sheet would render).
 pub async fn alerts_count(pool: &SqlitePool) -> Result<i64> {
     let n: i64 = sqlx::query_scalar(
         "SELECT
-            (SELECT COUNT(*) FROM cards c
-             WHERE c.blocked = 0
-               AND EXISTS (SELECT 1 FROM transactions t
-                           WHERE t.card_id = c.id
-                             AND t.valid_until IS NOT NULL
-                             AND t.deleted_at IS NULL
-                             AND t.valid_until BETWEEN date('now') AND date('now','+7 days'))) +
-            (SELECT COUNT(*) FROM cards c
-             WHERE c.blocked = 0 AND c.credit < 5.0) +
+            (SELECT COUNT(*) FROM (SELECT c.id
+                FROM cards c
+                WHERE c.blocked = 0
+                  AND EXISTS (SELECT 1 FROM transactions t
+                              WHERE t.card_id = c.id
+                                AND t.valid_until IS NOT NULL
+                                AND t.deleted_at IS NULL
+                                AND t.valid_until BETWEEN date('now') AND date('now','+7 days'))
+                LIMIT 100)) +
+            (SELECT COUNT(*) FROM (SELECT c.id
+                FROM cards c
+                WHERE c.blocked = 0 AND c.credit < 5.0
+                LIMIT 100)) +
             (SELECT COUNT(*) FROM (
                 SELECT c.id
                 FROM cards c
@@ -272,6 +276,7 @@ pub async fn alerts_count(pool: &SqlitePool) -> Result<i64> {
                 WHERE c.blocked = 0 AND c.credit > 0
                 GROUP BY c.id
                 HAVING MAX(t.created_at) IS NULL OR MAX(t.created_at) < datetime('now','-60 days')
+                LIMIT 100
             ))",
     )
     .fetch_one(pool)

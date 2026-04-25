@@ -65,6 +65,8 @@ pub fn AlertsBanner(data: ReadSignal<Option<AlertsResponse>>) -> impl IntoView {
                         view! {
                             <div class="alerts-banner__row" data-testid="alert-expiring"
                                  on:click=move |_| spawn_local(async move {
+                                     // Defer to microtask: avoids closure-after-drop
+                                     // when this state change unmounts our own DOM.
                                      set_open_sheet.set(Some(AlertType::Expiring));
                                  })>
                                 <div class="alerts-banner__body">
@@ -86,6 +88,8 @@ pub fn AlertsBanner(data: ReadSignal<Option<AlertsResponse>>) -> impl IntoView {
                         view! {
                             <div class="alerts-banner__row" data-testid="alert-low-credit"
                                  on:click=move |_| spawn_local(async move {
+                                     // Defer to microtask: avoids closure-after-drop
+                                     // when this state change unmounts our own DOM.
                                      set_open_sheet.set(Some(AlertType::LowCredit));
                                  })>
                                 <div class="alerts-banner__body">
@@ -107,6 +111,8 @@ pub fn AlertsBanner(data: ReadSignal<Option<AlertsResponse>>) -> impl IntoView {
                         view! {
                             <div class="alerts-banner__row" data-testid="alert-inactive"
                                  on:click=move |_| spawn_local(async move {
+                                     // Defer to microtask: avoids closure-after-drop
+                                     // when this state change unmounts our own DOM.
                                      set_open_sheet.set(Some(AlertType::Inactive));
                                  })>
                                 <div class="alerts-banner__body">

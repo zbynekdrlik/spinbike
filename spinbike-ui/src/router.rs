@@ -16,17 +16,25 @@ fn RedirectTo(#[prop(into)] to: String) -> impl IntoView {
 
 /// Role-aware /schedule: admin/staff see the rich roster view (StaffDashboardPage);
 /// customers (and logged-out visitors) see the public week schedule (SchedulePage).
+/// Reactive on `auth_ver` so the view flips immediately on login/logout while
+/// the user is parked on this route.
 #[component]
 fn ScheduleRoute() -> impl IntoView {
-    let user = crate::auth::get_user();
-    let is_staff = user
-        .as_ref()
-        .map(|u| u.role == "staff" || u.role == "admin")
-        .unwrap_or(false);
-    if is_staff {
-        StaffDashboardPage().into_any()
-    } else {
-        SchedulePage().into_any()
+    let auth_ver = use_context::<ReadSignal<u32>>().expect("auth_ver context");
+    view! {
+        {move || {
+            let _ = auth_ver.get();
+            let user = crate::auth::get_user();
+            let is_staff = user
+                .as_ref()
+                .map(|u| u.role == "staff" || u.role == "admin")
+                .unwrap_or(false);
+            if is_staff {
+                StaffDashboardPage().into_any()
+            } else {
+                SchedulePage().into_any()
+            }
+        }}
     }
 }
 

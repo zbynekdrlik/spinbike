@@ -2,6 +2,7 @@ use leptos::prelude::*;
 
 use crate::components::Sheet;
 use crate::i18n::{self, Lang};
+use crate::pages::dashboard::helpers::urlencoding_light;
 use spinbike_core::reports::AlertsResponse;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -91,10 +92,7 @@ pub fn AlertDetailSheet(
                             return;
                         }
                         if let Some(w) = web_sys::window() {
-                            let encoded = q_owned
-                                .replace('%', "%25")
-                                .replace(' ', "%20")
-                                .replace('&', "%26");
+                            let encoded = urlencoding_light(&q_owned);
                             let _ = w.location().set_href(&format!("/staff?q={encoded}"));
                         }
                     };

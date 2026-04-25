@@ -1,37 +1,5 @@
 //! Shared helper functions and types.
 
-/// Format a server-side timestamp per the user's language preference.
-/// Slovak: `dd.MM.yyyy HH:mm` (e.g. `14.04.2026 18:13`).
-/// English: `yyyy-MM-dd HH:mm` (ISO).
-/// Handles current SQLite output, ISO 8601, and legacy MS Access dumps
-/// (`MM/dd/yy` or `MM/dd/yyyy`) imported via the migrate-legacy tool.
-/// Falls back to the raw string so rows never disappear, even on unknown formats.
-pub fn format_datetime(raw: &str, lang: crate::i18n::Lang) -> String {
-    use chrono::NaiveDateTime;
-    let trimmed = raw.trim();
-    let patterns = [
-        "%Y-%m-%d %H:%M:%S",    // SQLite datetime('now')
-        "%Y-%m-%dT%H:%M:%S",    // ISO 8601 with T
-        "%Y-%m-%d %H:%M:%S%.f", // SQLite with fractional seconds
-        "%m/%d/%y %H:%M:%S",    // legacy MS Access, 2-digit year
-        "%m/%d/%Y %H:%M:%S",    // legacy MS Access, 4-digit year
-    ];
-    for pattern in patterns {
-        if let Ok(dt) = NaiveDateTime::parse_from_str(trimmed, pattern) {
-            return match lang {
-                crate::i18n::Lang::Sk => dt.format("%d.%m.%Y %H:%M").to_string(),
-                crate::i18n::Lang::En => dt.format("%Y-%m-%d %H:%M").to_string(),
-            };
-        }
-    }
-    raw.to_string()
-}
-
-/// Backwards-compat alias — Slovak-specific version used by tests.
-#[cfg(test)]
-fn format_sk_datetime(raw: &str) -> String {
-    format_datetime(raw, crate::i18n::Lang::Sk)
-}
 
 pub fn pass_is_active(card: &super::CardInfo) -> bool {
     card.pass
@@ -78,41 +46,3 @@ pub fn event_target_value(ev: &web_sys::Event) -> String {
         .unwrap_or_default()
 }
 
-#[cfg(test)]
-mod date_tests {
-    use super::format_sk_datetime;
-
-    #[test]
-    fn sqlite_format() {
-        assert_eq!(
-            format_sk_datetime("2026-04-14 18:13:11"),
-            "14.04.2026 18:13"
-        );
-    }
-
-    #[test]
-    fn iso_8601_format() {
-        assert_eq!(
-            format_sk_datetime("2026-04-14T18:13:11"),
-            "14.04.2026 18:13"
-        );
-    }
-
-    #[test]
-    fn legacy_two_digit_year() {
-        assert_eq!(format_sk_datetime("03/24/26 18:59:08"), "24.03.2026 18:59");
-    }
-
-    #[test]
-    fn legacy_four_digit_year() {
-        assert_eq!(
-            format_sk_datetime("03/24/2026 18:59:08"),
-            "24.03.2026 18:59"
-        );
-    }
-
-    #[test]
-    fn unknown_returns_input() {
-        assert_eq!(format_sk_datetime("not-a-date"), "not-a-date");
-    }
-}

@@ -80,17 +80,27 @@ pub fn fmt_weekday_short(d: chrono::NaiveDate, lang: Lang) -> &'static str {
     }
 }
 
-/// Parse a `YYYY-MM-DD HH:MM:SS` string from the server and format
-/// per-locale. Returns the original string if it doesn't parse.
+/// Parse a server timestamp and format per-locale. Returns the original
+/// string if it doesn't parse. Accepts SQLite, ISO 8601, fractional seconds,
+/// and legacy MS Access dump formats so dates from any source render cleanly.
 pub fn fmt_datetime_str(s: &str, lang: Lang) -> String {
-    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
-        match lang {
-            Lang::Sk => dt.format("%d.%m.%Y %H:%M").to_string(),
-            Lang::En => dt.format("%Y-%m-%d %H:%M").to_string(),
+    let trimmed = s.trim();
+    let patterns = [
+        "%Y-%m-%d %H:%M:%S",    // SQLite datetime('now')
+        "%Y-%m-%dT%H:%M:%S",    // ISO 8601 with T
+        "%Y-%m-%d %H:%M:%S%.f", // SQLite with fractional seconds
+        "%m/%d/%y %H:%M:%S",    // legacy MS Access, 2-digit year
+        "%m/%d/%Y %H:%M:%S",    // legacy MS Access, 4-digit year
+    ];
+    for pattern in patterns {
+        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(trimmed, pattern) {
+            return match lang {
+                Lang::Sk => dt.format("%d.%m.%Y %H:%M").to_string(),
+                Lang::En => dt.format("%Y-%m-%d %H:%M").to_string(),
+            };
         }
-    } else {
-        s.to_string()
     }
+    s.to_string()
 }
 
 /// Format a translated string with dynamic values. Returns an owned String.
@@ -191,7 +201,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("mon", ("Po", "Mon"));
     m.insert("tue", ("Ut", "Tue"));
     m.insert("wed", ("St", "Wed"));
-    m.insert("thu", ("St", "Thu"));
+    m.insert("thu", ("\u{160}t", "Thu"));
     m.insert("fri", ("Pi", "Fri"));
     m.insert("sat", ("So", "Sat"));
     m.insert("sun", ("Ne", "Sun"));
@@ -622,3 +632,38 @@ pub static ADMIN_TAB_KEYS: [(&str, &str); 5] = [
 
 /// Weekday names used in admin (short) - same as DAY_KEYS
 pub static WEEKDAY_KEYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+#[cfg(test)]
+mod datetime_tests {
+    use super::{fmt_datetime_str, Lang};
+
+    #[test]
+    fn sqlite_format_sk() {
+        assert_eq!(fmt_datetime_str("2026-04-14 18:13:11", Lang::Sk), "14.04.2026 18:13");
+    }
+
+    #[test]
+    fn sqlite_format_en() {
+        assert_eq!(fmt_datetime_str("2026-04-14 18:13:11", Lang::En), "2026-04-14 18:13");
+    }
+
+    #[test]
+    fn iso_8601_format() {
+        assert_eq!(fmt_datetime_str("2026-04-14T18:13:11", Lang::Sk), "14.04.2026 18:13");
+    }
+
+    #[test]
+    fn legacy_two_digit_year() {
+        assert_eq!(fmt_datetime_str("03/24/26 18:59:08", Lang::Sk), "24.03.2026 18:59");
+    }
+
+    #[test]
+    fn legacy_four_digit_year() {
+        assert_eq!(fmt_datetime_str("03/24/2026 18:59:08", Lang::Sk), "24.03.2026 18:59");
+    }
+
+    #[test]
+    fn unknown_returns_input() {
+        assert_eq!(fmt_datetime_str("not-a-date", Lang::Sk), "not-a-date");
+    }
+}

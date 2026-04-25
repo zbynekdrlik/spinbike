@@ -3,24 +3,10 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
 use crate::i18n::{self, Lang};
+use crate::pages::dashboard::helpers::urlencoding_light as url_encode;
 use spinbike_core::reports::{EventKind, ReportEvent, ReportResponse};
 
 use super::{FiltersState, RangeMode};
-
-/// Percent-encode unreserved-set non-conformant chars in a query value.
-/// Minimal hand-roll — avoids adding the urlencoding crate just for this.
-fn url_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char);
-            }
-            _ => out.push_str(&format!("%{b:02X}")),
-        }
-    }
-    out
-}
 
 #[component]
 pub fn ActivityFeed(
@@ -208,10 +194,7 @@ fn render_row(e: ReportEvent) -> impl IntoView {
             return;
         }
         if let Some(w) = web_sys::window() {
-            let encoded = q_value
-                .replace('%', "%25")
-                .replace(' ', "%20")
-                .replace('&', "%26");
+            let encoded = url_encode(&q_value);
             let _ = w.location().set_href(&format!("/staff?q={encoded}"));
         }
     };

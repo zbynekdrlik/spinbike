@@ -6,9 +6,9 @@
 
 use leptos::ev;
 use leptos::prelude::*;
-use wasm_bindgen::JsCast;
 
 use crate::i18n::{self, Lang};
+use crate::pages::dashboard::helpers::event_target_value;
 
 /// Try a few common formats. Returns `None` if none match.
 pub fn parse_user_date(s: &str) -> Option<chrono::NaiveDate> {
@@ -116,13 +116,6 @@ pub fn DateInput(
     }
 }
 
-fn event_target_value(ev: &ev::Event) -> String {
-    ev.target()
-        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-        .map(|el| el.value())
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::parse_user_date;
@@ -161,5 +154,31 @@ mod tests {
     fn rejects_garbage() {
         assert!(parse_user_date("not-a-date").is_none());
         assert!(parse_user_date("").is_none());
+    }
+
+    #[test]
+    fn rejects_logically_invalid_dates() {
+        assert!(parse_user_date("31.04.2026").is_none(), "April has 30 days");
+        assert!(parse_user_date("32.01.2026").is_none(), "Jan has 31 days");
+        assert!(parse_user_date("00.01.2026").is_none(), "day 0 invalid");
+    }
+
+    #[test]
+    fn leap_year_handled_correctly() {
+        assert_eq!(
+            parse_user_date("29.02.2024").unwrap().to_string(),
+            "2024-02-29",
+            "2024 is a leap year"
+        );
+        assert!(
+            parse_user_date("29.02.2025").is_none(),
+            "2025 is not a leap year"
+        );
+    }
+
+    #[test]
+    fn whitespace_padding_trimmed() {
+        let d = parse_user_date("  25.04.2026  ").unwrap();
+        assert_eq!(d.to_string(), "2026-04-25");
     }
 }
