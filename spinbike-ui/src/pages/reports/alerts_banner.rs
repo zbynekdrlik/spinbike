@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use wasm_bindgen_futures::spawn_local;
 
 use super::sheets::alert_detail::{AlertDetailSheet, AlertType};
 use crate::i18n::{self, Lang};
@@ -63,7 +64,9 @@ pub fn AlertsBanner(data: ReadSignal<Option<AlertsResponse>>) -> impl IntoView {
                         let n = expiring_n;
                         view! {
                             <div class="alerts-banner__row" data-testid="alert-expiring"
-                                 on:click=move |_| set_open_sheet.set(Some(AlertType::Expiring))>
+                                 on:click=move |_| spawn_local(async move {
+                                     set_open_sheet.set(Some(AlertType::Expiring));
+                                 })>
                                 <div class="alerts-banner__body">
                                     {move || i18n::t(lang.get(), "alerts_expiring_passes").replace("{n}", &n.to_string())}
                                 </div>
@@ -82,7 +85,9 @@ pub fn AlertsBanner(data: ReadSignal<Option<AlertsResponse>>) -> impl IntoView {
                         let n = low_n;
                         view! {
                             <div class="alerts-banner__row" data-testid="alert-low-credit"
-                                 on:click=move |_| set_open_sheet.set(Some(AlertType::LowCredit))>
+                                 on:click=move |_| spawn_local(async move {
+                                     set_open_sheet.set(Some(AlertType::LowCredit));
+                                 })>
                                 <div class="alerts-banner__body">
                                     {move || i18n::t(lang.get(), "alerts_low_credit").replace("{n}", &n.to_string())}
                                 </div>
@@ -101,7 +106,9 @@ pub fn AlertsBanner(data: ReadSignal<Option<AlertsResponse>>) -> impl IntoView {
                         let n = inactive_n;
                         view! {
                             <div class="alerts-banner__row" data-testid="alert-inactive"
-                                 on:click=move |_| set_open_sheet.set(Some(AlertType::Inactive))>
+                                 on:click=move |_| spawn_local(async move {
+                                     set_open_sheet.set(Some(AlertType::Inactive));
+                                 })>
                                 <div class="alerts-banner__body">
                                     {move || i18n::t(lang.get(), "alerts_inactive").replace("{n}", &n.to_string())}
                                 </div>

@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::spawn_local;
 
 use crate::components::Sheet;
 use crate::i18n::{self, Lang};
@@ -35,7 +36,12 @@ pub fn CalendarPickerSheet(
                 <button class="btn btn--ghost"
                         on:click=move |ev: leptos::ev::MouseEvent| {
                             ev.stop_propagation();
-                            on_close_cancel.run(());
+                            // Defer to next microtask so the click event
+                            // finishes propagating before the sheet unmounts —
+                            // avoids "closure invoked after dropped" errors.
+                            spawn_local(async move {
+                                on_close_cancel.run(());
+                            });
                         }>
                     {move || i18n::t(lang.get(), "modal_cancel")}
                 </button>
@@ -43,9 +49,12 @@ pub fn CalendarPickerSheet(
                         data-testid="calendar-picker-confirm"
                         on:click=move |ev: leptos::ev::MouseEvent| {
                             ev.stop_propagation();
-                            if let Ok(d) = chrono::NaiveDate::parse_from_str(&typed.get(), "%Y-%m-%d") {
-                                on_pick.run(d);
-                            }
+                            let parsed = chrono::NaiveDate::parse_from_str(&typed.get(), "%Y-%m-%d").ok();
+                            spawn_local(async move {
+                                if let Some(d) = parsed {
+                                    on_pick.run(d);
+                                }
+                            });
                         }>
                     {move || i18n::t(lang.get(), "modal_confirm")}
                 </button>
