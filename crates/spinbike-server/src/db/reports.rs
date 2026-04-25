@@ -68,10 +68,6 @@ pub fn parse_before_cursor(before: &str) -> Option<(String, i64)> {
     Some((ts.to_string(), id))
 }
 
-pub fn make_before_cursor(created_at: &str, id: i64) -> String {
-    format!("{created_at}|{id}")
-}
-
 /// Fetch all non-voided transactions for a single day, joined with card + service data.
 /// Returns events sorted by (created_at, id) DESC and a KpiSummary aggregated over the whole day.
 pub async fn day_report(
