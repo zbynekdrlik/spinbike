@@ -9,12 +9,13 @@ test.describe('Admin pages', () => {
 
         await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
         await page.goto('/admin');
+        // /admin redirects to /settings
+        await expect(page).toHaveURL(/\/settings$/);
         await page.waitForSelector('h1.page-title');
         expect(await page.textContent('h1.page-title')).toBe('Admin');
 
-        // Nav should show Admin link
-        const nav = page.locator('.navbar-links');
-        await expect(nav.locator('a[href="/admin"]')).toBeVisible();
+        // AdaptiveNav (replaces old Navbar links) should show the Settings tab
+        await expect(page.locator('[data-testid="nav-settings"]')).toBeVisible();
 
         assertCleanConsole(consoleMessages);
     });

@@ -15,7 +15,7 @@ test.describe('Reports range', () => {
         await page.locator('[data-testid="range-month"]').click();
         await expect(page.locator('[data-testid="kpi-revenue"]')).toBeVisible();
 
-        await page.locator('[data-testid="range-day"]').click();
+        await page.locator('[data-testid="quick-today"]').click();
         await expect(page.locator('[data-testid="kpi-revenue"]')).toBeVisible();
 
         assertCleanConsole(consoleMessages);

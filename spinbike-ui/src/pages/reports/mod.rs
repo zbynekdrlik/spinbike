@@ -160,13 +160,6 @@ pub fn ReportsPage() -> impl IntoView {
                     </button>
                 </div>
             </div>
-            // Hide the old range-day testid via an off-screen alias so existing
-            // E2E tests still resolve.
-            <button class="visually-hidden" data-testid="range-day"
-                    on:click=move |_| {
-                        set_mode.set(RangeMode::Day);
-                        set_anchor.set(chrono::Local::now().date_naive());
-                    }>"day"</button>
 
             {move || if !error.get().is_empty() {
                 view! { <div class="alert alert--error" data-testid="reports-error">{move || error.get()}</div> }.into_any()
