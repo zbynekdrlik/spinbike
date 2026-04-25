@@ -143,7 +143,19 @@ pub fn StaffDashboardPage() -> impl IntoView {
                     "list-row list-row--available"
                 };
 
-                let time_label = format!("{} {}", slot.date, slot.start_time);
+                let time_label = {
+                    let l = lang.get_untracked();
+                    let date_pretty = chrono::NaiveDate::parse_from_str(&slot.date, "%Y-%m-%d")
+                        .map(|d| {
+                            format!(
+                                "{} {}",
+                                i18n::fmt_weekday_short(d, l),
+                                i18n::fmt_date(d, l)
+                            )
+                        })
+                        .unwrap_or_else(|_| slot.date.clone());
+                    format!("{} {}", date_pretty, slot.start_time)
+                };
                 let booked = slot.booked;
                 let capacity = slot.capacity;
 

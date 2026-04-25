@@ -625,7 +625,7 @@ fn UsersTab() -> impl IntoView {
                 let email = u.email.clone();
                 let name = u.name.clone();
                 let current_role = u.role.clone();
-                let created = u.created_at.clone();
+                let created = i18n::fmt_datetime_str(&u.created_at, lang.get_untracked());
                 let set_v = set_ver;
                 let set_m = set_msg;
                 let role_ref = NodeRef::<leptos::html::Select>::new();

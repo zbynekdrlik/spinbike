@@ -50,6 +50,49 @@ pub fn t(lang: Lang, key: &str) -> &'static str {
     }
 }
 
+/// Format a `NaiveDate` for display, locale-aware.
+/// Slovak: `DD.MM.YYYY` (e.g. `25.04.2026`). English: `YYYY-MM-DD` (ISO).
+/// API request bodies and `<input type="date">` values must continue to use
+/// the ISO form (`%Y-%m-%d`) explicitly — this helper is for display only.
+pub fn fmt_date(d: chrono::NaiveDate, lang: Lang) -> String {
+    match lang {
+        Lang::Sk => d.format("%d.%m.%Y").to_string(),
+        Lang::En => d.format("%Y-%m-%d").to_string(),
+    }
+}
+
+/// Short form of `fmt_date` (no year). Slovak: `25.04.`, English: `04-25`.
+pub fn fmt_date_short(d: chrono::NaiveDate, lang: Lang) -> String {
+    match lang {
+        Lang::Sk => d.format("%d.%m.").to_string(),
+        Lang::En => d.format("%m-%d").to_string(),
+    }
+}
+
+/// 2-letter weekday abbreviation in target language.
+/// Slovak: Po/Ut/St/Št/Pi/So/Ne · English: Mon/Tue/Wed/Thu/Fri/Sat/Sun.
+pub fn fmt_weekday_short(d: chrono::NaiveDate, lang: Lang) -> &'static str {
+    use chrono::Datelike;
+    let wd = d.weekday().num_days_from_monday() as usize;
+    match lang {
+        Lang::Sk => ["Po", "Ut", "St", "\u{160}t", "Pi", "So", "Ne"][wd],
+        Lang::En => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][wd],
+    }
+}
+
+/// Parse a `YYYY-MM-DD HH:MM:SS` string from the server and format
+/// per-locale. Returns the original string if it doesn't parse.
+pub fn fmt_datetime_str(s: &str, lang: Lang) -> String {
+    if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(s, "%Y-%m-%d %H:%M:%S") {
+        match lang {
+            Lang::Sk => dt.format("%d.%m.%Y %H:%M").to_string(),
+            Lang::En => dt.format("%Y-%m-%d %H:%M").to_string(),
+        }
+    } else {
+        s.to_string()
+    }
+}
+
 /// Format a translated string with dynamic values. Returns an owned String.
 pub fn tf(lang: Lang, key: &str, args: &[&str]) -> String {
     let template = t(lang, key);
@@ -434,6 +477,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("pass_active_until", ("Aktivny do {}", "Active until {}"));
     m.insert("pass_expired_on", ("Skoncil {}", "Expired {}"));
     m.insert("days_left_short", ("{} d", "{}d"));
+    m.insert("days_short", ("dni", "days"));
     m.insert("days_ago_short", ("pred {} d", "{}d ago"));
     m.insert("edit_pass_date", ("Upravit datum", "Edit date"));
 

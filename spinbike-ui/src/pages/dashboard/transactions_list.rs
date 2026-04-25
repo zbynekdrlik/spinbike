@@ -4,7 +4,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::api;
 use crate::i18n::{self, Lang};
 
-use super::helpers::format_sk_datetime;
+use super::helpers::format_datetime;
 use super::TxnInfo;
 
 #[component]
@@ -52,7 +52,7 @@ pub fn TransactionsList(
 
             let l = lang.get();
             let rows: Vec<_> = t.iter().map(|tx| {
-                let date = format_sk_datetime(&tx.created_at);
+                let date = format_datetime(&tx.created_at, l);
                 let action_key = match tx.action.as_str() {
                     "topup"  => "tx_action_topup",
                     "charge" => "tx_action_charge",
@@ -66,7 +66,7 @@ pub fn TransactionsList(
                 };
                 let until_suffix = tx
                     .valid_until
-                    .map(|d| format!(" · {} {}", i18n::t(l, "tx_until_short"), d.format("%d.%m")))
+                    .map(|d| format!(" · {} {}", i18n::t(l, "tx_until_short"), i18n::fmt_date_short(d, l)))
                     .unwrap_or_default();
                 let service = tx.service_name.clone().unwrap_or_else(|| "—".into());
                 let amount = tx.amount;

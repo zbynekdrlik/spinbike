@@ -29,6 +29,7 @@ pub fn AlertDetailSheet(
         AlertType::Inactive => data.inactive.len(),
     };
     let title = i18n::t(lang.get_untracked(), title_key).replace("{n}", &count.to_string());
+    let l = lang.get_untracked();
 
     let rows: Vec<(String, String, Option<String>, String)> = match alert_type {
         AlertType::Expiring => data
@@ -39,9 +40,10 @@ pub fn AlertDetailSheet(
                     p.name.clone(),
                     p.barcode.clone(),
                     Some(format!(
-                        "{} · {} dní",
-                        p.valid_until.format("%Y-%m-%d"),
-                        p.days_left
+                        "{} · {} {}",
+                        i18n::fmt_date(p.valid_until, l),
+                        p.days_left,
+                        i18n::t(l, "days_short")
                     )),
                     p.barcode.clone(),
                 )
@@ -66,7 +68,9 @@ pub fn AlertDetailSheet(
                 (
                     c.name.clone(),
                     c.barcode.clone(),
-                    c.last_visit.clone(),
+                    c.last_visit
+                        .as_ref()
+                        .map(|s| i18n::fmt_datetime_str(s, l)),
                     c.barcode.clone(),
                 )
             })

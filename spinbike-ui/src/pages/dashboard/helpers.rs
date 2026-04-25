@@ -1,10 +1,12 @@
 //! Shared helper functions and types.
 
-/// Format a server-side timestamp into the Slovak convention `dd.MM.yyyy HH:mm`.
+/// Format a server-side timestamp per the user's language preference.
+/// Slovak: `dd.MM.yyyy HH:mm` (e.g. `14.04.2026 18:13`).
+/// English: `yyyy-MM-dd HH:mm` (ISO).
 /// Handles current SQLite output, ISO 8601, and legacy MS Access dumps
 /// (`MM/dd/yy` or `MM/dd/yyyy`) imported via the migrate-legacy tool.
 /// Falls back to the raw string so rows never disappear, even on unknown formats.
-pub fn format_sk_datetime(raw: &str) -> String {
+pub fn format_datetime(raw: &str, lang: crate::i18n::Lang) -> String {
     use chrono::NaiveDateTime;
     let trimmed = raw.trim();
     let patterns = [
@@ -16,10 +18,19 @@ pub fn format_sk_datetime(raw: &str) -> String {
     ];
     for pattern in patterns {
         if let Ok(dt) = NaiveDateTime::parse_from_str(trimmed, pattern) {
-            return dt.format("%d.%m.%Y %H:%M").to_string();
+            return match lang {
+                crate::i18n::Lang::Sk => dt.format("%d.%m.%Y %H:%M").to_string(),
+                crate::i18n::Lang::En => dt.format("%Y-%m-%d %H:%M").to_string(),
+            };
         }
     }
     raw.to_string()
+}
+
+/// Backwards-compat alias — Slovak-specific version used by tests.
+#[cfg(test)]
+fn format_sk_datetime(raw: &str) -> String {
+    format_datetime(raw, crate::i18n::Lang::Sk)
 }
 
 pub fn pass_is_active(card: &super::CardInfo) -> bool {

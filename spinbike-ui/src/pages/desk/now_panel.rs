@@ -44,8 +44,10 @@ pub fn NowPanel() -> impl IntoView {
                 if let Some(cc) = n.current_class.clone() {
                     render_current(cc, collapsed, set_collapsed, lang)
                 } else if let Some(nc) = n.next_class.clone() {
-                    let when = format!("{} {} ({})",
-                        nc.date.format("%a %Y-%m-%d"),
+                    let l = lang.get();
+                    let when = format!("{} {} {} ({})",
+                        i18n::fmt_weekday_short(nc.date, l),
+                        i18n::fmt_date(nc.date, l),
                         nc.start_time.clone(),
                         nc.service_name.clone());
                     view! {

@@ -149,7 +149,7 @@ pub fn ReportsPage() -> impl IntoView {
                     </button>
                     <button class="seg__item" data-testid="date-label"
                             on:click=move |_| set_show_picker.set(true)>
-                        {move || anchor.get().format("%Y-%m-%d").to_string()}
+                        {move || i18n::fmt_date(anchor.get(), lang.get())}
                     </button>
                     <button class="seg__item" data-testid="date-next"
                             on:click=move |_| {
