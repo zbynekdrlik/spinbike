@@ -2,10 +2,9 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
-use crate::components::Sheet;
+use crate::components::{DateInput, Sheet};
 use crate::i18n::{self, Lang};
 
-use crate::pages::dashboard::helpers::event_target_value;
 use crate::pages::dashboard::CardInfo;
 
 #[component]
@@ -34,13 +33,6 @@ pub fn EditPassDateSheet(
             let (draft, set_draft) = signal(current_date);
             let (err, set_err) = signal(String::new());
             let (saving, set_saving) = signal(false);
-
-            let on_date_input = move |ev: web_sys::Event| {
-                let s = event_target_value(&ev);
-                if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-                    set_draft.set(d);
-                }
-            };
 
             let on_save = move |_| {
                 let vu = draft.get();
@@ -86,13 +78,7 @@ pub fn EditPassDateSheet(
                 >
                     <div class="form-group">
                         <label>{i18n::t(lang.get(), "modal_valid_until")}</label>
-                        <input
-                            type="date"
-                            class="form-control"
-                            data-testid="pass-date-input"
-                            prop:value=move || draft.get().format("%Y-%m-%d").to_string()
-                            on:input=on_date_input
-                        />
+                        <DateInput value=draft set_value=set_draft testid="pass-date-input" />
                     </div>
                     {move || {
                         let e = err.get();

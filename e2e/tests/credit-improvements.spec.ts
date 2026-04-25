@@ -78,18 +78,18 @@ test.describe('credit improvements', () => {
 
         const banner = page.locator('[data-testid="pass-banner-active"]');
         await expect(banner).toBeVisible();
-        // Banner shows the original date in dd.MM.yyyy format.
-        await expect(banner).toContainText('15.06.2030');
+        // English-locale tests render the ISO form; Slovak users see 15.06.2030.
+        await expect(banner).toContainText('2030-06-15');
 
         // Click pencil to enter edit mode, change date, save.
         await page.locator('[data-testid="pass-date-edit"]').click();
-        const input = page.locator('[data-testid="pass-date-input"]');
+        const input = page.locator('[data-testid="pass-date-input-input"]');
         await expect(input).toBeVisible();
         await input.fill('2027-01-15');
         await page.locator('[data-testid="pass-date-save"]').click();
 
         // Banner refreshes: new date in dd.MM.yyyy and edit UI closes.
-        await expect(banner).toContainText('15.01.2027', { timeout: 5000 });
+        await expect(banner).toContainText('2027-01-15', { timeout: 5000 });
         await expect(input).toBeHidden();
 
         assertCleanConsole(consoleMessages);

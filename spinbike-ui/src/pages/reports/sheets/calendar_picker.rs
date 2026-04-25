@@ -1,8 +1,7 @@
 use leptos::prelude::*;
-use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::components::Sheet;
+use crate::components::{DateInput, Sheet};
 use crate::i18n::{self, Lang};
 
 #[component]
@@ -12,7 +11,7 @@ pub fn CalendarPickerSheet(
     #[prop(into)] on_pick: Callback<chrono::NaiveDate>,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
-    let (typed, set_typed) = signal(current.get_untracked().format("%Y-%m-%d").to_string());
+    let (draft, set_draft) = signal(current.get_untracked());
 
     let on_close_cancel = on_close;
     view! {
@@ -22,23 +21,12 @@ pub fn CalendarPickerSheet(
             testid="sheet-calendar-picker".to_string()
         >
             <div class="form-group">
-                <input class="form-control"
-                       type="date"
-                       data-testid="calendar-picker-input"
-                       prop:value=move || typed.get()
-                       on:input=move |ev: leptos::ev::Event| {
-                           if let Some(el) = ev.target().and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok()) {
-                               set_typed.set(el.value());
-                           }
-                       }/>
+                <DateInput value=draft set_value=set_draft testid="calendar-picker-input" />
             </div>
             <div class="sheet__actions">
                 <button class="btn btn--ghost"
                         on:click=move |ev: leptos::ev::MouseEvent| {
                             ev.stop_propagation();
-                            // Defer to next microtask so the click event
-                            // finishes propagating before the sheet unmounts —
-                            // avoids "closure invoked after dropped" errors.
                             spawn_local(async move {
                                 on_close_cancel.run(());
                             });
@@ -49,11 +37,9 @@ pub fn CalendarPickerSheet(
                         data-testid="calendar-picker-confirm"
                         on:click=move |ev: leptos::ev::MouseEvent| {
                             ev.stop_propagation();
-                            let parsed = chrono::NaiveDate::parse_from_str(&typed.get(), "%Y-%m-%d").ok();
+                            let d = draft.get_untracked();
                             spawn_local(async move {
-                                if let Some(d) = parsed {
-                                    on_pick.run(d);
-                                }
+                                on_pick.run(d);
                             });
                         }>
                     {move || i18n::t(lang.get(), "modal_confirm")}

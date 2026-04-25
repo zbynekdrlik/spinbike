@@ -56,7 +56,7 @@ test.describe('Reports page', () => {
 
         await page.locator('[data-testid="date-label"]').click();
         await expect(page.locator('[data-testid="sheet-calendar-picker"]')).toBeVisible();
-        await page.locator('[data-testid="calendar-picker-input"]').fill('2026-01-15');
+        await page.locator('[data-testid="calendar-picker-input-input"]').fill('15.01.2026');
         await page.locator('[data-testid="calendar-picker-confirm"]').click();
         await expect(page.locator('[data-testid="date-label"]')).toHaveText('2026-01-15');
 

@@ -1193,6 +1193,23 @@ table tbody tr:last-child td,
     }
 }
 
+/* ─────────── Date input (custom, replaces native <input type="date">) ─── */
+.date-input {
+    display: flex;
+    align-items: stretch;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+}
+.date-input__field {
+    flex: 1 1 12ch;
+    min-width: 12ch;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+}
+.date-input .btn--compact {
+    flex: 0 0 auto;
+}
+
 /* Off-screen accessible / E2E-stable hidden hooks. */
 .visually-hidden {
     position: absolute !important;
