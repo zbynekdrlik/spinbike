@@ -1,7 +1,7 @@
 use leptos::prelude::*;
-use wasm_bindgen::JsCast;
 
 use crate::i18n::{self, Lang};
+use crate::pages::dashboard::helpers::event_target_value;
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct FiltersState {
@@ -96,9 +96,3 @@ fn FilterKindBtn(
     }
 }
 
-fn event_target_value(ev: &leptos::ev::Event) -> String {
-    ev.target()
-        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-        .map(|el| el.value())
-        .unwrap_or_default()
-}

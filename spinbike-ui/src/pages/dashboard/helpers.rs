@@ -1,6 +1,5 @@
 //! Shared helper functions and types.
 
-
 pub fn pass_is_active(card: &super::CardInfo) -> bool {
     card.pass
         .as_ref()
