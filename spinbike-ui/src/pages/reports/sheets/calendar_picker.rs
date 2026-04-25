@@ -33,12 +33,16 @@ pub fn CalendarPickerSheet(
             </div>
             <div class="sheet__actions">
                 <button class="btn btn--ghost"
-                        on:click=move |_| on_close_cancel.run(())>
+                        on:click=move |ev: leptos::ev::MouseEvent| {
+                            ev.stop_propagation();
+                            on_close_cancel.run(());
+                        }>
                     {move || i18n::t(lang.get(), "modal_cancel")}
                 </button>
                 <button class="btn btn--primary"
                         data-testid="calendar-picker-confirm"
-                        on:click=move |_| {
+                        on:click=move |ev: leptos::ev::MouseEvent| {
+                            ev.stop_propagation();
                             if let Ok(d) = chrono::NaiveDate::parse_from_str(&typed.get(), "%Y-%m-%d") {
                                 on_pick.run(d);
                             }

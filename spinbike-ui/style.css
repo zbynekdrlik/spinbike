@@ -341,7 +341,14 @@ a:hover { text-decoration: underline; }
     color: #1a2906;
     font-weight: 600;
 }
-.btn--pass:hover:not(:disabled) { filter: brightness(1.08); }
+/* Hover: darken background instead of `filter: brightness(...)` which washed
+   the dark text out (regression report from owner). Keep text deep-olive,
+   tighten background for clear contrast. */
+.btn--pass:hover:not(:disabled) {
+    background: #6aa414;
+    border-color: #6aa414;
+    color: #0e1804;
+}
 
 .btn--danger {
     background: transparent;
