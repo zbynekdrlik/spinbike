@@ -28,7 +28,7 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
             }
             let is_admin = u.role == "admin";
             let path = current_path();
-            let desk_active = path.starts_with("/staff") || path == "/";
+            let desk_active = path.starts_with("/staff");
             let schedule_active = path.starts_with("/schedule");
             let reports_active = path.starts_with("/reports");
             let settings_active = path.starts_with("/settings") || path.starts_with("/admin");

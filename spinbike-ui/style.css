@@ -56,11 +56,11 @@
     --text:          #ededf2;
     --text-muted:    #a8acb5;
     --text-dim:      #72767f;
-    --brand:         #22c55e;
-    --brand-tint:    rgba(34, 197, 94, 0.14);
+    --brand:         #60a5fa;
+    --brand-tint:    rgba(96, 165, 250, 0.14);
     --danger:        #f87171;
-    --info:          #60a5fa;
-    --pass:          #84cc16;
+    --info:          var(--brand);
+    --pass:          #fbbf24;
     --shadow:        0 4px 12px rgba(0, 0, 0, 0.4);
     --shadow-lg:     0 12px 36px rgba(0, 0, 0, 0.55);
     --shadow-sm:     0 1px 2px rgba(0, 0, 0, 0.35);
@@ -87,7 +87,7 @@
     --info-hover:     color-mix(in srgb, var(--info) 85%, black);
     --info-fg:        #fff;
     --pass-hover:     color-mix(in srgb, var(--pass) 85%, black);
-    --pass-fg:        #1a2906;
+    --pass-fg:        #1a1306;
 
     /* Legacy radius aliases */
     --radius-sm: var(--r-sm);
@@ -117,11 +117,11 @@
         --text:          #14161b;
         --text-muted:    #545a67;
         --text-dim:      #8a8f9b;
-        --brand:         #16a34a;
-        --brand-tint:    rgba(22, 163, 74, 0.10);
+        --brand:         #2563eb;
+        --brand-tint:    rgba(37, 99, 235, 0.10);
         --danger:        #dc2626;
-        --info:          #2563eb;
-        --pass:          #65a30d;
+        --info:          var(--brand);
+        --pass:          #d97706;
         --shadow:        0 2px 8px rgba(13, 20, 45, 0.07);
         --shadow-lg:     0 16px 48px rgba(13, 20, 45, 0.12);
         --shadow-sm:     0 1px 2px rgba(13, 20, 45, 0.05);
@@ -247,7 +247,7 @@ a:hover { text-decoration: underline; }
 .navbar-links a.active {
     color: var(--brand);
     background: var(--brand-tint);
-    border-color: rgba(34, 197, 94, 0.25);
+    border-color: color-mix(in srgb, var(--brand) 25%, transparent);
 }
 
 .navbar-user {
@@ -527,7 +527,7 @@ select.form-control {
 .day-btn.active {
     background: var(--brand-tint);
     color: var(--brand);
-    border-color: rgba(34, 197, 94, 0.4);
+    border-color: color-mix(in srgb, var(--brand) 40%, transparent);
     font-weight: 600;
 }
 
@@ -603,8 +603,8 @@ select.form-control {
     white-space: nowrap;
 }
 
-.badge--pass      { background: rgba(132, 204, 22, 0.14); color: var(--pass); }
-.badge--booked    { background: rgba(96, 165, 250, 0.14); color: var(--info); }
+.badge--pass      { background: color-mix(in srgb, var(--pass) 16%, var(--surface)); color: var(--pass); }
+.badge--booked    { background: color-mix(in srgb, var(--info) 14%, var(--surface)); color: var(--info); }
 .badge--full      { background: rgba(248, 113, 113, 0.14); color: var(--danger); }
 .badge--cancelled { background: var(--surface-3); color: var(--text-dim); }
 .badge--voided    { background: rgba(248, 113, 113, 0.14); color: var(--danger); }

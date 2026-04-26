@@ -37,7 +37,17 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
 
     view! {
         <nav class="navbar">
-            <a href="/" class="navbar-brand">"SpinBike"</a>
+            <a
+                href=move || {
+                    let _ = auth_ver.get();
+                    match auth::get_user() {
+                        Some(u) if u.role == "admin" || u.role == "staff" => "/staff",
+                        _ => "/",
+                    }
+                }
+                class="navbar-brand"
+                data-testid="brand-link"
+            >"SpinBike"</a>
             <div class="navbar-links">
                 {move || {
                     if let Some(u) = user() {
