@@ -38,6 +38,28 @@ fn ScheduleRoute() -> impl IntoView {
     }
 }
 
+/// Role-aware root route. Staff/admin land on the Desk (`/staff`); customers
+/// and logged-out visitors see the public schedule. Reactive on `auth_ver`.
+#[component]
+fn RootRoute() -> impl IntoView {
+    let auth_ver = use_context::<ReadSignal<u32>>().expect("auth_ver context");
+    view! {
+        {move || {
+            let _ = auth_ver.get();
+            let user = crate::auth::get_user();
+            let is_staff = user
+                .as_ref()
+                .map(|u| u.role == "staff" || u.role == "admin")
+                .unwrap_or(false);
+            if is_staff {
+                view! { <RedirectTo to="/staff".to_string()/> }.into_any()
+            } else {
+                SchedulePage().into_any()
+            }
+        }}
+    }
+}
+
 use crate::components::AdaptiveNav;
 use crate::components::nav::Navbar;
 use crate::i18n;
@@ -74,7 +96,7 @@ pub fn App() -> impl IntoView {
                 <AdaptiveNav auth_ver=auth_ver />
                 <div class="page">
                     <Routes fallback=move || view! { <p class="text-center text-muted mt-3">{move || i18n::t(lang_signal.get(), "page_not_found")}</p> }>
-                        <Route path=path!("/") view=SchedulePage />
+                        <Route path=path!("/") view=RootRoute />
                         <Route path=path!("/login") view=LoginPage />
                         <Route path=path!("/register") view=RegisterPage />
                         <Route path=path!("/my/bookings") view=MyBookingsPage />
