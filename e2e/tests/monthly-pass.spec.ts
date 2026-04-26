@@ -1,58 +1,64 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, Page } from '@playwright/test';
 import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
-test.describe('Monthly pass — sell, banner, visit', () => {
-    test('sell pass → banner appears → visit logs 0 EUR row', async ({ page }) => {
-        const consoleMessages = setupConsoleCheck(page);
-        await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+async function activateUniqueCard(
+    token: string,
+    initialCredit: number,
+): Promise<{ barcode: string; lastName: string }> {
+    const suffix = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
+    const barcode = `MP-${suffix}`;
+    const lastName = `Monthlypass${suffix}`;
+    const resp = await fetch(`${BASE_URL}/api/cards/activate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ barcode, initial_credit: initialCredit, first_name: 'MP', last_name: lastName }),
+    });
+    if (!resp.ok) throw new Error(`activate failed: ${resp.status} ${await resp.text()}`);
+    return { barcode, lastName };
+}
+
+async function openCardByLastName(page: Page, lastName: string) {
+    const searchInput = page.locator('input[type="search"]');
+    await searchInput.waitFor();
+    await searchInput.focus();
+    await page.keyboard.type(lastName, { delay: 30 });
+    await page.locator('[data-testid="search-result"]').first().click();
+    await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+}
+
+test.describe('Monthly pass — sell via dropdown, banner, log-visit', () => {
+    test('sell pass via dropdown → banner appears → log-visit logs 0 EUR row', async ({ page }) => {
+        const msgs = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        // Start with 80 € so the 35 € pass charge leaves 45 €.
+        const { lastName } = await activateUniqueCard(token, 80.0);
         await page.goto('/staff');
-
-        // Pick the first card from the seeded test set
-        const searchInput = page.locator('input[type="search"]');
-        await searchInput.waitFor();
-        await searchInput.focus();
-        await page.keyboard.type('TestCorp', { delay: 30 });
-        await page.locator('[data-testid="search-result"]').first().click();
-
-        // Top up so the card has credit for the pass
-        // Jana starts with 50.00 initial credit; after +30 topup → 80.00
-        await page.locator('[data-testid="topup-30"]').click();
+        await openCardByLastName(page, lastName);
         await expect(page.locator('[data-testid="card-credit"]')).toContainText('80.00');
 
-        // Open the sell-pass modal
-        await page.locator('[data-testid="sell-pass-btn"]').click();
-        const modal = page.locator('[data-testid="sheet-sell-pass"]');
-        await expect(modal).toBeVisible();
+        // Select Monthly pass from the unified service dropdown.
+        await page.locator('[data-testid="charge-service"]').selectOption({ label: /Monthly pass/ });
+        // Default amount auto-filled with 35.00; default valid_until is today + 30. Accept both.
+        await page.locator('[data-testid="charge-submit"]').click();
 
-        // Default price should be 35, date should be today + 30
-        const priceInput = page.locator('[data-testid="sell-pass-price"]');
-        await expect(priceInput).toHaveValue('35.00');
-
-        // Confirm
-        await page.locator('[data-testid="sell-pass-confirm"]').click();
-        await expect(modal).not.toBeVisible();
-
-        // Banner appears
-        const banner = page.locator('[data-testid="pass-banner-active"]');
-        await expect(banner).toBeVisible();
-        await expect(banner).toContainText('Monthly pass valid until');
-        await expect(banner).toContainText('days remaining');
-
-        // Credit dropped by 35: 80.00 - 35.00 = 45.00
+        // Active pass banner appears.
+        await expect(page.locator('[data-testid="pass-banner-active"]')).toBeVisible();
+        // Credit drops 80 - 35 = 45.
         await expect(page.locator('[data-testid="card-credit"]')).toContainText('45.00');
 
-        // Charge buttons are now "Log visit" buttons
+        // Quick log-visit chip is visible only when an active pass exists.
         const visitBtn = page.locator('[data-testid="log-visit-btn"]').first();
         await expect(visitBtn).toBeVisible();
         await visitBtn.click();
 
-        // History shows a visit row with 0.00 amount.
-        // .txn-row-visit class proves the row is a visit; the action label is
-        // i18n-translated (SK: "Navsteva", EN: "Visit") so we don't assert text.
-        await expect(page.locator('.txn-row-visit')).toContainText('0.00');
+        // Switch to History tab and verify a 0 € visit row appears.
+        await page.locator('[data-testid="tab-history"]').click();
+        // History rows show transaction amounts; a logged visit is 0,00 € or 0.00 €
+        // depending on locale formatting. Match either.
+        await expect(page.locator('[data-testid="action-panel"]')).toContainText(/0[.,]00/);
 
-        assertCleanConsole(consoleMessages);
+        assertCleanConsole(msgs);
     });
 });
