@@ -26,7 +26,10 @@ test.describe('Monthly pass — expired state', () => {
         await expect(banner).toContainText('days ago');
 
         await expect(page.locator('[data-testid="log-visit-btn"]')).toHaveCount(0);
-        await expect(page.locator('[data-testid="sell-pass-btn"]')).toBeVisible();
+        // After the prior pass expired, the user can still sell a new one
+        // via the unified service dropdown.
+        const opts = await page.locator('[data-testid="charge-service"] option').allTextContents();
+        expect(opts.some(o => /Monthly pass/.test(o))).toBe(true);
 
         assertCleanConsole(consoleMessages);
     });
