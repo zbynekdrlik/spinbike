@@ -50,6 +50,59 @@ pub fn t(lang: Lang, key: &str) -> &'static str {
     }
 }
 
+/// Format a `NaiveDate` for display, locale-aware.
+/// Slovak: `DD.MM.YYYY` (e.g. `25.04.2026`). English: `YYYY-MM-DD` (ISO).
+/// API request bodies and `<input type="date">` values must continue to use
+/// the ISO form (`%Y-%m-%d`) explicitly — this helper is for display only.
+pub fn fmt_date(d: chrono::NaiveDate, lang: Lang) -> String {
+    match lang {
+        Lang::Sk => d.format("%d.%m.%Y").to_string(),
+        Lang::En => d.format("%Y-%m-%d").to_string(),
+    }
+}
+
+/// Short form of `fmt_date` (no year). Slovak: `25.04.`, English: `04-25`.
+pub fn fmt_date_short(d: chrono::NaiveDate, lang: Lang) -> String {
+    match lang {
+        Lang::Sk => d.format("%d.%m.").to_string(),
+        Lang::En => d.format("%m-%d").to_string(),
+    }
+}
+
+/// 2-letter weekday abbreviation in target language.
+/// Slovak: Po/Ut/St/Št/Pi/So/Ne · English: Mon/Tue/Wed/Thu/Fri/Sat/Sun.
+pub fn fmt_weekday_short(d: chrono::NaiveDate, lang: Lang) -> &'static str {
+    use chrono::Datelike;
+    let wd = d.weekday().num_days_from_monday() as usize;
+    match lang {
+        Lang::Sk => ["Po", "Ut", "St", "\u{160}t", "Pi", "So", "Ne"][wd],
+        Lang::En => ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][wd],
+    }
+}
+
+/// Parse a server timestamp and format per-locale. Returns the original
+/// string if it doesn't parse. Accepts SQLite, ISO 8601, fractional seconds,
+/// and legacy MS Access dump formats so dates from any source render cleanly.
+pub fn fmt_datetime_str(s: &str, lang: Lang) -> String {
+    let trimmed = s.trim();
+    let patterns = [
+        "%Y-%m-%d %H:%M:%S",    // SQLite datetime('now')
+        "%Y-%m-%dT%H:%M:%S",    // ISO 8601 with T
+        "%Y-%m-%d %H:%M:%S%.f", // SQLite with fractional seconds
+        "%m/%d/%y %H:%M:%S",    // legacy MS Access, 2-digit year
+        "%m/%d/%Y %H:%M:%S",    // legacy MS Access, 4-digit year
+    ];
+    for pattern in patterns {
+        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(trimmed, pattern) {
+            return match lang {
+                Lang::Sk => dt.format("%d.%m.%Y %H:%M").to_string(),
+                Lang::En => dt.format("%Y-%m-%d %H:%M").to_string(),
+            };
+        }
+    }
+    s.to_string()
+}
+
 /// Format a translated string with dynamic values. Returns an owned String.
 pub fn tf(lang: Lang, key: &str, args: &[&str]) -> String {
     let template = t(lang, key);
@@ -148,7 +201,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("mon", ("Po", "Mon"));
     m.insert("tue", ("Ut", "Tue"));
     m.insert("wed", ("St", "Wed"));
-    m.insert("thu", ("St", "Thu"));
+    m.insert("thu", ("\u{160}t", "Thu"));
     m.insert("fri", ("Pi", "Fri"));
     m.insert("sat", ("So", "Sat"));
     m.insert("sun", ("Ne", "Sun"));
@@ -383,8 +436,9 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     );
     m.insert("modal_price", ("Cena (EUR)", "Price (EUR)"));
     m.insert("modal_valid_until", ("Platny do", "Valid until"));
-    m.insert("modal_confirm", ("Predat", "Sell pass"));
+    m.insert("modal_confirm", ("Potvrdit", "OK"));
     m.insert("modal_cancel", ("Zrusit", "Cancel"));
+    m.insert("sell_pass_action", ("Predat", "Sell pass"));
     m.insert(
         "price_required",
         ("Zadajte cenu", "Please enter a price"),
@@ -433,8 +487,129 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("pass_active_until", ("Aktivny do {}", "Active until {}"));
     m.insert("pass_expired_on", ("Skoncil {}", "Expired {}"));
     m.insert("days_left_short", ("{} d", "{}d"));
+    m.insert("days_short", ("dni", "days"));
     m.insert("days_ago_short", ("pred {} d", "{}d ago"));
     m.insert("edit_pass_date", ("Upravit datum", "Edit date"));
+
+    // --- Staff/CEO redesign (v0.10.0) ---
+
+    // Nav (bottom tabs + sidebar labels)
+    m.insert("nav_desk", ("Desk", "Desk"));
+    m.insert("nav_schedule", ("Plan", "Schedule"));
+    m.insert("nav_reports", ("Prehlad", "Reports"));
+    m.insert("nav_settings", ("Nastavenia", "Settings"));
+
+    // Reports — date navigation
+    m.insert("reports_yesterday", ("Vcera", "Yesterday"));
+    m.insert("reports_today", ("Dnes", "Today"));
+    m.insert("reports_tomorrow", ("Zajtra", "Tomorrow"));
+    m.insert("reports_week", ("Tyzden", "Week"));
+    m.insert("reports_month", ("Mesiac", "Month"));
+    m.insert("reports_pick_date", ("Zvolit datum", "Pick date"));
+
+    // Reports — KPI cards
+    m.insert("kpi_revenue", ("TRZBA", "REVENUE"));
+    m.insert("kpi_attendance", ("NAVSTEVY", "ATTENDANCE"));
+    m.insert("kpi_passes", ("PERMANENTKY", "PASSES"));
+    m.insert("kpi_cash_in", ("VKLADY", "CASH IN"));
+
+    // Reports — alerts banner
+    m.insert(
+        "alerts_title",
+        ("Potrebuje pozornost", "Needs attention"),
+    );
+    m.insert(
+        "alerts_expiring_passes",
+        (
+            "{n} permanentiek vyprsi do 7 dni",
+            "{n} passes expire within 7 days",
+        ),
+    );
+    m.insert(
+        "alerts_low_credit",
+        (
+            "{n} kariet s kreditom pod 5 EUR",
+            "{n} cards below EUR 5 credit",
+        ),
+    );
+    m.insert(
+        "alerts_inactive",
+        (
+            "{n} zakaznikov neaktivnych 60+ dni",
+            "{n} customers inactive 60+ days",
+        ),
+    );
+    m.insert("alerts_dismiss", ("Skryt", "Dismiss"));
+
+    // Reports — filters
+    m.insert("filters_label", ("Filtre", "Filters"));
+    m.insert("filters_reset", ("Zrusit filtre", "Reset"));
+    m.insert("filters_event_all", ("Vsetko", "All"));
+    m.insert("filters_event_payments", ("Platby", "Payments"));
+    m.insert("filters_event_topups", ("Vklady", "Top-ups"));
+    m.insert("filters_event_passes", ("Permanentky", "Passes"));
+    m.insert("filters_service_spinning", ("Spinning", "Spinning"));
+    m.insert("filters_service_fitness", ("Fitness", "Fitness"));
+    m.insert("filters_service_pass", ("Permanentka", "Pass"));
+    m.insert(
+        "filters_search_placeholder",
+        (
+            "Hladat meno, ciarovy kod, telefon",
+            "Search name, barcode, phone",
+        ),
+    );
+
+    // Reports — feed event labels (used as the row title prefix when service is unknown)
+    m.insert("event_charge",   ("Návšteva",     "Visit"));
+    m.insert("event_topup",    ("Vklad",        "Top-up"));
+    m.insert("event_pass",     ("Permanentka",  "Pass sale"));
+    m.insert("event_other",    ("Iné",          "Other"));
+    // Reports — feed
+    m.insert("feed_load_older", ("Nacitat starsie", "Load older"));
+    m.insert(
+        "feed_empty_day",
+        ("Na tento den nie je ziadna aktivita.", "No activity on this day."),
+    );
+    m.insert(
+        "feed_empty_filter",
+        (
+            "Ziadne vysledky pre tieto filtre.",
+            "No results for these filters.",
+        ),
+    );
+
+    // Desk — Now panel
+    m.insert(
+        "now_no_more_today",
+        ("Dnes uz ziadne hodiny.", "No more classes today."),
+    );
+    m.insert(
+        "now_next_on",
+        ("Dalsia hodina: {when}", "Next class: {when}"),
+    );
+    m.insert("now_walk_in", ("Bez rezervacie", "Walk-in"));
+    m.insert("now_cancel_class", ("Zrusit hodinu", "Cancel class"));
+    m.insert("now_collapse", ("Skryt", "Hide"));
+    m.insert("now_expand", ("Zobrazit", "Show"));
+
+    // Roster status badges
+    m.insert("status_booked", ("Rezervovane", "Booked"));
+    m.insert("status_checked_in", ("Prisiel", "Checked in"));
+    m.insert("status_cancelled", ("Zrusene", "Cancelled"));
+
+    // Card detail (collapsed contact)
+    m.insert(
+        "card_show_contact",
+        ("Zobrazit kontakt", "Show contact"),
+    );
+    m.insert("card_hide_contact", ("Skryt kontakt", "Hide contact"));
+
+    // Settings (renamed /admin) tabs
+    m.insert("settings_tab_center", ("Centrum", "Center"));
+    m.insert("settings_tab_services", ("Sluzby", "Services"));
+    m.insert("settings_tab_templates", ("Permanentky", "Templates"));
+    m.insert("settings_tab_instructors", ("Instruktori", "Instructors"));
+    m.insert("settings_tab_users", ("Pouzivatelia", "Users"));
 
     m
 });
@@ -446,14 +621,49 @@ fn translations() -> &'static TransMap {
 /// Get the short day name keys in order Mon-Sun
 pub static DAY_KEYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
-/// Admin tab name translations
+/// Admin tab name translations (keys map to settings_tab_* in TRANSLATIONS).
 pub static ADMIN_TAB_KEYS: [(&str, &str); 5] = [
-    ("templates", "templates"),
-    ("instructors", "instructors"),
-    ("services", "services"),
-    ("users", "users"),
-    ("settings", "settings"),
+    ("templates", "settings_tab_templates"),
+    ("instructors", "settings_tab_instructors"),
+    ("services", "settings_tab_services"),
+    ("users", "settings_tab_users"),
+    ("settings", "settings_tab_center"),
 ];
 
 /// Weekday names used in admin (short) - same as DAY_KEYS
 pub static WEEKDAY_KEYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+
+#[cfg(test)]
+mod datetime_tests {
+    use super::{fmt_datetime_str, Lang};
+
+    #[test]
+    fn sqlite_format_sk() {
+        assert_eq!(fmt_datetime_str("2026-04-14 18:13:11", Lang::Sk), "14.04.2026 18:13");
+    }
+
+    #[test]
+    fn sqlite_format_en() {
+        assert_eq!(fmt_datetime_str("2026-04-14 18:13:11", Lang::En), "2026-04-14 18:13");
+    }
+
+    #[test]
+    fn iso_8601_format() {
+        assert_eq!(fmt_datetime_str("2026-04-14T18:13:11", Lang::Sk), "14.04.2026 18:13");
+    }
+
+    #[test]
+    fn legacy_two_digit_year() {
+        assert_eq!(fmt_datetime_str("03/24/26 18:59:08", Lang::Sk), "24.03.2026 18:59");
+    }
+
+    #[test]
+    fn legacy_four_digit_year() {
+        assert_eq!(fmt_datetime_str("03/24/2026 18:59:08", Lang::Sk), "24.03.2026 18:59");
+    }
+
+    #[test]
+    fn unknown_returns_input() {
+        assert_eq!(fmt_datetime_str("not-a-date", Lang::Sk), "not-a-date");
+    }
+}

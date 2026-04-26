@@ -3,7 +3,7 @@ use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
 
 use crate::api;
-use crate::components::Sheet;
+use crate::components::{DateInput, Sheet};
 use crate::i18n::{self, Lang};
 
 use super::helpers::event_target_value;
@@ -132,18 +132,10 @@ pub fn SellPassModal(
                     </div>
                     <div class="form-group">
                         <label>{i18n::t(lang.get(), "modal_valid_until")}</label>
-                        <input
-                            type="date"
-                            class="form-control"
-                            data-testid="sell-pass-date"
-                            prop:value=move || valid_until.get().format("%Y-%m-%d").to_string()
-                            on:input=move |ev| {
-                                let ev: web_sys::Event = ev.into();
-                                let s = event_target_value(&ev);
-                                if let Ok(d) = chrono::NaiveDate::parse_from_str(&s, "%Y-%m-%d") {
-                                    set_valid_until.set(d);
-                                }
-                            }
+                        <DateInput
+                            value=valid_until
+                            set_value=set_valid_until
+                            testid="sell-pass-date"
                         />
                     </div>
                     {move || {
@@ -165,7 +157,7 @@ pub fn SellPassModal(
                             data-testid="sell-pass-confirm"
                             on:click=on_confirm
                         >
-                            {i18n::t(lang.get(), "modal_confirm")}
+                            {i18n::t(lang.get(), "sell_pass_action")}
                         </button>
                     </div>
                 </Sheet>

@@ -20,7 +20,7 @@ pub fn PassBanner(
     let current_date = p.valid_until;
     let show_edit_sheet = RwSignal::new(false);
 
-    let date_str = current_date.format("%d.%m.%Y").to_string();
+    let date_for_title = current_date;
     let is_active = p.days_remaining >= 0;
     let days = p.days_remaining;
     let days_ago = -p.days_remaining;
@@ -37,10 +37,10 @@ pub fn PassBanner(
     };
 
     let title_view = if is_active {
-        let date_str = date_str.clone();
         view! {
             <>
-                {move || i18n::t(lang.get(), "pass_valid_until")}" "{date_str.clone()}
+                {move || i18n::t(lang.get(), "pass_valid_until")}" "
+                {move || i18n::fmt_date(date_for_title, lang.get())}
             </>
         }
         .into_any()
@@ -62,10 +62,10 @@ pub fn PassBanner(
         }
         .into_any()
     } else {
-        let date_str = date_str.clone();
         view! {
             <>
-                {move || i18n::t(lang.get(), "pass_last_valid_until")}" "{date_str.clone()}
+                {move || i18n::t(lang.get(), "pass_last_valid_until")}" "
+                {move || i18n::fmt_date(date_for_title, lang.get())}
             </>
         }
         .into_any()

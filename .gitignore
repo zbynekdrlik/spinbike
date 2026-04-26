@@ -19,3 +19,6 @@ spinbike.db-wal
 .claude/
 *.png
 !spinbike-ui/static/**/*.png
+.playwright-mcp/
+desk-snap.yml
+sell-pass-hover.png

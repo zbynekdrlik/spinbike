@@ -1,7 +1,44 @@
 use leptos::prelude::*;
 use leptos_router::components::{Route, Router, Routes};
+use leptos_router::hooks::use_navigate;
 use leptos_router::path;
 
+/// Imperative redirect — runs once on mount, navigates to `to`.
+#[component]
+fn RedirectTo(#[prop(into)] to: String) -> impl IntoView {
+    let nav = use_navigate();
+    let to_clone = to.clone();
+    Effect::new(move |_| {
+        nav(&to_clone, Default::default());
+    });
+    view! { <span></span> }
+}
+
+/// Role-aware /schedule: admin/staff see the rich roster view (StaffDashboardPage);
+/// customers (and logged-out visitors) see the public week schedule (SchedulePage).
+/// Reactive on `auth_ver` so the view flips immediately on login/logout while
+/// the user is parked on this route.
+#[component]
+fn ScheduleRoute() -> impl IntoView {
+    let auth_ver = use_context::<ReadSignal<u32>>().expect("auth_ver context");
+    view! {
+        {move || {
+            let _ = auth_ver.get();
+            let user = crate::auth::get_user();
+            let is_staff = user
+                .as_ref()
+                .map(|u| u.role == "staff" || u.role == "admin")
+                .unwrap_or(false);
+            if is_staff {
+                StaffDashboardPage().into_any()
+            } else {
+                SchedulePage().into_any()
+            }
+        }}
+    }
+}
+
+use crate::components::AdaptiveNav;
 use crate::components::nav::Navbar;
 use crate::i18n;
 use crate::pages::admin::AdminPage;
@@ -10,6 +47,7 @@ use crate::pages::link_card::LinkCardPage;
 use crate::pages::login::{LoginPage, RegisterPage};
 use crate::pages::my_balance::MyBalancePage;
 use crate::pages::my_bookings::MyBookingsPage;
+use crate::pages::reports::ReportsPage;
 use crate::pages::schedule::SchedulePage;
 use crate::pages::staff_dashboard::StaffDashboardPage;
 
@@ -33,6 +71,7 @@ pub fn App() -> impl IntoView {
         <Router>
             <div class="app-shell">
                 <Navbar auth_ver=auth_ver />
+                <AdaptiveNav auth_ver=auth_ver />
                 <div class="page">
                     <Routes fallback=move || view! { <p class="text-center text-muted mt-3">{move || i18n::t(lang_signal.get(), "page_not_found")}</p> }>
                         <Route path=path!("/") view=SchedulePage />
@@ -42,8 +81,13 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/my/balance") view=MyBalancePage />
                         <Route path=path!("/link-card") view=LinkCardPage />
                         <Route path=path!("/staff") view=DashboardPage />
+                        // Admin schedule view (rosters, walk-in, cancel) lives at /schedule.
+                        // /staff/classes kept as alias for back-compat.
                         <Route path=path!("/staff/classes") view=StaffDashboardPage />
-                        <Route path=path!("/admin") view=AdminPage />
+                        <Route path=path!("/schedule") view=ScheduleRoute />
+                        <Route path=path!("/reports") view=ReportsPage />
+                        <Route path=path!("/settings") view=AdminPage />
+                        <Route path=path!("/admin") view=|| view! { <RedirectTo to="/settings".to_string()/> } />
                     </Routes>
                 </div>
             </div>

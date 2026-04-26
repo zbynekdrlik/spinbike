@@ -625,7 +625,7 @@ fn UsersTab() -> impl IntoView {
                 let email = u.email.clone();
                 let name = u.name.clone();
                 let current_role = u.role.clone();
-                let created = u.created_at.clone();
+                let created_raw = u.created_at.clone();
                 let set_v = set_ver;
                 let set_m = set_msg;
                 let role_ref = NodeRef::<leptos::html::Select>::new();
@@ -664,7 +664,9 @@ fn UsersTab() -> impl IntoView {
                                 {role_options}
                             </select>
                         </div>
-                        <div class="text-muted" style="font-size:0.75rem">{format!("ID: {uid} | Created: {created}")}</div>
+                        <div class="text-muted" style="font-size:0.75rem">
+                            {move || format!("ID: {uid} | Created: {}", i18n::fmt_datetime_str(&created_raw, lang.get()))}
+                        </div>
                     </div>
                 }.into_any()
             }).collect();

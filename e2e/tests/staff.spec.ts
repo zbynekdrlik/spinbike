@@ -12,12 +12,12 @@ test.describe('Staff navigation', () => {
         await page.waitForSelector('h1.page-title');
         expect(await page.textContent('h1.page-title')).toBe('Cards — Quick Dashboard');
 
-        // Nav should show Cards and Classes links, no separate Payments.
-        const nav = page.locator('.navbar-links');
-        await expect(nav.locator('a[href="/staff"]')).toBeVisible();
-        await expect(nav.locator('a[href="/staff/classes"]')).toBeVisible();
-        await expect(nav.locator('a[href="/staff/payments"]')).toHaveCount(0);
-        await expect(nav.locator('a[href="/staff/cards"]')).toHaveCount(0);
+        // AdaptiveNav (replaces old Navbar links) shows Desk + Schedule for staff.
+        await expect(page.locator('[data-testid="nav-desk"]')).toBeVisible();
+        await expect(page.locator('[data-testid="nav-schedule"]')).toBeVisible();
+        // Reports + Settings are admin-only and must NOT show for staff.
+        await expect(page.locator('[data-testid="nav-reports"]')).toHaveCount(0);
+        await expect(page.locator('[data-testid="nav-settings"]')).toHaveCount(0);
 
         assertCleanConsole(consoleMessages);
     });

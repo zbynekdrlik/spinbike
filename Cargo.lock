@@ -1633,7 +1633,7 @@ dependencies = [
 
 [[package]]
 name = "spinbike-core"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "chrono",
  "serde",
@@ -1643,7 +1643,7 @@ dependencies = [
 
 [[package]]
 name = "spinbike-server"
-version = "0.9.6"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "argon2",

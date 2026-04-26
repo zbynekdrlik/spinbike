@@ -24,6 +24,7 @@ pub fn CardActionPanel(
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (show_edit, set_show_edit) = signal(false);
     let (show_sell_pass, set_show_sell_pass) = signal(false);
+    let (show_contact, set_show_contact) = signal(false);
     // Counter incremented after a log-visit to re-trigger the history fetch.
     let txn_refresh = RwSignal::new(0u32);
     // Counter driving UpcomingClasses + PersistentToggles refetches after a
@@ -54,14 +55,12 @@ pub fn CardActionPanel(
     view! {
         <>
         <div class="card mb-2" data-testid="action-panel">
-            // ── Header bar ───────────────────────────────────────────────
+            // ── Header bar (name + barcode prominent; contact collapsed) ─
             <div class="card-header">
                 <div class="card-header__main">
                     <div class="card-title">{name}</div>
                     <div class="card-header__meta">
                         <code>{barcode.clone()}</code>
-                        {if !company.is_empty() { format!(" · {company}") } else { String::new() }}
-                        {if !phone.is_empty() { format!(" · {phone}") } else { String::new() }}
                     </div>
                 </div>
                 <button
@@ -70,6 +69,42 @@ pub fn CardActionPanel(
                     title="close"
                 >"\u{2715}"</button>
             </div>
+
+            // ── Contact info toggle (addresses "card detail too busy" pain point) ─
+            {
+                let has_contact = !company.is_empty() || !phone.is_empty();
+                let company_for_show = company.clone();
+                let phone_for_show = phone.clone();
+                view! {
+                    {move || if has_contact {
+                        view! {
+                            <button
+                                class="btn btn--compact btn--ghost"
+                                data-testid="toggle-contact"
+                                on:click=move |_| set_show_contact.update(|v| *v = !*v)
+                            >
+                                {move || if show_contact.get() {
+                                    i18n::t(lang.get(), "card_hide_contact")
+                                } else {
+                                    i18n::t(lang.get(), "card_show_contact")
+                                }}
+                            </button>
+                        }.into_any()
+                    } else { ().into_any() }}
+                    {move || if show_contact.get() {
+                        view! {
+                            <div class="group" data-testid="card-contact">
+                                <div class="list-row">
+                                    <div class="list-row__main">
+                                        <div class="list-row__sub">{company_for_show.clone()}</div>
+                                        <div class="list-row__sub">{phone_for_show.clone()}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        }.into_any()
+                    } else { ().into_any() }}
+                }
+            }
 
             // ── Pass banner ───────────────────────────────────────────────
             <PassBanner pass=card_pass barcode=barcode.clone() set_selected=set_selected />
