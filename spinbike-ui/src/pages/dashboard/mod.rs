@@ -3,15 +3,13 @@
 //! Replaces the old /staff/cards (list-dump) and /staff/payments (separate) pages.
 //! Flow: type in search → dropdown → pick result → quick top-up / charge / block / edit.
 
+pub mod action_form;
 pub mod block_button;
 pub mod card_panel;
-pub mod charge_section;
 pub mod edit_info_form;
 pub mod helpers;
 pub mod pass_banner;
-pub mod sell_pass_modal;
 pub mod sheets;
-pub mod topup_section;
 pub mod transactions_list;
 
 pub use card_panel::CardActionPanel;
