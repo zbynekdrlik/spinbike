@@ -91,7 +91,8 @@ test.describe('Card dashboard (staff /staff)', () => {
         await expect(result).toBeVisible({ timeout: 3000 });
         await result.click();
 
-        await page.locator('[data-testid="topup-30"]').click();
+        await page.locator('[data-testid="charge-amount"]').fill('30');
+        await page.locator('[data-testid="topup-submit"]').click();
 
         // Wait for panel to reflect the new credit.
         await expect(page.locator('[data-testid="action-panel"]')).toContainText(
