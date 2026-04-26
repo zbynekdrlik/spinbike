@@ -64,6 +64,25 @@ export async function loginViaUI(page: Page, email: string, password: string) {
 }
 
 /**
+ * Select the "Monthly pass" option in the unified card-action service dropdown.
+ *
+ * Playwright's `selectOption({ label: /regex/ })` does NOT accept regex — it
+ * fails with "expected string, got object". The option label is built as
+ * `${name} (${default_price:.2} €)` so the price varies between environments;
+ * looking up the option by visible text and selecting by its `value` attribute
+ * is the robust path.
+ */
+export async function selectMonthlyPass(page: Page): Promise<void> {
+    const value = await page
+        .locator('[data-testid="charge-service"] option')
+        .filter({ hasText: 'Monthly pass' })
+        .first()
+        .getAttribute('value');
+    if (!value) throw new Error('Monthly pass option not found in [data-testid="charge-service"]');
+    await page.locator('[data-testid="charge-service"]').selectOption(value);
+}
+
+/**
  * Login via API and store the token in localStorage so the WASM app picks it up.
  * Returns the raw JWT token so callers can pass it to API requests (e.g. seed endpoints).
  */

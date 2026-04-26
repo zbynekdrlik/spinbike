@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
+import { setupConsoleCheck, assertCleanConsole, loginViaAPI, selectMonthlyPass } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -26,18 +26,6 @@ async function openCardByLastName(page: Page, lastName: string) {
     await page.keyboard.type(lastName, { delay: 30 });
     await page.locator('[data-testid="search-result"]').first().click();
     await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
-}
-
-// Playwright's selectOption doesn't accept regex for `label`. Look up the
-// option's value attribute by its visible text, then select by value.
-async function selectMonthlyPass(page: Page) {
-    const value = await page
-        .locator('[data-testid="charge-service"] option')
-        .filter({ hasText: 'Monthly pass' })
-        .first()
-        .getAttribute('value');
-    if (!value) throw new Error('Monthly pass option not found');
-    await page.locator('[data-testid="charge-service"]').selectOption(value);
 }
 
 test.describe('Card action form — unified Charge / Top-up / Sell pass', () => {
@@ -125,6 +113,47 @@ test.describe('Card action form — unified Charge / Top-up / Sell pass', () => 
         const body = JSON.parse(req.postData() ?? '{}');
         expect(body.amount).toBe(3.5);
         expect(typeof body.service_id).toBe('number');
+
+        assertCleanConsole(msgs);
+    });
+
+    test('Charge with empty amount surfaces inline error (no silent no-op)', async ({ page }) => {
+        const msgs = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const { lastName } = await activateUniqueCard(token, 50.0);
+        await page.goto('/staff');
+        await openCardByLastName(page, lastName);
+
+        // Pick a non-pass service so default_price auto-fills, then clear it.
+        await page.locator('[data-testid="charge-service"]').selectOption({ index: 1 });
+        const amountInput = page.locator('[data-testid="charge-amount"]');
+        await amountInput.focus();
+        await amountInput.press('ControlOrMeta+a');
+        await amountInput.press('Delete');
+        await expect(amountInput).toHaveValue('');
+
+        await page.locator('[data-testid="charge-submit"]').click();
+
+        // Inline error appears; credit unchanged.
+        await expect(page.locator('[data-testid="action-panel"] .alert-error')).toBeVisible();
+        await expect(page.locator('[data-testid="card-credit"]')).toContainText('50.00');
+
+        assertCleanConsole(msgs);
+    });
+
+    test('Charge with amount=0 surfaces inline error (no silent no-op)', async ({ page }) => {
+        const msgs = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const { lastName } = await activateUniqueCard(token, 50.0);
+        await page.goto('/staff');
+        await openCardByLastName(page, lastName);
+
+        await page.locator('[data-testid="charge-service"]').selectOption({ index: 1 });
+        await page.locator('[data-testid="charge-amount"]').fill('0');
+        await page.locator('[data-testid="charge-submit"]').click();
+
+        await expect(page.locator('[data-testid="action-panel"] .alert-error')).toBeVisible();
+        await expect(page.locator('[data-testid="card-credit"]')).toContainText('50.00');
 
         assertCleanConsole(msgs);
     });

@@ -604,7 +604,7 @@ select.form-control {
 }
 
 .badge--pass      { background: color-mix(in srgb, var(--pass) 16%, var(--surface)); color: var(--pass); }
-.badge--booked    { background: rgba(96, 165, 250, 0.14); color: var(--info); }
+.badge--booked    { background: color-mix(in srgb, var(--info) 14%, var(--surface)); color: var(--info); }
 .badge--full      { background: rgba(248, 113, 113, 0.14); color: var(--danger); }
 .badge--cancelled { background: var(--surface-3); color: var(--text-dim); }
 .badge--voided    { background: rgba(248, 113, 113, 0.14); color: var(--danger); }

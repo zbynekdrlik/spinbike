@@ -177,6 +177,7 @@ pub fn ActionForm(
             });
         } else {
             if amount <= 0.0 {
+                set_err.set(i18n::t(lang.get_untracked(), "price_required").to_string());
                 return;
             }
             set_loading.set(true);

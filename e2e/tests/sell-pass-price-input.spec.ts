@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
+import { setupConsoleCheck, assertCleanConsole, loginViaAPI, selectMonthlyPass } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -26,16 +26,6 @@ async function openCardByLastName(page: Page, lastName: string) {
     await page.keyboard.type(lastName, { delay: 30 });
     await page.locator('[data-testid="search-result"]').first().click();
     await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
-}
-
-async function selectMonthlyPass(page: Page) {
-    const value = await page
-        .locator('[data-testid="charge-service"] option')
-        .filter({ hasText: 'Monthly pass' })
-        .first()
-        .getAttribute('value');
-    if (!value) throw new Error('Monthly pass option not found');
-    await page.locator('[data-testid="charge-service"]').selectOption(value);
 }
 
 test.describe('Sell pass — unified form price input', () => {
