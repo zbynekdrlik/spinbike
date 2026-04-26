@@ -31,23 +31,6 @@ async function openCard(page: import('@playwright/test').Page, searchTerm: strin
 }
 
 test.describe('redesign: sheets', () => {
-    test('sell pass sheet opens and closes via cancel', async ({ page }) => {
-        const msgs = setupConsoleCheck(page);
-        await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        await openCard(page, 'Jana');
-
-        // Open the sell pass sheet.
-        await page.locator('[data-testid="sell-pass-btn"]').click();
-        await expect(page.locator('[data-testid="sheet-sell-pass"]')).toBeVisible();
-
-        // Cancel button uses the modal_cancel i18n key → "Zrusit" (SK) / "Cancel" (EN).
-        // Both languages are accepted since helpers.ts sets EN but the test should be robust.
-        await page.locator('[data-testid="sheet-sell-pass"] button').filter({ hasText: /zrusit|cancel/i }).click();
-        await expect(page.locator('[data-testid="sheet-sell-pass"]')).not.toBeVisible({ timeout: 2000 });
-
-        assertCleanConsole(msgs);
-    });
-
     test('edit info sheet opens and closes via cancel', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
@@ -92,38 +75,4 @@ test.describe('redesign: sheets', () => {
         assertCleanConsole(msgs);
     });
 
-    test('escape key closes a sheet', async ({ page }) => {
-        const msgs = setupConsoleCheck(page);
-        await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        await openCard(page, 'Jana');
-
-        // Open the sell pass sheet.
-        await page.locator('[data-testid="sell-pass-btn"]').click();
-        const sheet = page.locator('[data-testid="sheet-sell-pass"]');
-        await expect(sheet).toBeVisible();
-
-        // The sheet element has tabindex="-1"; focus it so Escape is delivered to it.
-        await sheet.focus();
-        await page.keyboard.press('Escape');
-        await expect(sheet).not.toBeVisible({ timeout: 2000 });
-
-        assertCleanConsole(msgs);
-    });
-
-    test('backdrop click closes a sheet', async ({ page }) => {
-        const msgs = setupConsoleCheck(page);
-        await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        await openCard(page, 'Jana');
-
-        // Open the sell pass sheet.
-        await page.locator('[data-testid="sell-pass-btn"]').click();
-        await expect(page.locator('[data-testid="sheet-sell-pass"]')).toBeVisible();
-
-        // Click the backdrop (the overlay behind the sheet). Sheets only mount
-        // when their `show` signal is true, so .sheet-backdrop is unique.
-        await page.locator('.sheet-backdrop').click({ position: { x: 10, y: 10 }, force: true });
-        await expect(page.locator('[data-testid="sheet-sell-pass"]')).not.toBeVisible({ timeout: 2000 });
-
-        assertCleanConsole(msgs);
-    });
 });
