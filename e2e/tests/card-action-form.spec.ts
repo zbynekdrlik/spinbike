@@ -28,6 +28,18 @@ async function openCardByLastName(page: Page, lastName: string) {
     await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
 }
 
+// Playwright's selectOption doesn't accept regex for `label`. Look up the
+// option's value attribute by its visible text, then select by value.
+async function selectMonthlyPass(page: Page) {
+    const value = await page
+        .locator('[data-testid="charge-service"] option')
+        .filter({ hasText: 'Monthly pass' })
+        .first()
+        .getAttribute('value');
+    if (!value) throw new Error('Monthly pass option not found');
+    await page.locator('[data-testid="charge-service"]').selectOption(value);
+}
+
 test.describe('Card action form — unified Charge / Top-up / Sell pass', () => {
     test('default state: service options include Monthly pass; Charge label is not Sell pass', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
@@ -54,7 +66,7 @@ test.describe('Card action form — unified Charge / Top-up / Sell pass', () => 
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
-        await page.locator('[data-testid="charge-service"]').selectOption({ label: /Monthly pass/ });
+        await selectMonthlyPass(page);
         await expect(page.locator('[data-testid="valid-until-row"]')).toBeVisible();
         const flipped = (await page.locator('[data-testid="charge-submit"]').textContent()) ?? '';
         expect(/predat|sell/i.test(flipped)).toBe(true);
@@ -79,7 +91,7 @@ test.describe('Card action form — unified Charge / Top-up / Sell pass', () => 
             req.url().endsWith('/api/payments/sell-pass') && req.method() === 'POST'
         );
 
-        await page.locator('[data-testid="charge-service"]').selectOption({ label: /Monthly pass/ });
+        await selectMonthlyPass(page);
         // Amount auto-filled from default_price (35.00). Accept it.
         await page.locator('[data-testid="charge-submit"]').click();
 
@@ -129,7 +141,7 @@ test.describe('Card action form — unified Charge / Top-up / Sell pass', () => 
         );
 
         // Even if a service is selected (including Monthly pass), Top up must ignore it.
-        await page.locator('[data-testid="charge-service"]').selectOption({ label: /Monthly pass/ });
+        await selectMonthlyPass(page);
         await page.locator('[data-testid="charge-amount"]').fill('20');
         await page.locator('[data-testid="topup-submit"]').click();
 

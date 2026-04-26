@@ -39,7 +39,13 @@ test.describe('Monthly pass — sell via dropdown, banner, log-visit', () => {
         await expect(page.locator('[data-testid="card-credit"]')).toContainText('80.00');
 
         // Select Monthly pass from the unified service dropdown.
-        await page.locator('[data-testid="charge-service"]').selectOption({ label: /Monthly pass/ });
+        const mpValue = await page
+            .locator('[data-testid="charge-service"] option')
+            .filter({ hasText: 'Monthly pass' })
+            .first()
+            .getAttribute('value');
+        if (!mpValue) throw new Error('Monthly pass option not found');
+        await page.locator('[data-testid="charge-service"]').selectOption(mpValue);
         // Default amount auto-filled with 35.00; default valid_until is today + 30. Accept both.
         await page.locator('[data-testid="charge-submit"]').click();
 

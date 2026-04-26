@@ -28,6 +28,16 @@ async function openCardByLastName(page: Page, lastName: string) {
     await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
 }
 
+async function selectMonthlyPass(page: Page) {
+    const value = await page
+        .locator('[data-testid="charge-service"] option')
+        .filter({ hasText: 'Monthly pass' })
+        .first()
+        .getAttribute('value');
+    if (!value) throw new Error('Monthly pass option not found');
+    await page.locator('[data-testid="charge-service"]').selectOption(value);
+}
+
 test.describe('Sell pass — unified form price input', () => {
     test('typing a custom price char-by-char survives and is charged', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
@@ -36,7 +46,7 @@ test.describe('Sell pass — unified form price input', () => {
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
-        await page.locator('[data-testid="charge-service"]').selectOption({ label: /Monthly pass/ });
+        await selectMonthlyPass(page);
         // Amount auto-filled to 35.00; clear and type 40 char-by-char.
         const amountInput = page.locator('[data-testid="charge-amount"]');
         await expect(amountInput).toHaveValue('35.00');
@@ -61,7 +71,7 @@ test.describe('Sell pass — unified form price input', () => {
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
-        await page.locator('[data-testid="charge-service"]').selectOption({ label: /Monthly pass/ });
+        await selectMonthlyPass(page);
         // Clear the auto-filled price.
         const amountInput = page.locator('[data-testid="charge-amount"]');
         await amountInput.focus();
@@ -86,7 +96,7 @@ test.describe('Sell pass — unified form price input', () => {
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
-        await page.locator('[data-testid="charge-service"]').selectOption({ label: /Monthly pass/ });
+        await selectMonthlyPass(page);
         const amountInput = page.locator('[data-testid="charge-amount"]');
         await amountInput.focus();
         await amountInput.press('ControlOrMeta+a');
