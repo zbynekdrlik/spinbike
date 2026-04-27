@@ -64,21 +64,22 @@ export async function loginViaUI(page: Page, email: string, password: string) {
 }
 
 /**
- * Select the "Monthly pass" option in the unified card-action service dropdown.
+ * Select the Monthly pass option in the unified card-action service dropdown.
  *
- * Playwright's `selectOption({ label: /regex/ })` does NOT accept regex — it
- * fails with "expected string, got object". The option label is built as
- * `${name} (${default_price:.2} €)` so the price varies between environments;
- * looking up the option by visible text and selecting by its `value` attribute
- * is the robust path.
+ * The option exposes `data-kind="monthly_pass"` so we don't need to match the
+ * visible label, which varies by Lang and includes the price.
+ *
+ * History: previous incarnation used `selectOption({ label: /regex/ })` (fails
+ * — Playwright wants a string) and then a `filter({ hasText: 'Monthly pass' })`
+ * lookup (fragile to language switches and renames). The data-kind attribute
+ * is the robust handle.
  */
 export async function selectMonthlyPass(page: Page): Promise<void> {
     const value = await page
-        .locator('[data-testid="charge-service"] option')
-        .filter({ hasText: 'Monthly pass' })
+        .locator('[data-testid="charge-service"] option[data-kind="monthly_pass"]')
         .first()
         .getAttribute('value');
-    if (!value) throw new Error('Monthly pass option not found in [data-testid="charge-service"]');
+    if (!value) throw new Error('Monthly pass option not found (data-kind="monthly_pass")');
     await page.locator('[data-testid="charge-service"]').selectOption(value);
 }
 
