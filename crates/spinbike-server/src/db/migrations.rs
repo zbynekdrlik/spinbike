@@ -28,6 +28,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         V7_TRANSACTIONS_SOFT_DELETE,
     ),
     (8, "services_dual_lang_kind", V8_SERVICES_DUAL_LANG_KIND),
+    (
+        9,
+        "transactions: legacy_backfilled marker",
+        V9_TRANSACTIONS_LEGACY_BACKFILL_MARKER,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -249,6 +254,10 @@ INSERT OR IGNORE INTO services (kind, name_sk, name_en, default_price, active)
 VALUES ('generic', 'Občerstvenie',     'Refreshments',        0.0, 1),
        ('generic', 'Doplnky výživy',   'Supplements',         0.0, 1),
        ('generic', 'Aktivácia karty',  'Card activation fee', 0.0, 1);
+"#;
+
+const V9_TRANSACTIONS_LEGACY_BACKFILL_MARKER: &str = r#"
+ALTER TABLE transactions ADD COLUMN legacy_backfilled INTEGER NOT NULL DEFAULT 0;
 "#;
 
 #[cfg(test)]
@@ -625,5 +634,24 @@ mod tests {
             still_valid,
             "transactions.service_id ref must still resolve after table rebuild"
         );
+    }
+
+    #[tokio::test]
+    async fn v9_transactions_have_legacy_backfilled_column() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // PRAGMA table_info returns: cid, name, type, notnull, dflt_value, pk
+        let cols: Vec<(i64, String, String, i64, Option<String>, i64)> =
+            sqlx::query_as("PRAGMA table_info(transactions)")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let lb = cols
+            .iter()
+            .find(|c| c.1 == "legacy_backfilled")
+            .expect("legacy_backfilled column missing on transactions");
+        assert_eq!(lb.2.to_uppercase(), "INTEGER");
+        assert_eq!(lb.3, 1, "legacy_backfilled must be NOT NULL");
     }
 }
