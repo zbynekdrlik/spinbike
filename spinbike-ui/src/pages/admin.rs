@@ -29,7 +29,9 @@ struct InstructorRow {
 #[derive(Debug, Clone, serde::Deserialize)]
 struct ServiceRow {
     id: i64,
-    name: String,
+    kind: String,
+    name_sk: String,
+    name_en: String,
     default_price: f64,
     active: i64,
 }
@@ -436,8 +438,10 @@ fn ServicesTab() -> impl IntoView {
     let (loading, set_loading) = signal(true);
     let (ver, set_ver) = signal(0u32);
     let (msg, set_msg) = signal(String::new());
-    let name_ref = NodeRef::<leptos::html::Input>::new();
+    let name_sk_ref = NodeRef::<leptos::html::Input>::new();
+    let name_en_ref = NodeRef::<leptos::html::Input>::new();
     let price_ref = NodeRef::<leptos::html::Input>::new();
+    let kind_ref = NodeRef::<leptos::html::Select>::new();
 
     Effect::new(move || {
         let _ = ver.get();
@@ -451,9 +455,19 @@ fn ServicesTab() -> impl IntoView {
         });
     });
 
+    // Derived: does a monthly_pass row already exist?
+    let pass_already_exists = move || items.get().iter().any(|s| s.kind == "monthly_pass");
+
     let on_create = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
-        let name = name_ref
+        let name_sk = name_sk_ref
+            .get()
+            .map(|el| {
+                let el: &HtmlInputElement = &el;
+                el.value()
+            })
+            .unwrap_or_default();
+        let name_en = name_en_ref
             .get()
             .map(|el| {
                 let el: &HtmlInputElement = &el;
@@ -467,21 +481,32 @@ fn ServicesTab() -> impl IntoView {
                 el.value()
             })
             .unwrap_or_default();
+        let kind = kind_ref
+            .get()
+            .map(|el| {
+                let el: &web_sys::HtmlSelectElement = &el;
+                el.value()
+            })
+            .unwrap_or_else(|| "generic".to_string());
         let price = parse_money(&price_str).unwrap_or(0.0);
-        if name.is_empty() {
+        if name_sk.trim().is_empty() || name_en.trim().is_empty() {
             return;
         }
         spawn_local(async move {
             #[derive(serde::Serialize)]
             struct Req {
-                name: String,
+                name_sk: String,
+                name_en: String,
                 default_price: f64,
+                kind: String,
             }
             match api::post::<Req, ServiceRow>(
                 "/api/admin/services",
                 &Req {
-                    name,
+                    name_sk,
+                    name_en,
                     default_price: price,
+                    kind,
                 },
             )
             .await
@@ -496,14 +521,27 @@ fn ServicesTab() -> impl IntoView {
         {move || { let m = msg.get(); if m.is_empty() { view! { <span></span> }.into_any() } else { view! { <div class="alert alert-info">{m}</div> }.into_any() } }}
         <form class="inline-form mb-2" on:submit=on_create>
             <div class="form-group">
-                <label>{move || i18n::t(lang.get(), "name")}</label>
-                <input type="text" class="form-control" node_ref=name_ref data-testid="service-name" required />
+                <label>{move || i18n::t(lang.get(), "service_name_sk")}</label>
+                <input type="text" class="form-control" node_ref=name_sk_ref data-testid="service-name-sk-input" required />
             </div>
             <div class="form-group">
-                <label>{move || i18n::t(lang.get(), "price_czk")}</label>
-                <input type="text" inputmode="decimal" autocomplete="off" class="form-control" node_ref=price_ref data-testid="service-price" required />
+                <label>{move || i18n::t(lang.get(), "service_name_en")}</label>
+                <input type="text" class="form-control" node_ref=name_en_ref data-testid="service-name-en-input" required />
             </div>
-            <button type="submit" class="btn btn--primary btn--compact">{move || i18n::t(lang.get(), "add_service")}</button>
+            <div class="form-group">
+                <label>{move || i18n::t(lang.get(), "price")}</label>
+                <input type="text" inputmode="decimal" autocomplete="off" class="form-control" node_ref=price_ref data-testid="service-price-input" required />
+            </div>
+            <div class="form-group">
+                <label>{move || i18n::t(lang.get(), "kind")}</label>
+                <select class="form-control" node_ref=kind_ref data-testid="service-kind-select">
+                    <option value="generic" selected>{move || i18n::t(lang.get(), "service_kind_generic")}</option>
+                    <option value="monthly_pass" prop:disabled=pass_already_exists>
+                        {move || i18n::t(lang.get(), "service_kind_monthly_pass")}
+                    </option>
+                </select>
+            </div>
+            <button type="submit" class="btn btn--primary btn--compact" data-testid="service-create-btn">{move || i18n::t(lang.get(), "add_service")}</button>
         </form>
 
         {move || {
@@ -513,16 +551,21 @@ fn ServicesTab() -> impl IntoView {
             let list = items.get();
             let rows: Vec<_> = list.iter().map(|s| {
                 let sid = s.id;
-                let name = s.name.clone();
-                let price = format!("{:.0}", s.default_price);
+                let kind = s.kind.clone();
+                let name_sk = s.name_sk.clone();
+                let name_en = s.name_en.clone();
+                let price = format!("{:.2}", s.default_price);
                 let is_active = s.active != 0;
                 let set_v = set_ver;
                 let set_m = set_msg;
                 let (editing, set_editing) = signal(false);
-                let edit_name_ref = NodeRef::<leptos::html::Input>::new();
+                let edit_name_sk_ref = NodeRef::<leptos::html::Input>::new();
+                let edit_name_en_ref = NodeRef::<leptos::html::Input>::new();
                 let edit_price_ref = NodeRef::<leptos::html::Input>::new();
-                let name_for_edit = s.name.clone();
+                let name_sk_for_edit = s.name_sk.clone();
+                let name_en_for_edit = s.name_en.clone();
                 let price_for_edit = s.default_price;
+                let kind_for_badge = s.kind.clone();
                 let on_toggle = move |_| {
                     let new_active = !is_active;
                     spawn_local(async move {
@@ -535,23 +578,39 @@ fn ServicesTab() -> impl IntoView {
                     });
                 };
                 let on_save = move |_| {
-                    let new_name = edit_name_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
+                    let new_name_sk = edit_name_sk_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
+                    let new_name_en = edit_name_en_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
                     let new_price = parse_money(
                         &edit_price_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default()
                     ).unwrap_or(0.0);
                     spawn_local(async move {
                         #[derive(serde::Serialize)]
-                        struct Req { name: Option<String>, default_price: Option<f64> }
-                        match api::put(&format!("/api/admin/services/{sid}"), &Req { name: Some(new_name), default_price: Some(new_price) }).await {
+                        struct Req {
+                            #[serde(skip_serializing_if = "Option::is_none")]
+                            name_sk: Option<String>,
+                            #[serde(skip_serializing_if = "Option::is_none")]
+                            name_en: Option<String>,
+                            #[serde(skip_serializing_if = "Option::is_none")]
+                            default_price: Option<f64>,
+                        }
+                        match api::put(&format!("/api/admin/services/{sid}"), &Req {
+                            name_sk: Some(new_name_sk),
+                            name_en: Some(new_name_en),
+                            default_price: Some(new_price),
+                        }).await {
                             Ok(_) => { set_editing.set(false); set_v.update(|v| *v += 1); }
                             Err(e) => set_m.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                         }
                     });
                 };
+                let kind_label_key = format!("service_kind_{kind_for_badge}");
+                let kind_class = format!("badge badge--{kind_for_badge}");
                 view! {
                     <tr>
                         <td>{sid}</td>
-                        <td>{name}</td>
+                        <td>{name_sk}</td>
+                        <td>{name_en}</td>
+                        <td><span class=kind_class>{move || i18n::t(lang.get(), &kind_label_key)}</span></td>
                         <td>{price}</td>
                         <td>{move || if is_active { i18n::t(lang.get(), "active") } else { i18n::t(lang.get(), "inactive") }}</td>
                         <td>
@@ -561,13 +620,16 @@ fn ServicesTab() -> impl IntoView {
                     </tr>
                     {move || {
                         if editing.get() {
-                            let nval = name_for_edit.clone();
+                            let sk_val = name_sk_for_edit.clone();
+                            let en_val = name_en_for_edit.clone();
                             view! {
                                 <tr>
-                                    <td colspan="5">
-                                        <div class="inline-form" style="display:flex;gap:8px;align-items:center;padding:4px 0">
-                                            <label>{i18n::t(lang.get(), "name")}</label>
-                                            <input type="text" class="form-control" style="width:auto" node_ref=edit_name_ref value=nval />
+                                    <td colspan="7">
+                                        <div class="inline-form" style="display:flex;gap:8px;align-items:center;padding:4px 0;flex-wrap:wrap">
+                                            <label>{i18n::t(lang.get(), "service_name_sk")}</label>
+                                            <input type="text" class="form-control" style="width:auto" node_ref=edit_name_sk_ref value=sk_val />
+                                            <label>{i18n::t(lang.get(), "service_name_en")}</label>
+                                            <input type="text" class="form-control" style="width:auto" node_ref=edit_name_en_ref value=en_val />
                                             <label>{i18n::t(lang.get(), "price")}</label>
                                             <input type="text" inputmode="decimal" autocomplete="off" class="form-control" style="width:80px" node_ref=edit_price_ref value=format!("{price_for_edit:.2}") />
                                             <button class="btn btn--primary btn--compact" on:click=on_save>{i18n::t(lang.get(), "save")}</button>
