@@ -27,6 +27,7 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "transactions: soft-delete column",
         V7_TRANSACTIONS_SOFT_DELETE,
     ),
+    (8, "services_dual_lang_kind", V8_SERVICES_DUAL_LANG_KIND),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -203,6 +204,43 @@ WHERE NOT EXISTS (SELECT 1 FROM class_templates WHERE weekday=3 AND start_time='
 
 const V7_TRANSACTIONS_SOFT_DELETE: &str = r#"
 ALTER TABLE transactions ADD COLUMN deleted_at TEXT;
+"#;
+
+const V8_SERVICES_DUAL_LANG_KIND: &str = r#"
+CREATE TABLE services_new (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind          TEXT    NOT NULL DEFAULT 'generic'
+                  CHECK (kind IN ('generic', 'monthly_pass')),
+    name_sk       TEXT    NOT NULL,
+    name_en       TEXT    NOT NULL,
+    default_price REAL    NOT NULL,
+    active        INTEGER NOT NULL DEFAULT 1
+);
+
+INSERT INTO services_new (id, kind, name_sk, name_en, default_price, active)
+SELECT id,
+       CASE WHEN name = 'Monthly pass' THEN 'monthly_pass' ELSE 'generic' END,
+       CASE name WHEN 'Spinning' THEN 'Spinning'
+                 WHEN 'Fitness' THEN 'Fitness'
+                 WHEN 'Monthly pass' THEN 'Mesačný preplatok'
+                 ELSE name END,
+       CASE name WHEN 'Spinning' THEN 'Spinning'
+                 WHEN 'Fitness' THEN 'Fitness'
+                 WHEN 'Monthly pass' THEN 'Monthly pass'
+                 ELSE name END,
+       default_price, active
+FROM services;
+
+DROP TABLE services;
+ALTER TABLE services_new RENAME TO services;
+
+CREATE UNIQUE INDEX idx_services_monthly_pass
+    ON services(kind) WHERE kind = 'monthly_pass';
+
+INSERT OR IGNORE INTO services (kind, name_sk, name_en, default_price, active)
+VALUES ('generic', 'Občerstvenie',     'Refreshments',        0.0, 1),
+       ('generic', 'Doplnky výživy',   'Supplements',         0.0, 1),
+       ('generic', 'Aktivácia karty',  'Card activation fee', 0.0, 1);
 "#;
 
 #[cfg(test)]
@@ -385,5 +423,90 @@ mod tests {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         run_migrations(&pool).await.unwrap(); // second run must not error
+    }
+
+    #[tokio::test]
+    async fn v8_services_have_dual_lang_and_kind() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // Schema: name_sk, name_en, kind, default_price, active (no `name`).
+        let cols: Vec<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('services')")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        let names: Vec<&str> = cols.iter().map(|(n,)| n.as_str()).collect();
+        for col in [
+            "id",
+            "kind",
+            "name_sk",
+            "name_en",
+            "default_price",
+            "active",
+        ] {
+            assert!(
+                names.contains(&col),
+                "missing column {col} in services, got {names:?}"
+            );
+        }
+        assert!(
+            !names.contains(&"name"),
+            "old `name` column must be dropped"
+        );
+
+        // Existing rows preserved with correct dual-lang
+        let rows: Vec<(i64, String, String, String)> =
+            sqlx::query_as("SELECT id, kind, name_sk, name_en FROM services ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let by_kind: std::collections::HashMap<&str, &(i64, String, String, String)> =
+            rows.iter().map(|r| (r.1.as_str(), r)).collect();
+        let pass = by_kind
+            .get("monthly_pass")
+            .expect("monthly_pass row missing");
+        assert_eq!(pass.2, "Mesačný preplatok");
+        assert_eq!(pass.3, "Monthly pass");
+
+        // Three new generic rows seeded
+        for n_sk in ["Občerstvenie", "Doplnky výživy", "Aktivácia karty"] {
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE name_sk = ?")
+                .bind(n_sk)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(count, 1, "service '{n_sk}' should be seeded once");
+        }
+    }
+
+    #[tokio::test]
+    async fn v8_only_one_monthly_pass_allowed() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let res = sqlx::query(
+            "INSERT INTO services (kind, name_sk, name_en, default_price)
+             VALUES ('monthly_pass', 'Druhý preplatok', 'Second pass', 35.0)",
+        )
+        .execute(&pool)
+        .await;
+        assert!(
+            res.is_err(),
+            "partial unique index on kind='monthly_pass' must reject duplicates"
+        );
+    }
+
+    #[tokio::test]
+    async fn v8_kind_check_constraint_rejects_unknown() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let res = sqlx::query(
+            "INSERT INTO services (kind, name_sk, name_en, default_price)
+             VALUES ('foobar', 'X', 'Y', 1.0)",
+        )
+        .execute(&pool)
+        .await;
+        assert!(res.is_err(), "kind CHECK constraint must reject 'foobar'");
     }
 }
