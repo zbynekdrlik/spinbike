@@ -508,13 +508,13 @@ async fn create_service(
         // Partial unique index on kind='monthly_pass' surfaces here. Use the
         // sqlx-native unique-violation detector rather than string-matching
         // the error message so we're robust to SQLite locale / version drift.
-        if let sqlx::Error::Database(db_err) = &e {
-            if db_err.is_unique_violation() {
-                return (
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({"error": "a monthly_pass service already exists"})),
-                );
-            }
+        if let sqlx::Error::Database(db_err) = &e
+            && db_err.is_unique_violation()
+        {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": "a monthly_pass service already exists"})),
+            );
         }
         internal_error(e)
     })?;
