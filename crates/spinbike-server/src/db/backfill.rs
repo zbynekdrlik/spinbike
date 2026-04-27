@@ -12,6 +12,13 @@ use anyhow::{Context, Result, bail};
 use sqlx::SqlitePool;
 use tracing::{info, warn};
 
+/// Rows per intermediate `tx.commit()` during the backfill loop. SQLite is
+/// single-writer; committing periodically releases the writer lock so
+/// concurrent staff actions don't queue behind a multi-minute transaction.
+/// 1000 keeps each commit well under a second on prod hardware while
+/// limiting commit overhead to ~90 batches across the full ~87K legacy rows.
+const BACKFILL_BATCH_SIZE: u32 = 1000;
+
 #[derive(Debug, Default)]
 pub struct BackfillReport {
     pub matched: u32,
@@ -19,6 +26,10 @@ pub struct BackfillReport {
     pub unmatched: u32,
     pub orphan_card: u32,
     pub unknown_service: u32,
+    /// Legacy rows whose date column couldn't be parsed as
+    /// `MM/DD/YY HH:MM:SS`. Distinct from `unmatched` so the operator can
+    /// tell "format quirk" from "no prod row matched".
+    pub malformed_date: u32,
     pub ambiguous: u32,
     pub per_service: HashMap<String, ServiceCounts>,
 }
@@ -31,6 +42,20 @@ pub struct ServiceCounts {
     pub ambiguous: u32,
 }
 
+/// One parsed legacy `Data` row, ready for `apply_legacy_row` to dispatch.
+/// Owning struct so callers (real and test) can assemble fields without
+/// juggling 5+ borrows; lifetimes stay simple.
+#[derive(Debug, Clone)]
+pub(crate) struct LegacyRow {
+    pub(crate) card_id: String,
+    pub(crate) action: String,
+    pub(crate) service: String,
+    /// Raw legacy date string (`MM/DD/YY HH:MM:SS`). Converted to ISO
+    /// before the SQL match.
+    pub(crate) date: String,
+    pub(crate) amount_eur: f64,
+}
+
 /// True if the legacy action represents a transaction that had a service
 /// in the old data model. Top-ups, activations, and blocks legitimately
 /// have no service and must be skipped during backfill.
@@ -41,6 +66,11 @@ pub(crate) fn legacy_action_has_service(action: &str) -> bool {
     )
 }
 
+/// Spawn `mdb-export <table>` and return its stdout as a String. Pure I/O
+/// shim around an external binary — testing every mutation here would
+/// require a real .mdb fixture and mdbtools installed in the test
+/// environment. Excluded from mutation testing on purpose.
+#[mutants::skip]
 fn export_table(mdb_path: &Path, table: &str) -> Result<String> {
     let output = Command::new("mdb-export")
         .arg(mdb_path)
@@ -90,28 +120,24 @@ pub fn map_legacy_service_name(name: &str) -> Option<&'static str> {
 /// Apply backfill logic for one parsed legacy `Data` row.
 ///
 /// Updates `report` according to the row's outcome (orphan card, unknown
-/// service, matched, ambiguous, already_set, unmatched). Pulled out of `run()`
-/// so it can be exercised by unit tests without invoking `mdb-export`.
-#[allow(clippy::too_many_arguments)]
+/// service, matched, ambiguous, already_set, unmatched, malformed_date).
+/// Pulled out of `run()` so it can be exercised by unit tests without
+/// invoking `mdb-export`.
 pub(crate) async fn apply_legacy_row(
     tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
     service_ids: &HashMap<String, i64>,
     legacy_card_to_barcode: &HashMap<String, String>,
-    legacy_card_id: &str,
-    action: &str,
-    legacy_service: &str,
-    date: &str,
-    amount_eur: f64,
+    row: &LegacyRow,
     report: &mut BackfillReport,
 ) -> Result<()> {
-    if !legacy_action_has_service(action) {
+    if !legacy_action_has_service(&row.action) {
         return Ok(());
     }
-    if legacy_service.is_empty() {
+    if row.service.is_empty() {
         return Ok(());
     }
 
-    let barcode = match legacy_card_to_barcode.get(legacy_card_id) {
+    let barcode = match legacy_card_to_barcode.get(&row.card_id) {
         Some(bc) => bc,
         None => {
             report.orphan_card += 1;
@@ -119,12 +145,13 @@ pub(crate) async fn apply_legacy_row(
         }
     };
 
-    let new_name = match map_legacy_service_name(legacy_service) {
+    let new_name = match map_legacy_service_name(&row.service) {
         Some(n) => n,
         None => {
             warn!(
-                "unknown legacy service '{legacy_service}' on row card={legacy_card_id} \
-                 (will be skipped — extend map_legacy_service_name if this should be backfilled)"
+                "unknown legacy service '{}' on row card={} \
+                 (will be skipped — extend map_legacy_service_name if this should be backfilled)",
+                row.service, row.card_id
             );
             report.unknown_service += 1;
             return Ok(());
@@ -134,8 +161,9 @@ pub(crate) async fn apply_legacy_row(
         Some(id) => *id,
         None => {
             warn!(
-                "target DB has no service named '{new_name}' (legacy '{legacy_service}'); \
-                 run V8/V9 migrations first"
+                "target DB has no service named '{new_name}' (legacy '{}'); \
+                 run V8/V9 migrations first",
+                row.service
             );
             report.unknown_service += 1;
             return Ok(());
@@ -157,17 +185,17 @@ pub(crate) async fn apply_legacy_row(
     // The `service_id IS NULL` guard ensures we only touch imported rows,
     // so `t.amount` here is always the legacy-positive value and we
     // compare with `t.amount - legacy_amount`.
-    let iso_date = match legacy_date_to_iso(date) {
+    let iso_date = match legacy_date_to_iso(&row.date) {
         Some(s) => s,
         None => {
-            // Unparsable legacy timestamp — count as unmatched per service
-            // bucket so the operator can investigate.
+            // Unparsable legacy timestamp — distinct from "no prod row
+            // matched" so the operator can tell format-quirk apart from
+            // missing-data when reviewing the summary.
             warn!(
-                "unparsable legacy date '{date}' on row card={legacy_card_id} service='{legacy_service}'"
+                "unparsable legacy date '{}' on row card={} service='{}'",
+                row.date, row.card_id, row.service
             );
-            let bucket = report.per_service.entry(new_name.to_string()).or_default();
-            report.unmatched += 1;
-            bucket.unmatched += 1;
+            report.malformed_date += 1;
             return Ok(());
         }
     };
@@ -188,7 +216,7 @@ pub(crate) async fn apply_legacy_row(
     .bind(svc_id)
     .bind(barcode)
     .bind(&iso_date)
-    .bind(amount_eur)
+    .bind(row.amount_eur)
     .fetch_all(&mut **tx)
     .await
     .context("backfill UPDATE failed")?;
@@ -208,7 +236,7 @@ pub(crate) async fn apply_legacy_row(
             )
             .bind(barcode)
             .bind(&iso_date)
-            .bind(amount_eur)
+            .bind(row.amount_eur)
             .fetch_optional(&mut **tx)
             .await
             .context("ambiguity probe failed")?;
@@ -230,8 +258,10 @@ pub(crate) async fn apply_legacy_row(
             report.ambiguous += 1;
             bucket.ambiguous += 1;
             warn!(
-                "ambiguous: legacy row card={legacy_card_id} date={date} amount={amount_eur} \
-                 matched {n} prod rows: {:?}",
+                "ambiguous: legacy row card={} date={} amount={} matched {n} prod rows: {:?}",
+                row.card_id,
+                row.date,
+                row.amount_eur,
                 updated_ids.iter().map(|(i,)| *i).collect::<Vec<_>>()
             );
         }
@@ -244,6 +274,13 @@ pub(crate) async fn apply_legacy_row(
 /// Idempotent: only updates rows where `service_id IS NULL`. Sets
 /// `legacy_backfilled = 1` alongside `service_id` so a targeted rollback
 /// is possible.
+///
+/// The per-row decision logic lives in `apply_legacy_row` (mutation-tested
+/// independently). This function is the orchestration shell — file I/O,
+/// CSV iteration, batched commits — and depends on `mdb-export` being
+/// installed; mutating it would require an end-to-end .mdb harness rather
+/// than meaningful unit-level coverage. Excluded from mutation testing.
+#[mutants::skip]
 pub async fn run(pool: &SqlitePool, mdb_path: &Path) -> Result<BackfillReport> {
     info!("Loading services from target DB...");
     let service_ids: HashMap<String, i64> =
@@ -277,38 +314,57 @@ pub async fn run(pool: &SqlitePool, mdb_path: &Path) -> Result<BackfillReport> {
 
     let mut report = BackfillReport::default();
 
-    // Wrap the entire batch in one transaction. Two reasons:
-    //   1. Atomicity: a half-run (process killed) leaves the DB untouched;
-    //      a re-run starts from a clean slate.
-    //   2. Performance: SQLite WAL otherwise issues one fsync per row UPDATE.
-    //      On thousands of legacy rows this is orders of magnitude slower
-    //      than a single batched commit.
+    // Batch row UPDATEs into BACKFILL_BATCH_SIZE-row transactions instead of
+    // one big tx for the whole run. SQLite is single-writer, and a single
+    // ~3-minute tx would queue all concurrent staff actions (charges,
+    // top-ups, sell-pass) for the duration. Committing every N rows
+    // briefly releases the writer lock (sub-second window) so concurrent
+    // writes can interleave.
+    //
+    // Idempotency is preserved by the `service_id IS NULL` guard inside
+    // apply_legacy_row's UPDATE — a half-run that crashes mid-batch leaves
+    // committed rows in the right state, and a re-run skips them. A failure
+    // mid-batch rolls back only that batch, so the worst case is ~N rows
+    // re-processed on the next run.
     let mut tx = pool.begin().await.context("Failed to begin backfill tx")?;
+    let mut rows_in_batch = 0u32;
 
     for result in data_reader.records() {
         let r = result.context("parse legacy Data row")?;
         // Header: id_data,id_card,user,action,service,suma_SK,Date,EndDate,suma
-        let legacy_card_id = r.get(1).unwrap_or("").trim().to_string();
-        let action = r.get(3).unwrap_or("").trim();
-        let legacy_service = r.get(4).unwrap_or("").trim().trim_matches('"').to_string();
-        let date = r.get(6).unwrap_or("").trim().to_string();
-        let amount_eur: f64 = r.get(8).unwrap_or("0").trim().parse().unwrap_or(0.0);
+        let row = LegacyRow {
+            card_id: r.get(1).unwrap_or("").trim().to_string(),
+            action: r.get(3).unwrap_or("").trim().to_string(),
+            service: r.get(4).unwrap_or("").trim().trim_matches('"').to_string(),
+            date: r.get(6).unwrap_or("").trim().to_string(),
+            amount_eur: r.get(8).unwrap_or("0").trim().parse().unwrap_or(0.0),
+        };
 
         apply_legacy_row(
             &mut tx,
             &service_ids,
             &legacy_card_to_barcode,
-            &legacy_card_id,
-            action,
-            &legacy_service,
-            &date,
-            amount_eur,
+            &row,
             &mut report,
         )
         .await?;
+
+        rows_in_batch += 1;
+        if rows_in_batch >= BACKFILL_BATCH_SIZE {
+            tx.commit()
+                .await
+                .context("Failed to commit backfill batch")?;
+            tx = pool
+                .begin()
+                .await
+                .context("Failed to begin next backfill batch")?;
+            rows_in_batch = 0;
+        }
     }
 
-    tx.commit().await.context("Failed to commit backfill tx")?;
+    tx.commit()
+        .await
+        .context("Failed to commit final backfill batch")?;
 
     info!("=== Backfill summary ===");
     let mut services: Vec<&String> = report.per_service.keys().collect();
@@ -321,13 +377,14 @@ pub async fn run(pool: &SqlitePool, mdb_path: &Path) -> Result<BackfillReport> {
         );
     }
     info!(
-        "  TOTAL: matched={} already-set={} unmatched={} ambiguous={} orphan_card={} unknown_service={}",
+        "  TOTAL: matched={} already-set={} unmatched={} ambiguous={} orphan_card={} unknown_service={} malformed_date={}",
         report.matched,
         report.already_set,
         report.unmatched,
         report.ambiguous,
         report.orphan_card,
-        report.unknown_service
+        report.unknown_service,
+        report.malformed_date
     );
 
     Ok(report)
@@ -592,6 +649,23 @@ mod tests {
         (svc, cards)
     }
 
+    /// Tiny constructor so each test can express its row as a one-liner.
+    fn legacy(
+        card_id: &str,
+        action: &str,
+        service: &str,
+        date: &str,
+        amount_eur: f64,
+    ) -> LegacyRow {
+        LegacyRow {
+            card_id: card_id.into(),
+            action: action.into(),
+            service: service.into(),
+            date: date.into(),
+            amount_eur,
+        }
+    }
+
     #[tokio::test]
     async fn apply_row_orphan_card_increments_only_orphan() {
         let pool = create_memory_pool().await.unwrap();
@@ -604,11 +678,8 @@ mod tests {
             &mut tx,
             &svc,
             &cards,
-            "9999", // not in cards map
-            "Debet",
-            "Doplnky Vyzivy",
-            "11/06/08 12:00:00",
-            1.66,
+            // 9999 is not in cards map
+            &legacy("9999", "Debet", "Doplnky Vyzivy", "11/06/08 12:00:00", 1.66),
             &mut report,
         )
         .await
@@ -621,6 +692,7 @@ mod tests {
         assert_eq!(report.unmatched, 0);
         assert_eq!(report.ambiguous, 0);
         assert_eq!(report.unknown_service, 0);
+        assert_eq!(report.malformed_date, 0);
     }
 
     #[tokio::test]
@@ -635,11 +707,8 @@ mod tests {
             &mut tx,
             &svc,
             &cards,
-            "100",
-            "Debet",
-            "Iont", // not in map_legacy_service_name
-            "11/06/08 12:00:00",
-            1.0,
+            // "Iont" is not in map_legacy_service_name
+            &legacy("100", "Debet", "Iont", "11/06/08 12:00:00", 1.0),
             &mut report,
         )
         .await
@@ -666,11 +735,7 @@ mod tests {
             &mut tx,
             &svc,
             &cards,
-            "100",
-            "Debet",
-            "Doplnky Vyzivy",
-            "11/06/08 12:00:00",
-            1.66,
+            &legacy("100", "Debet", "Doplnky Vyzivy", "11/06/08 12:00:00", 1.66),
             &mut report,
         )
         .await
@@ -694,11 +759,7 @@ mod tests {
             &mut tx,
             &svc,
             &cards,
-            "100",
-            "Novy kredit",
-            "",
-            "11/06/08 12:00:00",
-            10.0,
+            &legacy("100", "Novy kredit", "", "11/06/08 12:00:00", 10.0),
             &mut report,
         )
         .await
@@ -711,6 +772,7 @@ mod tests {
         assert_eq!(report.already_set, 0);
         assert_eq!(report.unmatched, 0);
         assert_eq!(report.ambiguous, 0);
+        assert_eq!(report.malformed_date, 0);
     }
 
     #[tokio::test]
@@ -726,11 +788,7 @@ mod tests {
             &mut tx,
             &svc,
             &cards,
-            "100",
-            "Debet",
-            "Doplnky Vyzivy",
-            "11/06/08 12:00:00",
-            1.66,
+            &legacy("100", "Debet", "Doplnky Vyzivy", "11/06/08 12:00:00", 1.66),
             &mut report,
         )
         .await
@@ -747,10 +805,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn apply_row_unparsable_date_increments_unmatched_per_service() {
-        // Unparsable legacy date -> unmatched += 1 + bucket.unmatched += 1
-        // (without the date branch ever issuing the UPDATE). Kills the
-        // mutation-testing survivors on the date-error increment lines.
+    async fn apply_row_unparsable_date_increments_malformed_date() {
+        // Unparsable legacy date -> malformed_date += 1 (NOT unmatched, so the
+        // operator can distinguish "format quirk" from "no prod row matched").
+        // The function returns before the UPDATE so per-service buckets are
+        // never touched on this branch.
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         let (svc, cards) = fixture_state(&pool).await;
@@ -761,29 +820,33 @@ mod tests {
             &mut tx,
             &svc,
             &cards,
-            "100",
-            "Debet",
-            "Doplnky Vyzivy",
-            "this is not a legacy date",
-            1.66,
+            &legacy(
+                "100",
+                "Debet",
+                "Doplnky Vyzivy",
+                "this is not a legacy date",
+                1.66,
+            ),
             &mut report,
         )
         .await
         .unwrap();
         tx.commit().await.unwrap();
 
-        assert_eq!(report.unmatched, 1, "unparsable date counts as unmatched");
+        assert_eq!(
+            report.malformed_date, 1,
+            "unparsable date increments malformed_date"
+        );
+        assert_eq!(report.unmatched, 0, "must NOT spill into unmatched");
         assert_eq!(report.matched, 0);
         assert_eq!(report.already_set, 0);
         assert_eq!(report.ambiguous, 0);
         assert_eq!(report.orphan_card, 0);
         assert_eq!(report.unknown_service, 0);
-        let bucket = report.per_service.get("Doplnky výživy").unwrap();
-        assert_eq!(
-            bucket.unmatched, 1,
-            "per-service unmatched also incremented"
+        assert!(
+            report.per_service.is_empty(),
+            "per-service buckets are not touched by the malformed_date branch"
         );
-        assert_eq!(bucket.matched, 0);
     }
 
     #[tokio::test]
@@ -807,11 +870,7 @@ mod tests {
             &mut tx,
             &svc,
             &cards,
-            "100",
-            "Debet",
-            "Doplnky Vyzivy",
-            "11/06/08 12:00:00",
-            1.66,
+            &legacy("100", "Debet", "Doplnky Vyzivy", "11/06/08 12:00:00", 1.66),
             &mut report,
         )
         .await
@@ -853,11 +912,7 @@ mod tests {
             &mut tx,
             &svc,
             &cards,
-            "100",
-            "Debet",
-            "Doplnky Vyzivy",
-            "11/06/08 12:00:00",
-            1.66,
+            &legacy("100", "Debet", "Doplnky Vyzivy", "11/06/08 12:00:00", 1.66),
             &mut report,
         )
         .await
@@ -895,11 +950,7 @@ mod tests {
             &mut tx,
             &svc,
             &cards,
-            "100",
-            "Debet",
-            "Doplnky Vyzivy",
-            "11/06/08 12:00:00",
-            1.66,
+            &legacy("100", "Debet", "Doplnky Vyzivy", "11/06/08 12:00:00", 1.66),
             &mut report,
         )
         .await

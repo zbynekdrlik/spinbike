@@ -82,23 +82,11 @@ fn export_table(mdb_path: &PathBuf, table: &str) -> Result<String> {
         .with_context(|| format!("mdb-export output for '{table}' is not valid UTF-8"))
 }
 
-/// Map legacy service names (Slovak, from MS Access `serviceTab`) to the
-/// `name_sk` value in the post-V8 services table. Used as the lookup key
-/// when resolving a transaction's service_id.
-///
-/// "Storno" is intentionally NOT mapped — those rows have action='storno'
-/// which already labels them. "Iont" had zero historical sales, so YAGNI.
-fn map_legacy_service_name(name: &str) -> Option<&'static str> {
-    match name.trim() {
-        "Casova karta" => Some("Mesačný preplatok"),
-        "Fitnes" => Some("Fitness"),
-        "Spinbike" => Some("Spinning"),
-        "Doplnky Vyzivy" => Some("Doplnky výživy"),
-        "Obcerstvenie" => Some("Občerstvenie"),
-        "AktivaciaKarty" => Some("Aktivácia karty"),
-        _ => None,
-    }
-}
+// Legacy service-name mapping is the single source of truth in
+// `db::backfill::map_legacy_service_name`. Importing it here keeps the
+// fresh-import path and the in-place backfill mode in lockstep — adding
+// or removing a legacy service requires ONE edit, not two.
+use spinbike_server::db::backfill::map_legacy_service_name;
 
 /// Parse legacy EndDate strings in `MM/DD/YY HH:MM:SS` format
 /// (e.g. "12/05/08 00:00:00") to a `NaiveDate`. Blank/unparsable → None.
@@ -416,13 +404,14 @@ async fn main() -> Result<()> {
             db::run_migrations(&pool).await?;
             let report = db::backfill::run(&pool, &mdb_path).await?;
             info!(
-                "Backfill done: matched={} already_set={} unmatched={} ambiguous={} orphan_card={} unknown_service={}",
+                "Backfill done: matched={} already_set={} unmatched={} ambiguous={} orphan_card={} unknown_service={} malformed_date={}",
                 report.matched,
                 report.already_set,
                 report.unmatched,
                 report.ambiguous,
                 report.orphan_card,
-                report.unknown_service
+                report.unknown_service,
+                report.malformed_date
             );
             Ok(())
         }

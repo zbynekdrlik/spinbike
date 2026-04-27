@@ -1,25 +1,9 @@
-# cargo-mutants exclusions: functions that can only be exercised end-to-end
-# via the actual mdb-export binary + a real .mdb fixture, neither of which is
-# available in unit tests.
+# cargo-mutants config.
 #
-# - db::backfill::export_table — thin wrapper around `Command::new("mdb-export")`
-#   that returns its stdout. Cannot be unit-tested without spawning the
-#   process; integration testing belongs in a system test.
-# - db::backfill::run — orchestration that loads service ids, walks the .mdb
-#   card + Data CSVs, and dispatches each row to apply_legacy_row. The
-#   per-row logic is thoroughly mutation-covered via apply_legacy_row's
-#   tests (orphan_card / unknown_service / matched / already_set / unmatched
-#   / ambiguous branches). The remaining loop body is glue: file I/O,
-#   csv-reader iteration, and the final summary log.
+# Function-level exclusions are now expressed as `#[mutants::skip]` on the
+# function itself (see `db::backfill::export_table` and
+# `db::backfill::run`) — that survives rename and is more discoverable
+# than display-string regexes.
 #
-# Mutating these functions therefore lands in the "no realistic unit test
-# would catch this" bucket — the test would be tautological (test that
-# mdb-export exists, or test that csv::Reader iterates rows). Excluded.
-
-exclude_re = [
-    "backfill\\.rs.*replace export_table",
-    "backfill\\.rs.*delete ! in export_table",
-    "backfill\\.rs.*replace run",
-    "backfill\\.rs.*replace &&.*in run",
-    "backfill\\.rs.*delete !.*in run",
-]
+# This file is reserved for project-wide exclusions that cannot be
+# expressed as attributes (e.g. exclude a whole binary). None at present.

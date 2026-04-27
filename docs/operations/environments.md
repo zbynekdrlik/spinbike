@@ -54,6 +54,30 @@ deploy loudly rather than poison post-deploy smoke tests.
 - Nightly at 03:00, `spinbike-sync-dev.timer` copies the prod DB over the dev
   DB so dev tests against realistic data.
 
+## Service catalog
+
+Services are managed via the admin UI (`/admin?tab=services`) and stored
+in the `services` table with dual-language names (`name_sk`, `name_en`)
+plus a stable `kind` enum (`generic` | `monthly_pass`). The `kind` is
+read-only after create — admin can rename either language label freely
+without breaking sell-pass / pass-banner detection.
+
+### Seeded categories
+
+V8 (2026-04-27) seeded three new generic services for snack / supplement /
+activation-fee sales: **Občerstvenie / Refreshments**, **Doplnky výživy /
+Supplements**, **Aktivácia karty / Card activation fee**. Their
+`default_price` is `0.0` by design — legacy data shows snack/supplement
+prices vary widely (€0.66 to €278), so there's no useful default. Staff
+types the actual price each time. Admin can set a per-service default via
+the services tab if a single price emerges.
+
+### Migration runbook
+
+For any new schema migration (V10+), see `docs/operations/migrations.md` —
+the foreign-key handling around table-rebuild migrations has gotchas worth
+reading before writing one.
+
 ## Inspecting service state
 
 ```bash
