@@ -67,8 +67,30 @@ pub struct CardInfo {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ServiceInfo {
     pub id: i64,
-    pub name: String,
+    /// Stable identifier: "generic" or "monthly_pass". Used to detect the
+    /// pass row regardless of its display name.
+    pub kind: String,
+    pub name_sk: String,
+    pub name_en: String,
     pub default_price: f64,
+    #[serde(default = "default_active")]
+    pub active: i64,
+}
+
+fn default_active() -> i64 {
+    1
+}
+
+impl ServiceInfo {
+    pub fn display_name(&self, lang: crate::i18n::Lang) -> &str {
+        match lang {
+            crate::i18n::Lang::Sk => &self.name_sk,
+            crate::i18n::Lang::En => &self.name_en,
+        }
+    }
+    pub fn is_monthly_pass(&self) -> bool {
+        self.kind == "monthly_pass"
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
