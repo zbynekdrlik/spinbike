@@ -140,7 +140,7 @@ pub fn TransactionsList(
             }).collect();
 
             view! {
-                <div class="group">
+                <div class="group" data-testid="transactions-list">
                     {rows}
                 </div>
             }.into_any()
