@@ -91,6 +91,13 @@ impl ServiceInfo {
     pub fn is_monthly_pass(&self) -> bool {
         self.kind == "monthly_pass"
     }
+    /// Class-attendance services — the only ones that make sense as a "Log
+    /// Visit" chip on the staff dashboard. V8 introduced sellable items
+    /// (Refreshments, Supplements, Card activation fee) that share `kind=generic`
+    /// with the class services but must NOT appear as visits.
+    pub fn is_class_visit(&self) -> bool {
+        matches!(self.name_en.as_str(), "Spinning" | "Fitness")
+    }
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
