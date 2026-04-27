@@ -69,13 +69,20 @@ fn export_table(mdb_path: &PathBuf, table: &str) -> Result<String> {
         .with_context(|| format!("mdb-export output for '{table}' is not valid UTF-8"))
 }
 
-/// Map legacy service names (Slovak, from MS Access `serviceTab`) to
-/// the service names seeded in the new system.
+/// Map legacy service names (Slovak, from MS Access `serviceTab`) to the
+/// `name_sk` value in the post-V8 services table. Used as the lookup key
+/// when resolving a transaction's service_id.
+///
+/// "Storno" is intentionally NOT mapped — those rows have action='storno'
+/// which already labels them. "Iont" had zero historical sales, so YAGNI.
 fn map_legacy_service_name(name: &str) -> Option<&'static str> {
     match name.trim() {
-        "Casova karta" => Some("Monthly pass"),
+        "Casova karta" => Some("Mesačný preplatok"),
         "Fitnes" => Some("Fitness"),
         "Spinbike" => Some("Spinning"),
+        "Doplnky Vyzivy" => Some("Doplnky výživy"),
+        "Obcerstvenie" => Some("Občerstvenie"),
+        "AktivaciaKarty" => Some("Aktivácia karty"),
         _ => None,
     }
 }
@@ -256,7 +263,7 @@ async fn main() -> Result<()> {
 
     // Load service name → id map once for legacy service name resolution.
     let service_ids: std::collections::HashMap<String, i64> =
-        sqlx::query_as::<_, (String, i64)>("SELECT name, id FROM services")
+        sqlx::query_as::<_, (String, i64)>("SELECT name_sk, id FROM services")
             .fetch_all(&pool)
             .await
             .context("Failed to load services for legacy mapping")?
@@ -411,16 +418,36 @@ mod tests {
     fn map_legacy_service_known_names() {
         assert_eq!(
             map_legacy_service_name("Casova karta"),
-            Some("Monthly pass")
+            Some("Mesačný preplatok")
         );
         assert_eq!(map_legacy_service_name("Fitnes"), Some("Fitness"));
         assert_eq!(map_legacy_service_name("Spinbike"), Some("Spinning"));
     }
 
     #[test]
+    fn map_legacy_service_extended_names() {
+        assert_eq!(
+            map_legacy_service_name("Doplnky Vyzivy"),
+            Some("Doplnky výživy")
+        );
+        assert_eq!(
+            map_legacy_service_name("Obcerstvenie"),
+            Some("Občerstvenie")
+        );
+        assert_eq!(
+            map_legacy_service_name("AktivaciaKarty"),
+            Some("Aktivácia karty")
+        );
+    }
+
+    #[test]
     fn map_legacy_service_unknown_returns_none() {
         assert_eq!(map_legacy_service_name("Something else"), None);
         assert_eq!(map_legacy_service_name(""), None);
+        // Storno is intentionally unmapped — the action='storno' label suffices.
+        assert_eq!(map_legacy_service_name("Storno"), None);
+        // Iont had zero historical sales — YAGNI.
+        assert_eq!(map_legacy_service_name("Iont"), None);
     }
 
     #[tokio::test]
@@ -439,7 +466,7 @@ mod tests {
 
         // Mimic what the import loop does for one row.
         let service_ids: std::collections::HashMap<String, i64> =
-            sqlx::query_as::<_, (String, i64)>("SELECT name, id FROM services")
+            sqlx::query_as::<_, (String, i64)>("SELECT name_sk, id FROM services")
                 .fetch_all(&pool)
                 .await
                 .unwrap()
@@ -460,13 +487,13 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         let row: (Option<String>, Option<chrono::NaiveDate>) = sqlx::query_as(
-            "SELECT s.name, t.valid_until FROM transactions t
+            "SELECT s.name_sk, t.valid_until FROM transactions t
              LEFT JOIN services s ON s.id = t.service_id WHERE t.card_id = 1",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.0.as_deref(), Some("Monthly pass"));
+        assert_eq!(row.0.as_deref(), Some("Mesačný preplatok"));
         assert_eq!(
             row.1,
             Some(chrono::NaiveDate::from_ymd_opt(2008, 12, 5).unwrap())
