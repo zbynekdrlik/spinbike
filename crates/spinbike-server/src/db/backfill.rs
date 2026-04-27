@@ -70,6 +70,139 @@ pub fn map_legacy_service_name(name: &str) -> Option<&'static str> {
     }
 }
 
+/// Apply backfill logic for one parsed legacy `Data` row.
+///
+/// Updates `report` according to the row's outcome (orphan card, unknown
+/// service, matched, ambiguous, already_set, unmatched). Pulled out of `run()`
+/// so it can be exercised by unit tests without invoking `mdb-export`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn apply_legacy_row(
+    tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+    service_ids: &HashMap<String, i64>,
+    legacy_card_to_barcode: &HashMap<String, String>,
+    legacy_card_id: &str,
+    action: &str,
+    legacy_service: &str,
+    date: &str,
+    amount_eur: f64,
+    report: &mut BackfillReport,
+) -> Result<()> {
+    if !legacy_action_has_service(action) {
+        return Ok(());
+    }
+    if legacy_service.is_empty() {
+        return Ok(());
+    }
+
+    let barcode = match legacy_card_to_barcode.get(legacy_card_id) {
+        Some(bc) => bc,
+        None => {
+            report.orphan_card += 1;
+            return Ok(());
+        }
+    };
+
+    let new_name = match map_legacy_service_name(legacy_service) {
+        Some(n) => n,
+        None => {
+            warn!(
+                "unknown legacy service '{legacy_service}' on row card={legacy_card_id} \
+                 (will be skipped — extend map_legacy_service_name if this should be backfilled)"
+            );
+            report.unknown_service += 1;
+            return Ok(());
+        }
+    };
+    let svc_id = match service_ids.get(new_name) {
+        Some(id) => *id,
+        None => {
+            warn!(
+                "target DB has no service named '{new_name}' (legacy '{legacy_service}'); \
+                 run V8/V9 migrations first"
+            );
+            report.unknown_service += 1;
+            return Ok(());
+        }
+    };
+
+    // Match (barcode, created_at_string, amount with epsilon) and only touch
+    // rows that don't already have a service_id.
+    //
+    // SIGN CONVENTION: the migrator binds `amount_eur` with the same sign
+    // it has in the legacy `suma` column (positive for debits, no negation).
+    // Imported transactions in prod therefore have POSITIVE amounts for
+    // debits, in contrast to NEW sales which the API stores as negative.
+    // The `service_id IS NULL` guard ensures we only touch imported rows,
+    // so `t.amount` here is always the legacy-positive value and we
+    // compare with `t.amount - legacy_amount`.
+    let updated_ids: Vec<(i64,)> = sqlx::query_as(
+        "UPDATE transactions
+            SET service_id = ?, legacy_backfilled = 1
+          WHERE id IN (
+            SELECT t.id
+              FROM transactions t
+              JOIN cards c ON c.id = t.card_id
+             WHERE c.barcode = ?
+               AND t.created_at = ?
+               AND ABS(t.amount - ?) < 0.005
+               AND t.service_id IS NULL
+          )
+          RETURNING id",
+    )
+    .bind(svc_id)
+    .bind(barcode)
+    .bind(date)
+    .bind(amount_eur)
+    .fetch_all(&mut **tx)
+    .await
+    .context("backfill UPDATE failed")?;
+
+    let bucket = report.per_service.entry(new_name.to_string()).or_default();
+    match updated_ids.len() {
+        0 => {
+            // Either this legacy row's prod equivalent already has a
+            // service_id (= already-set on a prior backfill or a
+            // post-import sale), or there's no matching prod row at all.
+            let exists: Option<i64> = sqlx::query_scalar(
+                "SELECT t.id FROM transactions t
+                   JOIN cards c ON c.id = t.card_id
+                  WHERE c.barcode = ? AND t.created_at = ?
+                    AND ABS(t.amount - ?) < 0.005
+                  LIMIT 1",
+            )
+            .bind(barcode)
+            .bind(date)
+            .bind(amount_eur)
+            .fetch_optional(&mut **tx)
+            .await
+            .context("ambiguity probe failed")?;
+            if exists.is_some() {
+                report.already_set += 1;
+                bucket.already_set += 1;
+            } else {
+                report.unmatched += 1;
+                bucket.unmatched += 1;
+            }
+        }
+        1 => {
+            report.matched += 1;
+            bucket.matched += 1;
+        }
+        n => {
+            report.matched += n as u32;
+            bucket.matched += n as u32;
+            report.ambiguous += 1;
+            bucket.ambiguous += 1;
+            warn!(
+                "ambiguous: legacy row card={legacy_card_id} date={date} amount={amount_eur} \
+                 matched {n} prod rows: {:?}",
+                updated_ids.iter().map(|(i,)| *i).collect::<Vec<_>>()
+            );
+        }
+    }
+    Ok(())
+}
+
 /// Run the in-place backfill against `pool`, reading legacy data from `mdb_path`.
 ///
 /// Idempotent: only updates rows where `service_id IS NULL`. Sets
@@ -125,119 +258,18 @@ pub async fn run(pool: &SqlitePool, mdb_path: &Path) -> Result<BackfillReport> {
         let date = r.get(6).unwrap_or("").trim().to_string();
         let amount_eur: f64 = r.get(8).unwrap_or("0").trim().parse().unwrap_or(0.0);
 
-        if !legacy_action_has_service(action) {
-            continue;
-        }
-        if legacy_service.is_empty() {
-            continue;
-        }
-
-        let barcode = match legacy_card_to_barcode.get(&legacy_card_id) {
-            Some(bc) => bc,
-            None => {
-                report.orphan_card += 1;
-                continue;
-            }
-        };
-
-        let new_name = match map_legacy_service_name(&legacy_service) {
-            Some(n) => n,
-            None => {
-                warn!(
-                    "unknown legacy service '{legacy_service}' on row card={legacy_card_id} \
-                     (will be skipped — extend map_legacy_service_name if this should be backfilled)"
-                );
-                report.unknown_service += 1;
-                continue;
-            }
-        };
-        let svc_id = match service_ids.get(new_name) {
-            Some(id) => *id,
-            None => {
-                warn!(
-                    "target DB has no service named '{new_name}' (legacy '{legacy_service}'); \
-                     run V8/V9 migrations first"
-                );
-                report.unknown_service += 1;
-                continue;
-            }
-        };
-
-        // Match (barcode, created_at_string, amount with epsilon) and only
-        // touch rows that don't already have a service_id.
-        //
-        // SIGN CONVENTION: the migrator binds `amount_eur` with the same sign
-        // it has in the legacy `suma` column (positive for debits, no negation).
-        // Imported transactions in prod therefore have POSITIVE amounts for
-        // debits, in contrast to NEW sales which the API stores as negative.
-        // The `service_id IS NULL` guard ensures we only touch imported rows,
-        // so `t.amount` here is always the legacy-positive value and we
-        // compare with `t.amount - legacy_amount`.
-        let updated_ids: Vec<(i64,)> = sqlx::query_as(
-            "UPDATE transactions
-                SET service_id = ?, legacy_backfilled = 1
-              WHERE id IN (
-                SELECT t.id
-                  FROM transactions t
-                  JOIN cards c ON c.id = t.card_id
-                 WHERE c.barcode = ?
-                   AND t.created_at = ?
-                   AND ABS(t.amount - ?) < 0.005
-                   AND t.service_id IS NULL
-              )
-              RETURNING id",
+        apply_legacy_row(
+            &mut tx,
+            &service_ids,
+            &legacy_card_to_barcode,
+            &legacy_card_id,
+            action,
+            &legacy_service,
+            &date,
+            amount_eur,
+            &mut report,
         )
-        .bind(svc_id)
-        .bind(barcode)
-        .bind(&date)
-        .bind(amount_eur)
-        .fetch_all(&mut *tx)
-        .await
-        .context("backfill UPDATE failed")?;
-
-        let bucket = report.per_service.entry(new_name.to_string()).or_default();
-        match updated_ids.len() {
-            0 => {
-                // Either this legacy row's prod equivalent already has a
-                // service_id (= already-set on a prior backfill or a
-                // post-import sale), or there's no matching prod row at all.
-                let exists: Option<i64> = sqlx::query_scalar(
-                    "SELECT t.id FROM transactions t
-                       JOIN cards c ON c.id = t.card_id
-                      WHERE c.barcode = ? AND t.created_at = ?
-                        AND ABS(t.amount - ?) < 0.005
-                      LIMIT 1",
-                )
-                .bind(barcode)
-                .bind(&date)
-                .bind(amount_eur)
-                .fetch_optional(&mut *tx)
-                .await
-                .context("ambiguity probe failed")?;
-                if exists.is_some() {
-                    report.already_set += 1;
-                    bucket.already_set += 1;
-                } else {
-                    report.unmatched += 1;
-                    bucket.unmatched += 1;
-                }
-            }
-            1 => {
-                report.matched += 1;
-                bucket.matched += 1;
-            }
-            n => {
-                report.matched += n as u32;
-                bucket.matched += n as u32;
-                report.ambiguous += 1;
-                bucket.ambiguous += 1;
-                warn!(
-                    "ambiguous: legacy row card={legacy_card_id} date={date} amount={amount_eur} \
-                     matched {n} prod rows: {:?}",
-                    updated_ids.iter().map(|(i,)| *i).collect::<Vec<_>>()
-                );
-            }
-        }
+        .await?;
     }
 
     tx.commit().await.context("Failed to commit backfill tx")?;
@@ -469,5 +501,314 @@ mod tests {
         );
         assert_eq!(map_legacy_service_name("Storno"), None);
         assert_eq!(map_legacy_service_name("Iont"), None);
+    }
+
+    // ----- apply_legacy_row branch coverage -----
+    //
+    // These tests exercise every counter increment in apply_legacy_row to
+    // catch mutation-testing survivors (replace +=1 with -=1 / *=1, delete !,
+    // etc.). Each test asserts the EXACT report state after one row, so any
+    // mutated arithmetic produces a different value and gets caught.
+
+    /// Build a (service_ids, legacy_card_to_barcode) tuple from a fresh DB.
+    /// Inserts a card with barcode "BC-1" and id 1, returns the maps.
+    async fn fixture_state(pool: &SqlitePool) -> (HashMap<String, i64>, HashMap<String, String>) {
+        sqlx::query("INSERT INTO cards (barcode, allow_debit) VALUES ('BC-1', 1)")
+            .execute(pool)
+            .await
+            .unwrap();
+        let svc: HashMap<String, i64> =
+            sqlx::query_as::<_, (String, i64)>("SELECT name_sk, id FROM services")
+                .fetch_all(pool)
+                .await
+                .unwrap()
+                .into_iter()
+                .collect();
+        let cards: HashMap<String, String> =
+            HashMap::from([("100".to_string(), "BC-1".to_string())]);
+        (svc, cards)
+    }
+
+    #[tokio::test]
+    async fn apply_row_orphan_card_increments_only_orphan() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (svc, cards) = fixture_state(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let mut report = BackfillReport::default();
+
+        apply_legacy_row(
+            &mut tx,
+            &svc,
+            &cards,
+            "9999", // not in cards map
+            "Debet",
+            "Doplnky Vyzivy",
+            "11/06/08 12:00:00",
+            1.66,
+            &mut report,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(report.orphan_card, 1);
+        assert_eq!(report.matched, 0);
+        assert_eq!(report.already_set, 0);
+        assert_eq!(report.unmatched, 0);
+        assert_eq!(report.ambiguous, 0);
+        assert_eq!(report.unknown_service, 0);
+    }
+
+    #[tokio::test]
+    async fn apply_row_unknown_legacy_service_increments_unknown() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (svc, cards) = fixture_state(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let mut report = BackfillReport::default();
+
+        apply_legacy_row(
+            &mut tx,
+            &svc,
+            &cards,
+            "100",
+            "Debet",
+            "Iont", // not in map_legacy_service_name
+            "11/06/08 12:00:00",
+            1.0,
+            &mut report,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(report.unknown_service, 1);
+        assert_eq!(report.orphan_card, 0);
+        assert_eq!(report.matched, 0);
+    }
+
+    #[tokio::test]
+    async fn apply_row_unknown_target_service_increments_unknown() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (mut svc, cards) = fixture_state(&pool).await;
+        // Force the "target DB has no service named X" branch by removing the
+        // mapped entry from the snapshot the function reads.
+        svc.remove("Doplnky výživy");
+        let mut tx = pool.begin().await.unwrap();
+        let mut report = BackfillReport::default();
+
+        apply_legacy_row(
+            &mut tx,
+            &svc,
+            &cards,
+            "100",
+            "Debet",
+            "Doplnky Vyzivy",
+            "11/06/08 12:00:00",
+            1.66,
+            &mut report,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(report.unknown_service, 1);
+        assert_eq!(report.matched, 0);
+    }
+
+    #[tokio::test]
+    async fn apply_row_skips_topup_action_with_no_counter_change() {
+        // legacy_action_has_service('Novy kredit') == false -> no counter touched.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (svc, cards) = fixture_state(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let mut report = BackfillReport::default();
+
+        apply_legacy_row(
+            &mut tx,
+            &svc,
+            &cards,
+            "100",
+            "Novy kredit",
+            "",
+            "11/06/08 12:00:00",
+            10.0,
+            &mut report,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(report.orphan_card, 0);
+        assert_eq!(report.unknown_service, 0);
+        assert_eq!(report.matched, 0);
+        assert_eq!(report.already_set, 0);
+        assert_eq!(report.unmatched, 0);
+        assert_eq!(report.ambiguous, 0);
+    }
+
+    #[tokio::test]
+    async fn apply_row_unmatched_increments_unmatched_per_service() {
+        // No prod transaction matches -> unmatched += 1, bucket.unmatched += 1.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (svc, cards) = fixture_state(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let mut report = BackfillReport::default();
+
+        apply_legacy_row(
+            &mut tx,
+            &svc,
+            &cards,
+            "100",
+            "Debet",
+            "Doplnky Vyzivy",
+            "11/06/08 12:00:00",
+            1.66,
+            &mut report,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(report.unmatched, 1);
+        assert_eq!(report.matched, 0);
+        assert_eq!(report.already_set, 0);
+        assert_eq!(report.ambiguous, 0);
+        let bucket = report.per_service.get("Doplnky výživy").unwrap();
+        assert_eq!(bucket.unmatched, 1);
+        assert_eq!(bucket.matched, 0);
+    }
+
+    #[tokio::test]
+    async fn apply_row_matched_one_increments_matched_per_service() {
+        // One NULL-service prod txn matches -> matched += 1, bucket.matched += 1.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (svc, cards) = fixture_state(&pool).await;
+        sqlx::query(
+            "INSERT INTO transactions (card_id, amount, action, created_at)
+             VALUES (1, 1.66, 'debit', '11/06/08 12:00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        let mut report = BackfillReport::default();
+
+        apply_legacy_row(
+            &mut tx,
+            &svc,
+            &cards,
+            "100",
+            "Debet",
+            "Doplnky Vyzivy",
+            "11/06/08 12:00:00",
+            1.66,
+            &mut report,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(report.matched, 1);
+        assert_eq!(report.already_set, 0);
+        assert_eq!(report.unmatched, 0);
+        assert_eq!(report.ambiguous, 0);
+        let bucket = report.per_service.get("Doplnky výživy").unwrap();
+        assert_eq!(bucket.matched, 1);
+    }
+
+    #[tokio::test]
+    async fn apply_row_already_set_increments_already_set() {
+        // Prod txn already has a service_id -> already_set += 1.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (svc, cards) = fixture_state(&pool).await;
+        let fitness_id: i64 =
+            sqlx::query_scalar("SELECT id FROM services WHERE name_sk = 'Fitness'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        sqlx::query(
+            "INSERT INTO transactions (card_id, service_id, amount, action, created_at)
+             VALUES (1, ?, 1.66, 'debit', '11/06/08 12:00:00')",
+        )
+        .bind(fitness_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        let mut report = BackfillReport::default();
+
+        apply_legacy_row(
+            &mut tx,
+            &svc,
+            &cards,
+            "100",
+            "Debet",
+            "Doplnky Vyzivy",
+            "11/06/08 12:00:00",
+            1.66,
+            &mut report,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(report.already_set, 1);
+        assert_eq!(report.matched, 0);
+        assert_eq!(report.unmatched, 0);
+        assert_eq!(report.ambiguous, 0);
+        let bucket = report.per_service.get("Doplnky výživy").unwrap();
+        assert_eq!(bucket.already_set, 1);
+    }
+
+    #[tokio::test]
+    async fn apply_row_ambiguous_match_increments_correctly() {
+        // Two NULL-service prod txns share the same key -> matched += 2,
+        // ambiguous += 1.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (svc, cards) = fixture_state(&pool).await;
+        sqlx::query(
+            "INSERT INTO transactions (card_id, amount, action, created_at)
+             VALUES (1, 1.66, 'debit', '11/06/08 12:00:00'),
+                    (1, 1.66, 'debit', '11/06/08 12:00:00')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let mut tx = pool.begin().await.unwrap();
+        let mut report = BackfillReport::default();
+
+        apply_legacy_row(
+            &mut tx,
+            &svc,
+            &cards,
+            "100",
+            "Debet",
+            "Doplnky Vyzivy",
+            "11/06/08 12:00:00",
+            1.66,
+            &mut report,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(report.matched, 2, "both rows count toward matched");
+        assert_eq!(report.ambiguous, 1, "one ambiguous event");
+        assert_eq!(report.already_set, 0);
+        assert_eq!(report.unmatched, 0);
+        let bucket = report.per_service.get("Doplnky výživy").unwrap();
+        assert_eq!(bucket.matched, 2);
+        assert_eq!(bucket.ambiguous, 1);
     }
 }

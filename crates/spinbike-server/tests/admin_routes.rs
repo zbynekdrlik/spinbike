@@ -523,6 +523,38 @@ async fn create_service_with_invalid_kind_rejected() {
     assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
 }
 
+// Each empty-name branch exercised separately so the OR-validation guard
+// can't degrade to AND without a test failing (mutation testing kills the
+// `||` -> `&&` mutant in admin.rs).
+
+#[tokio::test]
+async fn create_service_with_empty_name_sk_rejected() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({
+        "name_sk": "  ",
+        "name_en": "OK",
+        "default_price": 1.0,
+    });
+    let (status, _) = app
+        .request(post_json("/api/admin/services", &app.admin_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_service_with_empty_name_en_rejected() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({
+        "name_sk": "OK",
+        "name_en": "",
+        "default_price": 1.0,
+    });
+    let (status, _) = app
+        .request(post_json("/api/admin/services", &app.admin_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test]
 async fn update_user_role_forbidden_for_staff() {
     let app = TestApp::new().await;

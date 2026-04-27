@@ -612,6 +612,58 @@ async fn seed_expired_pass_endpoint_is_reachable_and_stores_negative_amount() {
 }
 
 #[tokio::test]
+async fn seed_transactions_endpoint_seeds_card_and_legacy_backfilled_rows() {
+    // Hits POST /api/test/seed-transactions with staff token. Verifies that
+    // the legacy_backfilled marker is set on inserted rows (kills the mutant
+    // that drops the `, legacy_backfilled, 1` portion of the INSERT).
+    let app = TestApp::new().await;
+    let (status, body) = app
+        .request(post_json(
+            "/api/test/seed-transactions",
+            &app.staff_token,
+            &json!({
+                "barcode": "SEED-TXN-1",
+                "entries": [
+                    { "amount": 1.66, "action": "debit", "service_name_sk": "Občerstvenie" },
+                ],
+            }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "body={body}");
+    let card_id = body["card_id"].as_i64().expect("card_id in response");
+
+    let (svc_id, legacy_backfilled): (Option<i64>, i64) =
+        sqlx::query_as("SELECT service_id, legacy_backfilled FROM transactions WHERE card_id = ?")
+            .bind(card_id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert!(svc_id.is_some(), "service_id resolved from name_sk");
+    assert_eq!(legacy_backfilled, 1, "marker must be set on seeded rows");
+}
+
+#[tokio::test]
+async fn seed_transactions_forbidden_for_customer() {
+    // Kills the `delete !` mutant on `if !claims.role.can_process_payments()`
+    // in routes/test_fixtures.rs::seed_transactions: with the ! removed, a
+    // customer would be allowed through.
+    let app = TestApp::new().await;
+    let (status, _) = app
+        .request(post_json(
+            "/api/test/seed-transactions",
+            &app.customer_token,
+            &json!({
+                "barcode": "FORBIDDEN-1",
+                "entries": [
+                    { "amount": 1.0, "action": "debit", "service_name_sk": "Spinning" },
+                ],
+            }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn sell_pass_works_after_admin_renames_pass() {
     // Regression test for kind-based lookup. The Monthly pass row is now
     // identified by kind='monthly_pass', not by name='Monthly pass'. Admin
