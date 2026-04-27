@@ -46,8 +46,16 @@ test.describe('Card action form — service dropdown is language-aware', () => {
         expect(optionsEn.some(o => o.includes('Refreshments'))).toBe(true);
         expect(optionsEn.some(o => o.includes('Supplements'))).toBe(true);
 
-        // Switch to Slovak via localStorage and reload.
-        await page.evaluate(() => localStorage.setItem('spinbike_lang', 'sk'));
+        // Switch to Slovak. loginViaAPI added an init script forcing 'en' on
+        // every page load, so layering a second init script that runs AFTER
+        // it ensures 'sk' wins the localStorage write before the WASM boots.
+        await page.addInitScript(() => {
+            try {
+                localStorage.setItem('spinbike_lang', 'sk');
+            } catch {
+                // ignore — storage not ready
+            }
+        });
         await page.reload();
         await openCardByLastName(page, lastName);
 

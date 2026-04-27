@@ -54,8 +54,16 @@ test('card history shows backfilled service categories in Slovak', async ({ page
     const barcode = `LH-SK-${Date.now()}`;
     await seedCardWithBackfilledHistory(token, barcode);
 
-    // Switch to Slovak before the WASM loads.
-    await page.evaluate(() => localStorage.setItem('spinbike_lang', 'sk'));
+    // Switch to Slovak. loginViaAPI added an init script forcing 'en' on
+    // every page load, so layering a second init script that runs AFTER it
+    // ensures 'sk' wins the localStorage write before the WASM boots.
+    await page.addInitScript(() => {
+        try {
+            localStorage.setItem('spinbike_lang', 'sk');
+        } catch {
+            // ignore — storage not ready
+        }
+    });
     await page.goto('/staff');
     await openCardByBarcode(page, barcode);
 
