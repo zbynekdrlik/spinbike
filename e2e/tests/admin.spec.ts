@@ -98,7 +98,7 @@ test.describe('Admin pages', () => {
         }, { timeout: 10000 });
 
         // Verify services tab shows (check for price field in the form)
-        const priceInput = page.locator('[data-testid="service-price"]');
+        const priceInput = page.locator('[data-testid="service-price-input"]');
         await expect(priceInput.first()).toBeVisible();
 
         // Click users tab
@@ -138,15 +138,13 @@ test.describe('Admin pages', () => {
             return !document.querySelector('.spinner');
         }, { timeout: 10000 });
 
-        // Fill service form
-        const nameInput = page.locator('[data-testid="service-name"]');
-        await nameInput.fill('Pilates');
-
-        const priceInput = page.locator('[data-testid="service-price"]');
-        await priceInput.fill('150');
+        // Fill service form (V8 + Task 12: dual-language inputs).
+        await page.locator('[data-testid="service-name-sk-input"]').fill('Pilates SK');
+        await page.locator('[data-testid="service-name-en-input"]').fill('Pilates');
+        await page.locator('[data-testid="service-price-input"]').fill('150');
 
         // Click Add Service
-        await page.locator('button', { hasText: 'Add Service' }).click();
+        await page.locator('[data-testid="service-create-btn"]').click();
 
         // Wait for list to refresh
         await page.waitForTimeout(1000);

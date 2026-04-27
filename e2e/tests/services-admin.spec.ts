@@ -7,7 +7,10 @@ test.describe('Admin services — dual-language CRUD', () => {
     test('creates a generic service with Slovak + English names', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
-        await page.goto('/admin?tab=services');
+        await page.goto('/admin');
+        await page.waitForSelector('h1.page-title');
+        await page.locator('[data-testid="admin-tab-services"]').click();
+        await page.waitForFunction(() => !document.querySelector('.spinner'), { timeout: 10000 });
 
         const suffix = `${Date.now()}`;
         const skName = `TestSk${suffix}`;
@@ -29,9 +32,12 @@ test.describe('Admin services — dual-language CRUD', () => {
     test('the Monthly pass option in the kind selector is disabled when one exists', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
-        await page.goto('/admin?tab=services');
+        await page.goto('/admin');
+        await page.waitForSelector('h1.page-title');
+        await page.locator('[data-testid="admin-tab-services"]').click();
+        await page.waitForFunction(() => !document.querySelector('.spinner'), { timeout: 10000 });
 
-        // Wait for the services list to load — V8 seeds Monthly pass.
+        // V8 seeds Monthly pass — selector should disable that option.
         await page.locator('[data-testid="service-kind-select"]').waitFor();
         const passOption = page.locator(
             '[data-testid="service-kind-select"] option[value="monthly_pass"]'
