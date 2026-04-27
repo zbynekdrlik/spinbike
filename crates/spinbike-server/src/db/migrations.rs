@@ -268,13 +268,15 @@ mod tests {
     async fn v4_seeds_monthly_pass_service() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let (name, price, active): (String, f64, i64) = sqlx::query_as(
-            "SELECT name, default_price, active FROM services WHERE name = 'Monthly pass'",
+        // V4 seeded the pass; V8 dual-language schema renamed the column to
+        // name_en/name_sk and tagged the row with kind='monthly_pass'.
+        let (name_en, price, active): (String, f64, i64) = sqlx::query_as(
+            "SELECT name_en, default_price, active FROM services WHERE kind = 'monthly_pass'",
         )
         .fetch_one(&pool)
         .await
         .expect("Monthly pass service must be seeded by V4");
-        assert_eq!(name, "Monthly pass");
+        assert_eq!(name_en, "Monthly pass");
         assert_eq!(price, 35.0);
         assert_eq!(active, 1);
     }
@@ -286,7 +288,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         run_migrations(&pool).await.unwrap();
         let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE name = 'Monthly pass'")
+            sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE kind = 'monthly_pass'")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
