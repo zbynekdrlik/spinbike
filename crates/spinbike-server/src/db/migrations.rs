@@ -212,13 +212,11 @@ ALTER TABLE transactions ADD COLUMN deleted_at TEXT;
 "#;
 
 const V8_SERVICES_DUAL_LANG_KIND: &str = r#"
--- Defer foreign-key checks until COMMIT so DROP TABLE services does not
--- fail when transactions has child rows referencing services(id).
--- After RENAME services_new -> services, all original ids are preserved,
--- so transactions.service_id refs resolve cleanly at commit time.
--- (`PRAGMA foreign_keys = OFF` is a no-op inside an open transaction;
---  defer_foreign_keys is the supported mechanism.)
-PRAGMA defer_foreign_keys = TRUE;
+-- The CREATE_NEW + INSERT + DROP + RENAME pattern requires foreign-key
+-- enforcement to be OFF for the duration of the migration. The migration
+-- runner (db::run_migrations) handles that toggle around the transaction.
+-- INSERT INTO services_new ... SELECT id, ... preserves the original ids,
+-- so transactions.service_id refs continue to resolve after the rename.
 
 CREATE TABLE services_new (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -550,11 +548,17 @@ mod tests {
     #[tokio::test]
     async fn v8_drop_rename_pattern_works_with_fk_child_rows() {
         // Production scenario: services has child rows in transactions referencing
-        // services(id). Without `PRAGMA defer_foreign_keys = TRUE` inside V8's
-        // transaction, DROP TABLE services would fail at runtime with an FK
-        // violation. This test exercises the same CREATE/INSERT/DROP/RENAME
-        // pattern V8 uses, against a populated transactions table, to prove
-        // the deferral pragma is the right tool.
+        // services(id). The CREATE/INSERT/DROP/RENAME pattern only works when FK
+        // enforcement is OFF for the duration of the migration — the migration
+        // runner toggles `PRAGMA foreign_keys` before/after the transaction so
+        // V8 succeeds against a populated transactions table.
+        //
+        // (`PRAGMA defer_foreign_keys = TRUE` inside an open transaction does
+        // NOT work for this pattern: SQLite registers the FK violation when
+        // DROP TABLE implicitly DELETEs the parent rows, and the subsequent
+        // RENAME of the new table to the old name does not clear the pending
+        // violation. PRAGMA foreign_keys = OFF (per-connection, before BEGIN)
+        // is the only mechanism that works.)
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
 
@@ -579,12 +583,14 @@ mod tests {
         .await
         .unwrap();
 
-        // Mimic V8's DROP+RENAME pattern within a transaction with deferred FK.
-        let mut tx = pool.begin().await.unwrap();
-        sqlx::query("PRAGMA defer_foreign_keys = TRUE")
-            .execute(&mut *tx)
+        // Acquire a single connection so PRAGMA + BEGIN target the same one.
+        // Mirror what run_migrations does for every migration.
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
             .await
             .unwrap();
+        let mut tx = conn.begin().await.unwrap();
         sqlx::query(
             "CREATE TABLE services_test_rebuild (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -605,11 +611,10 @@ mod tests {
         .execute(&mut *tx)
         .await
         .unwrap();
-        // The critical step that fails without deferred FK.
         sqlx::query("DROP TABLE services")
             .execute(&mut *tx)
             .await
-            .expect("DROP TABLE services must succeed with PRAGMA defer_foreign_keys = TRUE");
+            .expect("DROP TABLE services must succeed with foreign_keys = OFF");
         sqlx::query("ALTER TABLE services_test_rebuild RENAME TO services")
             .execute(&mut *tx)
             .await
@@ -617,6 +622,10 @@ mod tests {
         tx.commit()
             .await
             .expect("commit must succeed — preserved ids restore FK validity");
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
 
         // The transaction's service_id ref still resolves after rebuild.
         let still_valid: bool = sqlx::query_scalar(
