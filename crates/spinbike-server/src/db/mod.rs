@@ -18,11 +18,20 @@ use tracing::info;
 use migrations::MIGRATIONS;
 
 /// Create a persistent SQLite pool with WAL mode and foreign keys.
+///
+/// `busy_timeout` is set explicitly to 30 seconds. SQLite is single-writer,
+/// and even short admin operations (a 100-row UPDATE batch in the legacy
+/// backfill, a schema migration, etc.) can briefly hold the writer lock.
+/// 30 s is well over any realistic short-write window so concurrent staff
+/// API calls wait for the lock instead of returning SQLITE_BUSY (500 to
+/// the caller). sqlx's default is 5 s, which the first prod backfill run
+/// hit because debug-build batches held the lock too long.
 pub async fn create_pool(db_path: &Path) -> Result<SqlitePool> {
     let options = SqliteConnectOptions::new()
         .filename(db_path)
         .create_if_missing(true)
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
+        .busy_timeout(std::time::Duration::from_secs(30))
         .foreign_keys(true);
 
     let pool = SqlitePoolOptions::new()
