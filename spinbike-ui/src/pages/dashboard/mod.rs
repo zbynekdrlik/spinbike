@@ -109,11 +109,24 @@ pub struct TxnInfo {
     pub action: String,
     pub created_at: String,
     #[serde(default)]
-    pub service_name: Option<String>,
+    pub service_name_sk: Option<String>,
+    #[serde(default)]
+    pub service_name_en: Option<String>,
+    #[serde(default)]
+    pub service_kind: Option<String>,
     #[serde(default)]
     pub valid_until: Option<chrono::NaiveDate>,
     #[serde(default)]
     pub deleted_at: Option<String>,
+}
+
+impl TxnInfo {
+    pub fn service_label(&self, lang: crate::i18n::Lang) -> Option<&str> {
+        match lang {
+            crate::i18n::Lang::Sk => self.service_name_sk.as_deref(),
+            crate::i18n::Lang::En => self.service_name_en.as_deref(),
+        }
+    }
 }
 
 #[component]

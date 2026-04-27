@@ -47,7 +47,12 @@ pub fn ActivityFeed(
                     _ => {}
                 }
                 if let Some(svc) = &f.service {
-                    if e.service_name.as_deref() != Some(svc.as_str()) {
+                    // Match against either language so the filter still works
+                    // regardless of which name (sk/en) was clicked from.
+                    let s = svc.as_str();
+                    let sk = e.service_name_sk.as_deref();
+                    let en = e.service_name_en.as_deref();
+                    if sk != Some(s) && en != Some(s) {
                         return false;
                     }
                 }
@@ -200,7 +205,10 @@ fn render_row(e: ReportEvent) -> impl IntoView {
     };
 
     let name = e.card_name.clone().unwrap_or_else(|| "—".to_string());
-    let service = e.service_name.clone();
+    let service = match lang.get_untracked() {
+        Lang::Sk => e.service_name_sk.clone(),
+        Lang::En => e.service_name_en.clone(),
+    };
     // Subtitle: "<event_label> · <service>" — never empty.
     let subtitle = move || {
         let svc_str = service
