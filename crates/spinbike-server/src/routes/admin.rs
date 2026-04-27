@@ -480,6 +480,7 @@ async fn create_service(
             Json(serde_json::json!({"error": "Admin access required"})),
         ));
     }
+
     if body.name_sk.trim().is_empty() || body.name_en.trim().is_empty() {
         return Err((
             StatusCode::BAD_REQUEST,
@@ -504,15 +505,18 @@ async fn create_service(
     .fetch_one(&state.pool)
     .await
     .map_err(|e| {
-        // Partial unique index on kind='monthly_pass' surfaces here.
-        if e.to_string().contains("UNIQUE constraint") {
-            (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({"error": "a monthly_pass service already exists"})),
-            )
-        } else {
-            internal_error(e)
+        // Partial unique index on kind='monthly_pass' surfaces here. Use the
+        // sqlx-native unique-violation detector rather than string-matching
+        // the error message so we're robust to SQLite locale / version drift.
+        if let sqlx::Error::Database(db_err) = &e {
+            if db_err.is_unique_violation() {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({"error": "a monthly_pass service already exists"})),
+                );
+            }
         }
+        internal_error(e)
     })?;
     Ok((
         StatusCode::CREATED,
