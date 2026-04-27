@@ -13,11 +13,21 @@ use sqlx::SqlitePool;
 use tracing::{info, warn};
 
 /// Rows per intermediate `tx.commit()` during the backfill loop. SQLite is
-/// single-writer; committing periodically releases the writer lock so
-/// concurrent staff actions don't queue behind a multi-minute transaction.
-/// 1000 keeps each commit well under a second on prod hardware while
-/// limiting commit overhead to ~90 batches across the full ~87K legacy rows.
-const BACKFILL_BATCH_SIZE: u32 = 1000;
+/// single-writer; once an UPDATE within the tx fires, the writer lock is
+/// held until COMMIT. Each apply_legacy_row issues an UPDATE as its first
+/// SQL, so the writer lock is acquired upfront for the batch.
+///
+/// 100 was chosen empirically after the first prod run hit
+/// `SQLITE_BUSY (database is locked)` on concurrent staff API calls — the
+/// previous 1000-row batches in debug build held the writer lock for ~13 s,
+/// well over sqlx's 5 s busy_timeout. With 100-row batches AND a release
+/// build, each batch's writer-lock window is ~100 ms, comfortably under
+/// the busy_timeout so concurrent writes wait briefly and succeed.
+///
+/// In addition, `db::create_pool` raises busy_timeout to 30 s so any future
+/// admin write that briefly exceeds 5 s does not surface as a 500 to the
+/// staff client.
+const BACKFILL_BATCH_SIZE: u32 = 100;
 
 #[derive(Debug, Default)]
 pub struct BackfillReport {
@@ -173,18 +183,26 @@ pub(crate) async fn apply_legacy_row(
     // Match (barcode, created_at_iso, amount with epsilon) and only touch
     // rows that don't already have a service_id.
     //
-    // DATE FORMAT: the legacy MDB stores `MM/DD/YY HH:MM:SS`; the prod DB
-    // stores ISO `YYYY-MM-DD HH:MM:SS` (the original importer normalised
-    // them). Comparing the raw legacy string against ISO yields ZERO
-    // matches — convert before binding.
+    // CONCURRENCY: this UPDATE is the FIRST SQL in apply_legacy_row, so the
+    // batch transaction (DEFERRED) acquires the writer lock here on first
+    // call. There is no read-snapshot to invalidate, which avoids the
+    // SQLITE_BUSY_SNAPSHOT (code 517) race a SELECT-first design would
+    // introduce. Combined with release-build speed and small batches
+    // (BACKFILL_BATCH_SIZE = 100), the writer lock is held for ~100 ms per
+    // batch — well under sqlx's 5 s busy_timeout for concurrent staff API
+    // calls on the same DB.
     //
-    // SIGN CONVENTION: the migrator binds `amount_eur` with the same sign
-    // it has in the legacy `suma` column (positive for debits, no negation).
-    // Imported transactions in prod therefore have POSITIVE amounts for
-    // debits, in contrast to NEW sales which the API stores as negative.
-    // The `service_id IS NULL` guard ensures we only touch imported rows,
-    // so `t.amount` here is always the legacy-positive value and we
-    // compare with `t.amount - legacy_amount`.
+    // DATE FORMAT: the legacy MDB stores `MM/DD/YY HH:MM:SS`; the prod
+    // DB stores ISO `YYYY-MM-DD HH:MM:SS` (the original importer
+    // normalised them). Convert before binding.
+    //
+    // SIGN CONVENTION: the migrator binds `amount_eur` with the same
+    // sign it has in the legacy `suma` column (positive for debits, no
+    // negation). Imported transactions in prod therefore have POSITIVE
+    // amounts for debits, in contrast to NEW sales which the API stores
+    // as negative. The `service_id IS NULL` guard ensures we only touch
+    // imported rows, so `t.amount` is always the legacy-positive value;
+    // we compare with `t.amount - legacy_amount`.
     let iso_date = match legacy_date_to_iso(&row.date) {
         Some(s) => s,
         None => {

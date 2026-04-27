@@ -47,7 +47,7 @@ pub fn LinkCardPage() -> impl IntoView {
         spawn_local(async move {
             match api::post::<LinkReq, CardResp>("/api/cards/link", &LinkReq { barcode }).await {
                 Ok(card) => set_success_msg.set(format!(
-                    "Card linked successfully! Barcode: {}, Credit: {:.0} CZK",
+                    "Card linked successfully! Barcode: {}, Credit: {:.2} \u{20ac}",
                     card.barcode, card.credit
                 )),
                 Err(e) => set_error.set(e),

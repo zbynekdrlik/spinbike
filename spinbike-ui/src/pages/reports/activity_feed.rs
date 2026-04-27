@@ -174,14 +174,7 @@ fn render_row(e: ReportEvent) -> impl IntoView {
     } else {
         format!("+{:.2} \u{20ac}", e.amount)
     };
-    let time_only: String = e
-        .created_at
-        .split(' ')
-        .nth(1)
-        .unwrap_or("")
-        .chars()
-        .take(5)
-        .collect();
+    let time_only = i18n::fmt_time_str(&e.created_at);
     let voided_badge = if e.voided {
         view! { <span class="badge badge--voided">"voided"</span> }.into_any()
     } else {

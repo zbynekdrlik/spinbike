@@ -80,27 +80,96 @@ pub fn fmt_weekday_short(d: chrono::NaiveDate, lang: Lang) -> &'static str {
     }
 }
 
-/// Parse a server timestamp and format per-locale. Returns the original
-/// string if it doesn't parse. Accepts SQLite, ISO 8601, fractional seconds,
-/// and legacy MS Access dump formats so dates from any source render cleanly.
-pub fn fmt_datetime_str(s: &str, lang: Lang) -> String {
+/// Parse a server timestamp and resolve it to a Europe/Bratislava `DateTime`.
+///
+/// SQLite `datetime('now')` and ISO 8601 strings are interpreted as UTC and
+/// converted via the IANA tz database (DST-aware). Legacy MS Access
+/// `MM/DD/YY` patterns come from the old VB6 app on a Slovak PC and are
+/// already local. Returns `None` if no pattern matches.
+///
+/// Returning a tz-aware `DateTime<Tz>` (rather than a `NaiveDateTime`) keeps
+/// the timezone identity attached so future callers can do arithmetic or
+/// comparisons without losing context. The display helpers below format
+/// directly off the tz-aware value, which prints in local wall-clock time.
+fn parse_to_local(s: &str) -> Option<chrono::DateTime<chrono_tz::Tz>> {
+    use chrono::TimeZone;
     let trimmed = s.trim();
-    let patterns = [
+    let bratislava = chrono_tz::Europe::Bratislava;
+
+    let utc_patterns = [
         "%Y-%m-%d %H:%M:%S",    // SQLite datetime('now')
         "%Y-%m-%dT%H:%M:%S",    // ISO 8601 with T
         "%Y-%m-%d %H:%M:%S%.f", // SQLite with fractional seconds
-        "%m/%d/%y %H:%M:%S",    // legacy MS Access, 2-digit year
-        "%m/%d/%Y %H:%M:%S",    // legacy MS Access, 4-digit year
     ];
-    for pattern in patterns {
-        if let Ok(dt) = chrono::NaiveDateTime::parse_from_str(trimmed, pattern) {
-            return match lang {
-                Lang::Sk => dt.format("%d.%m.%Y %H:%M").to_string(),
-                Lang::En => dt.format("%Y-%m-%d %H:%M").to_string(),
-            };
+    for pattern in utc_patterns {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(trimmed, pattern) {
+            return Some(bratislava.from_utc_datetime(&naive));
         }
     }
-    s.to_string()
+
+    let local_patterns = [
+        "%m/%d/%y %H:%M:%S", // legacy MS Access, 2-digit year
+        "%m/%d/%Y %H:%M:%S", // legacy MS Access, 4-digit year
+    ];
+    for pattern in local_patterns {
+        if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(trimmed, pattern) {
+            // Resolve in local time. Ambiguous fall-back overlap → pick
+            // earliest (CEST, the earlier UTC instant). Non-existent
+            // spring-forward gap shouldn't occur in legacy data, but if it
+            // does, fall back to interpreting as UTC so we still render
+            // something rather than dropping the row.
+            return bratislava
+                .from_local_datetime(&naive)
+                .earliest()
+                .or_else(|| Some(bratislava.from_utc_datetime(&naive)));
+        }
+    }
+
+    None
+}
+
+/// Log a console warning for an unparseable server timestamp. WASM-only —
+/// host-side `cargo test` builds compile this out so unit tests can exercise
+/// the None branch without linking JS interop.
+#[cfg(target_arch = "wasm32")]
+fn warn_unparseable(helper: &str, s: &str) {
+    web_sys::console::warn_1(
+        &format!("i18n::{helper}: unparseable timestamp '{s}'").into(),
+    );
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn warn_unparseable(_helper: &str, _s: &str) {}
+
+/// Format a server timestamp as date + time, per-locale, in Slovak local time.
+/// Slovak: `dd.mm.yyyy HH:MM` · English: `yyyy-mm-dd HH:MM`. Returns the
+/// original string unchanged (and emits a console warning) if it doesn't
+/// match any known pattern.
+pub fn fmt_datetime_str(s: &str, lang: Lang) -> String {
+    match parse_to_local(s) {
+        Some(dt) => match lang {
+            Lang::Sk => dt.format("%d.%m.%Y %H:%M").to_string(),
+            Lang::En => dt.format("%Y-%m-%d %H:%M").to_string(),
+        },
+        None => {
+            warn_unparseable("fmt_datetime_str", s);
+            s.to_string()
+        }
+    }
+}
+
+/// Format a server timestamp as just `HH:MM` in Slovak local time. Used in
+/// the activity feed where the date is supplied by the page-level day anchor.
+/// Returns an empty string (and emits a console warning) on parse failure —
+/// safer than the prior raw-split fallback that would have rendered a
+/// fragment of the malformed input.
+pub fn fmt_time_str(s: &str) -> String {
+    match parse_to_local(s) {
+        Some(dt) => dt.format("%H:%M").to_string(),
+        None => {
+            warn_unparseable("fmt_time_str", s);
+            String::new()
+        }
+    }
 }
 
 /// Format a translated string with dynamic values. Returns an owned String.
@@ -645,35 +714,115 @@ pub static WEEKDAY_KEYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", 
 
 #[cfg(test)]
 mod datetime_tests {
-    use super::{fmt_datetime_str, Lang};
+    use super::{fmt_datetime_str, fmt_time_str, Lang};
 
+    // UTC-source rows shift into Europe/Bratislava (CET = +1 winter,
+    // CEST = +2 summer). 2026-04-14 18:13 UTC is in CEST → 20:13 local.
     #[test]
-    fn sqlite_format_sk() {
-        assert_eq!(fmt_datetime_str("2026-04-14 18:13:11", Lang::Sk), "14.04.2026 18:13");
+    fn sqlite_format_sk_shifts_to_local() {
+        assert_eq!(fmt_datetime_str("2026-04-14 18:13:11", Lang::Sk), "14.04.2026 20:13");
     }
 
     #[test]
-    fn sqlite_format_en() {
-        assert_eq!(fmt_datetime_str("2026-04-14 18:13:11", Lang::En), "2026-04-14 18:13");
+    fn sqlite_format_en_shifts_to_local() {
+        assert_eq!(fmt_datetime_str("2026-04-14 18:13:11", Lang::En), "2026-04-14 20:13");
     }
 
     #[test]
-    fn iso_8601_format() {
-        assert_eq!(fmt_datetime_str("2026-04-14T18:13:11", Lang::Sk), "14.04.2026 18:13");
+    fn iso_8601_shifts_to_local() {
+        assert_eq!(fmt_datetime_str("2026-04-14T18:13:11", Lang::Sk), "14.04.2026 20:13");
     }
 
     #[test]
-    fn legacy_two_digit_year() {
+    fn fractional_seconds_shift_to_local() {
+        assert_eq!(
+            fmt_datetime_str("2026-04-14 18:13:11.123", Lang::Sk),
+            "14.04.2026 20:13"
+        );
+    }
+
+    // CET (winter): UTC + 1.
+    #[test]
+    fn cet_winter_shift() {
+        assert_eq!(fmt_datetime_str("2026-01-15 10:00:00", Lang::Sk), "15.01.2026 11:00");
+    }
+
+    // CEST (summer): UTC + 2.
+    #[test]
+    fn cest_summer_shift() {
+        assert_eq!(fmt_datetime_str("2026-07-15 10:00:00", Lang::Sk), "15.07.2026 12:00");
+    }
+
+    // Spring forward 2026: at 01:00 UTC on Sun Mar 29, local jumps 02:00→03:00.
+    #[test]
+    fn dst_spring_forward_before() {
+        // 00:30 UTC → CET 01:30 local
+        assert_eq!(fmt_datetime_str("2026-03-29 00:30:00", Lang::Sk), "29.03.2026 01:30");
+    }
+
+    #[test]
+    fn dst_spring_forward_after() {
+        // 01:30 UTC → CEST 03:30 local (the 02:00–03:00 local window doesn't exist)
+        assert_eq!(fmt_datetime_str("2026-03-29 01:30:00", Lang::Sk), "29.03.2026 03:30");
+    }
+
+    // Fall back 2026: at 01:00 UTC on Sun Oct 25, local goes 03:00→02:00.
+    #[test]
+    fn dst_fall_back_before() {
+        // 00:30 UTC → CEST 02:30 local
+        assert_eq!(fmt_datetime_str("2026-10-25 00:30:00", Lang::Sk), "25.10.2026 02:30");
+    }
+
+    #[test]
+    fn dst_fall_back_after() {
+        // 01:30 UTC → CET 02:30 local (the 02:00–03:00 local window repeats)
+        assert_eq!(fmt_datetime_str("2026-10-25 01:30:00", Lang::Sk), "25.10.2026 02:30");
+    }
+
+    // Legacy MS Access rows are already Slovak local time → no shift.
+    #[test]
+    fn legacy_two_digit_year_unchanged() {
         assert_eq!(fmt_datetime_str("03/24/26 18:59:08", Lang::Sk), "24.03.2026 18:59");
     }
 
     #[test]
-    fn legacy_four_digit_year() {
+    fn legacy_four_digit_year_unchanged() {
         assert_eq!(fmt_datetime_str("03/24/2026 18:59:08", Lang::Sk), "24.03.2026 18:59");
+    }
+
+    // A legacy timestamp during CEST window must still NOT shift — proves
+    // the dual-path dispatch sends legacy inputs through the local branch
+    // even when their date would otherwise look summer-time-eligible.
+    #[test]
+    fn legacy_summer_date_does_not_shift() {
+        assert_eq!(fmt_datetime_str("07/15/2026 10:00:00", Lang::Sk), "15.07.2026 10:00");
     }
 
     #[test]
     fn unknown_returns_input() {
         assert_eq!(fmt_datetime_str("not-a-date", Lang::Sk), "not-a-date");
+    }
+
+    #[test]
+    fn fmt_time_str_shifts_utc_to_local_summer() {
+        // 10:00 UTC summer → 12:00 CEST
+        assert_eq!(fmt_time_str("2026-07-15 10:00:00"), "12:00");
+    }
+
+    #[test]
+    fn fmt_time_str_shifts_utc_to_local_winter() {
+        // 10:00 UTC winter → 11:00 CET
+        assert_eq!(fmt_time_str("2026-01-15 10:00:00"), "11:00");
+    }
+
+    #[test]
+    fn fmt_time_str_legacy_unchanged() {
+        // Legacy MS-Access timestamp is already local — no shift.
+        assert_eq!(fmt_time_str("07/15/2026 10:00:00"), "10:00");
+    }
+
+    #[test]
+    fn fmt_time_str_unknown_returns_empty() {
+        assert_eq!(fmt_time_str("not-a-date"), "");
     }
 }

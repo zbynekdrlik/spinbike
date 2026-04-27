@@ -80,7 +80,7 @@ pub fn MyBalancePage() -> impl IntoView {
                     } else {
                         let card_views: Vec<_> = balance.cards.iter().map(|c| {
                             let barcode = c.barcode.clone();
-                            let credit_val = format!("{:.0}", c.credit);
+                            let credit_val = format!("{:.2}", c.credit);
                             let is_blocked = c.blocked;
                             view! {
                                 <div class="group mb-2">
@@ -91,7 +91,7 @@ pub fn MyBalancePage() -> impl IntoView {
                                         </div>
                                         <div class="card-balance">
                                             <span class="card-balance__num">{credit_val}</span>
-                                            <span class="card-balance__unit">"CZK"</span>
+                                            <span class="card-balance__unit">"\u{20ac}"</span>
                                         </div>
                                     </div>
                                 </div>
@@ -102,9 +102,9 @@ pub fn MyBalancePage() -> impl IntoView {
                             view! { <p class="text-muted mt-2">{i18n::t(lang.get(), "no_transactions")}</p> }.into_any()
                         } else {
                             let tx_rows: Vec<_> = balance.transactions.iter().map(|tx| {
-                                let date = tx.created_at.clone();
+                                let date = i18n::fmt_datetime_str(&tx.created_at, lang.get());
                                 let action = tx.action.clone();
-                                let amount = format!("{:.0} CZK", tx.amount);
+                                let amount = format!("{:.2} \u{20ac}", tx.amount);
                                 view! {
                                     <div class="list-row">
                                         <div class="list-row__main">
