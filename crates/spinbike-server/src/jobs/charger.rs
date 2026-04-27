@@ -31,7 +31,7 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
     .await?;
 
     let (service_id, price): (i64, f64) = sqlx::query_as(
-        "SELECT id, default_price FROM services WHERE name = 'Spinning' AND active = 1",
+        "SELECT id, default_price FROM services WHERE name_en = 'Spinning' AND active = 1",
     )
     .fetch_one(pool)
     .await?;
@@ -130,7 +130,7 @@ mod tests {
         .await
         .unwrap();
         if pass {
-            let svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name='Monthly pass'")
+            let svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind='monthly_pass'")
                 .fetch_one(pool)
                 .await
                 .unwrap();

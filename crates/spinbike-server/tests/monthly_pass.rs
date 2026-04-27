@@ -23,7 +23,10 @@ async fn card_credit(app: &TestApp, card_id: i64) -> f64 {
 }
 
 async fn service_id(app: &TestApp, name: &str) -> i64 {
-    sqlx::query_scalar("SELECT id FROM services WHERE name = ?")
+    // After V8, services has name_sk + name_en (no `name`). Callers pass
+    // English-readable names ("Spinning", "Monthly pass"), so name_en is
+    // the right column to look up.
+    sqlx::query_scalar("SELECT id FROM services WHERE name_en = ?")
         .bind(name)
         .fetch_one(&app.pool)
         .await
@@ -73,7 +76,7 @@ async fn sell_pass_debits_credit_and_records_valid_until() {
         Some(chrono::NaiveDate::from_ymd_opt(2030, 5, 17).unwrap())
     );
     let pass_svc_id: i64 =
-        sqlx::query_scalar("SELECT id FROM services WHERE name = 'Monthly pass'")
+        sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
             .fetch_one(&app.pool)
             .await
             .unwrap();
@@ -191,7 +194,7 @@ async fn log_visit_rejects_card_with_expired_pass() {
     let card_id = app.seed_card("VISIT-3", 50.0, None, None, None, None).await;
 
     // Insert an expired pass transaction directly via SQL
-    let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name = 'Monthly pass'")
+    let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
         .fetch_one(&app.pool)
         .await
         .unwrap();
@@ -347,7 +350,7 @@ async fn card_response_includes_expired_pass_with_negative_days_remaining() {
         .await;
 
     // Insert an expired pass directly — cannot go through sell-pass API (validates future date).
-    let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name = 'Monthly pass'")
+    let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
         .fetch_one(&app.pool)
         .await
         .unwrap();
@@ -405,7 +408,7 @@ async fn log_visit_accepts_pass_with_valid_until_today() {
 
     // Insert a pass expiring TODAY directly — API won't allow today via sell-pass.
     let today = chrono::Local::now().date_naive();
-    let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name = 'Monthly pass'")
+    let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
         .fetch_one(&app.pool)
         .await
         .unwrap();
@@ -440,7 +443,7 @@ async fn card_response_pass_field_when_valid_until_equals_today() {
         .await;
 
     let today = chrono::Local::now().date_naive();
-    let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name = 'Monthly pass'")
+    let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
         .fetch_one(&app.pool)
         .await
         .unwrap();
@@ -606,4 +609,49 @@ async fn seed_expired_pass_endpoint_is_reachable_and_stores_negative_amount() {
         amount, -35.0,
         "seed_expired_pass must store a NEGATIVE amount (ledger convention)"
     );
+}
+
+#[tokio::test]
+async fn sell_pass_works_after_admin_renames_pass() {
+    // Regression test for kind-based lookup. The Monthly pass row is now
+    // identified by kind='monthly_pass', not by name='Monthly pass'. Admin
+    // can rename name_sk and name_en freely without breaking sell-pass.
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("PASS-RENAME-1", 50.0, None, None, None, None)
+        .await;
+
+    let pass_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind='monthly_pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+
+    // Admin renames the Monthly pass — both languages.
+    let (status, row) = app
+        .request(helpers::put_json(
+            &format!("/api/admin/services/{pass_id}"),
+            &app.admin_token,
+            &json!({ "name_sk": "Permanentka", "name_en": "Membership" }),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "rename must succeed: {row}"
+    );
+
+    // Sell pass must still succeed (lookup is by kind, not name).
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({ "card_id": card_id, "price": 35.0, "valid_until": "2030-01-01" }),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "sell-pass must work after rename: {resp}"
+    );
+    assert_eq!(resp["new_credit"].as_f64().unwrap(), 15.0);
 }

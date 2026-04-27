@@ -31,7 +31,7 @@ async fn seed_expired_pass(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     // Look up the service id and its current default_price to avoid hardcoding.
     let (pass_service_id, pass_price): (i64, f64) =
-        sqlx::query_as("SELECT id, default_price FROM services WHERE name = 'Monthly pass'")
+        sqlx::query_as("SELECT id, default_price FROM services WHERE kind = 'monthly_pass'")
             .fetch_one(&state.pool)
             .await
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;

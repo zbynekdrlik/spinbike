@@ -13,7 +13,7 @@ async fn day_report_aggregates_charges_topups_passes_and_excludes_voided() {
     // One charge of 5 EUR (amount = -5)
     sqlx::query(
         "INSERT INTO transactions (card_id, amount, action, service_id, created_at) \
-                 SELECT ?1, -5.0, 'charge', id, datetime('now') FROM services WHERE name = 'Spinning' LIMIT 1",
+                 SELECT ?1, -5.0, 'charge', id, datetime('now') FROM services WHERE name_en = 'Spinning' LIMIT 1",
     )
     .bind(card_id)
     .execute(&app.pool)
