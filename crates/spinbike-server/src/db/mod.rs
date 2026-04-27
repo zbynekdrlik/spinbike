@@ -144,11 +144,13 @@ mod tests {
         assert_eq!(tables, expected);
 
         // Verify seed data.
+        // V1 seeded Spinning + Fitness; V4 seeded Monthly pass; V8 seeded
+        // Občerstvenie + Doplnky výživy + Aktivácia karty.
         let svc_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM services")
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(svc_count, 3);
+        assert_eq!(svc_count, 6);
 
         let setting: String =
             sqlx::query_scalar("SELECT value FROM settings WHERE key = 'bike_count'")
@@ -169,6 +171,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
     }
 }

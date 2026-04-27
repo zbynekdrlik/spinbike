@@ -207,6 +207,14 @@ ALTER TABLE transactions ADD COLUMN deleted_at TEXT;
 "#;
 
 const V8_SERVICES_DUAL_LANG_KIND: &str = r#"
+-- Defer foreign-key checks until COMMIT so DROP TABLE services does not
+-- fail when transactions has child rows referencing services(id).
+-- After RENAME services_new -> services, all original ids are preserved,
+-- so transactions.service_id refs resolve cleanly at commit time.
+-- (`PRAGMA foreign_keys = OFF` is a no-op inside an open transaction;
+--  defer_foreign_keys is the supported mechanism.)
+PRAGMA defer_foreign_keys = TRUE;
+
 CREATE TABLE services_new (
     id            INTEGER PRIMARY KEY AUTOINCREMENT,
     kind          TEXT    NOT NULL DEFAULT 'generic'
@@ -510,5 +518,112 @@ mod tests {
         .execute(&pool)
         .await;
         assert!(res.is_err(), "kind CHECK constraint must reject 'foobar'");
+    }
+
+    #[tokio::test]
+    async fn v8_is_idempotent() {
+        // Running migrations twice must not fail. Idempotency is enforced by
+        // the schema_version check in run_migrations, but exercise it.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        for n_sk in ["Občerstvenie", "Doplnky výživy", "Aktivácia karty"] {
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE name_sk = ?")
+                .bind(n_sk)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(count, 1, "service '{n_sk}' must be seeded exactly once");
+        }
+    }
+
+    #[tokio::test]
+    async fn v8_drop_rename_pattern_works_with_fk_child_rows() {
+        // Production scenario: services has child rows in transactions referencing
+        // services(id). Without `PRAGMA defer_foreign_keys = TRUE` inside V8's
+        // transaction, DROP TABLE services would fail at runtime with an FK
+        // violation. This test exercises the same CREATE/INSERT/DROP/RENAME
+        // pattern V8 uses, against a populated transactions table, to prove
+        // the deferral pragma is the right tool.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // Seed a transaction with a real services(id) FK ref.
+        let card_id: i64 = sqlx::query_scalar(
+            "INSERT INTO cards (barcode, allow_debit) VALUES ('FK-TEST', 1) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let svc_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind='monthly_pass'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO transactions (card_id, service_id, amount, action, created_at)
+             VALUES (?, ?, -35.0, 'debit', '2026-01-01 12:00:00')",
+        )
+        .bind(card_id)
+        .bind(svc_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Mimic V8's DROP+RENAME pattern within a transaction with deferred FK.
+        let mut tx = pool.begin().await.unwrap();
+        sqlx::query("PRAGMA defer_foreign_keys = TRUE")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE services_test_rebuild (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL DEFAULT 'generic',
+                name_sk TEXT NOT NULL,
+                name_en TEXT NOT NULL,
+                default_price REAL NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1
+            )",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO services_test_rebuild
+                SELECT id, kind, name_sk, name_en, default_price, active FROM services",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        // The critical step that fails without deferred FK.
+        sqlx::query("DROP TABLE services")
+            .execute(&mut *tx)
+            .await
+            .expect("DROP TABLE services must succeed with PRAGMA defer_foreign_keys = TRUE");
+        sqlx::query("ALTER TABLE services_test_rebuild RENAME TO services")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit()
+            .await
+            .expect("commit must succeed — preserved ids restore FK validity");
+
+        // The transaction's service_id ref still resolves after rebuild.
+        let still_valid: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1 FROM transactions t
+                JOIN services s ON s.id = t.service_id
+                WHERE t.card_id = ?
+            )",
+        )
+        .bind(card_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            still_valid,
+            "transactions.service_id ref must still resolve after table rebuild"
+        );
     }
 }
