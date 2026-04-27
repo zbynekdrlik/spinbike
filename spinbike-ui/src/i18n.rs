@@ -80,15 +80,21 @@ pub fn fmt_weekday_short(d: chrono::NaiveDate, lang: Lang) -> &'static str {
     }
 }
 
-/// Parse a server timestamp and resolve it to Slovak local wall time.
+/// Parse a server timestamp and resolve it to a Europe/Bratislava `DateTime`.
 ///
 /// SQLite `datetime('now')` and ISO 8601 strings are interpreted as UTC and
-/// converted to Europe/Bratislava (CET/CEST, DST-aware). Legacy MS Access
-/// `MM/DD/YY` patterns come from the old VB6 app on a Slovak PC, are already
-/// local, and pass through unshifted. Returns `None` if no pattern matches.
-fn parse_to_local(s: &str) -> Option<chrono::NaiveDateTime> {
+/// converted via the IANA tz database (DST-aware). Legacy MS Access
+/// `MM/DD/YY` patterns come from the old VB6 app on a Slovak PC and are
+/// already local. Returns `None` if no pattern matches.
+///
+/// Returning a tz-aware `DateTime<Tz>` (rather than a `NaiveDateTime`) keeps
+/// the timezone identity attached so future callers can do arithmetic or
+/// comparisons without losing context. The display helpers below format
+/// directly off the tz-aware value, which prints in local wall-clock time.
+fn parse_to_local(s: &str) -> Option<chrono::DateTime<chrono_tz::Tz>> {
     use chrono::TimeZone;
     let trimmed = s.trim();
+    let bratislava = chrono_tz::Europe::Bratislava;
 
     let utc_patterns = [
         "%Y-%m-%d %H:%M:%S",    // SQLite datetime('now')
@@ -97,8 +103,7 @@ fn parse_to_local(s: &str) -> Option<chrono::NaiveDateTime> {
     ];
     for pattern in utc_patterns {
         if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(trimmed, pattern) {
-            let local = chrono_tz::Europe::Bratislava.from_utc_datetime(&naive);
-            return Some(local.naive_local());
+            return Some(bratislava.from_utc_datetime(&naive));
         }
     }
 
@@ -108,34 +113,62 @@ fn parse_to_local(s: &str) -> Option<chrono::NaiveDateTime> {
     ];
     for pattern in local_patterns {
         if let Ok(naive) = chrono::NaiveDateTime::parse_from_str(trimmed, pattern) {
-            return Some(naive);
+            // Resolve in local time. Ambiguous fall-back overlap → pick
+            // earliest (CEST, the earlier UTC instant). Non-existent
+            // spring-forward gap shouldn't occur in legacy data, but if it
+            // does, fall back to interpreting as UTC so we still render
+            // something rather than dropping the row.
+            return bratislava
+                .from_local_datetime(&naive)
+                .earliest()
+                .or_else(|| Some(bratislava.from_utc_datetime(&naive)));
         }
     }
 
     None
 }
 
+/// Log a console warning for an unparseable server timestamp. WASM-only —
+/// host-side `cargo test` builds compile this out so unit tests can exercise
+/// the None branch without linking JS interop.
+#[cfg(target_arch = "wasm32")]
+fn warn_unparseable(helper: &str, s: &str) {
+    web_sys::console::warn_1(
+        &format!("i18n::{helper}: unparseable timestamp '{s}'").into(),
+    );
+}
+#[cfg(not(target_arch = "wasm32"))]
+fn warn_unparseable(_helper: &str, _s: &str) {}
+
 /// Format a server timestamp as date + time, per-locale, in Slovak local time.
 /// Slovak: `dd.mm.yyyy HH:MM` · English: `yyyy-mm-dd HH:MM`. Returns the
-/// original string unchanged if it doesn't match any known pattern.
+/// original string unchanged (and emits a console warning) if it doesn't
+/// match any known pattern.
 pub fn fmt_datetime_str(s: &str, lang: Lang) -> String {
     match parse_to_local(s) {
         Some(dt) => match lang {
             Lang::Sk => dt.format("%d.%m.%Y %H:%M").to_string(),
             Lang::En => dt.format("%Y-%m-%d %H:%M").to_string(),
         },
-        None => s.to_string(),
+        None => {
+            warn_unparseable("fmt_datetime_str", s);
+            s.to_string()
+        }
     }
 }
 
 /// Format a server timestamp as just `HH:MM` in Slovak local time. Used in
 /// the activity feed where the date is supplied by the page-level day anchor.
-/// Returns an empty string if no pattern matches (legacy raw-split fallback
-/// would have returned a fragment of the input — empty is a safer default).
+/// Returns an empty string (and emits a console warning) on parse failure —
+/// safer than the prior raw-split fallback that would have rendered a
+/// fragment of the malformed input.
 pub fn fmt_time_str(s: &str) -> String {
     match parse_to_local(s) {
         Some(dt) => dt.format("%H:%M").to_string(),
-        None => String::new(),
+        None => {
+            warn_unparseable("fmt_time_str", s);
+            String::new()
+        }
     }
 }
 
