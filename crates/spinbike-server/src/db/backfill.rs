@@ -747,6 +747,46 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn apply_row_unparsable_date_increments_unmatched_per_service() {
+        // Unparsable legacy date -> unmatched += 1 + bucket.unmatched += 1
+        // (without the date branch ever issuing the UPDATE). Kills the
+        // mutation-testing survivors on the date-error increment lines.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (svc, cards) = fixture_state(&pool).await;
+        let mut tx = pool.begin().await.unwrap();
+        let mut report = BackfillReport::default();
+
+        apply_legacy_row(
+            &mut tx,
+            &svc,
+            &cards,
+            "100",
+            "Debet",
+            "Doplnky Vyzivy",
+            "this is not a legacy date",
+            1.66,
+            &mut report,
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+
+        assert_eq!(report.unmatched, 1, "unparsable date counts as unmatched");
+        assert_eq!(report.matched, 0);
+        assert_eq!(report.already_set, 0);
+        assert_eq!(report.ambiguous, 0);
+        assert_eq!(report.orphan_card, 0);
+        assert_eq!(report.unknown_service, 0);
+        let bucket = report.per_service.get("Doplnky výživy").unwrap();
+        assert_eq!(
+            bucket.unmatched, 1,
+            "per-service unmatched also incremented"
+        );
+        assert_eq!(bucket.matched, 0);
+    }
+
+    #[tokio::test]
     async fn apply_row_matched_one_increments_matched_per_service() {
         // One NULL-service prod txn matches -> matched += 1, bucket.matched += 1.
         let pool = create_memory_pool().await.unwrap();
