@@ -12,7 +12,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{Row, SqlitePool};
+use sqlx::{Connection, Row, SqlitePool};
 use tracing::info;
 
 use migrations::MIGRATIONS;

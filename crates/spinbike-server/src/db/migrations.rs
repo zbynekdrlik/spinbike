@@ -261,6 +261,7 @@ ALTER TABLE transactions ADD COLUMN legacy_backfilled INTEGER NOT NULL DEFAULT 0
 #[cfg(test)]
 mod tests {
     use crate::db::{create_memory_pool, run_migrations};
+    use sqlx::Connection;
 
     #[tokio::test]
     async fn v4_adds_valid_until_column() {
