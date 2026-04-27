@@ -36,15 +36,26 @@ test.describe('Log Visit — only class-visit services', () => {
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
-        // Sell a monthly pass so log-visit chips become visible.
-        const mpValue = await page
+        // Sell a monthly pass so log-visit chips become visible. The dropdown
+        // populates async after services load — wait for the option to exist,
+        // then verify the on-change handler auto-filled the price before
+        // submitting (otherwise parse_money returns early and no pass is sold).
+        const mpOption = page
             .locator('[data-testid="charge-service"] option')
-            .filter({ hasText: 'Monthly pass' })
-            .first()
-            .getAttribute('value');
-        if (!mpValue) throw new Error('Monthly pass option not found');
+            .filter({ hasText: /Monthly pass|Mesačný preplatok/ })
+            .first();
+        await expect(mpOption).toBeAttached();
+        const mpValue = await mpOption.getAttribute('value');
+        if (!mpValue) throw new Error('Monthly pass option had no value');
         await page.locator('[data-testid="charge-service"]').selectOption(mpValue);
+        await expect(page.locator('[data-testid="charge-amount"]')).not.toHaveValue('');
+
+        const sellPassResp = page.waitForResponse(
+            (r) => r.url().includes('/api/payments/sell-pass') && r.request().method() === 'POST',
+        );
         await page.locator('[data-testid="charge-submit"]').click();
+        const resp = await sellPassResp;
+        expect(resp.ok()).toBe(true);
         await expect(page.locator('[data-testid="pass-banner-active"]')).toBeVisible();
 
         // Migrations seed 5 generic services (Spinning, Fitness, Refreshments,
