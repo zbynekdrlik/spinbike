@@ -108,6 +108,14 @@ pub async fn run(pool: &SqlitePool, mdb_path: &Path) -> Result<BackfillReport> {
 
     let mut report = BackfillReport::default();
 
+    // Wrap the entire batch in one transaction. Two reasons:
+    //   1. Atomicity: a half-run (process killed) leaves the DB untouched;
+    //      a re-run starts from a clean slate.
+    //   2. Performance: SQLite WAL otherwise issues one fsync per row UPDATE.
+    //      On thousands of legacy rows this is orders of magnitude slower
+    //      than a single batched commit.
+    let mut tx = pool.begin().await.context("Failed to begin backfill tx")?;
+
     for result in data_reader.records() {
         let r = result.context("parse legacy Data row")?;
         // Header: id_data,id_card,user,action,service,suma_SK,Date,EndDate,suma
@@ -156,8 +164,15 @@ pub async fn run(pool: &SqlitePool, mdb_path: &Path) -> Result<BackfillReport> {
         };
 
         // Match (barcode, created_at_string, amount with epsilon) and only
-        // touch rows that don't already have a service_id. Prod stores the
-        // amount as negative for debits; legacy `suma` is positive.
+        // touch rows that don't already have a service_id.
+        //
+        // SIGN CONVENTION: the migrator binds `amount_eur` with the same sign
+        // it has in the legacy `suma` column (positive for debits, no negation).
+        // Imported transactions in prod therefore have POSITIVE amounts for
+        // debits, in contrast to NEW sales which the API stores as negative.
+        // The `service_id IS NULL` guard ensures we only touch imported rows,
+        // so `t.amount` here is always the legacy-positive value and we
+        // compare with `t.amount - legacy_amount`.
         let updated_ids: Vec<(i64,)> = sqlx::query_as(
             "UPDATE transactions
                 SET service_id = ?, legacy_backfilled = 1
@@ -167,7 +182,7 @@ pub async fn run(pool: &SqlitePool, mdb_path: &Path) -> Result<BackfillReport> {
                   JOIN cards c ON c.id = t.card_id
                  WHERE c.barcode = ?
                    AND t.created_at = ?
-                   AND ABS(t.amount + ?) < 0.005
+                   AND ABS(t.amount - ?) < 0.005
                    AND t.service_id IS NULL
               )
               RETURNING id",
@@ -176,7 +191,7 @@ pub async fn run(pool: &SqlitePool, mdb_path: &Path) -> Result<BackfillReport> {
         .bind(barcode)
         .bind(&date)
         .bind(amount_eur)
-        .fetch_all(pool)
+        .fetch_all(&mut *tx)
         .await
         .context("backfill UPDATE failed")?;
 
@@ -190,13 +205,13 @@ pub async fn run(pool: &SqlitePool, mdb_path: &Path) -> Result<BackfillReport> {
                     "SELECT t.id FROM transactions t
                        JOIN cards c ON c.id = t.card_id
                       WHERE c.barcode = ? AND t.created_at = ?
-                        AND ABS(t.amount + ?) < 0.005
+                        AND ABS(t.amount - ?) < 0.005
                       LIMIT 1",
                 )
                 .bind(barcode)
                 .bind(&date)
                 .bind(amount_eur)
-                .fetch_optional(pool)
+                .fetch_optional(&mut *tx)
                 .await
                 .context("ambiguity probe failed")?;
                 if exists.is_some() {
@@ -224,6 +239,8 @@ pub async fn run(pool: &SqlitePool, mdb_path: &Path) -> Result<BackfillReport> {
             }
         }
     }
+
+    tx.commit().await.context("Failed to commit backfill tx")?;
 
     info!("=== Backfill summary ===");
     let mut services: Vec<&String> = report.per_service.keys().collect();
@@ -277,7 +294,7 @@ mod tests {
                 SELECT t.id FROM transactions t
                   JOIN cards c ON c.id = t.card_id
                  WHERE c.barcode = ? AND t.created_at = ?
-                   AND ABS(t.amount + ?) < 0.005
+                   AND ABS(t.amount - ?) < 0.005
                    AND t.service_id IS NULL
               ) RETURNING id",
         )
@@ -303,7 +320,7 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO transactions (card_id, amount, action, created_at)
-             VALUES (?, -1.66, 'debit', '11/06/08 21:31:04')",
+             VALUES (?, 1.66, 'debit', '11/06/08 21:31:04')",
         )
         .bind(card_id)
         .execute(&pool)
@@ -352,7 +369,7 @@ mod tests {
                 .unwrap();
         sqlx::query(
             "INSERT INTO transactions (card_id, service_id, amount, action, created_at)
-             VALUES (?, ?, -1.66, 'debit', '11/06/08 21:31:04')",
+             VALUES (?, ?, 1.66, 'debit', '11/06/08 21:31:04')",
         )
         .bind(card_id)
         .bind(fitness_id)
@@ -402,8 +419,8 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO transactions (card_id, amount, action, created_at)
-             VALUES (?, -1.66, 'debit', '11/06/08 21:31:04'),
-                    (?, -1.66, 'debit', '11/06/08 21:31:04')",
+             VALUES (?, 1.66, 'debit', '11/06/08 21:31:04'),
+                    (?, 1.66, 'debit', '11/06/08 21:31:04')",
         )
         .bind(card_id)
         .bind(card_id)
