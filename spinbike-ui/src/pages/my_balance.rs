@@ -102,7 +102,7 @@ pub fn MyBalancePage() -> impl IntoView {
                             view! { <p class="text-muted mt-2">{i18n::t(lang.get(), "no_transactions")}</p> }.into_any()
                         } else {
                             let tx_rows: Vec<_> = balance.transactions.iter().map(|tx| {
-                                let date = tx.created_at.clone();
+                                let date = i18n::fmt_datetime_str(&tx.created_at, lang.get());
                                 let action = tx.action.clone();
                                 let amount = format!("{:.0} CZK", tx.amount);
                                 view! {
