@@ -1,7 +1,10 @@
 //! CLI tool to migrate data from the legacy VB6 Access database into the new SQLite schema.
 //!
-//! Usage:
+//! Usage (fresh import):
 //!   migrate-legacy --mdb-path <path/to/db.mdb> --output <path/to/spinbike.db>
+//!
+//! Usage (in-place backfill):
+//!   migrate-legacy --backfill --mdb-path <path/to/db.mdb> --target <path/to/spinbike.db>
 //!
 //! Requires `mdb-export` (from mdbtools) to be installed on the system.
 
@@ -17,10 +20,16 @@ use tracing_subscriber::EnvFilter;
 use spinbike_server::auth;
 use spinbike_server::db;
 
-fn parse_args() -> Result<(PathBuf, PathBuf)> {
+enum Mode {
+    FreshImport { mdb_path: PathBuf, target: PathBuf },
+    Backfill { mdb_path: PathBuf, target: PathBuf },
+}
+
+fn parse_args() -> Result<Mode> {
     let args: Vec<String> = std::env::args().collect();
     let mut mdb_path: Option<PathBuf> = None;
-    let mut output: Option<PathBuf> = None;
+    let mut target: Option<PathBuf> = None;
+    let mut backfill = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -31,25 +40,29 @@ fn parse_args() -> Result<(PathBuf, PathBuf)> {
                     args.get(i).context("--mdb-path requires a value")?,
                 ));
             }
-            "--output" => {
+            "--output" | "--target" => {
                 i += 1;
-                output = Some(PathBuf::from(
-                    args.get(i).context("--output requires a value")?,
+                target = Some(PathBuf::from(
+                    args.get(i).context("--output/--target requires a value")?,
                 ));
             }
+            "--backfill" => backfill = true,
             other => bail!("Unknown argument: {other}"),
         }
         i += 1;
     }
 
     let mdb_path = mdb_path.context("Missing required argument: --mdb-path <path>")?;
-    let output = output.context("Missing required argument: --output <path>")?;
-
+    let target = target.context("Missing required argument: --output/--target <path>")?;
     if !mdb_path.exists() {
         bail!("MDB file not found: {}", mdb_path.display());
     }
 
-    Ok((mdb_path, output))
+    Ok(if backfill {
+        Mode::Backfill { mdb_path, target }
+    } else {
+        Mode::FreshImport { mdb_path, target }
+    })
 }
 
 /// Run `mdb-export` on the given table and return the CSV output as a string.
@@ -118,16 +131,7 @@ fn map_action(action: &str) -> Option<&'static str> {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::from_default_env().add_directive("migrate_legacy=info".parse()?),
-        )
-        .init();
-
-    let (mdb_path, output_path) = parse_args()?;
-
+async fn run_fresh_import(mdb_path: PathBuf, output_path: PathBuf) -> Result<()> {
     // Remove existing output file to start fresh.
     if output_path.exists() {
         std::fs::remove_file(&output_path).with_context(|| {
@@ -389,6 +393,40 @@ async fn main() -> Result<()> {
     info!("  Output:      {}", output_path.display());
 
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::from_default_env().add_directive("migrate_legacy=info".parse()?),
+        )
+        .init();
+
+    match parse_args()? {
+        Mode::FreshImport { mdb_path, target } => run_fresh_import(mdb_path, target).await,
+        Mode::Backfill { mdb_path, target } => {
+            if !target.exists() {
+                bail!(
+                    "--backfill requires an existing target DB: {}",
+                    target.display()
+                );
+            }
+            let pool = db::create_pool(&target).await?;
+            db::run_migrations(&pool).await?;
+            let report = db::backfill::run(&pool, &mdb_path).await?;
+            info!(
+                "Backfill done: matched={} already_set={} unmatched={} ambiguous={} orphan_card={} unknown_service={}",
+                report.matched,
+                report.already_set,
+                report.unmatched,
+                report.ambiguous,
+                report.orphan_card,
+                report.unknown_service
+            );
+            Ok(())
+        }
+    }
 }
 
 #[cfg(test)]
