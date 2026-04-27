@@ -15,7 +15,12 @@ pub struct TransactionRow {
     pub valid_until: Option<chrono::NaiveDate>,
     // Joined from services — None when the transaction wasn't tied to a service.
     #[sqlx(default)]
-    pub service_name: Option<String>,
+    pub service_name_sk: Option<String>,
+    #[sqlx(default)]
+    pub service_name_en: Option<String>,
+    /// Stable kind ("generic" | "monthly_pass") — None when service_id is NULL.
+    #[sqlx(default)]
+    pub service_kind: Option<String>,
     pub deleted_at: Option<String>,
 }
 
@@ -81,7 +86,7 @@ pub async fn list_transactions_for_card(
     let txns = sqlx::query_as::<_, TransactionRow>(
         "SELECT t.id, t.user_id, t.card_id, t.staff_id, t.service_id,
                 t.amount, t.action, t.created_at, t.valid_until,
-                s.name AS service_name, t.deleted_at
+                s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.deleted_at
          FROM transactions t
          LEFT JOIN services s ON s.id = t.service_id
          WHERE t.card_id = ?
@@ -113,7 +118,7 @@ pub async fn list_transactions_for_card_paginated(
         Some(cursor) => sqlx::query_as::<_, TransactionRow>(
             "SELECT t.id, t.user_id, t.card_id, t.staff_id, t.service_id,
                         t.amount, t.action, t.created_at, t.valid_until,
-                        s.name AS service_name, t.deleted_at
+                        s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.deleted_at
                  FROM transactions t
                  LEFT JOIN services s ON s.id = t.service_id
                  WHERE t.card_id = ? AND t.created_at < ?
@@ -129,7 +134,7 @@ pub async fn list_transactions_for_card_paginated(
         None => sqlx::query_as::<_, TransactionRow>(
             "SELECT t.id, t.user_id, t.card_id, t.staff_id, t.service_id,
                         t.amount, t.action, t.created_at, t.valid_until,
-                        s.name AS service_name, t.deleted_at
+                        s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.deleted_at
                  FROM transactions t
                  LEFT JOIN services s ON s.id = t.service_id
                  WHERE t.card_id = ?
@@ -152,7 +157,7 @@ pub async fn list_transactions_for_user(
     let txns = sqlx::query_as::<_, TransactionRow>(
         "SELECT t.id, t.user_id, t.card_id, t.staff_id, t.service_id,
                 t.amount, t.action, t.created_at, t.valid_until,
-                s.name AS service_name, t.deleted_at
+                s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.deleted_at
          FROM transactions t
          LEFT JOIN services s ON s.id = t.service_id
          WHERE t.user_id = ?
