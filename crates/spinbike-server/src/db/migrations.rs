@@ -27,6 +27,12 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "transactions: soft-delete column",
         V7_TRANSACTIONS_SOFT_DELETE,
     ),
+    (8, "services_dual_lang_kind", V8_SERVICES_DUAL_LANG_KIND),
+    (
+        9,
+        "transactions: legacy_backfilled marker",
+        V9_TRANSACTIONS_LEGACY_BACKFILL_MARKER,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -205,9 +211,57 @@ const V7_TRANSACTIONS_SOFT_DELETE: &str = r#"
 ALTER TABLE transactions ADD COLUMN deleted_at TEXT;
 "#;
 
+const V8_SERVICES_DUAL_LANG_KIND: &str = r#"
+-- The CREATE_NEW + INSERT + DROP + RENAME pattern requires foreign-key
+-- enforcement to be OFF for the duration of the migration. The migration
+-- runner (db::run_migrations) handles that toggle around the transaction.
+-- INSERT INTO services_new ... SELECT id, ... preserves the original ids,
+-- so transactions.service_id refs continue to resolve after the rename.
+
+CREATE TABLE services_new (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind          TEXT    NOT NULL DEFAULT 'generic'
+                  CHECK (kind IN ('generic', 'monthly_pass')),
+    name_sk       TEXT    NOT NULL,
+    name_en       TEXT    NOT NULL,
+    default_price REAL    NOT NULL,
+    active        INTEGER NOT NULL DEFAULT 1
+);
+
+INSERT INTO services_new (id, kind, name_sk, name_en, default_price, active)
+SELECT id,
+       CASE WHEN name = 'Monthly pass' THEN 'monthly_pass' ELSE 'generic' END,
+       CASE name WHEN 'Spinning' THEN 'Spinning'
+                 WHEN 'Fitness' THEN 'Fitness'
+                 WHEN 'Monthly pass' THEN 'Mesačný preplatok'
+                 ELSE name END,
+       CASE name WHEN 'Spinning' THEN 'Spinning'
+                 WHEN 'Fitness' THEN 'Fitness'
+                 WHEN 'Monthly pass' THEN 'Monthly pass'
+                 ELSE name END,
+       default_price, active
+FROM services;
+
+DROP TABLE services;
+ALTER TABLE services_new RENAME TO services;
+
+CREATE UNIQUE INDEX idx_services_monthly_pass
+    ON services(kind) WHERE kind = 'monthly_pass';
+
+INSERT OR IGNORE INTO services (kind, name_sk, name_en, default_price, active)
+VALUES ('generic', 'Občerstvenie',     'Refreshments',        0.0, 1),
+       ('generic', 'Doplnky výživy',   'Supplements',         0.0, 1),
+       ('generic', 'Aktivácia karty',  'Card activation fee', 0.0, 1);
+"#;
+
+const V9_TRANSACTIONS_LEGACY_BACKFILL_MARKER: &str = r#"
+ALTER TABLE transactions ADD COLUMN legacy_backfilled INTEGER NOT NULL DEFAULT 0;
+"#;
+
 #[cfg(test)]
 mod tests {
     use crate::db::{create_memory_pool, run_migrations};
+    use sqlx::Connection;
 
     #[tokio::test]
     async fn v4_adds_valid_until_column() {
@@ -230,13 +284,15 @@ mod tests {
     async fn v4_seeds_monthly_pass_service() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let (name, price, active): (String, f64, i64) = sqlx::query_as(
-            "SELECT name, default_price, active FROM services WHERE name = 'Monthly pass'",
+        // V4 seeded the pass; V8 dual-language schema renamed the column to
+        // name_en/name_sk and tagged the row with kind='monthly_pass'.
+        let (name_en, price, active): (String, f64, i64) = sqlx::query_as(
+            "SELECT name_en, default_price, active FROM services WHERE kind = 'monthly_pass'",
         )
         .fetch_one(&pool)
         .await
         .expect("Monthly pass service must be seeded by V4");
-        assert_eq!(name, "Monthly pass");
+        assert_eq!(name_en, "Monthly pass");
         assert_eq!(price, 35.0);
         assert_eq!(active, 1);
     }
@@ -248,7 +304,7 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         run_migrations(&pool).await.unwrap();
         let count: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE name = 'Monthly pass'")
+            sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE kind = 'monthly_pass'")
                 .fetch_one(&pool)
                 .await
                 .unwrap();
@@ -385,5 +441,230 @@ mod tests {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         run_migrations(&pool).await.unwrap(); // second run must not error
+    }
+
+    #[tokio::test]
+    async fn v8_services_have_dual_lang_and_kind() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // Schema: name_sk, name_en, kind, default_price, active (no `name`).
+        let cols: Vec<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('services')")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        let names: Vec<&str> = cols.iter().map(|(n,)| n.as_str()).collect();
+        for col in [
+            "id",
+            "kind",
+            "name_sk",
+            "name_en",
+            "default_price",
+            "active",
+        ] {
+            assert!(
+                names.contains(&col),
+                "missing column {col} in services, got {names:?}"
+            );
+        }
+        assert!(
+            !names.contains(&"name"),
+            "old `name` column must be dropped"
+        );
+
+        // Existing rows preserved with correct dual-lang
+        let rows: Vec<(i64, String, String, String)> =
+            sqlx::query_as("SELECT id, kind, name_sk, name_en FROM services ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let by_kind: std::collections::HashMap<&str, &(i64, String, String, String)> =
+            rows.iter().map(|r| (r.1.as_str(), r)).collect();
+        let pass = by_kind
+            .get("monthly_pass")
+            .expect("monthly_pass row missing");
+        assert_eq!(pass.2, "Mesačný preplatok");
+        assert_eq!(pass.3, "Monthly pass");
+
+        // Three new generic rows seeded
+        for n_sk in ["Občerstvenie", "Doplnky výživy", "Aktivácia karty"] {
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE name_sk = ?")
+                .bind(n_sk)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(count, 1, "service '{n_sk}' should be seeded once");
+        }
+    }
+
+    #[tokio::test]
+    async fn v8_only_one_monthly_pass_allowed() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let res = sqlx::query(
+            "INSERT INTO services (kind, name_sk, name_en, default_price)
+             VALUES ('monthly_pass', 'Druhý preplatok', 'Second pass', 35.0)",
+        )
+        .execute(&pool)
+        .await;
+        assert!(
+            res.is_err(),
+            "partial unique index on kind='monthly_pass' must reject duplicates"
+        );
+    }
+
+    #[tokio::test]
+    async fn v8_kind_check_constraint_rejects_unknown() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let res = sqlx::query(
+            "INSERT INTO services (kind, name_sk, name_en, default_price)
+             VALUES ('foobar', 'X', 'Y', 1.0)",
+        )
+        .execute(&pool)
+        .await;
+        assert!(res.is_err(), "kind CHECK constraint must reject 'foobar'");
+    }
+
+    #[tokio::test]
+    async fn v8_is_idempotent() {
+        // Running migrations twice must not fail. Idempotency is enforced by
+        // the schema_version check in run_migrations, but exercise it.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        for n_sk in ["Občerstvenie", "Doplnky výživy", "Aktivácia karty"] {
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE name_sk = ?")
+                .bind(n_sk)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(count, 1, "service '{n_sk}' must be seeded exactly once");
+        }
+    }
+
+    #[tokio::test]
+    async fn v8_drop_rename_pattern_works_with_fk_child_rows() {
+        // Production scenario: services has child rows in transactions referencing
+        // services(id). The CREATE/INSERT/DROP/RENAME pattern only works when FK
+        // enforcement is OFF for the duration of the migration — the migration
+        // runner toggles `PRAGMA foreign_keys` before/after the transaction so
+        // V8 succeeds against a populated transactions table.
+        //
+        // (`PRAGMA defer_foreign_keys = TRUE` inside an open transaction does
+        // NOT work for this pattern: SQLite registers the FK violation when
+        // DROP TABLE implicitly DELETEs the parent rows, and the subsequent
+        // RENAME of the new table to the old name does not clear the pending
+        // violation. PRAGMA foreign_keys = OFF (per-connection, before BEGIN)
+        // is the only mechanism that works.)
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // Seed a transaction with a real services(id) FK ref.
+        let card_id: i64 = sqlx::query_scalar(
+            "INSERT INTO cards (barcode, allow_debit) VALUES ('FK-TEST', 1) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let svc_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind='monthly_pass'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO transactions (card_id, service_id, amount, action, created_at)
+             VALUES (?, ?, -35.0, 'debit', '2026-01-01 12:00:00')",
+        )
+        .bind(card_id)
+        .bind(svc_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Acquire a single connection so PRAGMA + BEGIN target the same one.
+        // Mirror what run_migrations does for every migration.
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        let mut tx = conn.begin().await.unwrap();
+        sqlx::query(
+            "CREATE TABLE services_test_rebuild (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                kind TEXT NOT NULL DEFAULT 'generic',
+                name_sk TEXT NOT NULL,
+                name_en TEXT NOT NULL,
+                default_price REAL NOT NULL,
+                active INTEGER NOT NULL DEFAULT 1
+            )",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO services_test_rebuild
+                SELECT id, kind, name_sk, name_en, default_price, active FROM services",
+        )
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+        sqlx::query("DROP TABLE services")
+            .execute(&mut *tx)
+            .await
+            .expect("DROP TABLE services must succeed with foreign_keys = OFF");
+        sqlx::query("ALTER TABLE services_test_rebuild RENAME TO services")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        tx.commit()
+            .await
+            .expect("commit must succeed — preserved ids restore FK validity");
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        // Release the only connection back to the pool so the validity probe
+        // below can acquire it.
+        drop(conn);
+
+        // The transaction's service_id ref still resolves after rebuild.
+        let still_valid: bool = sqlx::query_scalar(
+            "SELECT EXISTS(
+                SELECT 1 FROM transactions t
+                JOIN services s ON s.id = t.service_id
+                WHERE t.card_id = ?
+            )",
+        )
+        .bind(card_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            still_valid,
+            "transactions.service_id ref must still resolve after table rebuild"
+        );
+    }
+
+    #[tokio::test]
+    async fn v9_transactions_have_legacy_backfilled_column() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // PRAGMA table_info returns: cid, name, type, notnull, dflt_value, pk
+        let cols: Vec<(i64, String, String, i64, Option<String>, i64)> =
+            sqlx::query_as("PRAGMA table_info(transactions)")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let lb = cols
+            .iter()
+            .find(|c| c.1 == "legacy_backfilled")
+            .expect("legacy_backfilled column missing on transactions");
+        assert_eq!(lb.2.to_uppercase(), "INTEGER");
+        assert_eq!(lb.3, 1, "legacy_backfilled must be NOT NULL");
     }
 }

@@ -76,7 +76,7 @@ async fn charge(
     // which /charge doesn't set. Staff must use /sell-pass instead.
     if let Some(sid) = body.service_id {
         let is_pass: bool =
-            sqlx::query_scalar("SELECT name = 'Monthly pass' FROM services WHERE id = ?")
+            sqlx::query_scalar("SELECT kind = 'monthly_pass' FROM services WHERE id = ?")
                 .bind(sid)
                 .fetch_optional(&state.pool)
                 .await
@@ -276,7 +276,7 @@ async fn sell_pass(
     }
 
     // Resolve Monthly pass service id by name (seeded by V4 migration).
-    let service_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name = 'Monthly pass'")
+    let service_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
         .fetch_one(&mut *tx)
         .await
         .map_err(internal_error)?;

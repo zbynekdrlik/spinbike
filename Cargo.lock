@@ -1044,6 +1044,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "mutants"
+version = "0.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bc0287524726960e07b119cebd01678f852f147742ae0d925e6a520dca956126"
+
+[[package]]
 name = "nu-ansi-term"
 version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1633,7 +1639,7 @@ dependencies = [
 
 [[package]]
 name = "spinbike-core"
-version = "0.10.0"
+version = "0.12.0"
 dependencies = [
  "chrono",
  "serde",
@@ -1643,7 +1649,7 @@ dependencies = [
 
 [[package]]
 name = "spinbike-server"
-version = "0.10.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -1654,6 +1660,7 @@ dependencies = [
  "http-body-util",
  "jsonwebtoken",
  "mime_guess",
+ "mutants",
  "rand 0.8.5",
  "rust-embed",
  "serde",

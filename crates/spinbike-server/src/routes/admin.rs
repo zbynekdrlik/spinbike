@@ -59,16 +59,22 @@ pub struct InstructorRow {
 
 // ---------- Services ----------
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct CreateServiceRequest {
-    pub name: String,
+    pub name_sk: String,
+    pub name_en: String,
     pub default_price: f64,
+    /// Optional. Defaults to "generic". Only "generic" or "monthly_pass" accepted.
+    #[serde(default)]
+    pub kind: Option<String>,
 }
 
-#[derive(Serialize, sqlx::FromRow)]
+#[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct ServiceRow {
     pub id: i64,
-    pub name: String,
+    pub kind: String,
+    pub name_sk: String,
+    pub name_en: String,
     pub default_price: f64,
     pub active: i64,
 }
@@ -122,11 +128,13 @@ pub struct UpdateInstructorRequest {
     pub active: Option<bool>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct UpdateServiceRequest {
-    pub name: Option<String>,
+    pub name_sk: Option<String>,
+    pub name_en: Option<String>,
     pub default_price: Option<f64>,
     pub active: Option<bool>,
+    // NOTE: `kind` is intentionally absent — it's read-only after create.
 }
 
 // ---------- Query params ----------
@@ -444,7 +452,7 @@ async fn update_instructor(
 
 // ---------- Service handlers ----------
 
-// I5: list_services now requires staff role.
+// I5: list_services requires staff role.
 async fn list_services(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
@@ -452,7 +460,7 @@ async fn list_services(
     require_staff(&claims)?;
 
     let rows = sqlx::query_as::<_, ServiceRow>(
-        "SELECT id, name, default_price, active FROM services ORDER BY id",
+        "SELECT id, kind, name_sk, name_en, default_price, active FROM services ORDER BY id",
     )
     .fetch_all(&state.pool)
     .await
@@ -473,19 +481,50 @@ async fn create_service(
         ));
     }
 
-    let id: i64 =
-        sqlx::query_scalar("INSERT INTO services (name, default_price) VALUES (?, ?) RETURNING id")
-            .bind(&body.name)
-            .bind(body.default_price)
-            .fetch_one(&state.pool)
-            .await
-            .map_err(internal_error)?;
-
+    if body.name_sk.trim().is_empty() || body.name_en.trim().is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "name_sk and name_en are required"})),
+        ));
+    }
+    let kind = body.kind.as_deref().unwrap_or("generic");
+    if !matches!(kind, "generic" | "monthly_pass") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "kind must be 'generic' or 'monthly_pass'"})),
+        ));
+    }
+    let id = sqlx::query_scalar::<_, i64>(
+        "INSERT INTO services (kind, name_sk, name_en, default_price)
+         VALUES (?, ?, ?, ?) RETURNING id",
+    )
+    .bind(kind)
+    .bind(&body.name_sk)
+    .bind(&body.name_en)
+    .bind(body.default_price)
+    .fetch_one(&state.pool)
+    .await
+    .map_err(|e| {
+        // Partial unique index on kind='monthly_pass' surfaces here. Use the
+        // sqlx-native unique-violation detector rather than string-matching
+        // the error message so we're robust to SQLite locale / version drift.
+        if let sqlx::Error::Database(db_err) = &e
+            && db_err.is_unique_violation()
+        {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": "a monthly_pass service already exists"})),
+            );
+        }
+        internal_error(e)
+    })?;
     Ok((
         StatusCode::CREATED,
         Json(ServiceRow {
             id,
-            name: body.name,
+            kind: kind.to_string(),
+            name_sk: body.name_sk,
+            name_en: body.name_en,
             default_price: body.default_price,
             active: 1,
         }),
@@ -506,22 +545,28 @@ async fn update_service(
     }
 
     let existing = sqlx::query_as::<_, ServiceRow>(
-        "SELECT id, name, default_price, active FROM services WHERE id = ?",
+        "SELECT id, kind, name_sk, name_en, default_price, active FROM services WHERE id = ?",
     )
     .bind(id)
-    .fetch_one(&state.pool)
+    .fetch_optional(&state.pool)
     .await
-    .map_err(internal_error)?;
+    .map_err(internal_error)?
+    .ok_or((
+        StatusCode::NOT_FOUND,
+        Json(serde_json::json!({"error": "service not found"})),
+    ))?;
 
-    let name = body.name.unwrap_or(existing.name);
+    let name_sk = body.name_sk.unwrap_or(existing.name_sk);
+    let name_en = body.name_en.unwrap_or(existing.name_en);
     let default_price = body.default_price.unwrap_or(existing.default_price);
     let active: i64 = body
         .active
-        .map(|a| if a { 1 } else { 0 })
+        .map(|b| if b { 1 } else { 0 })
         .unwrap_or(existing.active);
 
-    sqlx::query("UPDATE services SET name=?, default_price=?, active=? WHERE id=?")
-        .bind(&name)
+    sqlx::query("UPDATE services SET name_sk=?, name_en=?, default_price=?, active=? WHERE id=?")
+        .bind(&name_sk)
+        .bind(&name_en)
         .bind(default_price)
         .bind(active)
         .bind(id)
@@ -531,7 +576,9 @@ async fn update_service(
 
     Ok(Json(ServiceRow {
         id,
-        name,
+        kind: existing.kind, // unchanged: kind is read-only after create
+        name_sk,
+        name_en,
         default_price,
         active,
     }))

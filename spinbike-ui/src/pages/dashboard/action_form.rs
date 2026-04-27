@@ -10,8 +10,6 @@ use crate::util::parse_money;
 use super::helpers::pass_is_active;
 use super::{CardInfo, CardPass, PaymentResp, ServiceInfo};
 
-const MONTHLY_PASS_NAME: &str = "Monthly pass";
-
 /// Unified action form for the staff card-detail panel.
 #[component]
 pub fn ActionForm(
@@ -52,7 +50,7 @@ pub fn ActionForm(
             .get()
             .iter()
             .find(|s| s.id == id)
-            .map(|s| s.name == MONTHLY_PASS_NAME)
+            .map(|s| s.is_monthly_pass())
             .unwrap_or(false),
         None => false,
     };
@@ -255,10 +253,10 @@ pub fn ActionForm(
                 view! {
                     <div class="chip-row chip-row--spaced">
                         {services.get().into_iter()
-                            .filter(|svc| svc.name != MONTHLY_PASS_NAME)
+                            .filter(|svc| !svc.is_monthly_pass())
                             .map(|svc| {
                                 let service_id = svc.id;
-                                let svc_name = svc.name.clone();
+                                let svc_name = svc.display_name(lang.get_untracked()).to_string();
                                 view! {
                                     <button
                                         class="btn btn--compact btn--primary"
@@ -285,10 +283,12 @@ pub fn ActionForm(
                 >
                     <option value="">{move || i18n::t(lang.get(), "select_service")}</option>
                     {move || {
+                        let lang_now = lang.get();
                         services.get().into_iter().map(|s| {
                             let val = s.id.to_string();
-                            let label = format!("{} ({:.2} €)", s.name, s.default_price);
-                            view! { <option value=val>{label}</option> }
+                            let kind = s.kind.clone();
+                            let label = format!("{} ({:.2} €)", s.display_name(lang_now), s.default_price);
+                            view! { <option value=val data-kind=kind>{label}</option> }
                         }).collect::<Vec<_>>()
                     }}
                 </select>

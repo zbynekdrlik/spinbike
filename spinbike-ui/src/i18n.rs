@@ -375,6 +375,16 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("time", ("Cas", "Time"));
     m.insert("optional", ("Volitelne", "Optional"));
 
+    // Service catalog (V8 dual-language)
+    m.insert("service_name_sk", ("Slovensky nazov", "Slovak name"));
+    m.insert("service_name_en", ("Anglicky nazov", "English name"));
+    m.insert("kind", ("Druh", "Kind"));
+    m.insert("service_kind_generic", ("Polozka", "Item"));
+    m.insert(
+        "service_kind_monthly_pass",
+        ("Mesacny listok", "Monthly pass"),
+    );
+
     // Monthly pass banner
     m.insert(
         "pass_valid_until",

@@ -85,7 +85,7 @@ pub async fn day_report(
         "SELECT t.id, t.card_id, t.amount, t.action, t.created_at, t.valid_until, t.deleted_at,
                 TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')) AS card_name,
                 c.barcode,
-                s.name AS service_name
+                s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind
          FROM transactions t
          LEFT JOIN cards c ON c.id = t.card_id
          LEFT JOIN services s ON s.id = t.service_id
@@ -154,7 +154,9 @@ struct DbEventRow {
     barcode: Option<String>,
     action: String,
     amount: f64,
-    service_name: Option<String>,
+    service_name_sk: Option<String>,
+    service_name_en: Option<String>,
+    service_kind: Option<String>,
     created_at: String,
     valid_until: Option<chrono::NaiveDate>,
     deleted_at: Option<String>,
@@ -169,7 +171,9 @@ impl From<DbEventRow> for ReportEvent {
             barcode: r.barcode,
             action: r.action,
             amount: r.amount,
-            service_name: r.service_name,
+            service_name_sk: r.service_name_sk,
+            service_name_en: r.service_name_en,
+            service_kind: r.service_kind,
             created_at: r.created_at,
             valid_until: r.valid_until,
             voided: r.deleted_at.is_some(),
@@ -196,7 +200,7 @@ pub async fn range_report(
         "SELECT t.id, t.card_id, t.amount, t.action, t.created_at, t.valid_until, t.deleted_at,
                 TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')) AS card_name,
                 c.barcode,
-                s.name AS service_name
+                s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind
          FROM transactions t
          LEFT JOIN cards c ON c.id = t.card_id
          LEFT JOIN services s ON s.id = t.service_id

@@ -106,8 +106,12 @@ pub struct TransactionResponse {
     pub amount: f64,
     pub action: String,
     pub created_at: String,
-    // Name of the service the transaction paid for, when applicable.
-    pub service_name: Option<String>,
+    // Slovak label for the service (NULL when the transaction has no service).
+    pub service_name_sk: Option<String>,
+    // English label for the service (NULL when the transaction has no service).
+    pub service_name_en: Option<String>,
+    // Stable kind: "generic" | "monthly_pass" | NULL.
+    pub service_kind: Option<String>,
     pub valid_until: Option<chrono::NaiveDate>,
     pub deleted_at: Option<String>,
 }
@@ -500,7 +504,9 @@ async fn card_transactions(
                 amount: t.amount,
                 action: t.action,
                 created_at: t.created_at,
-                service_name: t.service_name,
+                service_name_sk: t.service_name_sk,
+                service_name_en: t.service_name_en,
+                service_kind: t.service_kind,
                 valid_until: t.valid_until,
                 deleted_at: t.deleted_at,
             })
@@ -535,7 +541,9 @@ async fn my_balance(
                 amount: t.amount,
                 action: t.action,
                 created_at: t.created_at,
-                service_name: t.service_name,
+                service_name_sk: t.service_name_sk,
+                service_name_en: t.service_name_en,
+                service_kind: t.service_kind,
                 valid_until: t.valid_until,
                 deleted_at: t.deleted_at,
             })

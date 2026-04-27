@@ -436,6 +436,125 @@ async fn update_user_role_rejects_invalid_role() {
     assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
 }
 
+// ---------- Services (dual-language + kind) ----------
+
+#[tokio::test]
+async fn create_and_list_services_with_dual_language() {
+    let app = TestApp::new().await;
+
+    // Create a new service.
+    let body = serde_json::json!({
+        "name_sk": "Voda",
+        "name_en": "Water",
+        "default_price": 1.0,
+    });
+    let (status, row) = app
+        .request(post_json("/api/admin/services", &app.admin_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+    assert_eq!(row["kind"], "generic");
+    assert_eq!(row["name_sk"], "Voda");
+    assert_eq!(row["name_en"], "Water");
+    assert_eq!(row["default_price"], 1.0);
+
+    // List includes seeded rows from V8.
+    let (status, rows) = app
+        .request(get("/api/admin/services", &app.staff_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let arr = rows.as_array().unwrap();
+    assert!(arr.iter().any(|r| r["kind"] == "monthly_pass"));
+    assert!(arr.iter().any(|r| r["name_sk"] == "Občerstvenie"));
+    assert!(arr.iter().any(|r| r["name_sk"] == "Doplnky výživy"));
+    assert!(arr.iter().any(|r| r["name_sk"] == "Aktivácia karty"));
+}
+
+#[tokio::test]
+async fn put_service_cannot_change_kind() {
+    let app = TestApp::new().await;
+
+    let pass_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind='monthly_pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+
+    let body = serde_json::json!({ "name_sk": "Renamed", "kind": "generic" });
+    let (status, row) = app
+        .request(put_json(
+            &format!("/api/admin/services/{pass_id}"),
+            &app.admin_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(row["kind"], "monthly_pass", "kind must remain monthly_pass");
+    assert_eq!(row["name_sk"], "Renamed");
+}
+
+#[tokio::test]
+async fn create_second_monthly_pass_rejected() {
+    let app = TestApp::new().await;
+
+    let body = serde_json::json!({
+        "name_sk": "Druhý",
+        "name_en": "Second",
+        "default_price": 35.0,
+        "kind": "monthly_pass",
+    });
+    let (status, _) = app
+        .request(post_json("/api/admin/services", &app.admin_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn create_service_with_invalid_kind_rejected() {
+    let app = TestApp::new().await;
+
+    let body = serde_json::json!({
+        "name_sk": "X",
+        "name_en": "Y",
+        "default_price": 1.0,
+        "kind": "foobar",
+    });
+    let (status, _) = app
+        .request(post_json("/api/admin/services", &app.admin_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
+// Each empty-name branch exercised separately so the OR-validation guard
+// can't degrade to AND without a test failing (mutation testing kills the
+// `||` -> `&&` mutant in admin.rs).
+
+#[tokio::test]
+async fn create_service_with_empty_name_sk_rejected() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({
+        "name_sk": "  ",
+        "name_en": "OK",
+        "default_price": 1.0,
+    });
+    let (status, _) = app
+        .request(post_json("/api/admin/services", &app.admin_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_service_with_empty_name_en_rejected() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({
+        "name_sk": "OK",
+        "name_en": "",
+        "default_price": 1.0,
+    });
+    let (status, _) = app
+        .request(post_json("/api/admin/services", &app.admin_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test]
 async fn update_user_role_forbidden_for_staff() {
     let app = TestApp::new().await;

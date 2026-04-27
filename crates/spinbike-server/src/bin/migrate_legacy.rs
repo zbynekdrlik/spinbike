@@ -1,7 +1,10 @@
 //! CLI tool to migrate data from the legacy VB6 Access database into the new SQLite schema.
 //!
-//! Usage:
+//! Usage (fresh import):
 //!   migrate-legacy --mdb-path <path/to/db.mdb> --output <path/to/spinbike.db>
+//!
+//! Usage (in-place backfill):
+//!   migrate-legacy --backfill --mdb-path <path/to/db.mdb> --target <path/to/spinbike.db>
 //!
 //! Requires `mdb-export` (from mdbtools) to be installed on the system.
 
@@ -17,10 +20,16 @@ use tracing_subscriber::EnvFilter;
 use spinbike_server::auth;
 use spinbike_server::db;
 
-fn parse_args() -> Result<(PathBuf, PathBuf)> {
+enum Mode {
+    FreshImport { mdb_path: PathBuf, target: PathBuf },
+    Backfill { mdb_path: PathBuf, target: PathBuf },
+}
+
+fn parse_args() -> Result<Mode> {
     let args: Vec<String> = std::env::args().collect();
     let mut mdb_path: Option<PathBuf> = None;
-    let mut output: Option<PathBuf> = None;
+    let mut target: Option<PathBuf> = None;
+    let mut backfill = false;
 
     let mut i = 1;
     while i < args.len() {
@@ -31,25 +40,29 @@ fn parse_args() -> Result<(PathBuf, PathBuf)> {
                     args.get(i).context("--mdb-path requires a value")?,
                 ));
             }
-            "--output" => {
+            "--output" | "--target" => {
                 i += 1;
-                output = Some(PathBuf::from(
-                    args.get(i).context("--output requires a value")?,
+                target = Some(PathBuf::from(
+                    args.get(i).context("--output/--target requires a value")?,
                 ));
             }
+            "--backfill" => backfill = true,
             other => bail!("Unknown argument: {other}"),
         }
         i += 1;
     }
 
     let mdb_path = mdb_path.context("Missing required argument: --mdb-path <path>")?;
-    let output = output.context("Missing required argument: --output <path>")?;
-
+    let target = target.context("Missing required argument: --output/--target <path>")?;
     if !mdb_path.exists() {
         bail!("MDB file not found: {}", mdb_path.display());
     }
 
-    Ok((mdb_path, output))
+    Ok(if backfill {
+        Mode::Backfill { mdb_path, target }
+    } else {
+        Mode::FreshImport { mdb_path, target }
+    })
 }
 
 /// Run `mdb-export` on the given table and return the CSV output as a string.
@@ -69,16 +82,11 @@ fn export_table(mdb_path: &PathBuf, table: &str) -> Result<String> {
         .with_context(|| format!("mdb-export output for '{table}' is not valid UTF-8"))
 }
 
-/// Map legacy service names (Slovak, from MS Access `serviceTab`) to
-/// the service names seeded in the new system.
-fn map_legacy_service_name(name: &str) -> Option<&'static str> {
-    match name.trim() {
-        "Casova karta" => Some("Monthly pass"),
-        "Fitnes" => Some("Fitness"),
-        "Spinbike" => Some("Spinning"),
-        _ => None,
-    }
-}
+// Legacy service-name mapping is the single source of truth in
+// `db::backfill::map_legacy_service_name`. Importing it here keeps the
+// fresh-import path and the in-place backfill mode in lockstep — adding
+// or removing a legacy service requires ONE edit, not two.
+use spinbike_server::db::backfill::map_legacy_service_name;
 
 /// Parse legacy EndDate strings in `MM/DD/YY HH:MM:SS` format
 /// (e.g. "12/05/08 00:00:00") to a `NaiveDate`. Blank/unparsable → None.
@@ -111,16 +119,7 @@ fn map_action(action: &str) -> Option<&'static str> {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::from_default_env().add_directive("migrate_legacy=info".parse()?),
-        )
-        .init();
-
-    let (mdb_path, output_path) = parse_args()?;
-
+async fn run_fresh_import(mdb_path: PathBuf, output_path: PathBuf) -> Result<()> {
     // Remove existing output file to start fresh.
     if output_path.exists() {
         std::fs::remove_file(&output_path).with_context(|| {
@@ -256,7 +255,7 @@ async fn main() -> Result<()> {
 
     // Load service name → id map once for legacy service name resolution.
     let service_ids: std::collections::HashMap<String, i64> =
-        sqlx::query_as::<_, (String, i64)>("SELECT name, id FROM services")
+        sqlx::query_as::<_, (String, i64)>("SELECT name_sk, id FROM services")
             .fetch_all(&pool)
             .await
             .context("Failed to load services for legacy mapping")?
@@ -384,6 +383,41 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
+#[tokio::main]
+async fn main() -> Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            EnvFilter::from_default_env().add_directive("migrate_legacy=info".parse()?),
+        )
+        .init();
+
+    match parse_args()? {
+        Mode::FreshImport { mdb_path, target } => run_fresh_import(mdb_path, target).await,
+        Mode::Backfill { mdb_path, target } => {
+            if !target.exists() {
+                bail!(
+                    "--backfill requires an existing target DB: {}",
+                    target.display()
+                );
+            }
+            let pool = db::create_pool(&target).await?;
+            db::run_migrations(&pool).await?;
+            let report = db::backfill::run(&pool, &mdb_path).await?;
+            info!(
+                "Backfill done: matched={} already_set={} unmatched={} ambiguous={} orphan_card={} unknown_service={} malformed_date={}",
+                report.matched,
+                report.already_set,
+                report.unmatched,
+                report.ambiguous,
+                report.orphan_card,
+                report.unknown_service,
+                report.malformed_date
+            );
+            Ok(())
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -411,16 +445,36 @@ mod tests {
     fn map_legacy_service_known_names() {
         assert_eq!(
             map_legacy_service_name("Casova karta"),
-            Some("Monthly pass")
+            Some("Mesačný preplatok")
         );
         assert_eq!(map_legacy_service_name("Fitnes"), Some("Fitness"));
         assert_eq!(map_legacy_service_name("Spinbike"), Some("Spinning"));
     }
 
     #[test]
+    fn map_legacy_service_extended_names() {
+        assert_eq!(
+            map_legacy_service_name("Doplnky Vyzivy"),
+            Some("Doplnky výživy")
+        );
+        assert_eq!(
+            map_legacy_service_name("Obcerstvenie"),
+            Some("Občerstvenie")
+        );
+        assert_eq!(
+            map_legacy_service_name("AktivaciaKarty"),
+            Some("Aktivácia karty")
+        );
+    }
+
+    #[test]
     fn map_legacy_service_unknown_returns_none() {
         assert_eq!(map_legacy_service_name("Something else"), None);
         assert_eq!(map_legacy_service_name(""), None);
+        // Storno is intentionally unmapped — the action='storno' label suffices.
+        assert_eq!(map_legacy_service_name("Storno"), None);
+        // Iont had zero historical sales — YAGNI.
+        assert_eq!(map_legacy_service_name("Iont"), None);
     }
 
     #[tokio::test]
@@ -439,7 +493,7 @@ mod tests {
 
         // Mimic what the import loop does for one row.
         let service_ids: std::collections::HashMap<String, i64> =
-            sqlx::query_as::<_, (String, i64)>("SELECT name, id FROM services")
+            sqlx::query_as::<_, (String, i64)>("SELECT name_sk, id FROM services")
                 .fetch_all(&pool)
                 .await
                 .unwrap()
@@ -460,13 +514,13 @@ mod tests {
         .execute(&pool).await.unwrap();
 
         let row: (Option<String>, Option<chrono::NaiveDate>) = sqlx::query_as(
-            "SELECT s.name, t.valid_until FROM transactions t
+            "SELECT s.name_sk, t.valid_until FROM transactions t
              LEFT JOIN services s ON s.id = t.service_id WHERE t.card_id = 1",
         )
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(row.0.as_deref(), Some("Monthly pass"));
+        assert_eq!(row.0.as_deref(), Some("Mesačný preplatok"));
         assert_eq!(
             row.1,
             Some(chrono::NaiveDate::from_ymd_opt(2008, 12, 5).unwrap())

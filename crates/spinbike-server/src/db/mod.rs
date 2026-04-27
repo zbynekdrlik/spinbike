@@ -1,3 +1,4 @@
+pub mod backfill;
 pub mod cards;
 pub mod classes;
 pub mod migrations;
@@ -11,7 +12,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::{Row, SqlitePool};
+use sqlx::{Connection, Row, SqlitePool};
 use tracing::info;
 
 use migrations::MIGRATIONS;
@@ -77,10 +78,25 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 
         info!(version, description, "applying migration");
 
+        // Acquire a single connection for the duration of this migration so
+        // that the foreign-key PRAGMA toggles affect the same connection that
+        // runs the migration SQL. (PRAGMA scope is per-connection.)
+        let mut conn = pool.acquire().await?;
+
+        // Disable FK enforcement around table-rebuild migrations (V8's
+        // CREATE_NEW + INSERT + DROP + RENAME pattern would otherwise fail at
+        // commit when transactions has child rows). PRAGMA foreign_keys can
+        // only be changed when no transaction is open, so we set it BEFORE
+        // BEGIN and restore AFTER COMMIT.
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .context("Failed to disable foreign_keys for migration")?;
+
         // Execute the migration SQL (may contain multiple statements).
         // SQLite does not support transactional DDL well with multiple statements
         // via sqlx::query, so we execute each statement individually inside a tx.
-        let mut tx = pool.begin().await?;
+        let mut tx = conn.begin().await?;
 
         for statement in sql.split(';') {
             let trimmed = statement.trim();
@@ -100,6 +116,12 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
             .await?;
 
         tx.commit().await?;
+
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&mut *conn)
+            .await
+            .context("Failed to re-enable foreign_keys after migration")?;
+
         info!(version, "migration applied");
     }
 
@@ -144,11 +166,13 @@ mod tests {
         assert_eq!(tables, expected);
 
         // Verify seed data.
+        // V1 seeded Spinning + Fitness; V4 seeded Monthly pass; V8 seeded
+        // Občerstvenie + Doplnky výživy + Aktivácia karty.
         let svc_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM services")
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(svc_count, 3);
+        assert_eq!(svc_count, 6);
 
         let setting: String =
             sqlx::query_scalar("SELECT value FROM settings WHERE key = 'bike_count'")
@@ -169,6 +193,6 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 9);
     }
 }

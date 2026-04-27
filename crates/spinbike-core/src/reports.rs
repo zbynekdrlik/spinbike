@@ -21,7 +21,12 @@ pub struct ReportEvent {
     pub barcode: Option<String>,
     pub action: String,
     pub amount: f64,
-    pub service_name: Option<String>,
+    /// Slovak label for the service (NULL when the transaction has no service).
+    pub service_name_sk: Option<String>,
+    /// English label for the service (NULL when the transaction has no service).
+    pub service_name_en: Option<String>,
+    /// Stable kind enum: `"generic"` or `"monthly_pass"`. NULL when service is NULL.
+    pub service_kind: Option<String>,
     pub created_at: String,
     pub valid_until: Option<chrono::NaiveDate>,
     pub voided: bool,
@@ -149,7 +154,9 @@ mod tests {
             barcode: None,
             action: "x".into(),
             amount,
-            service_name: None,
+            service_name_sk: None,
+            service_name_en: None,
+            service_kind: None,
             created_at: "2026-04-24 12:00:00".into(),
             valid_until,
             voided: false,

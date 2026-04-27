@@ -1,0 +1,9 @@
+# cargo-mutants config.
+#
+# Function-level exclusions are now expressed as `#[mutants::skip]` on the
+# function itself (see `db::backfill::export_table` and
+# `db::backfill::run`) — that survives rename and is more discoverable
+# than display-string regexes.
+#
+# This file is reserved for project-wide exclusions that cannot be
+# expressed as attributes (e.g. exclude a whole binary). None at present.

@@ -22,3 +22,6 @@ spinbike.db-wal
 .playwright-mcp/
 desk-snap.yml
 sell-pass-hover.png
+prod-reports.yml
+*-snap.yml
+*-snapshot.yml

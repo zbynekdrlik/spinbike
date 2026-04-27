@@ -67,7 +67,10 @@ pub fn TransactionsList(
                     .valid_until
                     .map(|d| format!(" · {} {}", i18n::t(l, "tx_until_short"), i18n::fmt_date_short(d, l)))
                     .unwrap_or_default();
-                let service = tx.service_name.clone().unwrap_or_else(|| "—".into());
+                let service = tx
+                    .service_label(l)
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| "—".into());
                 let amount = tx.amount;
                 let amount_class = if amount >= 0.0 {
                     "list-row__amount list-row__amount--pos"
@@ -137,7 +140,7 @@ pub fn TransactionsList(
             }).collect();
 
             view! {
-                <div class="group">
+                <div class="group" data-testid="transactions-list">
                     {rows}
                 </div>
             }.into_any()
