@@ -55,6 +55,23 @@ fn export_table(mdb_path: &Path, table: &str) -> Result<String> {
         .with_context(|| format!("mdb-export output for '{table}' is not valid UTF-8"))
 }
 
+/// Convert a legacy date string (`MM/DD/YY HH:MM:SS`, e.g. `11/06/08 21:17:38`)
+/// to the ISO format SQLite stored on import (`YYYY-MM-DD HH:MM:SS`, e.g.
+/// `2008-11-06 21:17:38`). Returns `None` for blank or unparsable input.
+///
+/// This is critical because legacy MDB raw strings DO NOT match prod's
+/// stored format — using them verbatim in the WHERE clause silently misses
+/// every row.
+pub(crate) fn legacy_date_to_iso(s: &str) -> Option<String> {
+    let trimmed = s.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        return None;
+    }
+    chrono::NaiveDateTime::parse_from_str(trimmed, "%m/%d/%y %H:%M:%S")
+        .ok()
+        .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+}
+
 /// Map a legacy Slovak service name to the target `name_sk` value.
 /// Mirror of the migrator's mapping; defined here so the backfill module
 /// is self-contained and the migrator's bin can stay focused on import.
@@ -125,8 +142,13 @@ pub(crate) async fn apply_legacy_row(
         }
     };
 
-    // Match (barcode, created_at_string, amount with epsilon) and only touch
+    // Match (barcode, created_at_iso, amount with epsilon) and only touch
     // rows that don't already have a service_id.
+    //
+    // DATE FORMAT: the legacy MDB stores `MM/DD/YY HH:MM:SS`; the prod DB
+    // stores ISO `YYYY-MM-DD HH:MM:SS` (the original importer normalised
+    // them). Comparing the raw legacy string against ISO yields ZERO
+    // matches — convert before binding.
     //
     // SIGN CONVENTION: the migrator binds `amount_eur` with the same sign
     // it has in the legacy `suma` column (positive for debits, no negation).
@@ -135,6 +157,20 @@ pub(crate) async fn apply_legacy_row(
     // The `service_id IS NULL` guard ensures we only touch imported rows,
     // so `t.amount` here is always the legacy-positive value and we
     // compare with `t.amount - legacy_amount`.
+    let iso_date = match legacy_date_to_iso(date) {
+        Some(s) => s,
+        None => {
+            // Unparsable legacy timestamp — count as unmatched per service
+            // bucket so the operator can investigate.
+            warn!(
+                "unparsable legacy date '{date}' on row card={legacy_card_id} service='{legacy_service}'"
+            );
+            let bucket = report.per_service.entry(new_name.to_string()).or_default();
+            report.unmatched += 1;
+            bucket.unmatched += 1;
+            return Ok(());
+        }
+    };
     let updated_ids: Vec<(i64,)> = sqlx::query_as(
         "UPDATE transactions
             SET service_id = ?, legacy_backfilled = 1
@@ -151,7 +187,7 @@ pub(crate) async fn apply_legacy_row(
     )
     .bind(svc_id)
     .bind(barcode)
-    .bind(date)
+    .bind(&iso_date)
     .bind(amount_eur)
     .fetch_all(&mut **tx)
     .await
@@ -171,7 +207,7 @@ pub(crate) async fn apply_legacy_row(
                   LIMIT 1",
             )
             .bind(barcode)
-            .bind(date)
+            .bind(&iso_date)
             .bind(amount_eur)
             .fetch_optional(&mut **tx)
             .await
@@ -352,7 +388,7 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO transactions (card_id, amount, action, created_at)
-             VALUES (?, 1.66, 'debit', '11/06/08 21:31:04')",
+             VALUES (?, 1.66, 'debit', '2008-11-06 21:31:04')",
         )
         .bind(card_id)
         .execute(&pool)
@@ -360,10 +396,10 @@ mod tests {
         .unwrap();
         let svc_id = doplnky_service_id(&pool).await;
 
-        let first = backfill_one(&pool, svc_id, "LEG-1", "11/06/08 21:31:04", 1.66).await;
+        let first = backfill_one(&pool, svc_id, "LEG-1", "2008-11-06 21:31:04", 1.66).await;
         assert_eq!(first.len(), 1, "first run should match the row");
 
-        let second = backfill_one(&pool, svc_id, "LEG-1", "11/06/08 21:31:04", 1.66).await;
+        let second = backfill_one(&pool, svc_id, "LEG-1", "2008-11-06 21:31:04", 1.66).await;
         assert_eq!(second.len(), 0, "second run must not match (NULL guard)");
 
         let svc: Option<i64> =
@@ -401,7 +437,7 @@ mod tests {
                 .unwrap();
         sqlx::query(
             "INSERT INTO transactions (card_id, service_id, amount, action, created_at)
-             VALUES (?, ?, 1.66, 'debit', '11/06/08 21:31:04')",
+             VALUES (?, ?, 1.66, 'debit', '2008-11-06 21:31:04')",
         )
         .bind(card_id)
         .bind(fitness_id)
@@ -410,7 +446,7 @@ mod tests {
         .unwrap();
         let svc_id = doplnky_service_id(&pool).await;
 
-        let updated = backfill_one(&pool, svc_id, "LEG-2", "11/06/08 21:31:04", 1.66).await;
+        let updated = backfill_one(&pool, svc_id, "LEG-2", "2008-11-06 21:31:04", 1.66).await;
         assert_eq!(
             updated.len(),
             0,
@@ -451,8 +487,8 @@ mod tests {
         .unwrap();
         sqlx::query(
             "INSERT INTO transactions (card_id, amount, action, created_at)
-             VALUES (?, 1.66, 'debit', '11/06/08 21:31:04'),
-                    (?, 1.66, 'debit', '11/06/08 21:31:04')",
+             VALUES (?, 1.66, 'debit', '2008-11-06 21:31:04'),
+                    (?, 1.66, 'debit', '2008-11-06 21:31:04')",
         )
         .bind(card_id)
         .bind(card_id)
@@ -461,7 +497,7 @@ mod tests {
         .unwrap();
         let svc_id = doplnky_service_id(&pool).await;
 
-        let updated = backfill_one(&pool, svc_id, "LEG-3", "11/06/08 21:31:04", 1.66).await;
+        let updated = backfill_one(&pool, svc_id, "LEG-3", "2008-11-06 21:31:04", 1.66).await;
         assert_eq!(
             updated.len(),
             2,
@@ -477,6 +513,33 @@ mod tests {
         assert!(!legacy_action_has_service("BLOKOVANA"));
         assert!(legacy_action_has_service("Debet"));
         assert!(legacy_action_has_service("Storno"));
+    }
+
+    #[test]
+    fn legacy_date_to_iso_converts_known_format() {
+        // Real prod data shape: legacy `MM/DD/YY HH:MM:SS` -> ISO.
+        assert_eq!(
+            legacy_date_to_iso("11/06/08 21:17:38").as_deref(),
+            Some("2008-11-06 21:17:38")
+        );
+        assert_eq!(
+            legacy_date_to_iso("12/31/25 13:39:05").as_deref(),
+            Some("2025-12-31 13:39:05")
+        );
+        // Quoted CSV cell — strip quotes before parsing.
+        assert_eq!(
+            legacy_date_to_iso("\"11/06/08 21:17:38\"").as_deref(),
+            Some("2008-11-06 21:17:38")
+        );
+    }
+
+    #[test]
+    fn legacy_date_to_iso_rejects_unparseable_inputs() {
+        assert_eq!(legacy_date_to_iso(""), None);
+        assert_eq!(legacy_date_to_iso("   "), None);
+        assert_eq!(legacy_date_to_iso("not a date"), None);
+        // Already ISO — not the legacy format, so refuse rather than guess.
+        assert_eq!(legacy_date_to_iso("2008-11-06 21:17:38"), None);
     }
 
     #[test]
@@ -691,7 +754,7 @@ mod tests {
         let (svc, cards) = fixture_state(&pool).await;
         sqlx::query(
             "INSERT INTO transactions (card_id, amount, action, created_at)
-             VALUES (1, 1.66, 'debit', '11/06/08 12:00:00')",
+             VALUES (1, 1.66, 'debit', '2008-11-06 12:00:00')",
         )
         .execute(&pool)
         .await
@@ -736,7 +799,7 @@ mod tests {
                 .unwrap();
         sqlx::query(
             "INSERT INTO transactions (card_id, service_id, amount, action, created_at)
-             VALUES (1, ?, 1.66, 'debit', '11/06/08 12:00:00')",
+             VALUES (1, ?, 1.66, 'debit', '2008-11-06 12:00:00')",
         )
         .bind(fitness_id)
         .execute(&pool)
@@ -778,8 +841,8 @@ mod tests {
         let (svc, cards) = fixture_state(&pool).await;
         sqlx::query(
             "INSERT INTO transactions (card_id, amount, action, created_at)
-             VALUES (1, 1.66, 'debit', '11/06/08 12:00:00'),
-                    (1, 1.66, 'debit', '11/06/08 12:00:00')",
+             VALUES (1, 1.66, 'debit', '2008-11-06 12:00:00'),
+                    (1, 1.66, 'debit', '2008-11-06 12:00:00')",
         )
         .execute(&pool)
         .await
