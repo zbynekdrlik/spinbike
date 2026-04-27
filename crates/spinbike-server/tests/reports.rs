@@ -276,6 +276,15 @@ async fn now_panel_returns_current_or_next_class() {
     let now = chrono::Local::now();
     let weekday = now.weekday().num_days_from_monday() as i64;
     let start_time = now.format("%H:00").to_string();
+    // Migrations seed default class_templates at weekday 0/1/2 / 18:00.
+    // If this test runs Mon/Tue/Wed at 18:xx the seeded row collides with
+    // the one we insert below — pick_current_and_next picks the seeded id,
+    // roster_for queries it, and finds zero of OUR seeded bookings.
+    // Clear pre-existing templates so we own the only matching row.
+    sqlx::query("DELETE FROM class_templates")
+        .execute(&app.pool)
+        .await
+        .unwrap();
     let template_id: i64 = sqlx::query_scalar(
         "INSERT INTO class_templates (weekday, start_time, duration_minutes, capacity, active) \
          VALUES (?1, ?2, 60, 12, 1) RETURNING id",
