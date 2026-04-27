@@ -627,6 +627,9 @@ mod tests {
             .execute(&mut *conn)
             .await
             .unwrap();
+        // Release the only connection back to the pool so the validity probe
+        // below can acquire it.
+        drop(conn);
 
         // The transaction's service_id ref still resolves after rebuild.
         let still_valid: bool = sqlx::query_scalar(
