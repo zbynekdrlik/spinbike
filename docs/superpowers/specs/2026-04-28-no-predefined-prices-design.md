@@ -39,7 +39,7 @@ The dropdown labels are localized via `s.display_name(lang_now)` — the format 
 
 ### Submit guard
 
-The existing `parse_money` + `v > 0.0` guard already no-ops on empty / zero / non-numeric input (`action_form.rs` `do_charge` and `do_topup` paths). No new guard is needed — empty submit silently does nothing today and will continue to.
+The existing handler already shows an inline `price_required` error on empty/non-numeric input (`action_form.rs:126` for `parse_money` returning `None`, `action_form.rs:178` for the regular-charge `amount <= 0.0` path). The error renders as `<div class="alert alert-error">` inside the action panel. **No new guard needed — empty submit shows an inline error today and will continue to.** The card credit and dashboard state are unchanged on the error path. Sell-pass POST is also gated by the same `parse_money` check, so picking Monthly pass + clicking Sell with an empty amount also surfaces the same inline error and does NOT hit the API.
 
 ### Topup
 
@@ -61,9 +61,9 @@ The Topup button has no service selector and never read `default_price`. **No ch
 |---|---|
 | `spinbike-ui/src/pages/dashboard/action_form.rs` | Delete the `el.set_value(&format!("{:.2}", svc.default_price));` auto-fill line in `on_service_change` (~line 72). Change the dropdown label `format!("{} ({:.2} €)", ...)` to use just the localized service name (~line 307). |
 | `e2e/tests/no-predefined-prices.spec.ts` | NEW — Playwright test asserting empty input + label without price + staff-typed amount still works. |
-| `e2e/tests/dashboard.spec.ts:141` | Test currently relies on auto-fill (comment: "The amount input should auto-fill from default_price. Override to 5 for a..."). Update: type the amount instead of overriding the auto-filled value. |
-| `e2e/tests/card-action-form.spec.ts:83` | Test currently relies on auto-fill (comment: "Amount auto-filled from default_price (35.00). Accept it."). Update: type 35.00 explicitly. |
-| `e2e/tests/card-action-form.spec.ts:127` | Test currently picks a non-pass service so default_price auto-fills, then clears it. Update: pick the service, then type the test value (the "clear it" step is no longer needed because the input is already empty). |
+| `e2e/tests/dashboard.spec.ts:141` | Test already calls `.fill('5')` after `selectOption`, so its assertion still passes after the change. The comment "The amount input should auto-fill from default_price. Override to 5..." is now misleading — update the comment to "Type the amount (no auto-fill — staff types every time, #17)." Test logic unchanged. |
+| `e2e/tests/card-action-form.spec.ts:83` | **Real test change.** Test today calls `selectMonthlyPass(page)` then immediately clicks `charge-submit`, relying on the auto-fill (35.00) to populate the amount. After the change the input is empty and submit surfaces `price_required` — no POST. Add `await page.locator('[data-testid="charge-amount"]').fill('35.00');` before the submit click. The `expect(body.price).toBe(35.0)` assertion is unchanged. |
+| `e2e/tests/card-action-form.spec.ts:127` | Test today picks a non-pass service (auto-fills to 5.00), manually clears the input, then submits to assert the inline error. After the change the input is already empty after `selectOption`, so the manual `Ctrl+A; Delete` clear is redundant but harmless — the test still passes. Update the comment "Pick a non-pass service so default_price auto-fills, then clear it." to "Pick a non-pass service — input stays empty post-#17, the clear is redundant but kept defensively." Test logic unchanged. |
 | `VERSION` | Bump (post-merge of PR #25). Sync to all `Cargo.toml` via `scripts/sync-version.sh`. |
 
 No backend changes. No DB migration. No new dependencies. No public API contract change.
@@ -115,8 +115,8 @@ Skeleton:
 3. **Empty input on service change** — for each of `Spinning`, `Fitness`, `Monthly pass` (looked up by `option.filter({ hasText: ... })`):
    - Select the option via `selectOption`
    - Read `[data-testid="charge-amount"]` value via `inputValue()` and assert it equals `''`
-4. **Submit empty is a no-op** — without typing anything, click `[data-testid="charge-submit"]` and assert no network request to `/api/payments/*` was made (use `page.waitForResponse` with a short timeout that should fail, OR observe the action panel didn't change state).
-5. **Typed amount still works** — pick `Spinning`, type `7.50` into the amount input, click Charge, assert success (transaction recorded, card balance reduced).
+4. **Submit empty surfaces inline error** — without typing anything, click `[data-testid="charge-submit"]` and assert `[data-testid="action-panel"] .alert-error` becomes visible (the existing `price_required` path). Assert the card credit text in `[data-testid="card-credit"]` is unchanged from its initial value (no transaction created). Assert no `/api/payments/charge` POST occurred during that interaction (use a `page.waitForResponse(... , { timeout: 1000 })` race with `Promise.race`, or simply observe the absence of `[data-testid="pass-banner-active"]` and the persistence of the error). The simplest assertion is `await expect(page.locator('[data-testid="action-panel"] .alert-error')).toBeVisible()`.
+5. **Typed amount still works** — clear the error path by selecting Spinning again (or by typing into the amount input which clears the error on next change). Type `7.50` into the amount input, click Charge, await the `/api/payments/charge` POST response, assert it's `ok()` and the credit reduces by 7.50.
 6. Standard zero-console-errors assertion at end (per `browser-console-zero-errors.md`).
 
 This is a new feature, so per `e2e-real-user-testing.md`, it requires its own dedicated Playwright test file — `no-predefined-prices.spec.ts` — committed in the same PR.
@@ -151,7 +151,7 @@ Per `mutation-testing.md`: `cargo mutants --in-diff` should still pass on the di
 
 - [ ] Picking Spinning / Fitness / Monthly pass leaves `[data-testid="charge-amount"]` empty (`''`).
 - [ ] Service dropdown labels are exactly the localized service name — no `€`, no numeric price, no parentheses.
-- [ ] Submitting empty amount is a no-op (no network request, no error message, no state change). Existing behavior preserved.
+- [ ] Submitting empty amount surfaces inline `price_required` error (the existing `.alert-error` inside the action panel). Card credit unchanged. No `/api/payments/charge` or `/api/payments/sell-pass` POST is made on the empty-submit path. Existing behavior preserved.
 - [ ] Typing `7.50` (or any positive value) and clicking Charge still creates the transaction with the typed amount.
 - [ ] Auto-charger still bills booked Spinning classes at the admin-configured `default_price` (verify via existing `charger_*` unit tests in `crates/spinbike-server/src/jobs/charger.rs` — they must remain green without modification).
 - [ ] Admin services page still lists, creates, and edits services with their price.
