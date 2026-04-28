@@ -1380,3 +1380,27 @@ table tbody tr:last-child td,
 .feed-dot--topup  { background: var(--brand); }
 .feed-dot--pass   { background: var(--info); }
 .feed-dot--voided { background: var(--text-dim); }
+
+/* ═════════════════════════════════════════════════════════════
+   Build version label — sticky bottom-right, every route.
+   Sits above the mobile bottom-nav (56px tall) so it doesn't
+   overlap the nav strip; on desktop the nav becomes a left
+   sidebar so the bottom-right corner is free.
+   ───────────────────────────────────────────────────────────── */
+.app-version {
+    position: fixed;
+    right: var(--s-3, 8px);
+    bottom: calc(56px + env(safe-area-inset-bottom) + 4px);
+    font-size: var(--fs-xs, 11px);
+    color: var(--text-dim, #888);
+    background: var(--surface-faint, rgba(0, 0, 0, 0.35));
+    padding: 2px 6px;
+    border-radius: 4px;
+    pointer-events: none;
+    z-index: 50;
+    user-select: none;
+}
+
+@media (min-width: 768px) {
+    .app-version { bottom: var(--s-3, 8px); }
+}

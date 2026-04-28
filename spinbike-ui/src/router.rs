@@ -61,6 +61,7 @@ fn RootRoute() -> impl IntoView {
 }
 
 use crate::components::AdaptiveNav;
+use crate::components::VersionFooter;
 use crate::components::nav::Navbar;
 use crate::i18n;
 use crate::pages::admin::AdminPage;
@@ -112,6 +113,7 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/admin") view=|| view! { <RedirectTo to="/settings".to_string()/> } />
                     </Routes>
                 </div>
+                <VersionFooter />
             </div>
         </Router>
     }

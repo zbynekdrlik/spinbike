@@ -9,6 +9,7 @@ pub mod static_files;
 pub mod test_fixtures;
 pub mod transactions;
 pub mod upcoming_classes;
+pub mod version;
 
 use axum::{Json, Router, http::StatusCode};
 
@@ -36,6 +37,7 @@ pub fn api_routes() -> Router<AppState> {
         .merge(reports::routes())
         .merge(transactions::routes())
         .merge(upcoming_classes::routes())
+        .merge(version::routes())
 }
 
 /// All routes: API + WebSocket + static file serving.
