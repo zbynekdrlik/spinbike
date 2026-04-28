@@ -332,15 +332,6 @@ pub fn ActionForm(
                 <button
                     type="button"
                     class="btn btn--primary"
-                    data-testid="topup-submit"
-                    on:click=do_topup
-                    disabled=move || loading.get()
-                >
-                    "+ "{move || i18n::t(lang.get(), "topup")}
-                </button>
-                <button
-                    type="button"
-                    class="btn btn--primary"
                     data-testid="charge-submit"
                     on:click=do_charge
                     disabled=move || loading.get()
@@ -350,6 +341,15 @@ pub fn ActionForm(
                     } else {
                         i18n::t(lang.get(), "charge").to_string()
                     }}
+                </button>
+                <button
+                    type="button"
+                    class="btn btn--ghost"
+                    data-testid="topup-submit"
+                    on:click=do_topup
+                    disabled=move || loading.get()
+                >
+                    "+ "{move || i18n::t(lang.get(), "topup")}
                 </button>
             </div>
         </div>
