@@ -12,14 +12,17 @@ interface ServiceLookup {
 }
 
 async function fetchServiceIds(token: string): Promise<ServiceLookup> {
-    const resp = await fetch(`${BASE_URL}/api/services/active`, {
+    // Admin-only endpoint; the test logs in as admin@test.com so this is fine.
+    // No public /api/services route exists — the staff dashboard uses
+    // /api/admin/services too.
+    const resp = await fetch(`${BASE_URL}/api/admin/services`, {
         headers: { Authorization: `Bearer ${token}` },
     });
-    if (!resp.ok) throw new Error(`/api/services/active failed: ${resp.status}`);
+    if (!resp.ok) throw new Error(`/api/admin/services failed: ${resp.status}`);
     const services: { id: number; name_en: string }[] = await resp.json();
     const find = (n: string) => {
         const s = services.find((x) => x.name_en === n);
-        if (!s) throw new Error(`service "${n}" not in /api/services/active`);
+        if (!s) throw new Error(`service "${n}" not in /api/admin/services`);
         return s.id;
     };
     return {
