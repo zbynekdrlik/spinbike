@@ -30,11 +30,11 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
     .fetch_all(pool)
     .await?;
 
-    let (service_id, price): (i64, f64) = sqlx::query_as(
-        "SELECT id, default_price FROM services WHERE name_en = 'Spinning' AND active = 1",
-    )
-    .fetch_one(pool)
-    .await?;
+    let (service_id, price): (i64, f64) =
+        sqlx::query_as("SELECT id, default_price FROM services WHERE name_en = ?1 AND active = 1")
+            .bind(spinbike_core::services::SPINNING_NAME_EN)
+            .fetch_one(pool)
+            .await?;
 
     let mut charged = 0usize;
     for (booking_id, _template_id, date, _start, card_id) in rows {

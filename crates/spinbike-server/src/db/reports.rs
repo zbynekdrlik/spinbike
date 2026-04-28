@@ -115,12 +115,14 @@ pub async fn day_report(
     // NOTE: `ELSE 0.0` (not `ELSE 0`) is required — otherwise SQLite returns an
     // INTEGER for the SUM when no rows match, and sqlx refuses to decode that
     // into f64 (the KPI struct's revenue_eur/cash_in_eur fields).
+    // Class-visit names bound from spinbike_core::services constants so renaming
+    // a service in the Rust constant updates this query automatically.
     let kpi_row: DbKpiRow = sqlx::query_as::<_, DbKpiRow>(
         "SELECT
             COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0.0 END), 0.0) AS revenue_eur,
             COALESCE(SUM(
               CASE
-                WHEN service_id IN (SELECT id FROM services WHERE name_en IN ('Fitness','Spinning'))
+                WHEN service_id IN (SELECT id FROM services WHERE name_en IN (?2, ?3))
                  AND (
                    (action = 'charge' AND amount < 0 AND valid_until IS NULL)
                    OR action = 'visit'
@@ -134,6 +136,8 @@ pub async fn day_report(
          WHERE date(created_at) = ?1 AND deleted_at IS NULL",
     )
     .bind(&date_str)
+    .bind(spinbike_core::services::FITNESS_NAME_EN)
+    .bind(spinbike_core::services::SPINNING_NAME_EN)
     .fetch_one(pool)
     .await?;
 
@@ -236,12 +240,14 @@ pub async fn range_report(
     }
     let events: Vec<ReportEvent> = rows.into_iter().map(Into::into).collect();
 
+    // Class-visit names bound from spinbike_core::services constants — see
+    // day_report for the rationale.
     let kpi_row: DbKpiRow = sqlx::query_as::<_, DbKpiRow>(
         "SELECT
             COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0.0 END), 0.0) AS revenue_eur,
             COALESCE(SUM(
               CASE
-                WHEN service_id IN (SELECT id FROM services WHERE name_en IN ('Fitness','Spinning'))
+                WHEN service_id IN (SELECT id FROM services WHERE name_en IN (?3, ?4))
                  AND (
                    (action = 'charge' AND amount < 0 AND valid_until IS NULL)
                    OR action = 'visit'
@@ -256,6 +262,8 @@ pub async fn range_report(
     )
     .bind(&from_str)
     .bind(&to_str)
+    .bind(spinbike_core::services::FITNESS_NAME_EN)
+    .bind(spinbike_core::services::SPINNING_NAME_EN)
     .fetch_one(pool)
     .await?;
 
@@ -451,7 +459,7 @@ pub async fn now_panel(pool: &SqlitePool) -> Result<NowResponse> {
             template_id: t.id,
             date: today,
             start_time: t.start_time.clone(),
-            service_name: "Spinning".to_string(),
+            service_name: spinbike_core::services::SPINNING_NAME_EN.to_string(),
             instructor_name: t.instructor_name.clone(),
             capacity: t.capacity,
             roster,
@@ -466,7 +474,7 @@ pub async fn now_panel(pool: &SqlitePool) -> Result<NowResponse> {
             template_id: t.id,
             date: today,
             start_time: t.start_time,
-            service_name: "Spinning".to_string(),
+            service_name: spinbike_core::services::SPINNING_NAME_EN.to_string(),
             instructor_name: t.instructor_name,
             booked,
             capacity: t.capacity,
@@ -577,7 +585,7 @@ async fn next_class_future(
                 template_id: t.id,
                 date: d,
                 start_time: t.start_time,
-                service_name: "Spinning".to_string(),
+                service_name: spinbike_core::services::SPINNING_NAME_EN.to_string(),
                 instructor_name: t.instructor_name,
                 booked,
                 capacity: t.capacity,
@@ -761,8 +769,10 @@ mod tests {
     async fn attendance_counts_only_fitness_and_spinning_visits() {
         let (pool, card_id) = setup_pool_with_card().await;
 
-        let fitness_id = service_id_by_name_en(&pool, "Fitness").await;
-        let spinning_id = service_id_by_name_en(&pool, "Spinning").await;
+        let fitness_id =
+            service_id_by_name_en(&pool, spinbike_core::services::FITNESS_NAME_EN).await;
+        let spinning_id =
+            service_id_by_name_en(&pool, spinbike_core::services::SPINNING_NAME_EN).await;
         let monthly_pass_id = service_id_by_name_en(&pool, "Monthly pass").await;
         let refreshments_id = service_id_by_name_en(&pool, "Refreshments").await;
         let card_fee_id = service_id_by_name_en(&pool, "Card activation fee").await;

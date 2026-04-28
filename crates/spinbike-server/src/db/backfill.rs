@@ -118,8 +118,8 @@ pub(crate) fn legacy_date_to_iso(s: &str) -> Option<String> {
 pub fn map_legacy_service_name(name: &str) -> Option<&'static str> {
     match name.trim().trim_matches('"') {
         "Casova karta" => Some("Mesačný preplatok"),
-        "Fitnes" => Some("Fitness"),
-        "Spinbike" => Some("Spinning"),
+        "Fitnes" => Some(spinbike_core::services::FITNESS_NAME_EN),
+        "Spinbike" => Some(spinbike_core::services::SPINNING_NAME_EN),
         "Doplnky Vyzivy" => Some("Doplnky výživy"),
         "Obcerstvenie" => Some("Občerstvenie"),
         "AktivaciaKarty" => Some("Aktivácia karty"),
@@ -619,8 +619,14 @@ mod tests {
 
     #[test]
     fn map_legacy_service_name_covers_all_six() {
-        assert_eq!(map_legacy_service_name("Fitnes"), Some("Fitness"));
-        assert_eq!(map_legacy_service_name("Spinbike"), Some("Spinning"));
+        assert_eq!(
+            map_legacy_service_name("Fitnes"),
+            Some(spinbike_core::services::FITNESS_NAME_EN)
+        );
+        assert_eq!(
+            map_legacy_service_name("Spinbike"),
+            Some(spinbike_core::services::SPINNING_NAME_EN)
+        );
         assert_eq!(
             map_legacy_service_name("Casova karta"),
             Some("Mesačný preplatok")

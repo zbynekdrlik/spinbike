@@ -264,7 +264,7 @@ pub fn ActionForm(
                                 // the soft-blue sibling so the pair reads as primary /
                                 // secondary within one hue family — small visual difference,
                                 // not a radical color shift.
-                                let color_cls = if svc.name_en == "Fitness" {
+                                let color_cls = if svc.name_en == spinbike_core::services::FITNESS_NAME_EN {
                                     "btn--info"
                                 } else {
                                     "btn--info-soft"
