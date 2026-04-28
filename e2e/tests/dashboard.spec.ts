@@ -138,8 +138,8 @@ test.describe('Card dashboard (staff /staff)', () => {
         const select = page.locator('[data-testid="charge-service"]');
         await select.selectOption({ index: 1 });
 
-        // The amount input should auto-fill from default_price. Override to 5 for a
-        // deterministic charge that never exceeds the card balance.
+        // Staff types the amount every time (#17 — no predefined prices).
+        // 5 is below the card's starting balance so the charge always succeeds.
         const amountInput = page.locator('[data-testid="charge-amount"]');
         await amountInput.fill('5');
 
