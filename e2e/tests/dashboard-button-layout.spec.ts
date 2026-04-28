@@ -48,7 +48,7 @@ async function sellMonthlyPass(page: Page) {
 }
 
 test.describe('Staff dashboard — button layout & colors (#13)', () => {
-    test('action-row: Charge left of Topup, Topup is ghost-styled', async ({ page }) => {
+    test('action-row: Charge left of Topup, with same-hue soft sibling', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
         const { lastName } = await activateUniqueCard(token, 80.0);
@@ -68,14 +68,19 @@ test.describe('Staff dashboard — button layout & colors (#13)', () => {
         }, topupHandle);
         expect(order).toBe(true);
 
+        // Charge: solid green primary (eye-catching, most-used action).
+        // Topup: soft green sibling (same hue, lower saturation — visible but
+        // recedes). The earlier `.btn--ghost` rendered nearly invisible against
+        // the surface, so the CEO asked for a "small difference" instead.
         await expect(charge).toHaveClass(/\bbtn--primary\b/);
-        await expect(topup).toHaveClass(/\bbtn--ghost\b/);
-        await expect(topup).not.toHaveClass(/\bbtn--primary\b/);
+        await expect(charge).not.toHaveClass(/\bbtn--primary-soft\b/);
+        await expect(topup).toHaveClass(/\bbtn--primary-soft\b/);
+        await expect(topup).not.toHaveClass(/\bbtn--ghost\b/);
 
         assertCleanConsole(msgs);
     });
 
-    test('visit-row: Fitness left of Spinning with distinct colors', async ({ page }) => {
+    test('visit-row: Fitness left of Spinning with same-hue soft sibling', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
         const { lastName } = await activateUniqueCard(token, 80.0);
@@ -92,8 +97,13 @@ test.describe('Staff dashboard — button layout & colors (#13)', () => {
         expect(labels[0]).toMatch(/Fitness/);
         expect(labels[1]).toMatch(/Spinning/);
 
+        // Fitness is the more-used activity → solid blue (eye-catching).
+        // Spinning is the soft-blue sibling — same hue, lower saturation —
+        // so the row reads primary / secondary within one color family.
         await expect(visits.nth(0)).toHaveClass(/\bbtn--info\b/);
-        await expect(visits.nth(1)).toHaveClass(/\bbtn--pass\b/);
+        await expect(visits.nth(0)).not.toHaveClass(/\bbtn--info-soft\b/);
+        await expect(visits.nth(1)).toHaveClass(/\bbtn--info-soft\b/);
+        await expect(visits.nth(1)).not.toHaveClass(/\bbtn--pass\b/);
 
         assertCleanConsole(msgs);
     });

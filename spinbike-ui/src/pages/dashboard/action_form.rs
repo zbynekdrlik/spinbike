@@ -263,10 +263,15 @@ pub fn ActionForm(
                             visits.into_iter().map(|svc| {
                                 let service_id = svc.id;
                                 let svc_name = svc.display_name(lang.get_untracked()).to_string();
+                                // Fitness is the more-used activity (per CEO feedback on
+                                // PR #25 v0.13.5) → solid blue, eye-catching. Spinning gets
+                                // the soft-blue sibling so the pair reads as primary /
+                                // secondary within one hue family — small visual difference,
+                                // not a radical color shift.
                                 let color_cls = if svc.name_en == "Fitness" {
                                     "btn--info"
                                 } else {
-                                    "btn--pass"
+                                    "btn--info-soft"
                                 };
                                 view! {
                                     <button
@@ -356,7 +361,7 @@ pub fn ActionForm(
                 </button>
                 <button
                     type="button"
-                    class="btn btn--ghost"
+                    class="btn btn--primary-soft"
                     data-testid="topup-submit"
                     on:click=do_topup
                     disabled=move || loading.get()
