@@ -29,7 +29,7 @@
 
 | File | Responsibility | Change |
 |---|---|---|
-| `VERSION` | Single source of truth for project version | Bump from current main version (0.13.6 after PR #25) to `0.13.7` |
+| `VERSION` | Single source of truth for project version | Bump dev from `0.13.6` (PR #25's earlier scope) to `0.13.7` (this work bundled into PR #25 per CEO direction) |
 | `Cargo.toml`, `crates/*/Cargo.toml`, `spinbike-ui/Cargo.toml` | Per-crate version | Synced via `scripts/sync-version.sh` |
 | `spinbike-ui/src/pages/dashboard/action_form.rs` | Staff action panel (charge / sell pass / topup) | Delete auto-fill block in `on_service_change` (~lines 68-77); simplify dropdown label `format!` (~line 308) |
 | `e2e/tests/no-predefined-prices.spec.ts` | NEW — Playwright E2E for the new behavior | Asserts: empty input on service change, dropdown labels without prices, empty submit shows `.alert-error`, typed amount still works, zero console errors |
@@ -738,7 +738,7 @@ Per `completion-report.md`, send the EXACT template:
 ✅ Deploy: dev frontend shows v0.13.7 (matches backend /api/version); selecting Spinning/Fitness/Monthly pass leaves the amount input empty; charging €7 via the typed-amount path debited the card to the new balance; console clean.
 
 **Plan steps:**
-- Bumped VERSION to 0.13.7 after PR #25 merge
+- Bumped VERSION to 0.13.7 (bundled into open PR #25)
 - Added Playwright test asserting dropdown shows only service names, input stays empty, empty submit shows error, typed amount works
 - Removed auto-fill of amount from default_price in action_form.rs
 - Removed price annotation from service dropdown labels

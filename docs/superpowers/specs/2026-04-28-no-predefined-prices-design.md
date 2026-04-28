@@ -64,7 +64,7 @@ The Topup button has no service selector and never read `default_price`. **No ch
 | `e2e/tests/dashboard.spec.ts:141` | Test already calls `.fill('5')` after `selectOption`, so its assertion still passes after the change. The comment "The amount input should auto-fill from default_price. Override to 5..." is now misleading — update the comment to "Type the amount (no auto-fill — staff types every time, #17)." Test logic unchanged. |
 | `e2e/tests/card-action-form.spec.ts:83` | **Real test change.** Test today calls `selectMonthlyPass(page)` then immediately clicks `charge-submit`, relying on the auto-fill (35.00) to populate the amount. After the change the input is empty and submit surfaces `price_required` — no POST. Add `await page.locator('[data-testid="charge-amount"]').fill('35.00');` before the submit click. The `expect(body.price).toBe(35.0)` assertion is unchanged. |
 | `e2e/tests/card-action-form.spec.ts:127` | Test today picks a non-pass service (auto-fills to 5.00), manually clears the input, then submits to assert the inline error. After the change the input is already empty after `selectOption`, so the manual `Ctrl+A; Delete` clear is redundant but harmless — the test still passes. Update the comment "Pick a non-pass service so default_price auto-fills, then clear it." to "Pick a non-pass service — input stays empty post-#17, the clear is redundant but kept defensively." Test logic unchanged. |
-| `VERSION` | Bump (post-merge of PR #25). Sync to all `Cargo.toml` via `scripts/sync-version.sh`. |
+| `VERSION` | Bump to `0.13.7` (this work bundles into open PR #25 per CEO direction). Sync to all `Cargo.toml` via `scripts/sync-version.sh`. |
 
 No backend changes. No DB migration. No new dependencies. No public API contract change.
 
