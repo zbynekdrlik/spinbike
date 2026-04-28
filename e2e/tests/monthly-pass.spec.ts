@@ -46,7 +46,9 @@ test.describe('Monthly pass — sell via dropdown, banner, log-visit', () => {
             .getAttribute('value');
         if (!mpValue) throw new Error('Monthly pass option not found');
         await page.locator('[data-testid="charge-service"]').selectOption(mpValue);
-        // Default amount auto-filled with 35.00; default valid_until is today + 30. Accept both.
+        // Post-#17: staff types the price every time. 35.00 keeps the
+        // downstream `80 - 35 = 45` card-credit assertion intact.
+        await page.locator('[data-testid="charge-amount"]').fill('35.00');
         await page.locator('[data-testid="charge-submit"]').click();
 
         // Active pass banner appears.

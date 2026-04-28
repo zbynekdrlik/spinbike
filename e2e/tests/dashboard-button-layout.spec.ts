@@ -37,7 +37,10 @@ async function sellMonthlyPass(page: Page) {
     const mpValue = await mpOption.getAttribute('value');
     if (!mpValue) throw new Error('Monthly pass option had no value');
     await page.locator('[data-testid="charge-service"]').selectOption(mpValue);
-    await expect(page.locator('[data-testid="charge-amount"]')).not.toHaveValue('');
+    // Post-#17: amount input stays empty after selectOption — staff types
+    // every time. 35.00 matches the seed's monthly_pass default_price so
+    // the resulting pass-banner-active assertion downstream still holds.
+    await page.locator('[data-testid="charge-amount"]').fill('35.00');
     const sellPassResp = page.waitForResponse(
         (r) => r.url().includes('/api/payments/sell-pass') && r.request().method() === 'POST',
     );
