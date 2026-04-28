@@ -370,6 +370,17 @@ a:hover { text-decoration: underline; }
     color: var(--text);
 }
 
+.btn--info {
+    background: var(--info);
+    border-color: var(--info);
+    color: var(--info-fg);
+    font-weight: 600;
+}
+.btn--info:hover:not(:disabled) {
+    background: var(--info-hover);
+    border-color: var(--info-hover);
+}
+
 
 /* ========================================================================
    7. FORMS
