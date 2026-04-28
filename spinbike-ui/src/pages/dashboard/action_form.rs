@@ -65,14 +65,10 @@ pub fn ActionForm(
             .unwrap_or_default();
         let id: Option<i64> = raw.parse().ok();
         set_selected_service_id.set(id);
-        if let Some(id) = id {
-            if let Some(svc) = services.get().iter().find(|s| s.id == id) {
-                if let Some(el) = amount_ref.get() {
-                    let el: &HtmlInputElement = &el;
-                    el.set_value(&format!("{:.2}", svc.default_price));
-                }
-            }
-        }
+        // Auto-fill from default_price was removed (#17). Staff types the price
+        // every time. The is_monthly_pass() helper still reads
+        // selected_service_id, so the date-row visibility and Sell-vs-Charge
+        // submit-label flip continue to work.
     };
 
     let do_topup = move |_ev: web_sys::MouseEvent| {
@@ -304,7 +300,8 @@ pub fn ActionForm(
                         services.get().into_iter().map(|s| {
                             let val = s.id.to_string();
                             let kind = s.kind.clone();
-                            let label = format!("{} ({:.2} €)", s.display_name(lang_now), s.default_price);
+                            // No price annotation (#17) — staff sees just the service name.
+                            let label = s.display_name(lang_now).to_string();
                             view! { <option value=val data-kind=kind>{label}</option> }
                         }).collect::<Vec<_>>()
                     }}
