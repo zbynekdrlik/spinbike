@@ -23,15 +23,24 @@ mod tests {
     use super::*;
     use axum::body::{Body, to_bytes};
     use axum::http::Request;
-    use axum::routing::get;
     use tower::ServiceExt;
 
     #[tokio::test]
     async fn version_endpoint_returns_cargo_pkg_version() {
-        // The /api/version handler doesn't read AppState, so we mount the
-        // bare handler against a stateless Router for the test. That keeps
-        // the test independent of the rest of the app's wiring.
-        let app: Router = Router::new().route("/api/version", get(version));
+        // Mount through `routes()` so a mutant that replaces the function
+        // body with `Router::new()` (no routes wired) shows up as a 404 here.
+        // The handler itself is stateless, but the `routes()` return type
+        // is `Router<AppState>`, so we wrap a minimal in-memory state to
+        // satisfy the type bound.
+        let pool = crate::db::create_memory_pool().await.unwrap();
+        crate::db::run_migrations(&pool).await.unwrap();
+        let (event_tx, _) = tokio::sync::broadcast::channel(8);
+        let state = crate::AppState {
+            pool,
+            event_tx,
+            jwt_secret: "test-jwt".to_string(),
+        };
+        let app = Router::new().merge(routes()).with_state(state);
 
         let resp = app
             .oneshot(

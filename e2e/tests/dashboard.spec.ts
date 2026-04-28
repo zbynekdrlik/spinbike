@@ -142,9 +142,19 @@ test.describe('Card dashboard (staff /staff)', () => {
         // deterministic charge that never exceeds the card balance.
         const amountInput = page.locator('[data-testid="charge-amount"]');
         await amountInput.fill('5');
-        await page.locator('[data-testid="charge-submit"]').click();
 
-        await expect(page.locator('.alert-success')).toBeVisible({ timeout: 5000 });
+        // Wait for the charge POST to complete before asserting the toast,
+        // otherwise the alert visibility can race the API round-trip under
+        // parallel CI load (band-aid would be a longer timeout — this syncs
+        // on the actual signal instead).
+        const chargeResp = page.waitForResponse(
+            (r) => r.url().includes('/api/payments/charge') && r.request().method() === 'POST',
+        );
+        await page.locator('[data-testid="charge-submit"]').click();
+        const resp = await chargeResp;
+        expect(resp.ok()).toBe(true);
+
+        await expect(page.locator('.alert-success')).toBeVisible();
 
         const after = await page.evaluate(async () => {
             const token = localStorage.getItem('spinbike_token');
