@@ -252,21 +252,33 @@ pub fn ActionForm(
             {if pass_active {
                 view! {
                     <div class="chip-row chip-row--spaced">
-                        {services.get().into_iter()
-                            .filter(|svc| svc.is_class_visit())
-                            .map(|svc| {
+                        {
+                            // Sort so Fitness renders left of Spinning. is_class_visit()
+                            // restricts name_en to "Fitness" | "Spinning", so a plain
+                            // alphabetical sort (Fitness < Spinning) yields the right order.
+                            let mut visits: Vec<_> = services.get().into_iter()
+                                .filter(|svc| svc.is_class_visit())
+                                .collect();
+                            visits.sort_by(|a, b| a.name_en.cmp(&b.name_en));
+                            visits.into_iter().map(|svc| {
                                 let service_id = svc.id;
                                 let svc_name = svc.display_name(lang.get_untracked()).to_string();
+                                let color_cls = if svc.name_en == "Fitness" {
+                                    "btn--info"
+                                } else {
+                                    "btn--pass"
+                                };
                                 view! {
                                     <button
-                                        class="btn btn--compact btn--primary"
+                                        class=format!("btn btn--compact {color_cls}")
                                         data-testid="log-visit-btn"
                                         on:click=visit_click_for(service_id)
                                     >
                                         {move || i18n::t(lang.get(), "log_visit")}" "{svc_name.clone()}
                                     </button>
                                 }
-                            }).collect::<Vec<_>>()}
+                            }).collect::<Vec<_>>()
+                        }
                     </div>
                 }.into_any()
             } else {
