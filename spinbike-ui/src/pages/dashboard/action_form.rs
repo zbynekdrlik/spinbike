@@ -253,7 +253,7 @@ pub fn ActionForm(
                 view! {
                     <div class="chip-row chip-row--spaced">
                         {services.get().into_iter()
-                            .filter(|svc| !svc.is_monthly_pass())
+                            .filter(|svc| svc.is_class_visit())
                             .map(|svc| {
                                 let service_id = svc.id;
                                 let svc_name = svc.display_name(lang.get_untracked()).to_string();
