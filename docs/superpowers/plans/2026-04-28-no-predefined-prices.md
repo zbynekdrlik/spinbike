@@ -16,8 +16,9 @@
 
 ## Pre-flight notes for the implementer
 
-- This work is gated on PR #25 (button layout, v0.13.6) being merged to main, because the same file `action_form.rs` is touched. Task 1 verifies that gate before any code changes.
-- The repo already has a local commit `dc8d0c1` (and any subsequent spec-correction commits) on `dev` containing the spec doc for this issue. After PR #25 merges and dev syncs with main, those doc commits will be in the next push.
+- **This work bundles into the existing OPEN PR #25** (button layout, v0.13.6). Same file (`action_form.rs`) is touched, and the user explicitly asked to deliver both changes at once. PR #25 is currently `MERGEABLE` + `clean`. Pushing the new commits to `dev` will retrigger PR #25's CI — that is expected.
+- The repo already has 3 unpushed local commits on `dev` for issue #17: `dc8d0c1` (spec), `4c5358f` (spec correction), `a82439c` (this plan). They will go up with the next push.
+- Do NOT merge PR #25 first. Do NOT sync dev with main. The work continues on the same `dev` branch ahead of `origin/dev` and folds into PR #25's diff.
 - Do NOT run `cargo build`, `cargo test`, `cargo clippy`, or `trunk build` locally. CI is the authoritative gate. The only allowed local check is `cargo fmt --all --check` per `CLAUDE.md`.
 - After every push, monitor CI to terminal state per `ci-monitoring.md` — single `sleep N && gh run view --json status,conclusion,jobs` background command, no scheduled polling.
 - Frequent commits per task. No `--amend`. No history rewrite.
@@ -38,58 +39,40 @@
 
 ---
 
-## Task 1: Verify PR #25 merged, sync dev, bump VERSION to 0.13.7
+## Task 1: Bump VERSION to 0.13.7 (bundled scope of PR #25)
 
 **Files:**
 - Read: `VERSION`
 - Modify: `VERSION`, `Cargo.toml`, `crates/spinbike-core/Cargo.toml`, `crates/spinbike-server/Cargo.toml`, `spinbike-ui/Cargo.toml` (the last 4 are written by `scripts/sync-version.sh`)
 
-- [ ] **Step 1: Verify PR #25 is merged**
+- [ ] **Step 1: Confirm we're on the right branch and ahead of origin/dev**
 
 ```bash
-gh pr view 25 --json state,mergedAt,mergeCommit -q '{state: .state, mergedAt: .mergedAt, mergeCommit: .mergeCommit.oid}'
+git rev-parse --abbrev-ref HEAD
+git log --oneline origin/dev..HEAD
 ```
 
-Expected output (state must be `MERGED`):
-```json
-{"state":"MERGED","mergedAt":"2026-04-28T...Z","mergeCommit":"<sha>"}
-```
+Expected: branch is `dev`. The 3 unpushed local commits (`dc8d0c1`, `4c5358f`, `a82439c`) appear in `git log` — all `docs(spec):` / `docs(plan):` for #17. Nothing else.
 
-If `state` is anything other than `MERGED`, STOP. Report to controller — implementation cannot start until PR #25 is merged.
+If anything else appears, STOP and ask the controller — there's drift to investigate.
 
-- [ ] **Step 2: Sync local dev with origin/main**
-
-```bash
-git fetch origin
-git checkout dev
-git merge origin/main --no-edit
-```
-
-Expected: fast-forward or merge commit. No conflicts (PR #25's diff is what's now on main, dev should have at most the spec/plan doc commits ahead).
-
-- [ ] **Step 3: Confirm dev is now ahead of main only by doc commits + plan**
-
-```bash
-git log --oneline origin/main..HEAD
-```
-
-Expected: 1-3 commits, all `docs(spec):` or `docs(plan):` for issue #17. If anything else appears, STOP and ask the controller — there's drift to investigate.
-
-- [ ] **Step 4: Read current VERSION**
+- [ ] **Step 2: Read current VERSION**
 
 ```bash
 cat VERSION
 ```
 
-Expected: `0.13.6` (matches what PR #25 shipped).
+Expected: `0.13.6` (the version PR #25 currently ships).
 
-- [ ] **Step 5: Bump VERSION to 0.13.7**
+- [ ] **Step 3: Bump VERSION to 0.13.7**
 
 ```bash
 echo "0.13.7" > VERSION
 ```
 
-- [ ] **Step 6: Run sync-version.sh to propagate to all Cargo.toml files**
+This bumps PR #25's scope from v0.13.6 (button layout only) to v0.13.7 (button layout + no predefined prices).
+
+- [ ] **Step 4: Run sync-version.sh to propagate to all Cargo.toml files**
 
 ```bash
 scripts/sync-version.sh
@@ -97,7 +80,7 @@ scripts/sync-version.sh
 
 Expected: no errors. The script edits `Cargo.toml`, `crates/spinbike-core/Cargo.toml`, `crates/spinbike-server/Cargo.toml`, and `spinbike-ui/Cargo.toml` to set `version = "0.13.7"`.
 
-- [ ] **Step 7: Verify the sync**
+- [ ] **Step 5: Verify the sync**
 
 ```bash
 grep '^version' Cargo.toml crates/spinbike-core/Cargo.toml crates/spinbike-server/Cargo.toml spinbike-ui/Cargo.toml
@@ -105,11 +88,11 @@ grep '^version' Cargo.toml crates/spinbike-core/Cargo.toml crates/spinbike-serve
 
 Expected: every line shows `version = "0.13.7"`.
 
-- [ ] **Step 8: Commit the version bump**
+- [ ] **Step 6: Commit the version bump**
 
 ```bash
 git add VERSION Cargo.toml crates/spinbike-core/Cargo.toml crates/spinbike-server/Cargo.toml spinbike-ui/Cargo.toml
-git commit -m "chore: bump VERSION to 0.13.7 (#17 no predefined prices)"
+git commit -m "chore: bump VERSION to 0.13.7 (bundles #17 into PR #25)"
 ```
 
 ---
@@ -600,51 +583,84 @@ No commit in this task.
 
 ---
 
-## Task 6: Open the PR and verify mergeable
+## Task 6: Update PR #25 title and body to reflect bundled scope, verify mergeable
 
-**Files:** none
+**Files:** none (PR metadata only — PR #25 already exists)
 
-- [ ] **Step 1: Open the PR from dev → main**
+- [ ] **Step 1: Update PR #25 title and body via the API**
+
+`gh pr edit` hits a deprecated GraphQL projects-classic codepath in this repo's setup, so use the REST API directly:
 
 ```bash
-gh pr create --base main --head dev \
-  --title "feat: no predefined prices on staff dashboard (#17, v0.13.7)" \
-  --body "$(cat <<'EOF'
+gh api -X PATCH repos/zbynekdrlik/spinbike/pulls/25 \
+  -f title="feat: button layout + no predefined prices on staff dashboard (#13 #17, v0.13.7)" \
+  -f body="$(cat <<'EOF'
 ## Summary
 
-- Staff types the price every time when charging a service or selling a monthly pass — no more auto-fill from `default_price`.
-- Service dropdown labels are now just the service name ("Spinning", "Fitness", "Monthly pass") with no `(price €)` annotation.
-- Admin services CRUD page is unchanged. The 4-hour Spinning class auto-charger (`crates/spinbike-server/src/jobs/charger.rs`) still uses `default_price` to bill booked classes — no functional impact on automatic billing.
+This PR bundles two staff-dashboard changes plus the CI cache + E2E diagnostics work that landed earlier on the branch.
 
-Closes #17.
+### #13 — Charge/Topup button order, Fitness/Spinning visit order, soft-sibling colors (v0.13.6)
+
+- **Charge** moves left, keeps `.btn--primary` (solid blue, most-used action).
+- **Topup** moves right, uses `.btn--primary-soft` (same blue hue, low saturation).
+- **Visit Fitness** is left of **Visit Spinning** in the visit row.
+- **Visit Fitness** keeps `.btn--info`, **Visit Spinning** uses `.btn--info-soft`.
+- Three new CSS modifiers added (`.btn--info`, `.btn--primary-soft`, `.btn--info-soft`).
+- New Playwright test `e2e/tests/dashboard-button-layout.spec.ts` asserts DOM order + class names + zero console errors.
+
+### #17 — No predefined prices on staff dashboard (v0.13.7)
+
+- Staff types the price every time when charging a service or selling a monthly pass. No more auto-fill from `default_price`.
+- Service dropdown labels show only the name (\"Spinning\", \"Fitness\", \"Monthly pass\"). The `(5.00 €)` annotation is gone.
+- Admin services CRUD page is unchanged. The 4-hour Spinning class auto-charger (\`crates/spinbike-server/src/jobs/charger.rs\`) still uses \`default_price\` to bill booked classes — no functional impact on automatic billing.
+- New Playwright test \`e2e/tests/no-predefined-prices.spec.ts\` asserts dropdown labels without prices, empty input on service change, empty-submit inline error, and the typed-amount path end-to-end with zero console errors.
+- Three existing E2E tests updated: \`card-action-form.spec.ts:83\` now \`.fill('35.00')\` before submit (was auto-filled); two comment cleanups in \`dashboard.spec.ts:141\` and \`card-action-form.spec.ts:127\`.
+
+### CI / E2E diagnostics (carried over from earlier on the branch)
+
+- All 3 E2E jobs cache npm + Playwright browsers across runs.
+- Server stdout/stderr captured to \`/tmp/spinbike-server.log\` and uploaded as artifact on E2E failure.
+- \`RUST_LOG=spinbike_server=info\` on the E2E server invocation so \`internal_error\` lines surface.
+- These diagnostics already paid off — flake #24 (\`SQLITE_BUSY\` writer race) was root-caused with concrete server-log evidence on this branch.
+
+Closes #13. Closes #17.
 
 ## Test plan
 
-- [x] New Playwright test `e2e/tests/no-predefined-prices.spec.ts` asserts: dropdown labels without prices, empty input on service change, empty submit shows `.alert-error`, typed amount end-to-end, zero console errors.
-- [x] Existing tests updated: `card-action-form.spec.ts:83` now `.fill('35.00')` before submit (was auto-filled); `dashboard.spec.ts:141` and `card-action-form.spec.ts:127` got comment cleanups (test logic unchanged).
-- [x] CI green on dev push run — all jobs.
-- [ ] Post-deploy on dev frontend: pick each service, confirm input stays empty, charge €7 against a test card, confirm typed amount path works.
-- [ ] Auto-charger regression: existing `charger_*` unit tests in `crates/spinbike-server/src/jobs/charger.rs` remain green without modification.
+- [x] CI green on push and PR runs — all jobs (Test Integrity, Lint, Build WASM, Test, E2E, Mutation Testing).
+- [x] New Playwright test for button layout (\`dashboard-button-layout.spec.ts\`).
+- [x] New Playwright test for no-predefined-prices (\`no-predefined-prices.spec.ts\`).
+- [x] Existing E2E tests still pass (with the 3 small updates above).
+- [ ] Post-deploy on dev frontend: pick each service, confirm input stays empty, type 7.50 + Charge to confirm typed-amount path works end-to-end. Read DOM version label, confirm v0.13.7.
+- [ ] Auto-charger regression: existing \`charger_*\` unit tests remain green without modification.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 )"
 ```
 
-- [ ] **Step 2: Wait for the PR's CI run to complete**
+- [ ] **Step 2: Confirm the PR title and body updated**
 
 ```bash
-sleep 10 && gh pr view <pr-number> --json statusCheckRollup -q '.statusCheckRollup[] | {name, status, conclusion}'
+gh pr view 25 --json title,body | jq -r '.title, "---", (.body | .[:300])'
 ```
 
-If still running, monitor with the same `sleep N && gh run view` pattern as Task 5.
+Expected: title contains both `#13` and `#17` and `v0.13.7`; body opens with the new Summary section.
+
+- [ ] **Step 3: Wait for the latest CI run on PR #25 to complete**
+
+The push from Task 5 already retriggered PR #25's CI. Monitor the same run:
+
+```bash
+sleep 10 && gh pr view 25 --json statusCheckRollup -q '.statusCheckRollup[] | {name, status, conclusion}'
+```
 
 Expected end state: every check `conclusion: SUCCESS`.
 
-- [ ] **Step 3: Verify the PR is mergeable + clean**
+- [ ] **Step 4: Verify PR #25 is mergeable + clean**
 
 ```bash
-gh api repos/zbynekdrlik/spinbike/pulls/<pr-number> --jq '{mergeable: .mergeable, mergeable_state: .mergeable_state}'
+gh api repos/zbynekdrlik/spinbike/pulls/25 --jq '{mergeable: .mergeable, mergeable_state: .mergeable_state}'
 ```
 
 Expected:
@@ -654,9 +670,9 @@ Expected:
 
 If `mergeable_state` is anything other than `"clean"` (e.g. `unstable`, `behind`, `blocked`, `dirty`), STOP and investigate. Per `autonomous-quality-discipline.md`, UNSTABLE is not mergeable. Fix the cause before reporting done.
 
-- [ ] **Step 4: Report PR URL to the controller**
+- [ ] **Step 5: Report PR URL to the controller**
 
-Output: `https://github.com/zbynekdrlik/spinbike/pull/<pr-number>` — mergeable, clean. Awaiting user "merge it".
+Output: `https://github.com/zbynekdrlik/spinbike/pull/25` — mergeable, clean. Awaiting user "merge it".
 
 **Per `pr-merge-policy.md`, do NOT merge. The user merges explicitly. Task 6 ends here.**
 
@@ -737,8 +753,8 @@ Per `completion-report.md`, send the EXACT template:
 🌐 Dev:  http://10.77.8.134:3000
 🌐 Prod: <prod URL from project CLAUDE.md>
 
-**[spinbike] PR #<N>: feat: no predefined prices on staff dashboard (#17, v0.13.7)**
-https://github.com/zbynekdrlik/spinbike/pull/<N> — merged
+**[spinbike] PR #25: feat: button layout + no predefined prices on staff dashboard (#13 #17, v0.13.7)**
+https://github.com/zbynekdrlik/spinbike/pull/25 — merged
 ```
 
 If the deploy verification surfaces any console error, broken behavior, or version mismatch — DO NOT send the report. Investigate and fix first.
