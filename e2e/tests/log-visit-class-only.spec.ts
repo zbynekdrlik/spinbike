@@ -38,8 +38,8 @@ test.describe('Log Visit — only class-visit services', () => {
 
         // Sell a monthly pass so log-visit chips become visible. The dropdown
         // populates async after services load — wait for the option to exist,
-        // then verify the on-change handler auto-filled the price before
-        // submitting (otherwise parse_money returns early and no pass is sold).
+        // then explicitly type the price (post-#17: no auto-fill, staff types
+        // every time, otherwise parse_money returns early and no pass is sold).
         const mpOption = page
             .locator('[data-testid="charge-service"] option')
             .filter({ hasText: /Monthly pass|Mesačný preplatok/ })
@@ -48,7 +48,7 @@ test.describe('Log Visit — only class-visit services', () => {
         const mpValue = await mpOption.getAttribute('value');
         if (!mpValue) throw new Error('Monthly pass option had no value');
         await page.locator('[data-testid="charge-service"]').selectOption(mpValue);
-        await expect(page.locator('[data-testid="charge-amount"]')).not.toHaveValue('');
+        await page.locator('[data-testid="charge-amount"]').fill('35.00');
 
         const sellPassResp = page.waitForResponse(
             (r) => r.url().includes('/api/payments/sell-pass') && r.request().method() === 'POST',

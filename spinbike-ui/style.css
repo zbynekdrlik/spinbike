@@ -370,6 +370,43 @@ a:hover { text-decoration: underline; }
     color: var(--text);
 }
 
+.btn--info {
+    background: var(--info);
+    border-color: var(--info);
+    color: var(--info-fg);
+    font-weight: 600;
+}
+.btn--info:hover:not(:disabled) {
+    background: var(--info-hover);
+    border-color: var(--info-hover);
+}
+
+/* Soft-tinted variants — same hue family as their solid siblings, lower
+   saturation. Used for the right-side / less-frequent action in a paired row
+   (Charge | Topup, Visit Fitness | Visit Spinning) so the more-used button
+   on the left visually leads without making the right one disappear. */
+.btn--primary-soft {
+    background: var(--success-soft);
+    border-color: var(--success-border);
+    color: var(--success-fg);
+    font-weight: 600;
+}
+.btn--primary-soft:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--brand) 28%, var(--surface));
+    border-color: color-mix(in srgb, var(--brand) 55%, var(--surface));
+}
+
+.btn--info-soft {
+    background: var(--info-soft);
+    border-color: var(--info-border);
+    color: var(--info-soft-fg);
+    font-weight: 600;
+}
+.btn--info-soft:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--info) 26%, var(--surface));
+    border-color: color-mix(in srgb, var(--info) 60%, var(--surface));
+}
+
 
 /* ========================================================================
    7. FORMS

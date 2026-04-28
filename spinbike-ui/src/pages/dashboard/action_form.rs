@@ -65,14 +65,10 @@ pub fn ActionForm(
             .unwrap_or_default();
         let id: Option<i64> = raw.parse().ok();
         set_selected_service_id.set(id);
-        if let Some(id) = id {
-            if let Some(svc) = services.get().iter().find(|s| s.id == id) {
-                if let Some(el) = amount_ref.get() {
-                    let el: &HtmlInputElement = &el;
-                    el.set_value(&format!("{:.2}", svc.default_price));
-                }
-            }
-        }
+        // Auto-fill from default_price was removed (#17). Staff types the price
+        // every time. The is_monthly_pass() helper still reads
+        // selected_service_id, so the date-row visibility and Sell-vs-Charge
+        // submit-label flip continue to work.
     };
 
     let do_topup = move |_ev: web_sys::MouseEvent| {
@@ -252,21 +248,38 @@ pub fn ActionForm(
             {if pass_active {
                 view! {
                     <div class="chip-row chip-row--spaced">
-                        {services.get().into_iter()
-                            .filter(|svc| svc.is_class_visit())
-                            .map(|svc| {
+                        {
+                            // Sort so Fitness renders left of Spinning. is_class_visit()
+                            // restricts name_en to "Fitness" | "Spinning", so a plain
+                            // alphabetical sort (Fitness < Spinning) yields the right order.
+                            let mut visits: Vec<_> = services.get().into_iter()
+                                .filter(|svc| svc.is_class_visit())
+                                .collect();
+                            visits.sort_by(|a, b| a.name_en.cmp(&b.name_en));
+                            visits.into_iter().map(|svc| {
                                 let service_id = svc.id;
                                 let svc_name = svc.display_name(lang.get_untracked()).to_string();
+                                // Fitness is the more-used activity (per CEO feedback on
+                                // PR #25 v0.13.5) → solid blue, eye-catching. Spinning gets
+                                // the soft-blue sibling so the pair reads as primary /
+                                // secondary within one hue family — small visual difference,
+                                // not a radical color shift.
+                                let color_cls = if svc.name_en == spinbike_core::services::FITNESS_NAME_EN {
+                                    "btn--info"
+                                } else {
+                                    "btn--info-soft"
+                                };
                                 view! {
                                     <button
-                                        class="btn btn--compact btn--primary"
+                                        class=format!("btn btn--compact {color_cls}")
                                         data-testid="log-visit-btn"
                                         on:click=visit_click_for(service_id)
                                     >
                                         {move || i18n::t(lang.get(), "log_visit")}" "{svc_name.clone()}
                                     </button>
                                 }
-                            }).collect::<Vec<_>>()}
+                            }).collect::<Vec<_>>()
+                        }
                     </div>
                 }.into_any()
             } else {
@@ -287,7 +300,8 @@ pub fn ActionForm(
                         services.get().into_iter().map(|s| {
                             let val = s.id.to_string();
                             let kind = s.kind.clone();
-                            let label = format!("{} ({:.2} €)", s.display_name(lang_now), s.default_price);
+                            // No price annotation (#17) — staff sees just the service name.
+                            let label = s.display_name(lang_now).to_string();
                             view! { <option value=val data-kind=kind>{label}</option> }
                         }).collect::<Vec<_>>()
                     }}
@@ -332,15 +346,6 @@ pub fn ActionForm(
                 <button
                     type="button"
                     class="btn btn--primary"
-                    data-testid="topup-submit"
-                    on:click=do_topup
-                    disabled=move || loading.get()
-                >
-                    "+ "{move || i18n::t(lang.get(), "topup")}
-                </button>
-                <button
-                    type="button"
-                    class="btn btn--primary"
                     data-testid="charge-submit"
                     on:click=do_charge
                     disabled=move || loading.get()
@@ -350,6 +355,15 @@ pub fn ActionForm(
                     } else {
                         i18n::t(lang.get(), "charge").to_string()
                     }}
+                </button>
+                <button
+                    type="button"
+                    class="btn btn--primary-soft"
+                    data-testid="topup-submit"
+                    on:click=do_topup
+                    disabled=move || loading.get()
+                >
+                    "+ "{move || i18n::t(lang.get(), "topup")}
                 </button>
             </div>
         </div>

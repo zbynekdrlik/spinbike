@@ -80,7 +80,9 @@ test.describe('Card action form — unified Charge / Top-up / Sell pass', () => 
         );
 
         await selectMonthlyPass(page);
-        // Amount auto-filled from default_price (35.00). Accept it.
+        // Staff types the price every time (#17 — no auto-fill). Use 35.00
+        // to match the assertion `expect(body.price).toBe(35.0)` below.
+        await page.locator('[data-testid="charge-amount"]').fill('35.00');
         await page.locator('[data-testid="charge-submit"]').click();
 
         const req = await sellPassReq;
@@ -124,7 +126,10 @@ test.describe('Card action form — unified Charge / Top-up / Sell pass', () => 
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
-        // Pick a non-pass service so default_price auto-fills, then clear it.
+        // Pick a non-pass service. Post-#17 the input is already empty after
+        // selectOption — the Ctrl+A; Delete clear below is redundant but
+        // harmless and kept defensively in case a future regression
+        // reintroduces auto-fill.
         await page.locator('[data-testid="charge-service"]').selectOption({ index: 1 });
         const amountInput = page.locator('[data-testid="charge-amount"]');
         await amountInput.focus();

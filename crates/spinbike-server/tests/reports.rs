@@ -13,9 +13,10 @@ async fn day_report_aggregates_charges_topups_passes_and_excludes_voided() {
     // One charge of 5 EUR (amount = -5)
     sqlx::query(
         "INSERT INTO transactions (card_id, amount, action, service_id, created_at) \
-                 SELECT ?1, -5.0, 'charge', id, datetime('now') FROM services WHERE name_en = 'Spinning' LIMIT 1",
+                 SELECT ?1, -5.0, 'charge', id, datetime('now') FROM services WHERE name_en = ?2 LIMIT 1",
     )
     .bind(card_id)
+    .bind(spinbike_core::services::SPINNING_NAME_EN)
     .execute(&app.pool)
     .await
     .unwrap();
@@ -86,13 +87,22 @@ async fn range_report_aggregates_across_days_and_rejects_over_93_days() {
     let app = TestApp::new().await;
     let card_id = app.customer_card_id;
 
+    // Per #23, only Fitness/Spinning service rows count toward attendance.
+    // Look up Spinning's service id and tag both charges with it so the
+    // range KPI still asserts attendance == 2 across days.
+    let spinning_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name_en = ?1")
+        .bind(spinbike_core::services::SPINNING_NAME_EN)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
     sqlx::query(
-        "INSERT INTO transactions (card_id, amount, action, created_at) VALUES \
-                 (?1, -5.0, 'charge', datetime('now','-3 days')), \
-                 (?1, -5.0, 'charge', datetime('now','-2 days')), \
-                 (?1, 20.0, 'topup', datetime('now','-1 days'))",
+        "INSERT INTO transactions (card_id, service_id, amount, action, created_at) VALUES \
+                 (?1, ?2, -5.0, 'charge', datetime('now','-3 days')), \
+                 (?1, ?2, -5.0, 'charge', datetime('now','-2 days')), \
+                 (?1, NULL, 20.0, 'topup', datetime('now','-1 days'))",
     )
     .bind(card_id)
+    .bind(spinning_id)
     .execute(&app.pool)
     .await
     .unwrap();

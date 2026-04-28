@@ -115,16 +115,29 @@ pub async fn day_report(
     // NOTE: `ELSE 0.0` (not `ELSE 0`) is required — otherwise SQLite returns an
     // INTEGER for the SUM when no rows match, and sqlx refuses to decode that
     // into f64 (the KPI struct's revenue_eur/cash_in_eur fields).
+    // Class-visit names bound from spinbike_core::services constants so renaming
+    // a service in the Rust constant updates this query automatically.
     let kpi_row: DbKpiRow = sqlx::query_as::<_, DbKpiRow>(
         "SELECT
             COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0.0 END), 0.0) AS revenue_eur,
-            COALESCE(SUM(CASE WHEN amount < 0 AND valid_until IS NULL THEN 1 ELSE 0 END), 0)   AS attendance,
+            COALESCE(SUM(
+              CASE
+                WHEN service_id IN (SELECT id FROM services WHERE name_en IN (?2, ?3))
+                 AND (
+                   (action = 'charge' AND amount < 0 AND valid_until IS NULL)
+                   OR action = 'visit'
+                 )
+                THEN 1 ELSE 0
+              END
+            ), 0) AS attendance,
             COALESCE(SUM(CASE WHEN valid_until IS NOT NULL THEN 1 ELSE 0 END), 0) AS passes_sold,
             COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0.0 END), 0.0) AS cash_in_eur
          FROM transactions
          WHERE date(created_at) = ?1 AND deleted_at IS NULL",
     )
     .bind(&date_str)
+    .bind(spinbike_core::services::FITNESS_NAME_EN)
+    .bind(spinbike_core::services::SPINNING_NAME_EN)
     .fetch_one(pool)
     .await?;
 
@@ -227,10 +240,21 @@ pub async fn range_report(
     }
     let events: Vec<ReportEvent> = rows.into_iter().map(Into::into).collect();
 
+    // Class-visit names bound from spinbike_core::services constants — see
+    // day_report for the rationale.
     let kpi_row: DbKpiRow = sqlx::query_as::<_, DbKpiRow>(
         "SELECT
             COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0.0 END), 0.0) AS revenue_eur,
-            COALESCE(SUM(CASE WHEN amount < 0 AND valid_until IS NULL THEN 1 ELSE 0 END), 0) AS attendance,
+            COALESCE(SUM(
+              CASE
+                WHEN service_id IN (SELECT id FROM services WHERE name_en IN (?3, ?4))
+                 AND (
+                   (action = 'charge' AND amount < 0 AND valid_until IS NULL)
+                   OR action = 'visit'
+                 )
+                THEN 1 ELSE 0
+              END
+            ), 0) AS attendance,
             COALESCE(SUM(CASE WHEN valid_until IS NOT NULL THEN 1 ELSE 0 END), 0) AS passes_sold,
             COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0.0 END), 0.0) AS cash_in_eur
          FROM transactions
@@ -238,6 +262,8 @@ pub async fn range_report(
     )
     .bind(&from_str)
     .bind(&to_str)
+    .bind(spinbike_core::services::FITNESS_NAME_EN)
+    .bind(spinbike_core::services::SPINNING_NAME_EN)
     .fetch_one(pool)
     .await?;
 
@@ -433,7 +459,7 @@ pub async fn now_panel(pool: &SqlitePool) -> Result<NowResponse> {
             template_id: t.id,
             date: today,
             start_time: t.start_time.clone(),
-            service_name: "Spinning".to_string(),
+            service_name: spinbike_core::services::SPINNING_NAME_EN.to_string(),
             instructor_name: t.instructor_name.clone(),
             capacity: t.capacity,
             roster,
@@ -448,7 +474,7 @@ pub async fn now_panel(pool: &SqlitePool) -> Result<NowResponse> {
             template_id: t.id,
             date: today,
             start_time: t.start_time,
-            service_name: "Spinning".to_string(),
+            service_name: spinbike_core::services::SPINNING_NAME_EN.to_string(),
             instructor_name: t.instructor_name,
             booked,
             capacity: t.capacity,
@@ -559,7 +585,7 @@ async fn next_class_future(
                 template_id: t.id,
                 date: d,
                 start_time: t.start_time,
-                service_name: "Spinning".to_string(),
+                service_name: spinbike_core::services::SPINNING_NAME_EN.to_string(),
                 instructor_name: t.instructor_name,
                 booked,
                 capacity: t.capacity,
@@ -696,4 +722,184 @@ mod tests {
     // `picks_current_when_inside_window`: now=1110, start=1080, dur=60, true end=1140.
     // `+` → `-` mutant: end = 1020. 1110 < 1020 false → not current. Test asserts
     // current=Some(0), fails on mutant. ✓
+
+    // ----- Issue #23: NAVSTEVY/ATTENDANCE visit-count fix -----
+    //
+    // Today's attendance SQL counts ANY `amount < 0 AND valid_until IS NULL`
+    // row, which wrongly includes Refreshments/Supplements/Card-activation-fee
+    // charges AND wrongly excludes €0 `action='visit'` rows logged for
+    // monthly-pass holders. Per CEO direction (#23), attendance should equal
+    // (Fitness | Spinning) AND (paid charge | logged visit).
+    //
+    // The fixture is intentionally discriminating: it inserts 2 Refreshments
+    // charges so the OLD SQL returns 5 (paid Fitness + paid Spinning + 2 ×
+    // Refreshments + Card-fee) while the NEW SQL returns 4 (paid Fitness +
+    // paid Spinning + free Fitness visit + free Spinning visit). A 1×
+    // Refreshments fixture would coincidentally return 4 under both SQLs and
+    // the test would not detect the bug. Do not change the count of
+    // Refreshments rows without re-running the discriminator math.
+    use crate::db::transactions::{create_transaction, create_transaction_with_valid_until};
+    use crate::db::{create_memory_pool, run_migrations};
+    use sqlx::SqlitePool;
+
+    async fn setup_pool_with_card() -> (SqlitePool, i64) {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        // The standard migrations seed Spinning, Fitness, Monthly pass,
+        // Refreshments, Supplements, Card activation fee. We need a card to
+        // satisfy NOT-NULL-ish FK semantics on `transactions.card_id`.
+        let card_id: i64 = sqlx::query_scalar(
+            "INSERT INTO cards (barcode, credit, allow_debit) VALUES ('T-23', 100.0, 1) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        (pool, card_id)
+    }
+
+    async fn service_id_by_name_en(pool: &SqlitePool, name_en: &str) -> i64 {
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = ?")
+            .bind(name_en)
+            .fetch_one(pool)
+            .await
+            .unwrap_or_else(|_| panic!("service '{name_en}' missing from seed"))
+    }
+
+    #[tokio::test]
+    async fn attendance_counts_only_fitness_and_spinning_visits() {
+        let (pool, card_id) = setup_pool_with_card().await;
+
+        let fitness_id =
+            service_id_by_name_en(&pool, spinbike_core::services::FITNESS_NAME_EN).await;
+        let spinning_id =
+            service_id_by_name_en(&pool, spinbike_core::services::SPINNING_NAME_EN).await;
+        let monthly_pass_id = service_id_by_name_en(&pool, "Monthly pass").await;
+        let refreshments_id = service_id_by_name_en(&pool, "Refreshments").await;
+        let card_fee_id = service_id_by_name_en(&pool, "Card activation fee").await;
+
+        // 4 rows that SHOULD count.
+        create_transaction(
+            &pool,
+            None,
+            Some(card_id),
+            None,
+            Some(fitness_id),
+            -5.0,
+            "charge",
+        )
+        .await
+        .unwrap();
+        create_transaction(
+            &pool,
+            None,
+            Some(card_id),
+            None,
+            Some(spinning_id),
+            -5.0,
+            "charge",
+        )
+        .await
+        .unwrap();
+        create_transaction(
+            &pool,
+            None,
+            Some(card_id),
+            None,
+            Some(fitness_id),
+            0.0,
+            "visit",
+        )
+        .await
+        .unwrap();
+        create_transaction(
+            &pool,
+            None,
+            Some(card_id),
+            None,
+            Some(spinning_id),
+            0.0,
+            "visit",
+        )
+        .await
+        .unwrap();
+
+        // 5 rows that should NOT count. TWO Refreshments rows so the buggy SQL
+        // returns 5 and the fixed SQL returns 4 — the test would otherwise
+        // pass against the bug. See header comment.
+        create_transaction(
+            &pool,
+            None,
+            Some(card_id),
+            None,
+            Some(refreshments_id),
+            -2.50,
+            "charge",
+        )
+        .await
+        .unwrap();
+        create_transaction(
+            &pool,
+            None,
+            Some(card_id),
+            None,
+            Some(refreshments_id),
+            -2.50,
+            "charge",
+        )
+        .await
+        .unwrap();
+        create_transaction(
+            &pool,
+            None,
+            Some(card_id),
+            None,
+            Some(card_fee_id),
+            -3.0,
+            "charge",
+        )
+        .await
+        .unwrap();
+        let valid_until = chrono::NaiveDate::from_ymd_opt(2030, 1, 1).unwrap();
+        create_transaction_with_valid_until(
+            &pool,
+            None,
+            Some(card_id),
+            None,
+            Some(monthly_pass_id),
+            -35.0,
+            "charge",
+            Some(valid_until),
+        )
+        .await
+        .unwrap();
+        create_transaction(&pool, None, Some(card_id), None, None, 10.0, "topup")
+            .await
+            .unwrap();
+
+        // Use today's date — all `create_transaction*` calls default
+        // `created_at = datetime('now')`, so day_report(today) sees them all.
+        let today = chrono::Local::now().naive_local().date();
+
+        let (day_kpi, _, _) = super::day_report(&pool, today, 50, None).await.unwrap();
+        assert_eq!(
+            day_kpi.attendance, 4,
+            "day_report attendance must count only Fitness/Spinning paid+visit rows"
+        );
+
+        let (range_kpi, _, _) = super::range_report(&pool, today, today, 50, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            range_kpi.attendance, 4,
+            "range_report attendance must agree with day_report on the same date"
+        );
+
+        // Sanity: adjacent KPIs aren't disturbed by the change.
+        // revenue_eur sums all negative amounts: 5+5+2.50+2.50+3+35 = 53.00.
+        assert!((day_kpi.revenue_eur - 53.00).abs() < 0.001);
+        // passes_sold counts valid_until-set rows: exactly 1.
+        assert_eq!(day_kpi.passes_sold, 1);
+        // cash_in_eur sums positive-amount rows: just the topup.
+        assert!((day_kpi.cash_in_eur - 10.00).abs() < 0.001);
+    }
 }

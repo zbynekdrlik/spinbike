@@ -447,8 +447,14 @@ mod tests {
             map_legacy_service_name("Casova karta"),
             Some("Mesačný preplatok")
         );
-        assert_eq!(map_legacy_service_name("Fitnes"), Some("Fitness"));
-        assert_eq!(map_legacy_service_name("Spinbike"), Some("Spinning"));
+        assert_eq!(
+            map_legacy_service_name("Fitnes"),
+            Some(spinbike_core::services::FITNESS_NAME_EN)
+        );
+        assert_eq!(
+            map_legacy_service_name("Spinbike"),
+            Some(spinbike_core::services::SPINNING_NAME_EN)
+        );
     }
 
     #[test]

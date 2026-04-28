@@ -37,9 +37,12 @@ test.describe('Sell pass — unified form price input', () => {
         await openCardByLastName(page, lastName);
 
         await selectMonthlyPass(page);
-        // Amount auto-filled to 35.00; clear and type 40 char-by-char.
+        // Post-#17: input starts empty; type 40 char-by-char to verify the
+        // price input accepts keyboard input (was: clear auto-filled 35.00
+        // then type). The Ctrl+A; Delete clear below is redundant but kept
+        // defensively in case a future regression reintroduces auto-fill.
         const amountInput = page.locator('[data-testid="charge-amount"]');
-        await expect(amountInput).toHaveValue('35.00');
+        await expect(amountInput).toHaveValue('');
         await amountInput.focus();
         await amountInput.press('ControlOrMeta+a');
         await amountInput.press('Delete');

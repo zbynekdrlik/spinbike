@@ -101,7 +101,7 @@ impl ServiceInfo {
     /// migrate the data model to a `kind=class` flag instead of patching this
     /// list.
     pub fn is_class_visit(&self) -> bool {
-        matches!(self.name_en.as_str(), "Spinning" | "Fitness")
+        spinbike_core::services::CLASS_VISIT_NAMES_EN.contains(&self.name_en.as_str())
     }
 }
 
