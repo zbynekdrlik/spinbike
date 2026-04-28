@@ -118,7 +118,16 @@ pub async fn day_report(
     let kpi_row: DbKpiRow = sqlx::query_as::<_, DbKpiRow>(
         "SELECT
             COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0.0 END), 0.0) AS revenue_eur,
-            COALESCE(SUM(CASE WHEN amount < 0 AND valid_until IS NULL THEN 1 ELSE 0 END), 0)   AS attendance,
+            COALESCE(SUM(
+              CASE
+                WHEN service_id IN (SELECT id FROM services WHERE name_en IN ('Fitness','Spinning'))
+                 AND (
+                   (action = 'charge' AND amount < 0 AND valid_until IS NULL)
+                   OR action = 'visit'
+                 )
+                THEN 1 ELSE 0
+              END
+            ), 0) AS attendance,
             COALESCE(SUM(CASE WHEN valid_until IS NOT NULL THEN 1 ELSE 0 END), 0) AS passes_sold,
             COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0.0 END), 0.0) AS cash_in_eur
          FROM transactions
@@ -230,7 +239,16 @@ pub async fn range_report(
     let kpi_row: DbKpiRow = sqlx::query_as::<_, DbKpiRow>(
         "SELECT
             COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0.0 END), 0.0) AS revenue_eur,
-            COALESCE(SUM(CASE WHEN amount < 0 AND valid_until IS NULL THEN 1 ELSE 0 END), 0) AS attendance,
+            COALESCE(SUM(
+              CASE
+                WHEN service_id IN (SELECT id FROM services WHERE name_en IN ('Fitness','Spinning'))
+                 AND (
+                   (action = 'charge' AND amount < 0 AND valid_until IS NULL)
+                   OR action = 'visit'
+                 )
+                THEN 1 ELSE 0
+              END
+            ), 0) AS attendance,
             COALESCE(SUM(CASE WHEN valid_until IS NOT NULL THEN 1 ELSE 0 END), 0) AS passes_sold,
             COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0.0 END), 0.0) AS cash_in_eur
          FROM transactions
