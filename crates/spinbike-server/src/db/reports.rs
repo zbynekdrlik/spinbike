@@ -858,7 +858,7 @@ mod tests {
             Some(monthly_pass_id),
             -35.0,
             "charge",
-            valid_until,
+            Some(valid_until),
         )
         .await
         .unwrap();
