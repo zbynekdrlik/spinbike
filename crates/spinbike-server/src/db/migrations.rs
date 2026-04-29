@@ -33,6 +33,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "transactions: legacy_backfilled marker",
         V9_TRANSACTIONS_LEGACY_BACKFILL_MARKER,
     ),
+    (
+        10,
+        "transactions: free-text note column",
+        V10_TRANSACTIONS_NOTE_COLUMN,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -256,6 +261,10 @@ VALUES ('generic', 'Občerstvenie',     'Refreshments',        0.0, 1),
 
 const V9_TRANSACTIONS_LEGACY_BACKFILL_MARKER: &str = r#"
 ALTER TABLE transactions ADD COLUMN legacy_backfilled INTEGER NOT NULL DEFAULT 0;
+"#;
+
+const V10_TRANSACTIONS_NOTE_COLUMN: &str = r#"
+ALTER TABLE transactions ADD COLUMN note TEXT;
 "#;
 
 #[cfg(test)]
@@ -666,5 +675,47 @@ mod tests {
             .expect("legacy_backfilled column missing on transactions");
         assert_eq!(lb.2.to_uppercase(), "INTEGER");
         assert_eq!(lb.3, 1, "legacy_backfilled must be NOT NULL");
+    }
+
+    #[tokio::test]
+    async fn v10_adds_note_column_to_transactions() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let cols: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('transactions')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let names: Vec<&str> = cols.iter().map(|(n,)| n.as_str()).collect();
+        assert!(
+            names.contains(&"note"),
+            "transactions.note column missing; found: {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v10_note_defaults_to_null_for_existing_rows() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        // Inserting a row without a note column read should yield NULL.
+        let card_id: i64 =
+            sqlx::query_scalar("INSERT INTO cards (barcode) VALUES ('NOTE-TEST') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        sqlx::query("INSERT INTO transactions (card_id, amount, action) VALUES (?, ?, ?)")
+            .bind(card_id)
+            .bind(1.0_f64)
+            .bind("topup")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let note: Option<String> =
+            sqlx::query_scalar("SELECT note FROM transactions WHERE card_id = ?")
+                .bind(card_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(note.is_none(), "fresh row's note must be NULL");
     }
 }
