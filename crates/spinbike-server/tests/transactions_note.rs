@@ -1,9 +1,10 @@
 //! Integration tests for #26 — per-transaction note support.
-//! Covers: create endpoints accepting optional note (≤200 chars).
+//! Covers: create endpoints accepting optional note (≤200 chars), and
+//! PATCH /api/transactions/{id}/note.
 
 mod helpers;
 
-use helpers::{TestApp, post_json};
+use helpers::{TestApp, delete, patch_json, post_json};
 use serde_json::json;
 
 #[tokio::test]
@@ -250,4 +251,189 @@ async fn note_at_200_chars_accepted() {
         .await
         .unwrap();
     assert_eq!(note.as_deref(), Some(exactly_200.as_str()));
+}
+
+// ─── PATCH /api/transactions/{id}/note ────────────────────────────────────────
+
+#[tokio::test]
+async fn patch_note_updates_existing_row() {
+    let app = TestApp::new().await;
+    let card_id = app.seed_card("PATCH-1", 50.0, None, None, None, None).await;
+
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/charge",
+            &app.staff_token,
+            &json!({"card_id": card_id, "amount": 1.0, "note": "first"}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let tx_id = resp.get("transaction_id").unwrap().as_i64().unwrap();
+
+    let (patch_status, patch_resp) = app
+        .request(patch_json(
+            &format!("/api/transactions/{tx_id}/note"),
+            &app.staff_token,
+            &json!({"note": "edited"}),
+        ))
+        .await;
+    assert_eq!(patch_status, axum::http::StatusCode::OK);
+    assert_eq!(patch_resp.get("note").unwrap().as_str(), Some("edited"));
+
+    let note: Option<String> = sqlx::query_scalar("SELECT note FROM transactions WHERE id = ?")
+        .bind(tx_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(note.as_deref(), Some("edited"));
+}
+
+#[tokio::test]
+async fn patch_note_clears_with_null_or_empty() {
+    let app = TestApp::new().await;
+    let card_id = app.seed_card("PATCH-2", 50.0, None, None, None, None).await;
+
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/charge",
+            &app.staff_token,
+            &json!({"card_id": card_id, "amount": 1.0, "note": "to clear"}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let tx_id = resp.get("transaction_id").unwrap().as_i64().unwrap();
+
+    // Clear with explicit null.
+    let (patch_status, patch_resp) = app
+        .request(patch_json(
+            &format!("/api/transactions/{tx_id}/note"),
+            &app.staff_token,
+            &json!({"note": null}),
+        ))
+        .await;
+    assert_eq!(patch_status, axum::http::StatusCode::OK);
+    assert!(patch_resp.get("note").unwrap().is_null());
+
+    let note: Option<String> = sqlx::query_scalar("SELECT note FROM transactions WHERE id = ?")
+        .bind(tx_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert!(note.is_none());
+}
+
+#[tokio::test]
+async fn patch_note_rejects_voided_409() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("PATCH-VOID", 50.0, None, None, None, None)
+        .await;
+
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/charge",
+            &app.staff_token,
+            &json!({"card_id": card_id, "amount": 1.0}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let tx_id = resp.get("transaction_id").unwrap().as_i64().unwrap();
+
+    // Void the transaction.
+    let (void_status, _) = app
+        .request(delete(
+            &format!("/api/transactions/{tx_id}"),
+            &app.staff_token,
+        ))
+        .await;
+    assert_eq!(void_status, axum::http::StatusCode::NO_CONTENT);
+
+    // Attempt to patch note on voided transaction — must get 409 Conflict.
+    let (patch_status, _) = app
+        .request(patch_json(
+            &format!("/api/transactions/{tx_id}/note"),
+            &app.staff_token,
+            &json!({"note": "after void"}),
+        ))
+        .await;
+    assert_eq!(patch_status, axum::http::StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn patch_note_rejects_over_200_chars() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("PATCH-LONG", 50.0, None, None, None, None)
+        .await;
+
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/charge",
+            &app.staff_token,
+            &json!({"card_id": card_id, "amount": 1.0}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let tx_id = resp.get("transaction_id").unwrap().as_i64().unwrap();
+
+    let long = "x".repeat(201);
+    let (patch_status, patch_resp) = app
+        .request(patch_json(
+            &format!("/api/transactions/{tx_id}/note"),
+            &app.staff_token,
+            &json!({"note": long}),
+        ))
+        .await;
+    assert_eq!(patch_status, axum::http::StatusCode::BAD_REQUEST);
+    assert!(
+        patch_resp
+            .get("error")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("200 characters"),
+        "error message must mention 200 characters"
+    );
+}
+
+#[tokio::test]
+async fn patch_note_returns_404_when_id_missing() {
+    let app = TestApp::new().await;
+
+    let (patch_status, _) = app
+        .request(patch_json(
+            "/api/transactions/9999999/note",
+            &app.staff_token,
+            &json!({"note": "x"}),
+        ))
+        .await;
+    assert_eq!(patch_status, axum::http::StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn patch_note_requires_staff_role() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("PATCH-403", 50.0, None, None, None, None)
+        .await;
+
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/charge",
+            &app.staff_token,
+            &json!({"card_id": card_id, "amount": 1.0}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let tx_id = resp.get("transaction_id").unwrap().as_i64().unwrap();
+
+    // Customer token must be rejected with 403 Forbidden.
+    let (patch_status, _) = app
+        .request(patch_json(
+            &format!("/api/transactions/{tx_id}/note"),
+            &app.customer_token,
+            &json!({"note": "x"}),
+        ))
+        .await;
+    assert_eq!(patch_status, axum::http::StatusCode::FORBIDDEN);
 }
