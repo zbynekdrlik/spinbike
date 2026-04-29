@@ -163,7 +163,7 @@ fn render_row(e: ReportEvent) -> impl IntoView {
         EventKind::Charge => "event_charge",
         EventKind::TopUp => "event_topup",
         EventKind::PassSale => "event_pass",
-        EventKind::Visit => "event_charge", // placeholder — Task 7 replaces all keys
+        EventKind::Visit => "event_charge", // placeholder — Task 7 adds tx_label_visit and replaces this arm
         EventKind::Other => "event_other",
     };
     let amount_class = if e.amount < 0.0 {

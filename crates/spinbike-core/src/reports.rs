@@ -170,6 +170,8 @@ mod tests {
             card_id: None,
             card_name: None,
             barcode: None,
+            // Deliberately "x" (non-action) — tests using ev() exercise paths
+            // that don't depend on action; use ev_with_action() for action-specific cases.
             action: "x".into(),
             amount,
             service_name_sk: None,
