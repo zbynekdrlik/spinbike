@@ -160,11 +160,11 @@ fn render_row(e: ReportEvent) -> impl IntoView {
         EventKind::Other => "feed-dot feed-dot--voided",
     };
     let event_label_key = match kind {
-        EventKind::Charge => "event_charge",
-        EventKind::TopUp => "event_topup",
-        EventKind::PassSale => "event_pass",
-        EventKind::Visit => "event_charge", // placeholder — Task 7 adds tx_label_visit and replaces this arm
-        EventKind::Other => "event_other",
+        EventKind::PassSale => "tx_label_pass",
+        EventKind::Visit    => "tx_label_visit",
+        EventKind::Charge   => "tx_label_charge",
+        EventKind::TopUp    => "tx_label_topup",
+        EventKind::Other    => "event_other",
     };
     let amount_class = if e.amount < 0.0 {
         "list-row__amount list-row__amount--neg"

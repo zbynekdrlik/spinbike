@@ -52,17 +52,15 @@ pub fn TransactionsList(
             let l = lang.get();
             let rows: Vec<_> = t.iter().map(|tx| {
                 let date = i18n::fmt_datetime_str(&tx.created_at, l);
-                let action_key = match tx.action.as_str() {
-                    "topup"  => "tx_action_topup",
-                    "charge" => "tx_action_charge",
-                    "visit"  => "tx_action_visit",
-                    _ => "",
+                let kind = tx.kind();
+                let action_key = match kind {
+                    spinbike_core::reports::EventKind::PassSale => "tx_label_pass",
+                    spinbike_core::reports::EventKind::Visit    => "tx_label_visit",
+                    spinbike_core::reports::EventKind::Charge   => "tx_label_charge",
+                    spinbike_core::reports::EventKind::TopUp    => "tx_label_topup",
+                    spinbike_core::reports::EventKind::Other    => "event_other",
                 };
-                let action = if action_key.is_empty() {
-                    tx.action.clone()
-                } else {
-                    i18n::t(l, action_key).to_string()
-                };
+                let action = i18n::t(l, action_key).to_string();
                 let until_suffix = tx
                     .valid_until
                     .map(|d| format!(" · {} {}", i18n::t(l, "tx_until_short"), i18n::fmt_date_short(d, l)))
@@ -81,7 +79,7 @@ pub fn TransactionsList(
                 let is_voided = tx.deleted_at.is_some();
                 let row_class = if is_voided {
                     "list-row txn-row--voided"
-                } else if tx.action == "visit" {
+                } else if matches!(kind, spinbike_core::reports::EventKind::Visit) {
                     "list-row txn-row-visit"
                 } else {
                     "list-row"
