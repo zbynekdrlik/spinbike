@@ -85,7 +85,7 @@ The `ReportEvent::action: String` field is the input; the existing struct alread
 
 ### 3 — Note column
 
-**Migration v8 (incremental, append-only — production rule):**
+**Migration v10 (incremental, append-only — production rule):**
 
 ```sql
 ALTER TABLE transactions ADD COLUMN note TEXT;
@@ -190,7 +190,7 @@ Each test must use a discriminating fixture (existing `ev()` helper extended wit
 
 `crates/spinbike-server/src/db/migrations.rs::tests`:
 
-- `v8_adds_note_to_transactions` — applies migrations through v8, asserts `PRAGMA table_info(transactions)` contains `note TEXT`.
+- `v10_adds_note_to_transactions` — applies migrations through v10, asserts `PRAGMA table_info(transactions)` contains a `note` column.
 
 ### Integration (sqlx)
 
@@ -240,5 +240,5 @@ The new core tests must each cover ONE precedence rule with a discriminating amo
 4. Staff can edit a note inline on a non-voided card-history row via a pencil icon → text input → save (PATCH).
 5. Notes >200 characters are rejected with HTTP 400, both server-side and client-side (`maxlength` attribute).
 6. Notes on voided transactions cannot be edited (409 Conflict from server; pencil icon hidden client-side).
-7. Migration v8 runs cleanly on the production-synced dev database AND on a fresh CI test database. Existing rows get `note=NULL` (no backfill).
+7. Migration v10 runs cleanly on the production-synced dev database AND on a fresh CI test database. Existing rows get `note=NULL` (no backfill).
 8. CI green: lint + test + integrity + e2e + mutation + deploy.
