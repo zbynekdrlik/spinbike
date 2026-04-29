@@ -67,16 +67,24 @@ test.describe('Transaction notes — issue #26', () => {
     });
 
     test('note appears on report activity feed', async ({ page }) => {
+        // /api/reports/day is admin-only — log in as admin@test.com (matches
+        // the pattern in reports-attendance.spec.ts). admin can also drive the
+        // staff dashboard to create the seeded charge.
         const msgs = setupConsoleCheck(page);
-        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
         const { lastName } = await activateUniqueCard(token, 50.0);
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
         const noteText = `feed-${Date.now()}`;
         await chargeWithNote(page, '1.00', noteText);
 
-        const today = new Date().toISOString().slice(0, 10);
-        await page.goto(`/reports?date=${today}`);
+        // Wait for the report fetch to land before asserting on the DOM.
+        const reportResp = page.waitForResponse(
+            (r) => r.url().includes('/api/reports/day') && r.request().method() === 'GET',
+        );
+        await page.goto('/reports');
+        await reportResp;
+
         const feedNote = page
             .locator('[data-testid="feed-row"]')
             .filter({ has: page.locator('[data-testid="feed-note"]', { hasText: noteText }) })
