@@ -27,6 +27,7 @@ pub struct TransactionRow {
     pub note: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_transaction(
     pool: &SqlitePool,
     user_id: Option<i64>,
@@ -35,10 +36,11 @@ pub async fn create_transaction(
     service_id: Option<i64>,
     amount: f64,
     action: &str,
+    note: Option<&str>,
 ) -> Result<i64> {
     let id = sqlx::query_scalar(
-        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action)
-         VALUES (?, ?, ?, ?, ?, ?)
+        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action, note)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(user_id)
@@ -47,6 +49,7 @@ pub async fn create_transaction(
     .bind(service_id)
     .bind(amount)
     .bind(action)
+    .bind(note)
     .fetch_one(pool)
     .await
     .context("Failed to create transaction")?;
@@ -63,10 +66,11 @@ pub async fn create_transaction_with_valid_until(
     amount: f64,
     action: &str,
     valid_until: Option<chrono::NaiveDate>,
+    note: Option<&str>,
 ) -> Result<i64> {
     let id = sqlx::query_scalar(
-        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action, valid_until)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action, valid_until, note)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(user_id)
@@ -76,6 +80,7 @@ pub async fn create_transaction_with_valid_until(
     .bind(amount)
     .bind(action)
     .bind(valid_until)
+    .bind(note)
     .fetch_one(pool)
     .await
     .context("Failed to create transaction with valid_until")?;
@@ -226,6 +231,7 @@ mod tests {
             Some(1),
             5.0,
             "charge",
+            None,
         )
         .await
         .unwrap();
@@ -237,6 +243,7 @@ mod tests {
             Some(1),
             5.0,
             "charge",
+            None,
         )
         .await
         .unwrap();
@@ -263,6 +270,7 @@ mod tests {
             -35.0,
             "charge",
             Some(date),
+            None,
         )
         .await
         .unwrap();
@@ -276,7 +284,7 @@ mod tests {
     async fn transaction_without_valid_until_reads_back_as_none() {
         let pool = setup().await;
         let card_id = create_card(&pool, "VU-2").await.unwrap();
-        create_transaction(&pool, None, Some(card_id), None, None, 10.0, "topup")
+        create_transaction(&pool, None, Some(card_id), None, None, 10.0, "topup", None)
             .await
             .unwrap();
         let rows = list_transactions_for_card(&pool, card_id).await.unwrap();
@@ -287,7 +295,7 @@ mod tests {
     async fn soft_delete_sets_deleted_at() {
         let pool = setup().await;
         let card_id = create_card(&pool, "SD-1").await.unwrap();
-        let tx_id = create_transaction(&pool, None, Some(card_id), None, None, 5.0, "topup")
+        let tx_id = create_transaction(&pool, None, Some(card_id), None, None, 5.0, "topup", None)
             .await
             .unwrap();
 
@@ -313,7 +321,7 @@ mod tests {
     async fn list_transactions_returns_deleted_at_flag() {
         let pool = setup().await;
         let card_id = create_card(&pool, "SD-LIST").await.unwrap();
-        let tx_id = create_transaction(&pool, None, Some(card_id), None, None, 5.0, "topup")
+        let tx_id = create_transaction(&pool, None, Some(card_id), None, None, 5.0, "topup", None)
             .await
             .unwrap();
         soft_delete(&pool, tx_id).await.unwrap();

@@ -46,6 +46,8 @@ pub struct UpdateCardRequest {
 pub struct TopupRequest {
     pub card_id: i64,
     pub amount: f64,
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -335,6 +337,7 @@ async fn activate_card(
             None,
             body.initial_credit,
             "topup",
+            None,
         )
         .await
         .map_err(internal_error)?;
@@ -374,6 +377,15 @@ async fn topup_card(
             Json(serde_json::json!({"error": "Amount must be greater than zero"})),
         ));
     }
+    if let Some(n) = body.note.as_deref() {
+        if n.chars().count() > 200 {
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "Note must be 200 characters or fewer"})),
+            ));
+        }
+    }
+    let note_for_db = body.note.as_deref().filter(|s| !s.trim().is_empty());
 
     db::update_credit(&state.pool, body.card_id, body.amount)
         .await
@@ -387,6 +399,7 @@ async fn topup_card(
         None,
         body.amount,
         "topup",
+        note_for_db,
     )
     .await
     .map_err(internal_error)?;

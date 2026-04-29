@@ -790,6 +790,7 @@ mod tests {
             Some(fitness_id),
             -5.0,
             "charge",
+            None,
         )
         .await
         .unwrap();
@@ -801,6 +802,7 @@ mod tests {
             Some(spinning_id),
             -5.0,
             "charge",
+            None,
         )
         .await
         .unwrap();
@@ -812,6 +814,7 @@ mod tests {
             Some(fitness_id),
             0.0,
             "visit",
+            None,
         )
         .await
         .unwrap();
@@ -823,6 +826,7 @@ mod tests {
             Some(spinning_id),
             0.0,
             "visit",
+            None,
         )
         .await
         .unwrap();
@@ -838,6 +842,7 @@ mod tests {
             Some(refreshments_id),
             -2.50,
             "charge",
+            None,
         )
         .await
         .unwrap();
@@ -849,6 +854,7 @@ mod tests {
             Some(refreshments_id),
             -2.50,
             "charge",
+            None,
         )
         .await
         .unwrap();
@@ -860,6 +866,7 @@ mod tests {
             Some(card_fee_id),
             -3.0,
             "charge",
+            None,
         )
         .await
         .unwrap();
@@ -873,10 +880,11 @@ mod tests {
             -35.0,
             "charge",
             Some(valid_until),
+            None,
         )
         .await
         .unwrap();
-        create_transaction(&pool, None, Some(card_id), None, None, 10.0, "topup")
+        create_transaction(&pool, None, Some(card_id), None, None, 10.0, "topup", None)
             .await
             .unwrap();
 

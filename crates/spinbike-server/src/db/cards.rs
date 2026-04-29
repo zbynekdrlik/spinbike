@@ -807,6 +807,7 @@ mod tests {
             -35.0,
             "charge",
             Some(d1),
+            None,
         )
         .await
         .unwrap();
@@ -819,6 +820,7 @@ mod tests {
             -35.0,
             "charge",
             Some(d2),
+            None,
         )
         .await
         .unwrap();
@@ -836,10 +838,19 @@ mod tests {
         use crate::db::transactions::create_transaction;
         let pool = setup().await;
         let card_id = create_card(&pool, "CHARGE-ONLY").await.unwrap();
-        create_transaction(&pool, None, Some(card_id), None, Some(1), -5.0, "charge")
-            .await
-            .unwrap();
-        create_transaction(&pool, None, Some(card_id), None, None, 20.0, "topup")
+        create_transaction(
+            &pool,
+            None,
+            Some(card_id),
+            None,
+            Some(1),
+            -5.0,
+            "charge",
+            None,
+        )
+        .await
+        .unwrap();
+        create_transaction(&pool, None, Some(card_id), None, None, 20.0, "topup", None)
             .await
             .unwrap();
         let result = get_card_pass_valid_until(&pool, card_id).await.unwrap();
@@ -855,7 +866,7 @@ mod tests {
         let pool = setup().await;
         let card_id = create_card(&pool, "MIXED-NULL").await.unwrap();
         // One non-pass txn (topup — valid_until NULL) and one pass txn (valid_until set).
-        create_transaction(&pool, None, Some(card_id), None, None, 20.0, "topup")
+        create_transaction(&pool, None, Some(card_id), None, None, 20.0, "topup", None)
             .await
             .unwrap();
         let pass_date = chrono::NaiveDate::from_ymd_opt(2030, 1, 15).unwrap();
@@ -868,6 +879,7 @@ mod tests {
             -35.0,
             "charge",
             Some(pass_date),
+            None,
         )
         .await
         .unwrap();
@@ -895,6 +907,7 @@ mod tests {
             -35.0,
             "charge",
             Some(future),
+            None,
         )
         .await
         .unwrap();
