@@ -25,6 +25,21 @@ pub fn ActionForm(
 
     let service_ref = NodeRef::<leptos::html::Select>::new();
     let amount_ref = NodeRef::<leptos::html::Input>::new();
+    let note_ref = NodeRef::<leptos::html::Input>::new();
+
+    let read_note = move || -> Option<String> {
+        note_ref.get().and_then(|el| {
+            let el: &web_sys::HtmlInputElement = &el;
+            let v = el.value();
+            if v.trim().is_empty() { None } else { Some(v) }
+        })
+    };
+    let clear_note = move || {
+        if let Some(el) = note_ref.get() {
+            let el: &web_sys::HtmlInputElement = &el;
+            el.set_value("");
+        }
+    };
 
     let today = chrono::Local::now().date_naive();
     let default_valid_until = card
@@ -84,14 +99,16 @@ pub fn ActionForm(
             Some(v) if v > 0.0 => v,
             _ => return,
         };
+        let note = read_note();
         set_loading.set(true);
         spawn_local(async move {
             #[derive(serde::Serialize)]
             struct Req {
                 card_id: i64,
                 amount: f64,
+                note: Option<String>,
             }
-            match api::post::<Req, CardInfo>("/api/cards/topup", &Req { card_id, amount }).await {
+            match api::post::<Req, CardInfo>("/api/cards/topup", &Req { card_id, amount, note }).await {
                 Ok(c) => {
                     let credit = c.credit;
                     set_selected.set(Some(c));
@@ -100,6 +117,7 @@ pub fn ActionForm(
                         "topup_ok_format",
                         &[&format!("{credit:.2}")],
                     ));
+                    clear_note();
                 }
                 Err(e) => set_err.set(e),
             }
@@ -124,6 +142,7 @@ pub fn ActionForm(
             }
         };
         let service_id = selected_service_id.get_untracked();
+        let note = read_note();
 
         if is_monthly_pass() {
             let vu = valid_until.get_untracked();
@@ -134,6 +153,7 @@ pub fn ActionForm(
                     card_id: i64,
                     price: f64,
                     valid_until: chrono::NaiveDate,
+                    note: Option<String>,
                 }
                 #[derive(serde::Deserialize)]
                 struct Resp {
@@ -148,6 +168,7 @@ pub fn ActionForm(
                         card_id,
                         price: amount,
                         valid_until: vu,
+                        note,
                     },
                 )
                 .await
@@ -164,6 +185,7 @@ pub fn ActionForm(
                             }
                         });
                         set_txn_refresh.update(|n| *n += 1);
+                        clear_note();
                     }
                     Err(e) => set_err.set(e),
                 }
@@ -181,6 +203,7 @@ pub fn ActionForm(
                     card_id: i64,
                     amount: f64,
                     service_id: Option<i64>,
+                    note: Option<String>,
                 }
                 match api::post::<Req, PaymentResp>(
                     "/api/payments/charge",
@@ -188,6 +211,7 @@ pub fn ActionForm(
                         card_id,
                         amount,
                         service_id,
+                        note,
                     },
                 )
                 .await
@@ -204,6 +228,7 @@ pub fn ActionForm(
                             }
                         });
                         set_txn_refresh.update(|n| *n += 1);
+                        clear_note();
                     }
                     Err(e) => set_err.set(e),
                 }
@@ -214,11 +239,13 @@ pub fn ActionForm(
 
     let visit_click_for = move |service_id: i64| {
         move |_: web_sys::MouseEvent| {
+            let note = read_note();
             spawn_local(async move {
                 #[derive(serde::Serialize)]
                 struct Req {
                     card_id: i64,
                     service_id: i64,
+                    note: Option<String>,
                 }
                 #[derive(serde::Deserialize)]
                 struct Resp {
@@ -230,12 +257,14 @@ pub fn ActionForm(
                     &Req {
                         card_id,
                         service_id,
+                        note,
                     },
                 )
                 .await
                 {
                     Ok(_) => {
                         set_txn_refresh.update(|n| *n += 1);
+                        clear_note();
                     }
                     Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                 }
@@ -318,6 +347,18 @@ pub fn ActionForm(
                     node_ref=amount_ref
                     data-testid="charge-amount"
                     placeholder=move || i18n::t(lang.get(), "amount")
+                />
+            </div>
+
+            <div class="form-group">
+                <label>{move || i18n::t(lang.get(), "tx_note_edit")}</label>
+                <input
+                    type="text"
+                    maxlength="200"
+                    class="form-control"
+                    node_ref=note_ref
+                    data-testid="txn-note-input"
+                    placeholder=move || i18n::t(lang.get(), "tx_note_placeholder")
                 />
             </div>
 
