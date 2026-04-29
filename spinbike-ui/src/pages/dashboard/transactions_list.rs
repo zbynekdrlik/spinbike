@@ -101,31 +101,6 @@ pub fn TransactionsList(
                 let (note_value, set_note_value) = signal(note_initial.clone());
 
                 let on_edit = move |_| set_editing.set(true);
-                let on_cancel = move |_| {
-                    set_note_value.set(note_initial.clone());
-                    set_editing.set(false);
-                };
-                let on_save = move |_| {
-                    let new_note = note_value.get_untracked();
-                    spawn_local(async move {
-                        #[derive(serde::Serialize)]
-                        struct Req { note: Option<String> }
-                        #[derive(serde::Deserialize)]
-                        struct Resp { #[allow(dead_code)] id: i64, #[allow(dead_code)] note: Option<String> }
-                        let body = Req {
-                            note: if new_note.trim().is_empty() { None } else { Some(new_note) },
-                        };
-                        match api::patch::<Req, Resp>(
-                            &format!("/api/transactions/{tx_id}/note"), &body
-                        ).await {
-                            Ok(_) => {
-                                set_editing.set(false);
-                                txn_refresh.update(|n| *n += 1);
-                            }
-                            Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
-                        }
-                    });
-                };
 
                 let on_void = move |_| {
                     let confirm_msg = i18n::t(lang.get(), "confirm_void");
@@ -141,14 +116,6 @@ pub fn TransactionsList(
                     });
                 };
 
-                let on_input = move |ev: web_sys::Event| {
-                    let v = ev.target()
-                        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
-                        .map(|el| el.value())
-                        .unwrap_or_default();
-                    set_note_value.set(v);
-                };
-
                 view! {
                     <div class=row_class>
                         <div class="list-row__main">
@@ -158,6 +125,44 @@ pub fn TransactionsList(
                             </div>
                             <div class="list-row__sub">{date}" · "{service}</div>
                             {move || if editing.get() {
+                                // Editor closures defined inside the reactive
+                                // block so each tick re-creates them (Leptos
+                                // requires FnMut for view children — closures
+                                // that consume non-Copy captures otherwise
+                                // become FnOnce).
+                                let note_initial = note_initial.clone();
+                                let on_cancel = move |_| {
+                                    set_note_value.set(note_initial.clone());
+                                    set_editing.set(false);
+                                };
+                                let on_save = move |_| {
+                                    let new_note = note_value.get_untracked();
+                                    spawn_local(async move {
+                                        #[derive(serde::Serialize)]
+                                        struct Req { note: Option<String> }
+                                        #[derive(serde::Deserialize)]
+                                        struct Resp { #[allow(dead_code)] id: i64, #[allow(dead_code)] note: Option<String> }
+                                        let body = Req {
+                                            note: if new_note.trim().is_empty() { None } else { Some(new_note) },
+                                        };
+                                        match api::patch::<Req, Resp>(
+                                            &format!("/api/transactions/{tx_id}/note"), &body
+                                        ).await {
+                                            Ok(_) => {
+                                                set_editing.set(false);
+                                                txn_refresh.update(|n| *n += 1);
+                                            }
+                                            Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
+                                        }
+                                    });
+                                };
+                                let on_input = move |ev: web_sys::Event| {
+                                    let v = ev.target()
+                                        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                                        .map(|el| el.value())
+                                        .unwrap_or_default();
+                                    set_note_value.set(v);
+                                };
                                 view! {
                                     <div class="list-row__note-edit">
                                         <input
