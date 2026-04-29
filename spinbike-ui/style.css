@@ -1416,6 +1416,7 @@ table tbody tr:last-child td,
 .feed-dot--charge { background: var(--danger); }
 .feed-dot--topup  { background: var(--brand); }
 .feed-dot--pass   { background: var(--info); }
+.feed-dot--visit  { background: var(--info-soft, #b8d4f0); }
 .feed-dot--voided { background: var(--text-dim); }
 
 /* ═════════════════════════════════════════════════════════════

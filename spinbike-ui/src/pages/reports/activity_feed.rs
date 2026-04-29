@@ -40,7 +40,7 @@ pub fn ActivityFeed(
                         }
                     }
                     Some("pass") => {
-                        if !matches!(e.kind(), EventKind::PassSold) {
+                        if !matches!(e.kind(), EventKind::PassSale) {
                             return false;
                         }
                     }
@@ -155,13 +155,15 @@ fn render_row(e: ReportEvent) -> impl IntoView {
     let kind_class = match kind {
         EventKind::Charge => "feed-dot feed-dot--charge",
         EventKind::TopUp => "feed-dot feed-dot--topup",
-        EventKind::PassSold => "feed-dot feed-dot--pass",
+        EventKind::PassSale => "feed-dot feed-dot--pass",
+        EventKind::Visit => "feed-dot feed-dot--visit",
         EventKind::Other => "feed-dot feed-dot--voided",
     };
     let event_label_key = match kind {
         EventKind::Charge => "event_charge",
         EventKind::TopUp => "event_topup",
-        EventKind::PassSold => "event_pass",
+        EventKind::PassSale => "event_pass",
+        EventKind::Visit => "event_charge", // placeholder — Task 7 replaces all keys
         EventKind::Other => "event_other",
     };
     let amount_class = if e.amount < 0.0 {
