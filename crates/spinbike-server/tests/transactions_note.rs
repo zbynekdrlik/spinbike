@@ -437,3 +437,327 @@ async fn patch_note_requires_staff_role() {
         .await;
     assert_eq!(patch_status, axum::http::StatusCode::FORBIDDEN);
 }
+
+// ─── Boundary tests: topup ────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn topup_at_200_chars_accepted() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("TOPUP-200", 0.0, None, None, None, None)
+        .await;
+
+    let exactly_200 = "x".repeat(200);
+    let (status, _) = app
+        .request(post_json(
+            "/api/cards/topup",
+            &app.staff_token,
+            &json!({"card_id": card_id, "amount": 30.0, "note": exactly_200.clone()}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "topup note of exactly 200 chars must be accepted"
+    );
+
+    let note: Option<String> = sqlx::query_scalar(
+        "SELECT note FROM transactions WHERE card_id = ? ORDER BY id DESC LIMIT 1",
+    )
+    .bind(card_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(note.as_deref(), Some(exactly_200.as_str()));
+}
+
+#[tokio::test]
+async fn topup_over_200_chars_rejected() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("TOPUP-201", 0.0, None, None, None, None)
+        .await;
+
+    let long = "x".repeat(201);
+    let (status, resp) = app
+        .request(post_json(
+            "/api/cards/topup",
+            &app.staff_token,
+            &json!({"card_id": card_id, "amount": 30.0, "note": long}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::BAD_REQUEST,
+        "topup note of 201 chars must be rejected"
+    );
+    assert!(
+        resp.get("error")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("200 characters"),
+        "error message must mention 200 characters"
+    );
+}
+
+// ─── Boundary tests: sell_pass ────────────────────────────────────────────────
+
+#[tokio::test]
+async fn sell_pass_at_200_chars_accepted() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("PASS-200", 100.0, None, None, None, None)
+        .await;
+    let valid_until = (chrono::Local::now().date_naive() + chrono::Duration::days(30))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let exactly_200 = "x".repeat(200);
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({"card_id": card_id, "price": 35.0, "valid_until": valid_until,
+                    "note": exactly_200.clone()}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "sell-pass note of exactly 200 chars must be accepted"
+    );
+    let tx_id = resp.get("transaction_id").unwrap().as_i64().unwrap();
+
+    let note: Option<String> = sqlx::query_scalar("SELECT note FROM transactions WHERE id = ?")
+        .bind(tx_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(note.as_deref(), Some(exactly_200.as_str()));
+}
+
+#[tokio::test]
+async fn sell_pass_over_200_chars_rejected() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("PASS-201", 100.0, None, None, None, None)
+        .await;
+    let valid_until = (chrono::Local::now().date_naive() + chrono::Duration::days(30))
+        .format("%Y-%m-%d")
+        .to_string();
+
+    let long = "x".repeat(201);
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({"card_id": card_id, "price": 35.0, "valid_until": valid_until,
+                    "note": long}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::BAD_REQUEST,
+        "sell-pass note of 201 chars must be rejected"
+    );
+    assert!(
+        resp.get("error")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("200 characters"),
+        "error message must mention 200 characters"
+    );
+}
+
+// ─── Boundary tests: log_visit ────────────────────────────────────────────────
+
+#[tokio::test]
+async fn log_visit_at_200_chars_accepted() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("VISIT-200", 50.0, None, None, None, None)
+        .await;
+
+    // Give the card an active pass.
+    let valid_until = (chrono::Local::now().date_naive() + chrono::Duration::days(30))
+        .format("%Y-%m-%d")
+        .to_string();
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({"card_id": card_id, "price": 35.0, "valid_until": valid_until}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "sell-pass must succeed");
+
+    let spinning_id: i64 =
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning' AND active = 1")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+
+    let exactly_200 = "x".repeat(200);
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/log-visit",
+            &app.staff_token,
+            &json!({"card_id": card_id, "service_id": spinning_id, "note": exactly_200.clone()}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "log-visit note of exactly 200 chars must be accepted"
+    );
+    let tx_id = resp.get("transaction_id").unwrap().as_i64().unwrap();
+
+    let note: Option<String> = sqlx::query_scalar("SELECT note FROM transactions WHERE id = ?")
+        .bind(tx_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(note.as_deref(), Some(exactly_200.as_str()));
+}
+
+#[tokio::test]
+async fn log_visit_over_200_chars_rejected() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("VISIT-201", 50.0, None, None, None, None)
+        .await;
+
+    // Give the card an active pass.
+    let valid_until = (chrono::Local::now().date_naive() + chrono::Duration::days(30))
+        .format("%Y-%m-%d")
+        .to_string();
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({"card_id": card_id, "price": 35.0, "valid_until": valid_until}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "sell-pass must succeed");
+
+    let spinning_id: i64 =
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning' AND active = 1")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+
+    let long = "x".repeat(201);
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/log-visit",
+            &app.staff_token,
+            &json!({"card_id": card_id, "service_id": spinning_id, "note": long}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::BAD_REQUEST,
+        "log-visit note of 201 chars must be rejected"
+    );
+    assert!(
+        resp.get("error")
+            .unwrap()
+            .as_str()
+            .unwrap()
+            .contains("200 characters"),
+        "error message must mention 200 characters"
+    );
+}
+
+// ─── Boundary tests: patch_note ───────────────────────────────────────────────
+
+#[tokio::test]
+async fn patch_note_at_200_chars_accepted() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("PATCH-200", 50.0, None, None, None, None)
+        .await;
+
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/charge",
+            &app.staff_token,
+            &json!({"card_id": card_id, "amount": 1.0}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let tx_id = resp.get("transaction_id").unwrap().as_i64().unwrap();
+
+    let exactly_200 = "x".repeat(200);
+    let (patch_status, patch_resp) = app
+        .request(patch_json(
+            &format!("/api/transactions/{tx_id}/note"),
+            &app.staff_token,
+            &json!({"note": exactly_200.clone()}),
+        ))
+        .await;
+    assert_eq!(
+        patch_status,
+        axum::http::StatusCode::OK,
+        "patch note of exactly 200 chars must be accepted"
+    );
+    assert_eq!(
+        patch_resp.get("note").unwrap().as_str(),
+        Some(exactly_200.as_str())
+    );
+
+    let note: Option<String> = sqlx::query_scalar("SELECT note FROM transactions WHERE id = ?")
+        .bind(tx_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(note.as_deref(), Some(exactly_200.as_str()));
+}
+
+#[tokio::test]
+async fn patch_note_whitespace_only_stored_as_null() {
+    let app = TestApp::new().await;
+    let card_id = app
+        .seed_card("PATCH-WS", 50.0, None, None, None, None)
+        .await;
+
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/charge",
+            &app.staff_token,
+            &json!({"card_id": card_id, "amount": 1.0, "note": "initial note"}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let tx_id = resp.get("transaction_id").unwrap().as_i64().unwrap();
+
+    // PATCH with whitespace-only note — must normalize to NULL, not store "   ".
+    let (patch_status, patch_resp) = app
+        .request(patch_json(
+            &format!("/api/transactions/{tx_id}/note"),
+            &app.staff_token,
+            &json!({"note": "   "}),
+        ))
+        .await;
+    assert_eq!(
+        patch_status,
+        axum::http::StatusCode::OK,
+        "patch with whitespace-only note must succeed"
+    );
+    assert!(
+        patch_resp.get("note").unwrap().is_null(),
+        "response note must be null for whitespace-only input"
+    );
+
+    let note: Option<String> = sqlx::query_scalar("SELECT note FROM transactions WHERE id = ?")
+        .bind(tx_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert!(
+        note.is_none(),
+        "whitespace-only patch note must be stored as NULL in DB"
+    );
+}
