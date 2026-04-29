@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::AppState;
 use crate::auth::AuthUser;
 use crate::db::cards;
+use crate::db::transactions::NOTE_MAX_CHARS;
 use crate::routes::internal_error;
 
 #[derive(Deserialize)]
@@ -106,7 +107,7 @@ async fn charge(
         ));
     }
     if let Some(n) = body.note.as_deref() {
-        if n.chars().count() > 200 {
+        if n.chars().count() > NOTE_MAX_CHARS {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": "Note must be 200 characters or fewer"})),
@@ -269,7 +270,7 @@ async fn sell_pass(
         ));
     }
     if let Some(n) = body.note.as_deref() {
-        if n.chars().count() > 200 {
+        if n.chars().count() > NOTE_MAX_CHARS {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": "Note must be 200 characters or fewer"})),
@@ -385,7 +386,7 @@ async fn log_visit(
     }
 
     if let Some(n) = body.note.as_deref() {
-        if n.chars().count() > 200 {
+        if n.chars().count() > NOTE_MAX_CHARS {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": "Note must be 200 characters or fewer"})),

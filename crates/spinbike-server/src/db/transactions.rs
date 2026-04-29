@@ -1,6 +1,11 @@
 use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 
+/// Maximum length (in Unicode code points) for a transaction note.
+/// Enforced by every create / patch endpoint. Slovak diacritics count as
+/// one character each (uses `chars().count()`, not `len()`).
+pub const NOTE_MAX_CHARS: usize = 200;
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct TransactionRow {
     pub id: i64,

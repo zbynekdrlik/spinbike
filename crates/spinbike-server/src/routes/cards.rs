@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::auth::AuthUser;
+use crate::db::transactions::NOTE_MAX_CHARS;
 use crate::db::{cards as db, transactions};
 use crate::routes::internal_error;
 
@@ -378,7 +379,7 @@ async fn topup_card(
         ));
     }
     if let Some(n) = body.note.as_deref() {
-        if n.chars().count() > 200 {
+        if n.chars().count() > NOTE_MAX_CHARS {
             return Err((
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({"error": "Note must be 200 characters or fewer"})),
