@@ -501,10 +501,16 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         ),
     );
 
-    // Transaction history action labels (DB stores raw English: topup/charge/visit).
-    m.insert("tx_action_topup", ("Dobitie", "Top-up"));
-    m.insert("tx_action_charge", ("Platba", "Charge"));
-    m.insert("tx_action_visit", ("Navsteva", "Visit"));
+    // Transaction history action labels (EventKind-driven; DB stores raw English: topup/charge/visit/pass).
+    m.insert("tx_label_topup",  ("Dobitie kreditu",      "Top-up"));
+    m.insert("tx_label_charge", ("Výdaj z kreditu",      "Spent from credit"));
+    m.insert("tx_label_visit",  ("Vstup s permanentkou", "Entry with pass"));
+    m.insert("tx_label_pass",   ("Predaj permanentky",   "Sale of pass"));
+    // Transaction note UI strings
+    m.insert("tx_note_placeholder", ("Poznámka (nepovinné)", "Note (optional)"));
+    m.insert("tx_note_edit",        ("Upraviť poznámku",     "Edit note"));
+    m.insert("tx_note_save",        ("Uložiť",               "Save"));
+    m.insert("tx_note_cancel",      ("Zrušiť",               "Cancel"));
     m.insert("tx_until_short", ("do", "until"));
     m.insert("error_format", ("Chyba: {}", "Error: {}"));
 
@@ -638,10 +644,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         ),
     );
 
-    // Reports — feed event labels (used as the row title prefix when service is unknown)
-    m.insert("event_charge",   ("Návšteva",     "Visit"));
-    m.insert("event_topup",    ("Vklad",        "Top-up"));
-    m.insert("event_pass",     ("Permanentka",  "Pass sale"));
+    // Reports — feed event labels (Other is a fallback; main labels come from tx_label_*)
     m.insert("event_other",    ("Iné",          "Other"));
     // Reports — feed
     m.insert("feed_load_older", ("Nacitat starsie", "Load older"));

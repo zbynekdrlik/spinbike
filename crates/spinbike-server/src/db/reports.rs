@@ -85,7 +85,7 @@ pub async fn day_report(
         "SELECT t.id, t.card_id, t.amount, t.action, t.created_at, t.valid_until, t.deleted_at,
                 TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')) AS card_name,
                 c.barcode,
-                s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind
+                s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.note
          FROM transactions t
          LEFT JOIN cards c ON c.id = t.card_id
          LEFT JOIN services s ON s.id = t.service_id
@@ -173,6 +173,10 @@ struct DbEventRow {
     created_at: String,
     valid_until: Option<chrono::NaiveDate>,
     deleted_at: Option<String>,
+    /// Free-text staff note (≤200 chars). NULL when no note was recorded.
+    /// Migration v10 guarantees the column exists, so no `#[sqlx(default)]` —
+    /// a missing column should error loudly.
+    note: Option<String>,
 }
 
 impl From<DbEventRow> for ReportEvent {
@@ -190,6 +194,7 @@ impl From<DbEventRow> for ReportEvent {
             created_at: r.created_at,
             valid_until: r.valid_until,
             voided: r.deleted_at.is_some(),
+            note: r.note,
         }
     }
 }
@@ -213,7 +218,7 @@ pub async fn range_report(
         "SELECT t.id, t.card_id, t.amount, t.action, t.created_at, t.valid_until, t.deleted_at,
                 TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')) AS card_name,
                 c.barcode,
-                s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind
+                s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.note
          FROM transactions t
          LEFT JOIN cards c ON c.id = t.card_id
          LEFT JOIN services s ON s.id = t.service_id
@@ -786,6 +791,7 @@ mod tests {
             Some(fitness_id),
             -5.0,
             "charge",
+            None,
         )
         .await
         .unwrap();
@@ -797,6 +803,7 @@ mod tests {
             Some(spinning_id),
             -5.0,
             "charge",
+            None,
         )
         .await
         .unwrap();
@@ -808,6 +815,7 @@ mod tests {
             Some(fitness_id),
             0.0,
             "visit",
+            None,
         )
         .await
         .unwrap();
@@ -819,6 +827,7 @@ mod tests {
             Some(spinning_id),
             0.0,
             "visit",
+            None,
         )
         .await
         .unwrap();
@@ -834,6 +843,7 @@ mod tests {
             Some(refreshments_id),
             -2.50,
             "charge",
+            None,
         )
         .await
         .unwrap();
@@ -845,6 +855,7 @@ mod tests {
             Some(refreshments_id),
             -2.50,
             "charge",
+            None,
         )
         .await
         .unwrap();
@@ -856,6 +867,7 @@ mod tests {
             Some(card_fee_id),
             -3.0,
             "charge",
+            None,
         )
         .await
         .unwrap();
@@ -869,10 +881,11 @@ mod tests {
             -35.0,
             "charge",
             Some(valid_until),
+            None,
         )
         .await
         .unwrap();
-        create_transaction(&pool, None, Some(card_id), None, None, 10.0, "topup")
+        create_transaction(&pool, None, Some(card_id), None, None, 10.0, "topup", None)
             .await
             .unwrap();
 

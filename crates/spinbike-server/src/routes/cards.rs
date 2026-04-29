@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::auth::AuthUser;
+use crate::db::transactions::NOTE_MAX_CHARS;
 use crate::db::{cards as db, transactions};
 use crate::routes::internal_error;
 
@@ -46,6 +47,8 @@ pub struct UpdateCardRequest {
 pub struct TopupRequest {
     pub card_id: i64,
     pub amount: f64,
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -114,6 +117,9 @@ pub struct TransactionResponse {
     pub service_kind: Option<String>,
     pub valid_until: Option<chrono::NaiveDate>,
     pub deleted_at: Option<String>,
+    /// Free-text staff note (≤200 chars). NULL when no note was recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 // Replaces `impl From<&db::CardRow> for CardResponse`.
@@ -332,6 +338,7 @@ async fn activate_card(
             None,
             body.initial_credit,
             "topup",
+            None,
         )
         .await
         .map_err(internal_error)?;
@@ -371,6 +378,15 @@ async fn topup_card(
             Json(serde_json::json!({"error": "Amount must be greater than zero"})),
         ));
     }
+    if let Some(n) = body.note.as_deref()
+        && n.chars().count() > NOTE_MAX_CHARS
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Note must be 200 characters or fewer"})),
+        ));
+    }
+    let note_for_db = body.note.as_deref().filter(|s| !s.trim().is_empty());
 
     db::update_credit(&state.pool, body.card_id, body.amount)
         .await
@@ -384,6 +400,7 @@ async fn topup_card(
         None,
         body.amount,
         "topup",
+        note_for_db,
     )
     .await
     .map_err(internal_error)?;
@@ -509,6 +526,7 @@ async fn card_transactions(
                 service_kind: t.service_kind,
                 valid_until: t.valid_until,
                 deleted_at: t.deleted_at,
+                note: t.note,
             })
             .collect(),
     ))
@@ -546,6 +564,7 @@ async fn my_balance(
                 service_kind: t.service_kind,
                 valid_until: t.valid_until,
                 deleted_at: t.deleted_at,
+                note: t.note,
             })
             .collect(),
     }))

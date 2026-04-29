@@ -40,7 +40,7 @@ pub fn ActivityFeed(
                         }
                     }
                     Some("pass") => {
-                        if !matches!(e.kind(), EventKind::PassSold) {
+                        if !matches!(e.kind(), EventKind::PassSale) {
                             return false;
                         }
                     }
@@ -155,14 +155,16 @@ fn render_row(e: ReportEvent) -> impl IntoView {
     let kind_class = match kind {
         EventKind::Charge => "feed-dot feed-dot--charge",
         EventKind::TopUp => "feed-dot feed-dot--topup",
-        EventKind::PassSold => "feed-dot feed-dot--pass",
+        EventKind::PassSale => "feed-dot feed-dot--pass",
+        EventKind::Visit => "feed-dot feed-dot--visit",
         EventKind::Other => "feed-dot feed-dot--voided",
     };
     let event_label_key = match kind {
-        EventKind::Charge => "event_charge",
-        EventKind::TopUp => "event_topup",
-        EventKind::PassSold => "event_pass",
-        EventKind::Other => "event_other",
+        EventKind::PassSale => "tx_label_pass",
+        EventKind::Visit    => "tx_label_visit",
+        EventKind::Charge   => "tx_label_charge",
+        EventKind::TopUp    => "tx_label_topup",
+        EventKind::Other    => "event_other",
     };
     let amount_class = if e.amount < 0.0 {
         "list-row__amount list-row__amount--neg"
@@ -197,6 +199,7 @@ fn render_row(e: ReportEvent) -> impl IntoView {
         }
     };
 
+    let note_str = e.note.clone().unwrap_or_default();
     let name = e.card_name.clone().unwrap_or_else(|| "—".to_string());
     let service = match lang.get_untracked() {
         Lang::Sk => e.service_name_sk.clone(),
@@ -224,6 +227,20 @@ fn render_row(e: ReportEvent) -> impl IntoView {
             <div class="list-row__main">
                 <div class="list-row__title">{name}</div>
                 <div class="list-row__sub">{subtitle}</div>
+                // Non-reactive `if` is correct here: each render_row(e) call
+                // materialises a fresh row from a fresh ReportEvent, so when
+                // events change the whole row is rebuilt with a new note_str.
+                // (Card history is reactive because the editor toggles
+                // dynamically — different concern.)
+                {if !note_str.is_empty() {
+                    view! {
+                        <div class="list-row__note" data-testid="feed-note">
+                            {note_str}
+                        </div>
+                    }.into_any()
+                } else {
+                    view! { <span></span> }.into_any()
+                }}
             </div>
             <div class=amount_class>{amount_display}</div>
             {voided_badge}

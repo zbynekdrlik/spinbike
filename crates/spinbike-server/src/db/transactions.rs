@@ -1,6 +1,11 @@
 use anyhow::{Context, Result};
 use sqlx::SqlitePool;
 
+/// Maximum length (in Unicode code points) for a transaction note.
+/// Enforced by every create / patch endpoint. Slovak diacritics count as
+/// one character each (uses `chars().count()`, not `len()`).
+pub const NOTE_MAX_CHARS: usize = 200;
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct TransactionRow {
     pub id: i64,
@@ -22,8 +27,13 @@ pub struct TransactionRow {
     #[sqlx(default)]
     pub service_kind: Option<String>,
     pub deleted_at: Option<String>,
+    /// Free-text staff note (≤200 chars). NULL when no note was recorded.
+    /// Migration v10 guarantees the column exists on every queried DB, so no
+    /// `#[sqlx(default)]` — a missing column should error loudly.
+    pub note: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn create_transaction(
     pool: &SqlitePool,
     user_id: Option<i64>,
@@ -32,10 +42,11 @@ pub async fn create_transaction(
     service_id: Option<i64>,
     amount: f64,
     action: &str,
+    note: Option<&str>,
 ) -> Result<i64> {
     let id = sqlx::query_scalar(
-        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action)
-         VALUES (?, ?, ?, ?, ?, ?)
+        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action, note)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(user_id)
@@ -44,6 +55,7 @@ pub async fn create_transaction(
     .bind(service_id)
     .bind(amount)
     .bind(action)
+    .bind(note)
     .fetch_one(pool)
     .await
     .context("Failed to create transaction")?;
@@ -60,10 +72,11 @@ pub async fn create_transaction_with_valid_until(
     amount: f64,
     action: &str,
     valid_until: Option<chrono::NaiveDate>,
+    note: Option<&str>,
 ) -> Result<i64> {
     let id = sqlx::query_scalar(
-        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action, valid_until)
-         VALUES (?, ?, ?, ?, ?, ?, ?)
+        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action, valid_until, note)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
          RETURNING id",
     )
     .bind(user_id)
@@ -73,6 +86,7 @@ pub async fn create_transaction_with_valid_until(
     .bind(amount)
     .bind(action)
     .bind(valid_until)
+    .bind(note)
     .fetch_one(pool)
     .await
     .context("Failed to create transaction with valid_until")?;
@@ -86,7 +100,7 @@ pub async fn list_transactions_for_card(
     let txns = sqlx::query_as::<_, TransactionRow>(
         "SELECT t.id, t.user_id, t.card_id, t.staff_id, t.service_id,
                 t.amount, t.action, t.created_at, t.valid_until,
-                s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.deleted_at
+                s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.deleted_at, t.note
          FROM transactions t
          LEFT JOIN services s ON s.id = t.service_id
          WHERE t.card_id = ?
@@ -118,7 +132,7 @@ pub async fn list_transactions_for_card_paginated(
         Some(cursor) => sqlx::query_as::<_, TransactionRow>(
             "SELECT t.id, t.user_id, t.card_id, t.staff_id, t.service_id,
                         t.amount, t.action, t.created_at, t.valid_until,
-                        s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.deleted_at
+                        s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.deleted_at, t.note
                  FROM transactions t
                  LEFT JOIN services s ON s.id = t.service_id
                  WHERE t.card_id = ? AND t.created_at < ?
@@ -134,7 +148,7 @@ pub async fn list_transactions_for_card_paginated(
         None => sqlx::query_as::<_, TransactionRow>(
             "SELECT t.id, t.user_id, t.card_id, t.staff_id, t.service_id,
                         t.amount, t.action, t.created_at, t.valid_until,
-                        s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.deleted_at
+                        s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.deleted_at, t.note
                  FROM transactions t
                  LEFT JOIN services s ON s.id = t.service_id
                  WHERE t.card_id = ?
@@ -157,7 +171,7 @@ pub async fn list_transactions_for_user(
     let txns = sqlx::query_as::<_, TransactionRow>(
         "SELECT t.id, t.user_id, t.card_id, t.staff_id, t.service_id,
                 t.amount, t.action, t.created_at, t.valid_until,
-                s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.deleted_at
+                s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.deleted_at, t.note
          FROM transactions t
          LEFT JOIN services s ON s.id = t.service_id
          WHERE t.user_id = ?
@@ -223,6 +237,7 @@ mod tests {
             Some(1),
             5.0,
             "charge",
+            None,
         )
         .await
         .unwrap();
@@ -234,6 +249,7 @@ mod tests {
             Some(1),
             5.0,
             "charge",
+            None,
         )
         .await
         .unwrap();
@@ -260,6 +276,7 @@ mod tests {
             -35.0,
             "charge",
             Some(date),
+            None,
         )
         .await
         .unwrap();
@@ -273,7 +290,7 @@ mod tests {
     async fn transaction_without_valid_until_reads_back_as_none() {
         let pool = setup().await;
         let card_id = create_card(&pool, "VU-2").await.unwrap();
-        create_transaction(&pool, None, Some(card_id), None, None, 10.0, "topup")
+        create_transaction(&pool, None, Some(card_id), None, None, 10.0, "topup", None)
             .await
             .unwrap();
         let rows = list_transactions_for_card(&pool, card_id).await.unwrap();
@@ -284,7 +301,7 @@ mod tests {
     async fn soft_delete_sets_deleted_at() {
         let pool = setup().await;
         let card_id = create_card(&pool, "SD-1").await.unwrap();
-        let tx_id = create_transaction(&pool, None, Some(card_id), None, None, 5.0, "topup")
+        let tx_id = create_transaction(&pool, None, Some(card_id), None, None, 5.0, "topup", None)
             .await
             .unwrap();
 
@@ -310,7 +327,7 @@ mod tests {
     async fn list_transactions_returns_deleted_at_flag() {
         let pool = setup().await;
         let card_id = create_card(&pool, "SD-LIST").await.unwrap();
-        let tx_id = create_transaction(&pool, None, Some(card_id), None, None, 5.0, "topup")
+        let tx_id = create_transaction(&pool, None, Some(card_id), None, None, 5.0, "topup", None)
             .await
             .unwrap();
         soft_delete(&pool, tx_id).await.unwrap();

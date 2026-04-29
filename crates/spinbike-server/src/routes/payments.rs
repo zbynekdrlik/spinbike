@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::AppState;
 use crate::auth::AuthUser;
 use crate::db::cards;
+use crate::db::transactions::NOTE_MAX_CHARS;
 use crate::routes::internal_error;
 
 #[derive(Deserialize)]
@@ -11,6 +12,8 @@ pub struct ChargeRequest {
     pub card_id: i64,
     pub amount: f64,
     pub service_id: Option<i64>,
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -30,6 +33,8 @@ pub struct PaymentResponse {
 pub struct LogVisitRequest {
     pub card_id: i64,
     pub service_id: i64,
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -42,6 +47,8 @@ pub struct SellPassRequest {
     pub card_id: i64,
     pub price: f64,
     pub valid_until: chrono::NaiveDate,
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -99,6 +106,15 @@ async fn charge(
             Json(serde_json::json!({"error": "Amount must be greater than zero"})),
         ));
     }
+    if let Some(n) = body.note.as_deref()
+        && n.chars().count() > NOTE_MAX_CHARS
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Note must be 200 characters or fewer"})),
+        ));
+    }
+    let note_for_db = body.note.as_deref().filter(|s| !s.trim().is_empty());
 
     let amount = cards::round_cents(body.amount);
 
@@ -136,8 +152,8 @@ async fn charge(
         .map_err(internal_error)?;
 
     let tx_id: i64 = sqlx::query_scalar(
-        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action)
-         VALUES (?, ?, ?, ?, ?, 'charge')
+        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action, note)
+         VALUES (?, ?, ?, ?, ?, 'charge', ?)
          RETURNING id",
     )
     .bind(card.user_id)
@@ -145,6 +161,7 @@ async fn charge(
     .bind(Some(claims.sub))
     .bind(body.service_id)
     .bind(-amount)
+    .bind(note_for_db)
     .fetch_one(&mut *tx)
     .await
     .map_err(internal_error)?;
@@ -205,8 +222,8 @@ async fn storno(
         .map_err(internal_error)?;
 
     let tx_id: i64 = sqlx::query_scalar(
-        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action)
-         VALUES (?, ?, ?, ?, ?, 'storno')
+        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action, note)
+         VALUES (?, ?, ?, ?, ?, 'storno', NULL)
          RETURNING id",
     )
     .bind(card.user_id)
@@ -252,6 +269,15 @@ async fn sell_pass(
             Json(serde_json::json!({"error": "valid_until must be in the future"})),
         ));
     }
+    if let Some(n) = body.note.as_deref()
+        && n.chars().count() > NOTE_MAX_CHARS
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Note must be 200 characters or fewer"})),
+        ));
+    }
+    let note_for_db = body.note.as_deref().filter(|s| !s.trim().is_empty());
 
     let price = cards::round_cents(body.price);
 
@@ -289,8 +315,8 @@ async fn sell_pass(
         .map_err(internal_error)?;
 
     let tx_id: i64 = sqlx::query_scalar(
-        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action, valid_until)
-         VALUES (?, ?, ?, ?, ?, 'charge', ?)
+        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action, valid_until, note)
+         VALUES (?, ?, ?, ?, ?, 'charge', ?, ?)
          RETURNING id",
     )
     .bind(card.user_id)
@@ -299,6 +325,7 @@ async fn sell_pass(
     .bind(Some(service_id))
     .bind(-price)
     .bind(body.valid_until)
+    .bind(note_for_db)
     .fetch_one(&mut *tx)
     .await
     .map_err(internal_error)?;
@@ -358,6 +385,16 @@ async fn log_visit(
         ));
     }
 
+    if let Some(n) = body.note.as_deref()
+        && n.chars().count() > NOTE_MAX_CHARS
+    {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "Note must be 200 characters or fewer"})),
+        ));
+    }
+    let note_for_db = body.note.as_deref().filter(|s| !s.trim().is_empty());
+
     let tx_id = crate::db::transactions::create_transaction(
         &state.pool,
         None,
@@ -366,6 +403,7 @@ async fn log_visit(
         Some(body.service_id),
         0.0,
         "visit",
+        note_for_db,
     )
     .await
     .map_err(internal_error)?;

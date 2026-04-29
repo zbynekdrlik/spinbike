@@ -297,12 +297,37 @@ jobs:
           path: /tmp/spinbike-deploy-dev
           run-id: ${{ github.run_id }}
 
-      - name: Install dev binary and restart dev service
+      - name: Sync prod DB to dev (fresh prod-shape data every deploy)
+        # Why: dev needs to validate every migration / change against the SAME
+        # data shape the user sees on prod (88k+ rows, real services, real
+        # cards). Without this sync, dev silently drifts from prod and tests
+        # / smoke checks that pass on dev can fail on prod merge. This step
+        # runs BEFORE binary install so the new binary's startup migrations
+        # apply against fresh prod-shape data.
+        run: |
+          # Stop dev so the destination DB isn't being held open while we
+          # overwrite it. `|| true` because a stopped service is fine here.
+          sudo -n systemctl stop spinbike-dev.service || true
+          # Wipe stale WAL/SHM from previous dev run (online .backup writes
+          # a single consolidated file; leftover WAL would shadow it).
+          rm -f /opt/spinbike/dev/spinbike-dev.db-wal \
+                /opt/spinbike/dev/spinbike-dev.db-shm
+          # Online backup API: consistent snapshot even while prod is live.
+          # Plain cp on a WAL-mode DB can capture a torn snapshot.
+          sqlite3 /opt/spinbike/prod/spinbike.db ".timeout 5000" \
+            ".backup '/opt/spinbike/dev/spinbike-dev.db'"
+          # Customer data — lock down read perms (mirrors deploy-prod backup).
+          chmod 0600 /opt/spinbike/dev/spinbike-dev.db
+          echo "Synced prod -> dev. Dev DB now reflects current prod state."
+          ls -lh /opt/spinbike/dev/spinbike-dev.db
+
+      - name: Install dev binary and start dev service
         run: |
           install -Dm755 /tmp/spinbike-deploy-dev/spinbike-server \
             /opt/spinbike/dev/spinbike-server
           rm -rf /tmp/spinbike-deploy-dev
-          sudo -n systemctl restart spinbike-dev.service
+          # `start` (not `restart`) — service was stopped during the sync step.
+          sudo -n systemctl start spinbike-dev.service
 
       - name: Dump last journalctl lines on any failure (for debugging)
         if: failure()
