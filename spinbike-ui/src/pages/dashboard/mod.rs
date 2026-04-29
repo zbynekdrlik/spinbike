@@ -130,6 +130,8 @@ pub struct TxnInfo {
     pub valid_until: Option<chrono::NaiveDate>,
     #[serde(default)]
     pub deleted_at: Option<String>,
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 impl TxnInfo {
@@ -138,6 +140,12 @@ impl TxnInfo {
             crate::i18n::Lang::Sk => self.service_name_sk.as_deref(),
             crate::i18n::Lang::En => self.service_name_en.as_deref(),
         }
+    }
+
+    /// EventKind classification — same precedence as ReportEvent::kind().
+    /// Sourced from spinbike-core so card history and report stay in sync.
+    pub fn kind(&self) -> spinbike_core::reports::EventKind {
+        spinbike_core::reports::classify(&self.action, self.amount, self.valid_until)
     }
 }
 

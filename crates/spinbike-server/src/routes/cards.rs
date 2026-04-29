@@ -114,6 +114,9 @@ pub struct TransactionResponse {
     pub service_kind: Option<String>,
     pub valid_until: Option<chrono::NaiveDate>,
     pub deleted_at: Option<String>,
+    /// Free-text staff note (≤200 chars). NULL when no note was recorded.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
 }
 
 // Replaces `impl From<&db::CardRow> for CardResponse`.
@@ -509,6 +512,7 @@ async fn card_transactions(
                 service_kind: t.service_kind,
                 valid_until: t.valid_until,
                 deleted_at: t.deleted_at,
+                note: t.note,
             })
             .collect(),
     ))
@@ -546,6 +550,7 @@ async fn my_balance(
                 service_kind: t.service_kind,
                 valid_until: t.valid_until,
                 deleted_at: t.deleted_at,
+                note: t.note,
             })
             .collect(),
     }))
