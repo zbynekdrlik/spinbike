@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
@@ -94,32 +95,58 @@ pub fn TransactionsList(
                     view! { <span></span> }.into_any()
                 };
 
-                let void_btn = if is_voided {
-                    view! { <div></div> }.into_any()
-                } else {
-                    let on_void = move |_| {
-                        let confirm_msg = i18n::t(lang.get(), "confirm_void");
-                        let win = leptos::prelude::window();
-                        if !win.confirm_with_message(confirm_msg).unwrap_or(false) {
-                            return;
-                        }
-                        spawn_local(async move {
-                            match api::delete_empty(&format!("/api/transactions/{tx_id}")).await {
-                                Ok(()) => txn_refresh.update(|n| *n += 1),
-                                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
+                let note_initial = tx.note.clone().unwrap_or_default();
+                // Per-row signal so the editor opens independently for each row.
+                let (editing, set_editing) = signal(false);
+                let (note_value, set_note_value) = signal(note_initial.clone());
+
+                let on_edit = move |_| set_editing.set(true);
+                let on_cancel = move |_| {
+                    set_note_value.set(note_initial.clone());
+                    set_editing.set(false);
+                };
+                let on_save = move |_| {
+                    let new_note = note_value.get_untracked();
+                    spawn_local(async move {
+                        #[derive(serde::Serialize)]
+                        struct Req { note: Option<String> }
+                        #[derive(serde::Deserialize)]
+                        struct Resp { #[allow(dead_code)] id: i64, #[allow(dead_code)] note: Option<String> }
+                        let body = Req {
+                            note: if new_note.trim().is_empty() { None } else { Some(new_note) },
+                        };
+                        match api::patch::<Req, Resp>(
+                            &format!("/api/transactions/{tx_id}/note"), &body
+                        ).await {
+                            Ok(_) => {
+                                set_editing.set(false);
+                                txn_refresh.update(|n| *n += 1);
                             }
-                        });
-                    };
-                    view! {
-                        <div class="list-row__end">
-                            <button
-                                class="btn btn--compact btn--ghost"
-                                data-testid="txn-void"
-                                title=move || i18n::t(lang.get(), "void")
-                                on:click=on_void
-                            >"\u{2715}"</button>
-                        </div>
-                    }.into_any()
+                            Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
+                        }
+                    });
+                };
+
+                let on_void = move |_| {
+                    let confirm_msg = i18n::t(lang.get(), "confirm_void");
+                    let win = leptos::prelude::window();
+                    if !win.confirm_with_message(confirm_msg).unwrap_or(false) {
+                        return;
+                    }
+                    spawn_local(async move {
+                        match api::delete_empty(&format!("/api/transactions/{tx_id}")).await {
+                            Ok(()) => txn_refresh.update(|n| *n += 1),
+                            Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
+                        }
+                    });
+                };
+
+                let on_input = move |ev: web_sys::Event| {
+                    let v = ev.target()
+                        .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
+                        .map(|el| el.value())
+                        .unwrap_or_default();
+                    set_note_value.set(v);
                 };
 
                 view! {
@@ -130,9 +157,60 @@ pub fn TransactionsList(
                                 {voided_tag}
                             </div>
                             <div class="list-row__sub">{date}" · "{service}</div>
+                            {move || if editing.get() {
+                                view! {
+                                    <div class="list-row__note-edit">
+                                        <input
+                                            type="text"
+                                            maxlength="200"
+                                            class="form-control form-control--inline"
+                                            data-testid="txn-note-edit-input"
+                                            prop:value=move || note_value.get()
+                                            on:input=on_input
+                                        />
+                                        <button class="btn btn--compact btn--primary"
+                                                data-testid="txn-note-save"
+                                                on:click=on_save>
+                                            {move || i18n::t(lang.get(), "tx_note_save")}
+                                        </button>
+                                        <button class="btn btn--compact btn--ghost"
+                                                data-testid="txn-note-cancel"
+                                                on:click=on_cancel>
+                                            {move || i18n::t(lang.get(), "tx_note_cancel")}
+                                        </button>
+                                    </div>
+                                }.into_any()
+                            } else if !note_value.get().is_empty() {
+                                view! {
+                                    <div class="list-row__note" data-testid="txn-note-text">
+                                        {move || note_value.get()}
+                                    </div>
+                                }.into_any()
+                            } else {
+                                view! { <span></span> }.into_any()
+                            }}
                         </div>
                         <div class=amount_class>{amount_str}</div>
-                        {void_btn}
+                        {if !is_voided {
+                            view! {
+                                <div class="list-row__end list-row__end--column">
+                                    <button
+                                        class="btn btn--compact btn--ghost"
+                                        data-testid="txn-note-edit"
+                                        title=move || i18n::t(lang.get(), "tx_note_edit")
+                                        on:click=on_edit
+                                    >"\u{270e}"</button>
+                                    <button
+                                        class="btn btn--compact btn--ghost"
+                                        data-testid="txn-void"
+                                        title=move || i18n::t(lang.get(), "void")
+                                        on:click=on_void
+                                    >"\u{2715}"</button>
+                                </div>
+                            }.into_any()
+                        } else {
+                            view! { <div></div> }.into_any()
+                        }}
                     </div>
                 }
             }).collect();

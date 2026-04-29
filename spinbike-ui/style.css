@@ -1419,6 +1419,31 @@ table tbody tr:last-child td,
 .feed-dot--visit  { background: var(--info-soft); }
 .feed-dot--voided { background: var(--text-dim); }
 
+.list-row__note {
+    margin-top: 2px;
+    font-size: 0.85em;
+    color: var(--text-muted, #888);
+    font-style: italic;
+}
+
+.list-row__note-edit {
+    display: flex;
+    gap: 4px;
+    margin-top: 4px;
+    align-items: center;
+}
+
+.list-row__note-edit .form-control--inline {
+    flex: 1;
+    min-width: 0;
+}
+
+.list-row__end--column {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
 /* ═════════════════════════════════════════════════════════════
    Build version label — sticky bottom-right, every route.
    Sits above the mobile bottom-nav (56px tall) so it doesn't
