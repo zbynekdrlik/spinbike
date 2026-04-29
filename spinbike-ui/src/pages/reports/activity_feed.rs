@@ -227,6 +227,11 @@ fn render_row(e: ReportEvent) -> impl IntoView {
             <div class="list-row__main">
                 <div class="list-row__title">{name}</div>
                 <div class="list-row__sub">{subtitle}</div>
+                // Non-reactive `if` is correct here: each render_row(e) call
+                // materialises a fresh row from a fresh ReportEvent, so when
+                // events change the whole row is rebuilt with a new note_str.
+                // (Card history is reactive because the editor toggles
+                // dynamically — different concern.)
                 {if !note_str.is_empty() {
                     view! {
                         <div class="list-row__note" data-testid="feed-note">

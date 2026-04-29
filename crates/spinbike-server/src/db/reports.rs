@@ -174,7 +174,8 @@ struct DbEventRow {
     valid_until: Option<chrono::NaiveDate>,
     deleted_at: Option<String>,
     /// Free-text staff note (≤200 chars). NULL when no note was recorded.
-    #[sqlx(default)]
+    /// Migration v10 guarantees the column exists, so no `#[sqlx(default)]` —
+    /// a missing column should error loudly.
     note: Option<String>,
 }
 

@@ -28,7 +28,8 @@ pub struct TransactionRow {
     pub service_kind: Option<String>,
     pub deleted_at: Option<String>,
     /// Free-text staff note (≤200 chars). NULL when no note was recorded.
-    #[sqlx(default)]
+    /// Migration v10 guarantees the column exists on every queried DB, so no
+    /// `#[sqlx(default)]` — a missing column should error loudly.
     pub note: Option<String>,
 }
 
