@@ -199,6 +199,7 @@ fn render_row(e: ReportEvent) -> impl IntoView {
         }
     };
 
+    let note_str = e.note.clone().unwrap_or_default();
     let name = e.card_name.clone().unwrap_or_else(|| "—".to_string());
     let service = match lang.get_untracked() {
         Lang::Sk => e.service_name_sk.clone(),
@@ -226,6 +227,15 @@ fn render_row(e: ReportEvent) -> impl IntoView {
             <div class="list-row__main">
                 <div class="list-row__title">{name}</div>
                 <div class="list-row__sub">{subtitle}</div>
+                {if !note_str.is_empty() {
+                    view! {
+                        <div class="list-row__note" data-testid="feed-note">
+                            {note_str}
+                        </div>
+                    }.into_any()
+                } else {
+                    view! { <span></span> }.into_any()
+                }}
             </div>
             <div class=amount_class>{amount_display}</div>
             {voided_badge}
