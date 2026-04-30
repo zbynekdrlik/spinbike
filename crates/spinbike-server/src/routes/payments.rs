@@ -79,24 +79,36 @@ async fn charge(
         ));
     }
 
-    // Reject Monthly pass service_id via /charge — it requires valid_until,
-    // which /charge doesn't set. Staff must use /sell-pass instead.
-    if let Some(sid) = body.service_id {
-        let is_pass: bool =
-            sqlx::query_scalar("SELECT kind = 'monthly_pass' FROM services WHERE id = ?")
-                .bind(sid)
-                .fetch_optional(&state.pool)
-                .await
-                .map_err(internal_error)?
-                .unwrap_or(false);
-        if is_pass {
+    // #31: charge requires an explicit service_id (data integrity — untyped
+    // charges pollute the activity feed and reports). Top-up stays
+    // service-independent. UI also prevents this via removed empty <option>;
+    // server enforces it as defense-in-depth.
+    let service_id = match body.service_id {
+        Some(sid) => sid,
+        None => {
             return Err((
                 StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({
-                    "error": "Use /api/payments/sell-pass for Monthly pass sales (requires valid_until)"
-                })),
+                Json(serde_json::json!({"error": "service_id required for charge"})),
             ));
         }
+    };
+
+    // Reject Monthly pass service_id via /charge — it requires valid_until,
+    // which /charge doesn't set. Staff must use /sell-pass instead.
+    let is_pass: bool =
+        sqlx::query_scalar("SELECT kind = 'monthly_pass' FROM services WHERE id = ?")
+            .bind(service_id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(internal_error)?
+            .unwrap_or(false);
+    if is_pass {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "Use /api/payments/sell-pass for Monthly pass sales (requires valid_until)"
+            })),
+        ));
     }
 
     // C3: Validate amount is positive.

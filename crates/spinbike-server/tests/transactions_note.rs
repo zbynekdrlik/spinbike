@@ -13,12 +13,17 @@ async fn charge_persists_note() {
     let card_id = app
         .seed_card("NOTE-CHARGE", 50.0, None, None, None, None)
         .await;
+    let spinning_id: i64 =
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning' AND active = 1")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
 
     let (status, resp) = app
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 2.50, "note": "Proteinová tyčinka"}),
+            &json!({"card_id": card_id, "amount": 2.50, "service_id": spinning_id, "note": "Proteinová tyčinka"}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -93,13 +98,18 @@ async fn empty_note_stored_as_null() {
     let card_id = app
         .seed_card("NOTE-EMPTY", 50.0, None, None, None, None)
         .await;
+    let spinning_id: i64 =
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning' AND active = 1")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
 
     // Case 1: whitespace-only note must store as NULL.
     let (status, resp) = app
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "note": "   "}),
+            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": "   "}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -117,7 +127,7 @@ async fn empty_note_stored_as_null() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "note": ""}),
+            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": ""}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -137,13 +147,18 @@ async fn note_over_200_chars_rejected() {
     let card_id = app
         .seed_card("NOTE-LONG", 50.0, None, None, None, None)
         .await;
+    let spinning_id: i64 =
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning' AND active = 1")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
     let long = "x".repeat(201);
 
     let (status, resp) = app
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "note": long}),
+            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": long}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
@@ -164,12 +179,17 @@ async fn missing_note_field_works_unchanged() {
     let card_id = app
         .seed_card("NOTE-MISSING", 50.0, None, None, None, None)
         .await;
+    let spinning_id: i64 =
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning' AND active = 1")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
 
     let (status, _) = app
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0}),
+            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -229,13 +249,18 @@ async fn note_at_200_chars_accepted() {
     let card_id = app
         .seed_card("NOTE-200", 50.0, None, None, None, None)
         .await;
+    let spinning_id: i64 =
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning' AND active = 1")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
 
     let exactly_200 = "x".repeat(200);
     let (status, resp) = app
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "note": exactly_200.clone()}),
+            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": exactly_200.clone()}),
         ))
         .await;
     assert_eq!(
@@ -259,12 +284,17 @@ async fn note_at_200_chars_accepted() {
 async fn patch_note_updates_existing_row() {
     let app = TestApp::new().await;
     let card_id = app.seed_card("PATCH-1", 50.0, None, None, None, None).await;
+    let spinning_id: i64 =
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning' AND active = 1")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
 
     let (status, resp) = app
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "note": "first"}),
+            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": "first"}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -292,12 +322,17 @@ async fn patch_note_updates_existing_row() {
 async fn patch_note_clears_with_null_or_empty() {
     let app = TestApp::new().await;
     let card_id = app.seed_card("PATCH-2", 50.0, None, None, None, None).await;
+    let spinning_id: i64 =
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning' AND active = 1")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
 
     let (status, resp) = app
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "note": "to clear"}),
+            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": "to clear"}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -328,12 +363,17 @@ async fn patch_note_rejects_voided_409() {
     let card_id = app
         .seed_card("PATCH-VOID", 50.0, None, None, None, None)
         .await;
+    let spinning_id: i64 =
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning' AND active = 1")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
 
     let (status, resp) = app
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0}),
+            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -416,12 +456,17 @@ async fn patch_note_requires_staff_role() {
     let card_id = app
         .seed_card("PATCH-403", 50.0, None, None, None, None)
         .await;
+    let spinning_id: i64 =
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning' AND active = 1")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
 
     let (status, resp) = app
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0}),
+            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -679,12 +724,17 @@ async fn patch_note_at_200_chars_accepted() {
     let card_id = app
         .seed_card("PATCH-200", 50.0, None, None, None, None)
         .await;
+    let spinning_id: i64 =
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning' AND active = 1")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
 
     let (status, resp) = app
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0}),
+            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -722,12 +772,17 @@ async fn patch_note_whitespace_only_stored_as_null() {
     let card_id = app
         .seed_card("PATCH-WS", 50.0, None, None, None, None)
         .await;
+    let spinning_id: i64 =
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning' AND active = 1")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
 
     let (status, resp) = app
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "note": "initial note"}),
+            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": "initial note"}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
