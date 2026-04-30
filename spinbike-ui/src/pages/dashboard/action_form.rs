@@ -61,7 +61,7 @@ pub fn ActionForm(
     // never happens in practice).
     let initial_fitness_id = services
         .get_untracked()
-        .iter()
+        .into_iter()
         .find(|s| s.name_en == spinbike_core::services::FITNESS_NAME_EN)
         .map(|s| s.id);
     let (selected_service_id, set_selected_service_id) =
