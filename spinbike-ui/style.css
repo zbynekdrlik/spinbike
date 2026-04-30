@@ -504,17 +504,17 @@ select.form-control {
 }
 
 .card-title__name {
-    font-size: 1.75rem;
+    font-size: var(--fs-xl);
     font-weight: 700;
     letter-spacing: -0.01em;
     line-height: 1.15;
 }
 
 .card-title__barcode {
-    font-size: 1rem;
+    font-size: var(--fs-base);
     font-weight: 500;
     color: var(--text-muted);
-    font-family: var(--font-mono, ui-monospace, monospace);
+    font-family: ui-monospace, monospace;
 }
 
 /* Card balance — prominent credit display (used in Task 13) */
