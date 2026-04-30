@@ -1142,7 +1142,7 @@ table tbody tr:last-child td,
     margin-bottom: var(--s-3);
 }
 .quick-charge-row .btn {
-    font-size: 1.125rem;
+    font-size: var(--fs-md);
     font-weight: 700;
     padding: var(--s-2) var(--s-4);
 }
