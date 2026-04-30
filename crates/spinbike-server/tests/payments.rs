@@ -35,8 +35,9 @@ async fn charge_rejects_negative_amount() {
 async fn charge_reduces_credit_by_exact_amount() {
     let app = TestApp::new().await;
     let card_id = app.seed_card("C3", 100.0, None, None, None, None).await;
+    let spinning_id = app.spinning_service_id().await;
 
-    let body = serde_json::json!({ "card_id": card_id, "amount": 10.0 });
+    let body = serde_json::json!({ "card_id": card_id, "amount": 10.0, "service_id": spinning_id });
     let (status, resp) = app
         .request(post_json("/api/payments/charge", &app.staff_token, &body))
         .await;
@@ -149,12 +150,13 @@ async fn storno_forbidden_for_customer() {
 async fn charge_blocked_card_is_conflict() {
     let app = TestApp::new().await;
     let card_id = app.seed_card("BLK", 100.0, None, None, None, None).await;
+    let spinning_id = app.spinning_service_id().await;
     // Block the card directly in the DB.
     spinbike_server::db::cards::set_blocked(&app.pool, card_id, true)
         .await
         .unwrap();
 
-    let body = serde_json::json!({ "card_id": card_id, "amount": 10.0 });
+    let body = serde_json::json!({ "card_id": card_id, "amount": 10.0, "service_id": spinning_id });
     let (status, _) = app
         .request(post_json("/api/payments/charge", &app.staff_token, &body))
         .await;
@@ -164,7 +166,8 @@ async fn charge_blocked_card_is_conflict() {
 #[tokio::test]
 async fn charge_missing_card_is_404() {
     let app = TestApp::new().await;
-    let body = serde_json::json!({ "card_id": 999_999, "amount": 10.0 });
+    let spinning_id = app.spinning_service_id().await;
+    let body = serde_json::json!({ "card_id": 999_999, "amount": 10.0, "service_id": spinning_id });
     let (status, _) = app
         .request(post_json("/api/payments/charge", &app.staff_token, &body))
         .await;
@@ -181,13 +184,24 @@ async fn payment_routes_are_registered() {
     let card_id = app
         .seed_card("REG-PAY", 100.0, None, None, None, None)
         .await;
-    let body = serde_json::json!({ "card_id": card_id, "amount": 5.0 });
+    let spinning_id = app.spinning_service_id().await;
+    let body = serde_json::json!({
+        "card_id": card_id,
+        "amount": 5.0,
+        "service_id": spinning_id
+    });
     let (status, _) = app
         .request(post_json("/api/payments/charge", &app.staff_token, &body))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
+    // Storno doesn't require service_id (legacy reversal path); bare body OK.
+    let storno_body = serde_json::json!({ "card_id": card_id, "amount": 5.0 });
     let (status, _) = app
-        .request(post_json("/api/payments/storno", &app.staff_token, &body))
+        .request(post_json(
+            "/api/payments/storno",
+            &app.staff_token,
+            &storno_body,
+        ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
     // Touch /api/cards so the `get` helper is exercised in this binary too.
