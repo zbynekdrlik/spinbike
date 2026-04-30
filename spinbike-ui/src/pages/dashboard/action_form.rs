@@ -298,7 +298,7 @@ pub fn ActionForm(
         <div class="stack-12" data-testid="action-form">
             {if pass_active {
                 view! {
-                    <div class="chip-row chip-row--spaced">
+                    <div class="chip-row chip-row--spaced chip-row--readable">
                         {
                             // Sort so Fitness renders left of Spinning. is_class_visit()
                             // restricts name_en to "Fitness" | "Spinning", so a plain
@@ -322,7 +322,7 @@ pub fn ActionForm(
                                 };
                                 view! {
                                     <button
-                                        class=format!("btn btn--compact {color_cls}")
+                                        class=format!("btn {color_cls}")
                                         data-testid="log-visit-btn"
                                         on:click=visit_click_for(service_id)
                                     >

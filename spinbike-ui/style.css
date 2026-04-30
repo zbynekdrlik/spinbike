@@ -59,7 +59,7 @@
     --brand:         #60a5fa;
     --brand-tint:    rgba(96, 165, 250, 0.14);
     --danger:        #f87171;
-    --info:          var(--brand);
+    --info:          color-mix(in srgb, var(--brand) 90%, black);
     --pass:          #fbbf24;
     --shadow:        0 4px 12px rgba(0, 0, 0, 0.4);
     --shadow-lg:     0 12px 36px rgba(0, 0, 0, 0.55);
@@ -81,8 +81,8 @@
     --success-soft:   color-mix(in srgb, var(--brand) 18%, var(--surface));
     --success-border: color-mix(in srgb, var(--brand) 40%, var(--surface));
     --success-fg:     var(--brand);
-    --info-soft:      color-mix(in srgb, var(--info) 16%, var(--surface));
-    --info-border:    color-mix(in srgb, var(--info) 45%, var(--surface));
+    --info-soft:      color-mix(in srgb, var(--info) 22%, var(--surface));
+    --info-border:    color-mix(in srgb, var(--info) 50%, var(--surface));
     --info-soft-fg:   var(--info);
     --info-hover:     color-mix(in srgb, var(--info) 85%, black);
     --info-fg:        #fff;
@@ -120,7 +120,7 @@
         --brand:         #2563eb;
         --brand-tint:    rgba(37, 99, 235, 0.10);
         --danger:        #dc2626;
-        --info:          var(--brand);
+        --info:          color-mix(in srgb, var(--brand) 90%, black);
         --pass:          #d97706;
         --shadow:        0 2px 8px rgba(13, 20, 45, 0.07);
         --shadow-lg:     0 16px 48px rgba(13, 20, 45, 0.12);
@@ -1128,6 +1128,14 @@ table tbody tr:last-child td,
 /* Chip / button row that wraps. */
 .chip-row { display: flex; flex-wrap: wrap; gap: var(--s-2); }
 .chip-row--spaced { margin-bottom: var(--s-2); }
+/* #32d: log-visit class buttons read bigger and bolder than the default
+   --compact chip. Applied via .chip-row--readable on the parent so any
+   future quick-action chip row can opt in. */
+.chip-row--readable .btn {
+    font-size: var(--fs-md);
+    font-weight: 700;
+    padding: var(--s-2) var(--s-4);
+}
 
 /* Quick-charge chip row (#30): always-visible 1-click charge buttons. */
 .quick-charge-row {
