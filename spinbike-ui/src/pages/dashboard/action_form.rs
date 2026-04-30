@@ -57,24 +57,6 @@ pub fn ActionForm(
     let (valid_until, set_valid_until) = signal(default_valid_until);
 
     let (selected_service_id, set_selected_service_id) = signal::<Option<i64>>(None);
-
-    // #29: preselect Fitness as the default service. The services signal is
-    // fetched async on dashboard mount, so the value at ActionForm init can
-    // be []. Use a reactive Effect that runs once services is non-empty and
-    // sets the default — but only if the user hasn't already picked something
-    // (the is_none() guard preserves staff selection across services churn).
-    Effect::new(move |_| {
-        let svc_list = services.get();
-        if !svc_list.is_empty() && selected_service_id.get_untracked().is_none() {
-            if let Some(fid) = svc_list
-                .iter()
-                .find(|s| s.name_en == spinbike_core::services::FITNESS_NAME_EN)
-                .map(|s| s.id)
-            {
-                set_selected_service_id.set(Some(fid));
-            }
-        }
-    });
     let (loading, set_loading) = signal(false);
     let (err, set_err) = signal(String::new());
 
@@ -416,13 +398,8 @@ pub fn ActionForm(
                     node_ref=service_ref
                     on:change=on_service_change
                     data-testid="charge-service"
-                    prop:value=move || {
-                        selected_service_id
-                            .get()
-                            .map(|id| id.to_string())
-                            .unwrap_or_default()
-                    }
                 >
+                    <option value="">{move || i18n::t(lang.get(), "select_service")}</option>
                     {move || {
                         let lang_now = lang.get();
                         services.get().into_iter().map(|s| {

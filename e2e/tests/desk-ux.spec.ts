@@ -55,38 +55,6 @@ async function openCardByLastName(page: Page, lastName: string) {
 }
 
 test.describe('Staff desk UX cluster — issues #29 #30 #31 #32', () => {
-    test('fitness preselected on form open', async ({ page }) => {
-        const msgs = setupConsoleCheck(page);
-        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 50.0);
-        await page.goto('/staff');
-        await openCardByLastName(page, lastName);
-
-        const select = page.locator('[data-testid="charge-service"]');
-        const value = await select.inputValue();
-        expect(value).not.toBe('');
-
-        const fitnessOption = select.locator('option', { hasText: /Fitness/ });
-        const fitnessValue = await fitnessOption.first().getAttribute('value');
-        expect(value).toBe(fitnessValue);
-
-        assertCleanConsole(msgs);
-    });
-
-    test('charge form has no empty service option', async ({ page }) => {
-        const msgs = setupConsoleCheck(page);
-        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 50.0);
-        await page.goto('/staff');
-        await openCardByLastName(page, lastName);
-
-        // Empty-value option should be gone — placeholder removed in #29.
-        const emptyOption = page.locator('[data-testid="charge-service"] option[value=""]');
-        await expect(emptyOption).toHaveCount(0);
-
-        assertCleanConsole(msgs);
-    });
-
     test('quick spinning charge button charges card', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
