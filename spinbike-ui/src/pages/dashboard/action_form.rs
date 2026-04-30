@@ -56,7 +56,16 @@ pub fn ActionForm(
         + chrono::Duration::days(30);
     let (valid_until, set_valid_until) = signal(default_valid_until);
 
-    let (selected_service_id, set_selected_service_id) = signal::<Option<i64>>(None);
+    // #29: open with Fitness preselected. Falls back to None only if the
+    // Fitness service is missing from the seeded list (defensive only —
+    // never happens in practice).
+    let initial_fitness_id = services
+        .get_untracked()
+        .iter()
+        .find(|s| s.name_en == spinbike_core::services::FITNESS_NAME_EN)
+        .map(|s| s.id);
+    let (selected_service_id, set_selected_service_id) =
+        signal::<Option<i64>>(initial_fitness_id);
     let (loading, set_loading) = signal(false);
     let (err, set_err) = signal(String::new());
 
@@ -322,8 +331,13 @@ pub fn ActionForm(
                     node_ref=service_ref
                     on:change=on_service_change
                     data-testid="charge-service"
+                    prop:value=move || {
+                        selected_service_id
+                            .get()
+                            .map(|id| id.to_string())
+                            .unwrap_or_default()
+                    }
                 >
-                    <option value="">{move || i18n::t(lang.get(), "select_service")}</option>
                     {move || {
                         let lang_now = lang.get();
                         services.get().into_iter().map(|s| {
