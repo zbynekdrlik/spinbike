@@ -56,62 +56,27 @@ pub fn ActionForm(
         + chrono::Duration::days(30);
     let (valid_until, set_valid_until) = signal(default_valid_until);
 
-    // #29: open with Fitness preselected. Falls back to None only if the
-    // Fitness service is missing from the seeded list (defensive only —
-    // never happens in practice).
-    let initial_fitness_id = services
-        .get_untracked()
-        .into_iter()
-        .find(|s| s.name_en == spinbike_core::services::FITNESS_NAME_EN)
-        .map(|s| s.id);
-    let (selected_service_id, set_selected_service_id) =
-        signal::<Option<i64>>(initial_fitness_id);
+    let (selected_service_id, set_selected_service_id) = signal::<Option<i64>>(None);
+
+    // #29: preselect Fitness as the default service. The services signal is
+    // fetched async on dashboard mount, so the value at ActionForm init can
+    // be []. Use a reactive Effect that runs once services is non-empty and
+    // sets the default — but only if the user hasn't already picked something
+    // (the is_none() guard preserves staff selection across services churn).
+    Effect::new(move |_| {
+        let svc_list = services.get();
+        if !svc_list.is_empty() && selected_service_id.get_untracked().is_none() {
+            if let Some(fid) = svc_list
+                .iter()
+                .find(|s| s.name_en == spinbike_core::services::FITNESS_NAME_EN)
+                .map(|s| s.id)
+            {
+                set_selected_service_id.set(Some(fid));
+            }
+        }
+    });
     let (loading, set_loading) = signal(false);
     let (err, set_err) = signal(String::new());
-
-    // #30 + DRY-up of do_charge non-pass branch: shared dispatcher for the
-    // standard /api/payments/charge flow. Both the inline form ("Charge"
-    // button) and the Spinning quick chip use this with their own values.
-    let dispatch_charge = move |amount: f64, service_id: i64, note: Option<String>| {
-        set_loading.set(true);
-        spawn_local(async move {
-            #[derive(serde::Serialize)]
-            struct Req {
-                card_id: i64,
-                amount: f64,
-                service_id: Option<i64>,
-                note: Option<String>,
-            }
-            match api::post::<Req, PaymentResp>(
-                "/api/payments/charge",
-                &Req {
-                    card_id,
-                    amount,
-                    service_id: Some(service_id),
-                    note,
-                },
-            )
-            .await
-            {
-                Ok(r) => {
-                    set_msg.set(i18n::tf(
-                        lang.get_untracked(),
-                        "charge_ok_format",
-                        &[&format!("{:.2}", r.new_credit)],
-                    ));
-                    set_selected.update(|s| {
-                        if let Some(c) = s {
-                            c.credit = r.new_credit;
-                        }
-                    });
-                    set_txn_refresh.update(|n| *n += 1);
-                    clear_note();
-                }
-                Err(e) => set_err.set(e),
-            }
-            set_loading.set(false);
-        });
-    };
 
     let is_monthly_pass = move || match selected_service_id.get() {
         Some(id) => services
@@ -249,13 +214,44 @@ pub fn ActionForm(
                 set_err.set(i18n::t(lang.get_untracked(), "price_required").to_string());
                 return;
             }
-            // service_id was guaranteed Some by Task 3's UI (no empty option).
-            // Server-side guard from Task 2 returns 400 if it's None anyway.
-            let Some(sid) = service_id else {
-                set_err.set(i18n::t(lang.get_untracked(), "select_service").to_string());
-                return;
-            };
-            dispatch_charge(amount, sid, note);
+            set_loading.set(true);
+            spawn_local(async move {
+                #[derive(serde::Serialize)]
+                struct Req {
+                    card_id: i64,
+                    amount: f64,
+                    service_id: Option<i64>,
+                    note: Option<String>,
+                }
+                match api::post::<Req, PaymentResp>(
+                    "/api/payments/charge",
+                    &Req {
+                        card_id,
+                        amount,
+                        service_id,
+                        note,
+                    },
+                )
+                .await
+                {
+                    Ok(r) => {
+                        set_msg.set(i18n::tf(
+                            lang.get_untracked(),
+                            "charge_ok_format",
+                            &[&format!("{:.2}", r.new_credit)],
+                        ));
+                        set_selected.update(|s| {
+                            if let Some(c) = s {
+                                c.credit = r.new_credit;
+                            }
+                        });
+                        set_txn_refresh.update(|n| *n += 1);
+                        clear_note();
+                    }
+                    Err(e) => set_err.set(e),
+                }
+                set_loading.set(false);
+            });
         }
     };
 
@@ -356,9 +352,46 @@ pub fn ActionForm(
                             svc.display_name(lang.get_untracked()),
                             price
                         );
+                        let card_id_for_click = card_id;
                         let on_quick_click = move |_ev: web_sys::MouseEvent| {
                             set_err.set(String::new());
-                            dispatch_charge(price, svc_id, None);
+                            set_loading.set(true);
+                            spawn_local(async move {
+                                #[derive(serde::Serialize)]
+                                struct Req {
+                                    card_id: i64,
+                                    amount: f64,
+                                    service_id: Option<i64>,
+                                    note: Option<String>,
+                                }
+                                match api::post::<Req, PaymentResp>(
+                                    "/api/payments/charge",
+                                    &Req {
+                                        card_id: card_id_for_click,
+                                        amount: price,
+                                        service_id: Some(svc_id),
+                                        note: None,
+                                    },
+                                )
+                                .await
+                                {
+                                    Ok(r) => {
+                                        set_msg.set(i18n::tf(
+                                            lang.get_untracked(),
+                                            "charge_ok_format",
+                                            &[&format!("{:.2}", r.new_credit)],
+                                        ));
+                                        set_selected.update(|s| {
+                                            if let Some(c) = s {
+                                                c.credit = r.new_credit;
+                                            }
+                                        });
+                                        set_txn_refresh.update(|n| *n += 1);
+                                    }
+                                    Err(e) => set_err.set(e),
+                                }
+                                set_loading.set(false);
+                            });
                         };
                         view! {
                             <div class="chip-row quick-charge-row">
