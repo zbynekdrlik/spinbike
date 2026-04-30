@@ -70,7 +70,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32', () => {
         const fitnessValue = await fitnessOption.first().getAttribute('value');
         expect(value).toBe(fitnessValue);
 
-        await assertCleanConsole(msgs);
+        assertCleanConsole(msgs);
     });
 
     test('charge form has no empty service option', async ({ page }) => {
@@ -84,7 +84,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32', () => {
         const emptyOption = page.locator('[data-testid="charge-service"] option[value=""]');
         await expect(emptyOption).toHaveCount(0);
 
-        await assertCleanConsole(msgs);
+        assertCleanConsole(msgs);
     });
 
     test('quick spinning charge button charges card', async ({ page }) => {
@@ -111,7 +111,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32', () => {
             page.locator('[data-testid="txn-row"]').first(),
         ).toBeVisible();
 
-        await assertCleanConsole(msgs);
+        assertCleanConsole(msgs);
     });
 
     test('card header shows name and barcode on one line', async ({ page }) => {
@@ -137,7 +137,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32', () => {
             .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
         expect(nameFontSize).toBeGreaterThanOrEqual(24);
 
-        await assertCleanConsole(msgs);
+        assertCleanConsole(msgs);
     });
 
     test('pass banner active is one line', async ({ page }) => {
@@ -151,7 +151,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32', () => {
 
         const banner = page.locator('[data-testid="pass-banner-active"]');
         await expect(banner).toBeVisible();
-        await expect(banner).toHaveText(/^✓ Mesačný lístok do \d{1,2}\.\d{1,2}\.\d{4} \(\d+ dní\)/u);
+        await expect(banner).toHaveText(/^✓ Monthly pass valid until \d{4}-\d{2}-\d{2} \(\d+ days\)/);
 
         // Pencil edit button is present and inside the same single-line container.
         const editBtn = banner.locator('[data-testid="pass-date-edit"]');
@@ -159,24 +159,35 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32', () => {
         // No legacy `.pass-banner-sub` div.
         await expect(banner.locator('.pass-banner-sub')).toHaveCount(0);
 
-        await assertCleanConsole(msgs);
+        assertCleanConsole(msgs);
     });
 
-    test('pass banner expired is one line', async ({ page }) => {
+    test('pass banner expired is one line', async ({ page, request }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName, barcode } = await activateUniqueCard(token, 100.0);
-        const cardId = await lookupCardId(token, barcode);
-        await sellPassToCard(token, cardId, -5); // expired 5 days ago
+        const suffix = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
+        const cardBarcode = `UX-EXP-${suffix}`;
+
+        // Seed an expired-pass card via the test fixture endpoint (bypasses
+        // the server-side valid_until > today validation).
+        const seedResp = await request.post(`${BASE_URL}/api/test/seed-expired-pass`, {
+            data: { barcode: cardBarcode, valid_until: '2020-01-01' },
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        expect(seedResp.ok()).toBeTruthy();
+
         await page.goto('/staff');
-        await openCardByLastName(page, lastName);
+        const searchInput = page.locator('input[type="search"]');
+        await searchInput.focus();
+        await page.keyboard.type(cardBarcode, { delay: 30 });
+        await page.locator('[data-testid="search-result"]').first().click();
 
         const banner = page.locator('[data-testid="pass-banner-expired"]');
         await expect(banner).toBeVisible();
         // Symmetric guard: expired must also be a single line, no .pass-banner-sub.
         await expect(banner.locator('.pass-banner-sub')).toHaveCount(0);
 
-        await assertCleanConsole(msgs);
+        assertCleanConsole(msgs);
     });
 
     test('Cards — Quick Dashboard h1 is gone', async ({ page }) => {
@@ -188,7 +199,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32', () => {
         expect(body.toLowerCase()).not.toContain('cards — quick dashboard');
         expect(body.toLowerCase()).not.toContain('karty — rychly prehlad');
 
-        await assertCleanConsole(msgs);
+        assertCleanConsole(msgs);
     });
 
     test('log-visit class buttons are bigger and bolder', async ({ page }) => {
@@ -209,6 +220,6 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32', () => {
         expect(fontSize).toBeGreaterThanOrEqual(18);
         expect(fontWeight).toBeGreaterThanOrEqual(700);
 
-        await assertCleanConsole(msgs);
+        assertCleanConsole(msgs);
     });
 });
