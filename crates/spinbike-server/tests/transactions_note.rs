@@ -369,12 +369,13 @@ async fn patch_note_rejects_over_200_chars() {
     let card_id = app
         .seed_card("PATCH-LONG", 50.0, None, None, None, None)
         .await;
+    let spinning_id = app.spinning_service_id().await;
 
     let (status, resp) = app
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0}),
+            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
