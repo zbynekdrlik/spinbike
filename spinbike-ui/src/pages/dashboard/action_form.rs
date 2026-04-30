@@ -69,6 +69,50 @@ pub fn ActionForm(
     let (loading, set_loading) = signal(false);
     let (err, set_err) = signal(String::new());
 
+    // #30 + DRY-up of do_charge non-pass branch: shared dispatcher for the
+    // standard /api/payments/charge flow. Both the inline form ("Charge"
+    // button) and the Spinning quick chip use this with their own values.
+    let dispatch_charge = move |amount: f64, service_id: i64, note: Option<String>| {
+        set_loading.set(true);
+        spawn_local(async move {
+            #[derive(serde::Serialize)]
+            struct Req {
+                card_id: i64,
+                amount: f64,
+                service_id: Option<i64>,
+                note: Option<String>,
+            }
+            match api::post::<Req, PaymentResp>(
+                "/api/payments/charge",
+                &Req {
+                    card_id,
+                    amount,
+                    service_id: Some(service_id),
+                    note,
+                },
+            )
+            .await
+            {
+                Ok(r) => {
+                    set_msg.set(i18n::tf(
+                        lang.get_untracked(),
+                        "charge_ok_format",
+                        &[&format!("{:.2}", r.new_credit)],
+                    ));
+                    set_selected.update(|s| {
+                        if let Some(c) = s {
+                            c.credit = r.new_credit;
+                        }
+                    });
+                    set_txn_refresh.update(|n| *n += 1);
+                    clear_note();
+                }
+                Err(e) => set_err.set(e),
+            }
+            set_loading.set(false);
+        });
+    };
+
     let is_monthly_pass = move || match selected_service_id.get() {
         Some(id) => services
             .get()
@@ -205,44 +249,13 @@ pub fn ActionForm(
                 set_err.set(i18n::t(lang.get_untracked(), "price_required").to_string());
                 return;
             }
-            set_loading.set(true);
-            spawn_local(async move {
-                #[derive(serde::Serialize)]
-                struct Req {
-                    card_id: i64,
-                    amount: f64,
-                    service_id: Option<i64>,
-                    note: Option<String>,
-                }
-                match api::post::<Req, PaymentResp>(
-                    "/api/payments/charge",
-                    &Req {
-                        card_id,
-                        amount,
-                        service_id,
-                        note,
-                    },
-                )
-                .await
-                {
-                    Ok(r) => {
-                        set_msg.set(i18n::tf(
-                            lang.get_untracked(),
-                            "charge_ok_format",
-                            &[&format!("{:.2}", r.new_credit)],
-                        ));
-                        set_selected.update(|s| {
-                            if let Some(c) = s {
-                                c.credit = r.new_credit;
-                            }
-                        });
-                        set_txn_refresh.update(|n| *n += 1);
-                        clear_note();
-                    }
-                    Err(e) => set_err.set(e),
-                }
-                set_loading.set(false);
-            });
+            // service_id was guaranteed Some by Task 3's UI (no empty option).
+            // Server-side guard from Task 2 returns 400 if it's None anyway.
+            let Some(sid) = service_id else {
+                set_err.set(i18n::t(lang.get_untracked(), "select_service").to_string());
+                return;
+            };
+            dispatch_charge(amount, sid, note);
         }
     };
 
@@ -338,50 +351,17 @@ pub fn ActionForm(
                     Some(svc) => {
                         let svc_id = svc.id;
                         let price = svc.default_price;
-                        let label = format!("Spinning {price:.2} €");
-                        let card_id_for_click = card_id;
+                        let label = format!(
+                            "{} {:.2} €",
+                            svc.display_name(lang.get_untracked()),
+                            price
+                        );
                         let on_quick_click = move |_ev: web_sys::MouseEvent| {
                             set_err.set(String::new());
-                            set_loading.set(true);
-                            spawn_local(async move {
-                                #[derive(serde::Serialize)]
-                                struct Req {
-                                    card_id: i64,
-                                    amount: f64,
-                                    service_id: Option<i64>,
-                                    note: Option<String>,
-                                }
-                                match api::post::<Req, PaymentResp>(
-                                    "/api/payments/charge",
-                                    &Req {
-                                        card_id: card_id_for_click,
-                                        amount: price,
-                                        service_id: Some(svc_id),
-                                        note: None,
-                                    },
-                                )
-                                .await
-                                {
-                                    Ok(r) => {
-                                        set_msg.set(i18n::tf(
-                                            lang.get_untracked(),
-                                            "charge_ok_format",
-                                            &[&format!("{:.2}", r.new_credit)],
-                                        ));
-                                        set_selected.update(|s| {
-                                            if let Some(c) = s {
-                                                c.credit = r.new_credit;
-                                            }
-                                        });
-                                        set_txn_refresh.update(|n| *n += 1);
-                                    }
-                                    Err(e) => set_err.set(e),
-                                }
-                                set_loading.set(false);
-                            });
+                            dispatch_charge(price, svc_id, None);
                         };
                         view! {
-                            <div class="chip-row chip-row--spaced quick-charge-row">
+                            <div class="chip-row quick-charge-row">
                                 <button
                                     class="btn btn--info"
                                     data-testid="quick-charge-spinning"
