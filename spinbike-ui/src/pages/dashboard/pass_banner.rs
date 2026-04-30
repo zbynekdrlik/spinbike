@@ -74,6 +74,7 @@ pub fn PassBanner(
                     <button
                         class="pass-banner__edit-btn"
                         data-testid="pass-date-edit"
+                        aria-label=move || i18n::t(lang.get(), "edit_pass_date")
                         title=move || i18n::t(lang.get(), "edit_pass_date")
                         on:click=move |_| show_edit_sheet.set(true)
                     >
