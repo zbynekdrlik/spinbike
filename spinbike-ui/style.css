@@ -497,9 +497,24 @@ select.form-control {
 }
 
 .card-title {
-    font-weight: 600;
-    font-size: var(--fs-md);
-    letter-spacing: -0.005em;
+    display: flex;
+    align-items: baseline;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+}
+
+.card-title__name {
+    font-size: 1.75rem;
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.15;
+}
+
+.card-title__barcode {
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--text-muted);
+    font-family: var(--font-mono, ui-monospace, monospace);
 }
 
 /* Card balance — prominent credit display (used in Task 13) */
@@ -1124,11 +1139,6 @@ table tbody tr:last-child td,
 
 /* Card header layout: title block grows, close button stays compact. */
 .card-header__main { flex: 1; min-width: 0; }
-.card-header__meta {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
-    margin-top: 2px;
-}
 
 /* Pass banner sits inside .group; cancel its own border/radius/margin
    so the .group wrapper provides the visual container. */

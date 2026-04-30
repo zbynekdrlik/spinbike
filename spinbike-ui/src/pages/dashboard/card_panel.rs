@@ -48,9 +48,10 @@ pub fn CardActionPanel(
         <div class="card mb-2" data-testid="action-panel">
             <div class="card-header">
                 <div class="card-header__main">
-                    <div class="card-title">{name}</div>
-                    <div class="card-header__meta">
-                        <code>{barcode.clone()}</code>
+                    <div class="card-title">
+                        <span class="card-title__name">{name}</span>
+                        " "
+                        <code class="card-title__barcode">{barcode.clone()}</code>
                     </div>
                 </div>
                 <button
