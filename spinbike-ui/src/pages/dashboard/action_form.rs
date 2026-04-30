@@ -8,6 +8,7 @@ use crate::i18n::{self, Lang};
 use crate::util::parse_money;
 
 use super::helpers::pass_is_active;
+use spinbike_core::services::FITNESS_NAME_EN;
 use super::{CardInfo, CardPass, PaymentResp, ServiceInfo};
 
 /// Unified action form for the staff card-detail panel.
@@ -271,6 +272,45 @@ pub fn ActionForm(
             });
         }
     };
+
+    // Fitness preselect (#33).
+    //
+    // Watches the async-loaded services signal and, when it first arrives
+    // non-empty AND no service is selected yet, finds the active Fitness
+    // service and selects it both in the signal AND on the DOM <select>.
+    //
+    // The set_value() call is imperative DOM mutation, NOT a prop:value
+    // reactive binding — that's deliberate. The previous attempt (commit
+    // c533d7c, reverted in 471a0c0) used prop:value and triggered a
+    // re-render lifecycle that broke set_selected.update in the parent,
+    // causing the txn list to show empty after a successful charge. The
+    // imperative path doesn't subscribe the <select> to any signal, so the
+    // parent's update flow is untouched.
+    //
+    // The empty <option value=""> placeholder is intentionally kept in the
+    // options list — it serves as the missing-Fitness fallback when admin
+    // has disabled or renamed the Fitness service.
+    Effect::new(move |_| {
+        let svcs = services.get();
+        if svcs.is_empty() {
+            return;
+        }
+        if selected_service_id.get_untracked().is_some() {
+            return;
+        }
+        let Some(fitness) = svcs
+            .iter()
+            .find(|s| s.name_en == FITNESS_NAME_EN && s.active != 0)
+            .cloned()
+        else {
+            return;
+        };
+        set_selected_service_id.set(Some(fitness.id));
+        if let Some(el) = service_ref.get() {
+            let el: &HtmlSelectElement = &el;
+            el.set_value(&fitness.id.to_string());
+        }
+    });
 
     view! {
         <div class="stack-12" data-testid="action-form">
