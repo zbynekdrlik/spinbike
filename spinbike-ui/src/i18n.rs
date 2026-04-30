@@ -349,11 +349,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         ("Ciarovy kod novej karty", "New card barcode"),
     );
 
-    // Card dashboard (fast search + actions)
-    m.insert(
-        "card_dashboard",
-        ("Karty — rychly prehlad", "Cards — Quick Dashboard"),
-    );
     m.insert(
         "search_cards_placeholder",
         (
@@ -455,25 +450,24 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     );
 
     // Monthly pass banner
+    // #32: collapsed single-line pass status (active + expired). Used by
+    // pass_banner.rs. Placeholders are sequential `{}` per i18n::tf — first
+    // `{}` is the date, second `{}` is the day count (active form).
+    // For the expired form, first `{}` is days-ago count, second `{}` is the
+    // last-valid date.
     m.insert(
-        "pass_valid_until",
-        ("✓ Mesacny listok platny do", "✓ Monthly pass valid until"),
-    );
-    m.insert(
-        "pass_days_remaining",
+        "pass_active_oneline_format",
         (
-            "dni zostava · neobmedzeny pristup",
-            "days remaining · unlimited access",
+            "✓ Mesačný lístok do {} ({} dní)",
+            "✓ Monthly pass valid until {} ({} days)",
         ),
     );
     m.insert(
-        "pass_expired",
-        ("Mesacny listok expiroval pred", "Monthly pass expired"),
-    );
-    m.insert("pass_days_ago", ("dnami", "days ago"));
-    m.insert(
-        "pass_last_valid_until",
-        ("Naposledy platny do", "Last valid until"),
+        "pass_expired_oneline_format",
+        (
+            "⚠ Mesačný lístok vypršal pred {} dňami (do {})",
+            "⚠ Monthly pass expired {} days ago (was valid until {})",
+        ),
     );
     m.insert(
         "edit_pass_date",

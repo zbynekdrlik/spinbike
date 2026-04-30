@@ -36,36 +36,31 @@ pub fn PassBanner(
         "pass-banner-expired"
     };
 
-    let title_view = if is_active {
+    let line_view = if is_active {
         view! {
             <>
-                {move || i18n::t(lang.get(), "pass_valid_until")}" "
-                {move || i18n::fmt_date(date_for_title, lang.get())}
+                {move || i18n::tf(
+                    lang.get(),
+                    "pass_active_oneline_format",
+                    &[
+                        &i18n::fmt_date(date_for_title, lang.get()),
+                        &days.to_string(),
+                    ],
+                )}
             </>
         }
         .into_any()
     } else {
         view! {
             <>
-                {move || i18n::t(lang.get(), "pass_expired")}" "{days_ago}" "
-                {move || i18n::t(lang.get(), "pass_days_ago")}
-            </>
-        }
-        .into_any()
-    };
-
-    let sub_view = if is_active {
-        view! {
-            <>
-                {days}" "{move || i18n::t(lang.get(), "pass_days_remaining")}
-            </>
-        }
-        .into_any()
-    } else {
-        view! {
-            <>
-                {move || i18n::t(lang.get(), "pass_last_valid_until")}" "
-                {move || i18n::fmt_date(date_for_title, lang.get())}
+                {move || i18n::tf(
+                    lang.get(),
+                    "pass_expired_oneline_format",
+                    &[
+                        &days_ago.to_string(),
+                        &i18n::fmt_date(date_for_title, lang.get()),
+                    ],
+                )}
             </>
         }
         .into_any()
@@ -74,18 +69,18 @@ pub fn PassBanner(
     view! {
         <div class="group">
             <div class=format!("{banner_class} pass-banner--in-group") data-testid=banner_testid>
-                <div class="pass-banner-title pass-banner__title-row">
-                    <span class="pass-banner__title-text">{title_view}</span>
+                <div class="pass-banner__line">
+                    <span class="pass-banner__line-text">{line_view}</span>
                     <button
-                        class="btn btn--compact btn--ghost"
+                        class="pass-banner__edit-btn"
                         data-testid="pass-date-edit"
+                        aria-label=move || i18n::t(lang.get(), "edit_pass_date")
                         title=move || i18n::t(lang.get(), "edit_pass_date")
                         on:click=move |_| show_edit_sheet.set(true)
                     >
-                        {move || i18n::t(lang.get(), "edit_pass_date")}
+                        "✏"
                     </button>
                 </div>
-                <div class="pass-banner-sub">{sub_view}</div>
             </div>
         </div>
         <EditPassDateSheet

@@ -59,7 +59,7 @@
     --brand:         #60a5fa;
     --brand-tint:    rgba(96, 165, 250, 0.14);
     --danger:        #f87171;
-    --info:          var(--brand);
+    --info:          color-mix(in srgb, var(--brand) 90%, black);
     --pass:          #fbbf24;
     --shadow:        0 4px 12px rgba(0, 0, 0, 0.4);
     --shadow-lg:     0 12px 36px rgba(0, 0, 0, 0.55);
@@ -81,8 +81,8 @@
     --success-soft:   color-mix(in srgb, var(--brand) 18%, var(--surface));
     --success-border: color-mix(in srgb, var(--brand) 40%, var(--surface));
     --success-fg:     var(--brand);
-    --info-soft:      color-mix(in srgb, var(--info) 16%, var(--surface));
-    --info-border:    color-mix(in srgb, var(--info) 45%, var(--surface));
+    --info-soft:      color-mix(in srgb, var(--info) 22%, var(--surface));
+    --info-border:    color-mix(in srgb, var(--info) 50%, var(--surface));
     --info-soft-fg:   var(--info);
     --info-hover:     color-mix(in srgb, var(--info) 85%, black);
     --info-fg:        #fff;
@@ -120,7 +120,7 @@
         --brand:         #2563eb;
         --brand-tint:    rgba(37, 99, 235, 0.10);
         --danger:        #dc2626;
-        --info:          var(--brand);
+        --info:          color-mix(in srgb, var(--brand) 90%, black);
         --pass:          #d97706;
         --shadow:        0 2px 8px rgba(13, 20, 45, 0.07);
         --shadow-lg:     0 16px 48px rgba(13, 20, 45, 0.12);
@@ -497,9 +497,24 @@ select.form-control {
 }
 
 .card-title {
-    font-weight: 600;
-    font-size: var(--fs-md);
-    letter-spacing: -0.005em;
+    display: flex;
+    align-items: baseline;
+    gap: var(--s-2);
+    flex-wrap: wrap;
+}
+
+.card-title__name {
+    font-size: var(--fs-xl);
+    font-weight: 700;
+    letter-spacing: -0.01em;
+    line-height: 1.15;
+}
+
+.card-title__barcode {
+    font-size: var(--fs-base);
+    font-weight: 500;
+    color: var(--text-muted);
+    font-family: ui-monospace, monospace;
 }
 
 /* Card balance — prominent credit display (used in Task 13) */
@@ -883,17 +898,32 @@ table tbody tr:last-child td,
     border-color: var(--warn-border);
 }
 
-.pass-banner-title {
+.pass-banner__line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
     font-size: var(--fs-md);
     font-weight: 600;
-    margin-bottom: 2px;
     letter-spacing: -0.005em;
 }
 
-.pass-banner-sub {
-    font-size: var(--fs-sm);
-    opacity: 0.85;
+.pass-banner__line-text {
+    flex: 1;
+    min-width: 0;
 }
+
+.pass-banner__edit-btn {
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    font-size: var(--fs-md);
+    line-height: 1;
+    padding: var(--s-1);
+    color: inherit;
+    opacity: 0.7;
+}
+.pass-banner__edit-btn:hover { opacity: 1; }
 
 /* ========================================================================
    20. CARD SEARCH
@@ -1098,6 +1128,14 @@ table tbody tr:last-child td,
 /* Chip / button row that wraps. */
 .chip-row { display: flex; flex-wrap: wrap; gap: var(--s-2); }
 .chip-row--spaced { margin-bottom: var(--s-2); }
+/* #32d: log-visit class buttons read bigger and bolder than the default
+   --compact chip. Applied via .chip-row--readable on the parent so any
+   future quick-action chip row can opt in. */
+.chip-row--readable .btn {
+    font-size: var(--fs-md);
+    font-weight: 700;
+    padding: var(--s-2) var(--s-4);
+}
 
 /* Inline form (custom-amount input + submit button side-by-side). */
 .inline-row { display: inline-flex; gap: var(--s-2); }
@@ -1114,11 +1152,6 @@ table tbody tr:last-child td,
 
 /* Card header layout: title block grows, close button stays compact. */
 .card-header__main { flex: 1; min-width: 0; }
-.card-header__meta {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
-    margin-top: 2px;
-}
 
 /* Pass banner sits inside .group; cancel its own border/radius/margin
    so the .group wrapper provides the visual container. */
@@ -1127,13 +1160,6 @@ table tbody tr:last-child td,
     border-radius: 0;
     border: none;
 }
-.pass-banner__title-row {
-    display: flex;
-    align-items: center;
-    gap: var(--s-2);
-    flex-wrap: wrap;
-}
-.pass-banner__title-row > .pass-banner__title-text { flex: 1; }
 
 /* Search results list (renders before the action panel). */
 .search-input--lg { font-size: var(--fs-md); padding: var(--s-3); }
