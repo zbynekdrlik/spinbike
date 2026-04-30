@@ -25,3 +25,4 @@ sell-pass-hover.png
 prod-reports.yml
 *-snap.yml
 *-snapshot.yml
+mutants.out/
