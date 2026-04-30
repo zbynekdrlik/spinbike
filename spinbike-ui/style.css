@@ -898,17 +898,32 @@ table tbody tr:last-child td,
     border-color: var(--warn-border);
 }
 
-.pass-banner-title {
+.pass-banner__line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
     font-size: var(--fs-md);
     font-weight: 600;
-    margin-bottom: 2px;
     letter-spacing: -0.005em;
 }
 
-.pass-banner-sub {
-    font-size: var(--fs-sm);
-    opacity: 0.85;
+.pass-banner__line-text {
+    flex: 1;
+    min-width: 0;
 }
+
+.pass-banner__edit-btn {
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    font-size: 1.25rem; /* between --fs-md (18px) and --fs-lg (22px); equidistant */
+    line-height: 1;
+    padding: var(--s-1);
+    color: inherit;
+    opacity: 0.7;
+}
+.pass-banner__edit-btn:hover { opacity: 1; }
 
 /* ========================================================================
    20. CARD SEARCH
@@ -1147,13 +1162,6 @@ table tbody tr:last-child td,
     border-radius: 0;
     border: none;
 }
-.pass-banner__title-row {
-    display: flex;
-    align-items: center;
-    gap: var(--s-2);
-    flex-wrap: wrap;
-}
-.pass-banner__title-row > .pass-banner__title-text { flex: 1; }
 
 /* Search results list (renders before the action panel). */
 .search-input--lg { font-size: var(--fs-md); padding: var(--s-3); }
