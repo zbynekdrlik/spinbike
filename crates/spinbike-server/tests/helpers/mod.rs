@@ -119,6 +119,14 @@ impl TestApp {
         }
     }
 
+    /// Returns the id of the Spinning service (always active in the test DB).
+    pub async fn spinning_service_id(&self) -> i64 {
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning' AND active = 1")
+            .fetch_one(&self.pool)
+            .await
+            .unwrap()
+    }
+
     /// Seed a card with credit and optional metadata. Returns the card id.
     #[allow(clippy::too_many_arguments)]
     pub async fn seed_card(

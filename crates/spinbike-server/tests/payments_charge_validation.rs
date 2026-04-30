@@ -38,10 +38,11 @@ async fn charge_with_valid_service_id_still_succeeds() {
         .await;
 
     // Find the Fitness service id via /api/services or directly from DB.
-    let fitness_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Fitness'")
-        .fetch_one(&app.pool)
-        .await
-        .unwrap();
+    let fitness_id: i64 =
+        sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Fitness' AND active = 1")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
 
     let (status, _) = app
         .request(post_json(
