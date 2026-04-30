@@ -9,8 +9,13 @@ test.describe('Staff navigation', () => {
 
         await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
         await page.goto('/staff');
-        await page.waitForSelector('h1.page-title');
-        expect(await page.textContent('h1.page-title')).toBe('Cards — Quick Dashboard');
+        // The 'Cards — Quick Dashboard' h1 was removed in #32 (v0.13.10). Use
+        // the card-search input as the stable landmark instead.
+        await page.waitForSelector('input[type="search"]');
+        // Body must NOT contain the old h1 text in either language.
+        const body = (await page.locator('body').textContent()) ?? '';
+        expect(body.toLowerCase()).not.toContain('cards — quick dashboard');
+        expect(body.toLowerCase()).not.toContain('karty — rychly prehlad');
 
         // AdaptiveNav (replaces old Navbar links) shows Desk + Schedule for staff.
         await expect(page.locator('[data-testid="nav-desk"]')).toBeVisible();
