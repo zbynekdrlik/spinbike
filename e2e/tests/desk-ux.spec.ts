@@ -55,33 +55,6 @@ async function openCardByLastName(page: Page, lastName: string) {
 }
 
 test.describe('Staff desk UX cluster — issues #29 #30 #31 #32', () => {
-    test('quick spinning charge button charges card', async ({ page }) => {
-        const msgs = setupConsoleCheck(page);
-        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 50.0);
-        await page.goto('/staff');
-        await openCardByLastName(page, lastName);
-
-        const quick = page.locator('[data-testid="quick-charge-spinning"]');
-        await expect(quick).toBeVisible();
-        // Label format: "Spinning {price} €"
-        await expect(quick).toHaveText(/^Spinning \d+\.\d{2} €$/);
-
-        const chargeResp = page.waitForResponse(
-            (r) => r.url().includes('/api/payments/charge') && r.request().method() === 'POST',
-        );
-        await quick.click();
-        const resp = await chargeResp;
-        expect(resp.ok()).toBe(true);
-
-        // Verify the new transaction appears in the card history.
-        await expect(
-            page.locator('[data-testid="txn-row"]').first(),
-        ).toBeVisible();
-
-        assertCleanConsole(msgs);
-    });
-
     test('card header shows name and barcode on one line', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');

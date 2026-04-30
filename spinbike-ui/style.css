@@ -1137,16 +1137,6 @@ table tbody tr:last-child td,
     padding: var(--s-2) var(--s-4);
 }
 
-/* Quick-charge chip row (#30): always-visible 1-click charge buttons. */
-.quick-charge-row {
-    margin-bottom: var(--s-3);
-}
-.quick-charge-row .btn {
-    font-size: var(--fs-md);
-    font-weight: 700;
-    padding: var(--s-2) var(--s-4);
-}
-
 /* Inline form (custom-amount input + submit button side-by-side). */
 .inline-row { display: inline-flex; gap: var(--s-2); }
 
