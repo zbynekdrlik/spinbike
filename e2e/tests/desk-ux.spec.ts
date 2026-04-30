@@ -174,14 +174,14 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32', () => {
         // ActionForm renders inside the action-panel.
         await expect(page.locator('[data-testid="action-form"]')).toBeVisible();
 
-        // The <select> must show "Fitness" as the active option's visible text.
-        // The option label for the "Fitness" service is "Fitness" in both
-        // Slovak and English (it's the same word in both languages), so we
-        // don't need to force a language for this assertion.
-        const selectedText = await page
-            .locator('[data-testid="charge-service"] option:checked')
-            .textContent();
-        expect((selectedText ?? '').trim()).toBe('Fitness');
+        // The <select> must show "Fitness" as the active option's visible
+        // text. Use auto-retrying assertion so the test waits deterministically
+        // for the preselect Effect to land rather than racing it on a one-shot
+        // textContent() read. "Fitness" is identical in Slovak and English, so
+        // no language forcing is needed.
+        await expect(
+            page.locator('[data-testid="charge-service"] option:checked'),
+        ).toHaveText('Fitness');
 
         assertCleanConsole(msgs);
     });
@@ -199,9 +199,10 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32', () => {
         // the service id) must be a non-empty string that parses to a positive
         // integer. The empty <option value=""> placeholder still exists in the
         // DOM as the missing-Fitness fallback, but it must NOT be the active
-        // selection in this normal-case test.
+        // selection in this normal-case test. Use auto-retrying not.toHaveValue
+        // so the test waits for the preselect Effect rather than racing it.
+        await expect(page.locator('[data-testid="charge-service"]')).not.toHaveValue('');
         const value = await page.locator('[data-testid="charge-service"]').inputValue();
-        expect(value).not.toBe('');
         const parsed = Number.parseInt(value, 10);
         expect(Number.isFinite(parsed)).toBe(true);
         expect(parsed).toBeGreaterThan(0);
