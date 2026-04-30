@@ -171,7 +171,7 @@ async fn charge(
     .bind(card.user_id)
     .bind(Some(body.card_id))
     .bind(Some(claims.sub))
-    .bind(body.service_id)
+    .bind(Some(service_id))
     .bind(-amount)
     .bind(note_for_db)
     .fetch_one(&mut *tx)

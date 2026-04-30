@@ -137,6 +137,13 @@ Per `tdd-workflow.md` and `e2e-real-user-testing.md`, every user-visible change 
 
 `e2e/tests/desk-ux.spec.ts` (NEW), eight cases. Each test sets up a console listener and asserts `expect(consoleMessages).toEqual([])` at the end (per `browser-console-zero-errors.md`).
 
+**Deferred to follow-up issues:**
+
+- Cases 1 ("fitness preselected on form open") and 2 ("charge form has no empty service option") — moved to **issue #33** (Fitness preselect redesign).
+- Case 3 ("quick spinning charge button charges card") — moved to **issue #34** (Spinning quick-charge chip redesign).
+
+Cases 4-8 (card header one line, pass banner active/expired one line, h1 gone, log-visit buttons styling) are implemented in `e2e/tests/desk-ux.spec.ts` and ship in this PR.
+
 1. **`fitness preselected on form open`** — search for a card → action form opens → `select[data-testid="charge-service"]` has `value === fitness_id` immediately, before any user interaction.
 2. **`quick spinning charge button charges card`** — click `[data-testid="quick-charge-spinning"]` → wait for `/api/payments/charge` 200 response → assert credit decreased by service price → assert new transaction row appears in card history with action=charge and service=Spinning.
 3. **`charge form has no empty service option`** — verify the `<option>` count under `[data-testid="charge-service"]` matches the count of active services exactly (no placeholder).

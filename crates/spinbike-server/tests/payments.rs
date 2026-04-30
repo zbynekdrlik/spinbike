@@ -11,24 +11,36 @@ use helpers::{TestApp, get, post_json};
 async fn charge_rejects_zero_amount() {
     let app = TestApp::new().await;
     let card_id = app.seed_card("C1", 100.0, None, None, None, None).await;
+    let spinning_id = app.spinning_service_id().await;
 
-    let body = serde_json::json!({ "card_id": card_id, "amount": 0.0 });
-    let (status, _) = app
+    let body = serde_json::json!({ "card_id": card_id, "amount": 0.0, "service_id": spinning_id });
+    let (status, resp) = app
         .request(post_json("/api/payments/charge", &app.staff_token, &body))
         .await;
     assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    let err = resp.get("error").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        err.contains("Amount"),
+        "expected amount-validation error, got: {err}"
+    );
 }
 
 #[tokio::test]
 async fn charge_rejects_negative_amount() {
     let app = TestApp::new().await;
     let card_id = app.seed_card("C2", 100.0, None, None, None, None).await;
+    let spinning_id = app.spinning_service_id().await;
 
-    let body = serde_json::json!({ "card_id": card_id, "amount": -5.0 });
-    let (status, _) = app
+    let body = serde_json::json!({ "card_id": card_id, "amount": -5.0, "service_id": spinning_id });
+    let (status, resp) = app
         .request(post_json("/api/payments/charge", &app.staff_token, &body))
         .await;
     assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    let err = resp.get("error").and_then(|v| v.as_str()).unwrap_or("");
+    assert!(
+        err.contains("Amount"),
+        "expected amount-validation error, got: {err}"
+    );
 }
 
 #[tokio::test]
