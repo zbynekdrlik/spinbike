@@ -458,14 +458,14 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "pass_active_oneline_format",
         (
-            "✓ Mesacny listok do {} ({} dni)",
+            "✓ Mesačný lístok do {} ({} dní)",
             "✓ Monthly pass valid until {} ({} days)",
         ),
     );
     m.insert(
         "pass_expired_oneline_format",
         (
-            "⚠ Mesacny listok vyprsal pred {} dnami (do {})",
+            "⚠ Mesačný lístok vypršal pred {} dňami (do {})",
             "⚠ Monthly pass expired {} days ago (was valid until {})",
         ),
     );
