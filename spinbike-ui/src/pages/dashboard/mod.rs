@@ -539,7 +539,6 @@ fn ActivateCardForm(
 mod is_class_visit_tests {
     use super::*;
     use wasm_bindgen_test::*;
-    wasm_bindgen_test_configure!(run_in_node);
 
     fn make_svc(name_en: &str) -> ServiceInfo {
         ServiceInfo {

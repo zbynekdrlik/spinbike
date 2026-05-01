@@ -18,7 +18,6 @@ pub fn parse_money(s: &str) -> Option<f64> {
 mod parse_money_tests {
     use super::parse_money;
     use wasm_bindgen_test::*;
-    wasm_bindgen_test_configure!(run_in_node);
 
     #[wasm_bindgen_test]
     fn plain_integer() {

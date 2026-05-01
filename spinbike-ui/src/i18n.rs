@@ -713,7 +713,6 @@ pub static WEEKDAY_KEYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", 
 mod datetime_tests {
     use super::{fmt_datetime_str, fmt_time_str, Lang};
     use wasm_bindgen_test::*;
-    wasm_bindgen_test_configure!(run_in_node);
 
     // UTC-source rows shift into Europe/Bratislava (CET = +1 winter,
     // CEST = +2 summer). 2026-04-14 18:13 UTC is in CEST → 20:13 local.

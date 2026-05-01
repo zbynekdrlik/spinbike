@@ -120,7 +120,6 @@ pub fn DateInput(
 mod tests {
     use super::parse_user_date;
     use wasm_bindgen_test::*;
-    wasm_bindgen_test_configure!(run_in_node);
 
     #[wasm_bindgen_test]
     fn parses_slovak_dot_format() {
