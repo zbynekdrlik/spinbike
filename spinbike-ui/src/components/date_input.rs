@@ -16,9 +16,13 @@ pub fn parse_user_date(s: &str) -> Option<chrono::NaiveDate> {
     if s.is_empty() {
         return None;
     }
+    // 2-digit year formats MUST come before 4-digit year formats. chrono's
+    // `%Y` is permissive enough to match a 2-digit string like "26" as
+    // year 26 AD, so trying it first would silently swallow Slovak short-
+    // year dates and produce nonsense like 0026-04-25 for input "25.04.26".
     for fmt in &[
-        "%d.%m.%Y", "%d. %m. %Y", "%-d.%-m.%Y", "%-d. %-m. %Y", "%d.%m.%y", "%-d.%-m.%y",
-        "%Y-%m-%d", "%d/%m/%Y", "%d/%m/%y",
+        "%d.%m.%y", "%-d.%-m.%y", "%d/%m/%y", "%d.%m.%Y", "%d. %m. %Y", "%-d.%-m.%Y",
+        "%-d. %-m. %Y", "%Y-%m-%d", "%d/%m/%Y",
     ] {
         if let Ok(d) = chrono::NaiveDate::parse_from_str(s, fmt) {
             return Some(d);
