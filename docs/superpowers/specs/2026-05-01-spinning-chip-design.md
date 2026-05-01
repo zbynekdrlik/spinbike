@@ -172,9 +172,9 @@ All three with `setupConsoleCheck` / `assertCleanConsole`. Use existing helpers 
 7. Click [data-testid="quick-charge-spinning"]
 8. Wait for success toast / message
 9. Assert credit decreased by Spinning's default_price
-10. Assert [data-testid="txn-list"] is visible AND
-    [data-testid="txn-list-empty"] is NOT visible AND
-    txn-list contains at least one [data-testid="txn-row"]
+10. Assert [data-testid="transactions-list"] is visible AND
+    [data-testid="transactions-list-empty"] is NOT visible AND
+    transactions-list contains at least one [data-testid="transaction-row"]
 ```
 
 **Test 2 — Spinning chip is absent when service is inactive (#34)**
@@ -204,8 +204,8 @@ This is the exact scenario that broke in PR #35. Distinct from Test 1: explicitl
 3. Open the card
 4. Click [data-testid="quick-charge-spinning"]
 5. Wait for response
-6. Assert [data-testid="txn-list-empty"] has count === 0 (no "No transactions")
-7. Assert [data-testid="txn-row"] count >= 1 in the [data-testid="txn-list"] container
+6. Assert [data-testid="transactions-list-empty"] has count === 0 (no "No transactions")
+7. Assert [data-testid="transaction-row"] count >= 1 in the [data-testid="transactions-list"] container
 ```
 
 ### Unit tests
@@ -243,7 +243,7 @@ None added. The chip is purely UI/lifecycle behavior — only Playwright catches
 | File | Change |
 |---|---|
 | `spinbike-ui/src/pages/dashboard/action_form.rs` | Add `use spinbike_core::services::SPINNING_NAME_EN;` import. Add `spinning_chip` Option<AnyView> at component body. Insert `{spinning_chip}` in view! macro between Quick Action block and service `<select>`. Bundled #38: change line 336 to bare `FITNESS_NAME_EN`. |
-| `spinbike-ui/src/pages/dashboard/transactions_list.rs` | Add stable testids for E2E: `data-testid="txn-list"` on the outer wrapper that contains rows, `data-testid="txn-list-empty"` on the empty-state div, `data-testid="txn-row"` on each row. Required by Tests 1 and 3 below. |
+| `spinbike-ui/src/pages/dashboard/transactions_list.rs` | The outer wrapper at the bottom (`<div class="group" data-testid="transactions-list">`) already exists. Add two new testids: `data-testid="transactions-list-empty"` on the `<div class="empty-state">` (line 49) and `data-testid="transaction-row"` on each `<div class=row_class>` (line ~120). Required by Tests 1 and 3 below. |
 | `e2e/tests/desk-ux.spec.ts` | Add three tests inside the existing `Staff desk UX cluster — issues #29 #30 #31 #32` describe block (rename describe to include #34). |
 
 ## VERSION bump
