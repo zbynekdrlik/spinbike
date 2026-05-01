@@ -17,34 +17,36 @@ pub fn parse_money(s: &str) -> Option<f64> {
 #[cfg(test)]
 mod parse_money_tests {
     use super::parse_money;
+    use wasm_bindgen_test::*;
+    wasm_bindgen_test_configure!(run_in_node);
 
-    #[test]
+    #[wasm_bindgen_test]
     fn plain_integer() {
         assert_eq!(parse_money("40"), Some(40.0));
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn dot_decimal() {
         assert_eq!(parse_money("35.50"), Some(35.5));
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn comma_decimal_is_normalized() {
         assert_eq!(parse_money("35,50"), Some(35.5));
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn whitespace_trimmed() {
         assert_eq!(parse_money("  12.3  "), Some(12.3));
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn empty_is_none() {
         assert_eq!(parse_money(""), None);
         assert_eq!(parse_money("   "), None);
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn garbage_is_none() {
         assert_eq!(parse_money("abc"), None);
         assert_eq!(parse_money("1,2,3"), None);

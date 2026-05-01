@@ -38,3 +38,6 @@ chrono-tz = { version = "0.10", default-features = false }
 opt-level = "z"
 lto = true
 codegen-units = 1
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"

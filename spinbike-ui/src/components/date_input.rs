@@ -119,51 +119,53 @@ pub fn DateInput(
 #[cfg(test)]
 mod tests {
     use super::parse_user_date;
+    use wasm_bindgen_test::*;
+    wasm_bindgen_test_configure!(run_in_node);
 
-    #[test]
+    #[wasm_bindgen_test]
     fn parses_slovak_dot_format() {
         let d = parse_user_date("25.04.2026").unwrap();
         assert_eq!(d.to_string(), "2026-04-25");
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn parses_slovak_with_spaces() {
         let d = parse_user_date("25. 04. 2026").unwrap();
         assert_eq!(d.to_string(), "2026-04-25");
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn parses_iso() {
         let d = parse_user_date("2026-04-25").unwrap();
         assert_eq!(d.to_string(), "2026-04-25");
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn parses_short_year() {
         let d = parse_user_date("25.04.26").unwrap();
         assert_eq!(d.to_string(), "2026-04-25");
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn parses_single_digit_day_month() {
         let d = parse_user_date("5.4.2026").unwrap();
         assert_eq!(d.to_string(), "2026-04-05");
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn rejects_garbage() {
         assert!(parse_user_date("not-a-date").is_none());
         assert!(parse_user_date("").is_none());
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn rejects_logically_invalid_dates() {
         assert!(parse_user_date("31.04.2026").is_none(), "April has 30 days");
         assert!(parse_user_date("32.01.2026").is_none(), "Jan has 31 days");
         assert!(parse_user_date("00.01.2026").is_none(), "day 0 invalid");
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn leap_year_handled_correctly() {
         assert_eq!(
             parse_user_date("29.02.2024").unwrap().to_string(),
@@ -176,7 +178,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[wasm_bindgen_test]
     fn whitespace_padding_trimmed() {
         let d = parse_user_date("  25.04.2026  ").unwrap();
         assert_eq!(d.to_string(), "2026-04-25");
