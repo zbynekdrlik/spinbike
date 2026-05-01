@@ -236,7 +236,7 @@ None added. The chip is purely UI/lifecycle behavior — only Playwright catches
 | Re-introduces the PR #35 txn-list regression | Architectural choice (no reactive wrapper) + dedicated regression-fence E2E test (#3 above) |
 | `services.get_untracked()` returns empty at mount | Negligible — `services` is fetched on dashboard mount, well before any card click; if it ever did happen the chip would be absent until next card mount, which is graceful |
 | Admin renames "Spinning" service in DB | Chip silently hides; `SPINNING_NAME_EN` const is the contract — admin must keep the canonical English name |
-| Concurrent admin price edit during charge | Click captured `price` at mount; charge POSTs that captured value; server validates against current price (existing behavior) |
+| Concurrent admin price edit during charge | Click captures `price` at mount; charge POSTs that captured value. The `/api/payments/charge` server route only validates `amount > 0` (and rejects monthly-pass via `service_id`), NOT amount-vs-`default_price` — so a mid-session admin price edit charges the staff's snapshot price without server-side rejection. This is correct: the design's snapshot-at-mount semantics rely on the server NOT comparing amount to `default_price`. |
 
 ## File changes summary
 

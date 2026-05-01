@@ -331,6 +331,9 @@ pub fn ActionForm(
                         service_id: Option<i64>,
                         note: Option<String>,
                     }
+                    // service_id is required by /api/payments/charge per #31
+                    // (server rejects null service_id with 400 for data
+                    // integrity). The chip always has a concrete svc_id.
                     match api::post::<Req, PaymentResp>(
                         "/api/payments/charge",
                         &Req {
