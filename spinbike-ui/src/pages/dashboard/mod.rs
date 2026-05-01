@@ -537,6 +537,11 @@ fn ActivateCardForm(
 
 #[cfg(test)]
 mod is_class_visit_tests {
+    // The truthy assertions pin the contents of CLASS_VISIT_NAMES_EN
+    // (currently "Spinning" + "Fitness"). If the const grows — e.g. a new
+    // class type like "HIIT" — add a positive case here so the gate
+    // surfaces the addition. Renaming an existing entry will break this
+    // test (intended), matching the doc comment on is_class_visit.
     use super::*;
     use wasm_bindgen_test::*;
 

@@ -843,6 +843,86 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn v11_preserves_existing_rows_across_idempotent_rerun() {
+        // Regression fence for the V11 CREATE_NEW + INSERT + DROP + RENAME
+        // pattern: even though run_migrations runs the whole chain once and
+        // V11 is then schema_version-gated to a no-op, exercise the property
+        // that re-running migrations against a populated transactions table
+        // does NOT lose rows. Catches a hypothetical future migration that
+        // re-rebuilds transactions but forgets to copy data, AND verifies
+        // the bookings.charge_transaction_id FK still resolves after a
+        // populated re-run cycle.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let card_id: i64 =
+            sqlx::query_scalar("INSERT INTO cards (barcode) VALUES ('V11-PRESERVE') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let user_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, password_hash, role)
+             VALUES ('preserve@test.local', 'Preserver', 'x', 'admin')
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Seed 5 transactions and 5 bookings, each booking pointing at a
+        // different transaction.
+        for i in 0..5 {
+            let tx_id: i64 = sqlx::query_scalar(
+                "INSERT INTO transactions (card_id, amount, action)
+                 VALUES (?, ?, 'charge') RETURNING id",
+            )
+            .bind(card_id)
+            .bind(1.0_f64 + i as f64)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO bookings (template_id, date, user_id, charge_transaction_id)
+                 VALUES (1, ?, ?, ?)",
+            )
+            .bind(format!("2026-12-{:02}", i + 1))
+            .bind(user_id)
+            .bind(tx_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // Re-run migrations; V11 should remain a no-op via schema_version.
+        run_migrations(&pool).await.unwrap();
+
+        let tx_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(tx_count, 5, "transactions row count must survive re-run");
+
+        let bk_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bookings")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(bk_count, 5, "bookings row count must survive re-run");
+
+        // FK-via-join must still resolve for all 5.
+        let joined: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM transactions t
+             JOIN bookings b ON b.charge_transaction_id = t.id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            joined, 5,
+            "bookings.charge_transaction_id FK must resolve for all 5 rows"
+        );
+    }
+
+    #[tokio::test]
     async fn v11_drop_rename_pattern_preserves_bookings_fk() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();

@@ -121,7 +121,7 @@ export async function activateUniqueCard(
     token: string,
     initialCredit: number,
     prefix: string = 'AF',
-): Promise<{ barcode: string; lastName: string; cardId: number }> {
+): Promise<{ barcode: string; lastName: string }> {
     const BASE_URL = 'http://localhost:8099';
     const suffix = Array.from({ length: 8 }, () =>
         String.fromCharCode(97 + Math.floor(Math.random() * 26)),
@@ -144,6 +144,5 @@ export async function activateUniqueCard(
     if (!resp.ok) {
         throw new Error(`activate failed: ${resp.status} ${await resp.text()}`);
     }
-    const body = await resp.json();
-    return { barcode, lastName, cardId: body.id as number };
+    return { barcode, lastName };
 }

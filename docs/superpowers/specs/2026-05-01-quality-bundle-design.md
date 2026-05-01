@@ -86,13 +86,14 @@ User explicitly requested "do in one run" — single PR closing all four.
   1. `Test (UI)` — installs pinned `wasm-pack`, runs `wasm-pack test --node spinbike-ui`, with `Swatinem/rust-cache@v2` keyed for the UI manifest.
   2. `Mutation Testing (UI)` — runs `cargo mutants --in-diff pr.diff --manifest-path spinbike-ui/Cargo.toml --timeout 60`. Skipped on `push` to dev (only runs on PR), matching the existing server mutants job pattern.
 - **Demonstration cycle (red→strengthen→green) for issue acceptance:**
-  - Pick one pure-logic helper in `i18n.rs` or `util.rs`.
-  - Commit a deliberately weak assertion that mutants would survive (e.g. `assert!(result.is_some())` instead of `assert_eq!(result, Some(expected))`).
-  - Push, observe mutants survive in CI.
-  - Strengthen the assertion; mutants kill cleanly.
-  - The two commits in the PR (weak → strengthened) prove the gate works end-to-end. Per acceptance bullet "tests added to demonstrate the new mutation-test job actually catches a weak assertion (red → strengthen → green cycle)".
+  - Pick one pure-logic helper (chosen: `ServiceInfo::is_class_visit` in `dashboard/mod.rs`).
+  - Commit a deliberately weak assertion that mutants would survive (e.g. `let _ = s.is_class_visit();` with no assertion).
+  - Strengthen the assertion to pin the contract end-to-end.
+  - The two commits in the PR (weak → strengthened) live in git history as a code-review-level demonstration. Per acceptance bullet "tests added to demonstrate the new mutation-test job actually catches a weak assertion (red → strengthen → green cycle)".
 
-**Pin:** `wasm-pack` version pinned via `cargo install wasm-pack --version <X.Y.Z> --locked`. Estimated CI overhead: +20–30s for install (cached after first run via `cargo install` artifact).
+  **Honest scope of CI verification:** the cumulative PR diff only exposes the strong-test state to cargo-mutants (the weak commit's lines are net-removed). On this PR, every spinbike-ui change is inside `#[cfg(test)]` blocks, so cargo-mutants generated zero candidates ("No mutants to filter") — the gate ran without exercising any mutant. The demonstration is documented in git history but not empirically verified by CI on this PR. The first PR that modifies a non-test spinbike-ui function body will be the gate's first real run; if its wasm-target plumbing turns out to need work, follow up structurally (see issues filed alongside this PR).
+
+**Pin:** `wasm-pack` is installed via `taiki-e/install-action@v2` with prebuilt binaries (not `cargo install --locked`) to keep CI overhead low.
 
 ### #28 — V11 transactions.note CHECK constraint migration
 
