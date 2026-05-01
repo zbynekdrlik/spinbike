@@ -163,4 +163,50 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32', () => {
 
         assertCleanConsole(msgs);
     });
+
+    test('Fitness preselected when staff opens a card (#33)', async ({ page }) => {
+        const msgs = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const { lastName } = await activateUniqueCard(token, 50.0);
+        await page.goto('/staff');
+        await openCardByLastName(page, lastName);
+
+        // ActionForm renders inside the action-panel.
+        await expect(page.locator('[data-testid="action-form"]')).toBeVisible();
+
+        // The <select> must show "Fitness" as the active option's visible
+        // text. Use auto-retrying assertion so the test waits deterministically
+        // for the preselect Effect to land rather than racing it on a one-shot
+        // textContent() read. "Fitness" is identical in Slovak and English, so
+        // no language forcing is needed.
+        await expect(
+            page.locator('[data-testid="charge-service"] option:checked'),
+        ).toHaveText('Fitness');
+
+        assertCleanConsole(msgs);
+    });
+
+    test('Empty option is not the active selection when Fitness preselect succeeds (#33)', async ({ page }) => {
+        const msgs = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const { lastName } = await activateUniqueCard(token, 50.0);
+        await page.goto('/staff');
+        await openCardByLastName(page, lastName);
+
+        await expect(page.locator('[data-testid="action-form"]')).toBeVisible();
+
+        // The <select> value (which is the option's `value=` attribute, i.e.
+        // the service id) must be a non-empty string that parses to a positive
+        // integer. The empty <option value=""> placeholder still exists in the
+        // DOM as the missing-Fitness fallback, but it must NOT be the active
+        // selection in this normal-case test. Use auto-retrying not.toHaveValue
+        // so the test waits for the preselect Effect rather than racing it.
+        await expect(page.locator('[data-testid="charge-service"]')).not.toHaveValue('');
+        const value = await page.locator('[data-testid="charge-service"]').inputValue();
+        const parsed = Number.parseInt(value, 10);
+        expect(Number.isFinite(parsed)).toBe(true);
+        expect(parsed).toBeGreaterThan(0);
+
+        assertCleanConsole(msgs);
+    });
 });

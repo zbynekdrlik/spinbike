@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use spinbike_core::services::FITNESS_NAME_EN;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{HtmlInputElement, HtmlSelectElement};
 
@@ -271,6 +272,36 @@ pub fn ActionForm(
             });
         }
     };
+
+    // Fitness preselect (#33). On first non-empty services load with no
+    // current selection, selects Fitness in both the signal and the DOM
+    // <select>. set_value() is imperative DOM mutation — NOT a prop:value
+    // reactive binding. The previous prop:value attempt re-rendered the
+    // <select> and broke set_selected.update in the parent (txn list went
+    // empty after a charge). Imperative set_value() doesn't subscribe the
+    // <select> to any signal, so the parent's update flow is untouched.
+    // Empty <option value=""> stays as the missing-Fitness fallback.
+    Effect::new(move |_| {
+        let svcs = services.get();
+        if svcs.is_empty() {
+            return;
+        }
+        if selected_service_id.get_untracked().is_some() {
+            return;
+        }
+        let Some(fitness) = svcs
+            .iter()
+            .find(|s| s.name_en == FITNESS_NAME_EN && s.active != 0)
+            .cloned()
+        else {
+            return;
+        };
+        set_selected_service_id.set(Some(fitness.id));
+        if let Some(el) = service_ref.get() {
+            let el: &HtmlSelectElement = &el;
+            el.set_value(&fitness.id.to_string());
+        }
+    });
 
     view! {
         <div class="stack-12" data-testid="action-form">
