@@ -258,10 +258,12 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
         await chip.click();
 
         // After charge: txn list populated, empty-state absent, credit decreased.
+        // Use auto-retrying assertions throughout — the txn list re-renders
+        // asynchronously after set_txn_refresh + API fetch; one-shot reads
+        // race the re-render and yield 0 rows transiently.
         await expect(page.locator('[data-testid="transactions-list"]')).toBeVisible();
         await expect(page.locator('[data-testid="transactions-list-empty"]')).toHaveCount(0);
-        const rowCount = await page.locator('[data-testid="transaction-row"]').count();
-        expect(rowCount).toBeGreaterThanOrEqual(1);
+        await expect(page.locator('[data-testid="transaction-row"]')).not.toHaveCount(0);
 
         await expect
             .poll(async () => parseFloat((await page.locator('[data-testid="card-credit"]').textContent()) ?? '0'))
@@ -307,11 +309,10 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
         await page.locator('[data-testid="quick-charge-spinning"]').click();
 
         // The exact regression class from PR #35: empty-state must NOT appear,
-        // and at least one row must be present.
+        // and at least one row must be present. Both via auto-retrying
+        // assertions so we don't race the post-charge re-render.
         await expect(page.locator('[data-testid="transactions-list-empty"]')).toHaveCount(0);
-        const rows = page.locator('[data-testid="transaction-row"]');
-        await expect(rows.first()).toBeVisible();
-        expect(await rows.count()).toBeGreaterThanOrEqual(1);
+        await expect(page.locator('[data-testid="transaction-row"]')).not.toHaveCount(0);
 
         assertCleanConsole(msgs);
     });
