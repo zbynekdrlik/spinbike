@@ -1,23 +1,12 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
+import {
+    setupConsoleCheck,
+    assertCleanConsole,
+    loginViaAPI,
+    activateUniqueCard,
+} from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
-
-async function activateUniqueCard(
-    token: string,
-    initialCredit: number,
-): Promise<{ barcode: string; lastName: string }> {
-    const suffix = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
-    const barcode = `UX-${suffix}`;
-    const lastName = `Ux${suffix}`;
-    const resp = await fetch(`${BASE_URL}/api/cards/activate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ barcode, initial_credit: initialCredit, first_name: 'UX', last_name: lastName }),
-    });
-    if (!resp.ok) throw new Error(`activate failed: ${resp.status} ${await resp.text()}`);
-    return { barcode, lastName };
-}
 
 async function sellPassToCard(
     token: string,
@@ -83,7 +72,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
     test('card header shows name and barcode on one line', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName, barcode } = await activateUniqueCard(token, 50.0);
+        const { lastName, barcode } = await activateUniqueCard(token, 50.0, 'UX');
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
@@ -109,7 +98,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
     test('pass banner active is one line', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName, barcode } = await activateUniqueCard(token, 100.0);
+        const { lastName, barcode } = await activateUniqueCard(token, 100.0, 'UX');
         const cardId = await lookupCardId(token, barcode);
         await sellPassToCard(token, cardId, 14);
         await page.goto('/staff');
@@ -131,7 +120,9 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
     test('pass banner expired is one line', async ({ page, request }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const suffix = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
+        const suffix = Array.from({ length: 8 }, () =>
+            String.fromCharCode(97 + Math.floor(Math.random() * 26)),
+        ).join('');
         const cardBarcode = `UX-EXP-${suffix}`;
 
         // Seed an expired-pass card via the test fixture endpoint (bypasses
@@ -171,7 +162,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
     test('log-visit class buttons are bigger and bolder', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName, barcode } = await activateUniqueCard(token, 100.0);
+        const { lastName, barcode } = await activateUniqueCard(token, 100.0, 'UX');
         const cardId = await lookupCardId(token, barcode);
         await sellPassToCard(token, cardId, 14);
         await page.goto('/staff');
@@ -192,7 +183,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
     test('Fitness preselected when staff opens a card (#33)', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 50.0);
+        const { lastName } = await activateUniqueCard(token, 50.0, 'UX');
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
@@ -214,7 +205,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
     test('Empty option is not the active selection when Fitness preselect succeeds (#33)', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 50.0);
+        const { lastName } = await activateUniqueCard(token, 50.0, 'UX');
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
@@ -239,7 +230,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
         const spinning = await getSpinningService(token);
-        const { lastName } = await activateUniqueCard(token, 50.0);
+        const { lastName } = await activateUniqueCard(token, 50.0, 'UX');
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
@@ -283,7 +274,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
         await setSpinningActive(adminToken, spinning.id, false);
         try {
             const staffToken = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-            const { lastName } = await activateUniqueCard(staffToken, 50.0);
+            const { lastName } = await activateUniqueCard(staffToken, 50.0, 'UX');
             await page.goto('/staff');
             await openCardByLastName(page, lastName);
 
@@ -301,7 +292,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
     test('Regression fence: txn list still populates after Spinning chip charge (#34)', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 50.0);
+        const { lastName } = await activateUniqueCard(token, 50.0, 'UX');
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
