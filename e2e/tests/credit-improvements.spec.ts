@@ -128,7 +128,8 @@ test.describe('credit improvements', () => {
             ),
             voidBtn.click(),
         ]);
-        expect(voidResp.status()).toBe(200);
+        // DELETE /api/transactions/{id} returns 204 No Content on success.
+        expect(voidResp.ok()).toBe(true);
 
         // Voided row gets the .txn-row--voided class; the void button disappears for that row.
         await expect(page.locator('.txn-row--voided').first()).toBeVisible();
