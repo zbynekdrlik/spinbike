@@ -552,13 +552,31 @@ mod is_class_visit_tests {
         }
     }
 
-    // Demonstration: this is intentionally weak — it asserts the function
-    // returns *something* but not the right thing. Mutation testing will
-    // generate a mutant that always returns true (or false) and this test
-    // will still pass — proving the gate catches it.
+    // Strong: covers the two truthy class-visit names AND a sample of names
+    // that must return false. Catches mutants that flip the return constant
+    // OR replace `contains` with always-true / always-false equivalents.
     #[wasm_bindgen_test]
-    fn is_class_visit_returns_a_bool() {
-        let s = make_svc("Spinning");
-        let _ = s.is_class_visit();
+    fn is_class_visit_true_for_spinning() {
+        assert!(make_svc("Spinning").is_class_visit());
+    }
+
+    #[wasm_bindgen_test]
+    fn is_class_visit_true_for_fitness() {
+        assert!(make_svc("Fitness").is_class_visit());
+    }
+
+    #[wasm_bindgen_test]
+    fn is_class_visit_false_for_refreshments() {
+        assert!(!make_svc("Refreshments").is_class_visit());
+    }
+
+    #[wasm_bindgen_test]
+    fn is_class_visit_false_for_unknown() {
+        assert!(!make_svc("Whatever").is_class_visit());
+    }
+
+    #[wasm_bindgen_test]
+    fn is_class_visit_false_for_empty() {
+        assert!(!make_svc("").is_class_visit());
     }
 }
