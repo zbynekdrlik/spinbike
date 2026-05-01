@@ -718,4 +718,111 @@ mod tests {
                 .unwrap();
         assert!(note.is_none(), "fresh row's note must be NULL");
     }
+
+    // V11 — note CHECK constraint -------------------------------------
+
+    #[tokio::test]
+    async fn v11_note_check_accepts_200_chars() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // Insert a transaction with a 200-char note (exactly at the bound).
+        // Use a Slovak diacritic so the byte count > 200 but char count = 200,
+        // matching the server-side validator (uses chars().count(), not len()).
+        let note: String = "á".repeat(200);
+        sqlx::query(
+            "INSERT INTO transactions (card_id, amount, action, note)
+             VALUES (?, ?, 'charge', ?)",
+        )
+        .bind(1_i64)
+        .bind(5.0_f64)
+        .bind(&note)
+        .execute(&pool)
+        .await
+        .expect("200-char note must be accepted");
+    }
+
+    #[tokio::test]
+    async fn v11_note_check_rejects_201_chars() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let note: String = "á".repeat(201);
+        let res = sqlx::query(
+            "INSERT INTO transactions (card_id, amount, action, note)
+             VALUES (?, ?, 'charge', ?)",
+        )
+        .bind(1_i64)
+        .bind(5.0_f64)
+        .bind(&note)
+        .execute(&pool)
+        .await;
+
+        let err = res.expect_err("201-char note must be rejected");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("CHECK") || msg.contains("constraint"),
+            "expected SQLITE_CONSTRAINT-style error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v11_is_idempotent() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        // Second run must not error — schema_version check should make V11
+        // a no-op on the already-migrated DB.
+        run_migrations(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn v11_drop_rename_pattern_preserves_bookings_fk() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // Seed: a transaction + a booking that references it via charge_transaction_id.
+        // After V11 recreates `transactions`, the FK on bookings.charge_transaction_id
+        // must continue to resolve (V8 precedent — FK reattaches by table name on RENAME).
+        let tx_id: i64 = sqlx::query_scalar(
+            "INSERT INTO transactions (card_id, amount, action)
+             VALUES (1, 5.0, 'charge') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // bookings requires (template_id, date, user_id) NOT NULL FKs.
+        // Migrations seed a class_template at id=1 (V6_SEED_SPIN_CLASSES).
+        // users requires (email, name, role) — name is NOT NULL.
+        let user_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, password_hash, role)
+             VALUES ('booker@test.local', 'Test Booker', 'x', 'admin')
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO bookings (template_id, date, user_id, charge_transaction_id)
+             VALUES (1, '2026-12-01', ?, ?)",
+        )
+        .bind(user_id)
+        .bind(tx_id)
+        .execute(&pool)
+        .await
+        .expect("booking insert must succeed with V11 in place");
+
+        // Verify FK resolves: join must produce a row.
+        let joined: i64 = sqlx::query_scalar(
+            "SELECT t.id FROM transactions t
+             JOIN bookings b ON b.charge_transaction_id = t.id
+             WHERE b.charge_transaction_id IS NOT NULL
+             LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("transactions ↔ bookings FK must resolve after V11 rebuild");
+        assert_eq!(joined, tx_id);
+    }
 }
