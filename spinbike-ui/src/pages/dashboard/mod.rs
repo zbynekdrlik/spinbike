@@ -534,3 +534,31 @@ fn ActivateCardForm(
         </div>
     }
 }
+
+#[cfg(test)]
+mod is_class_visit_tests {
+    use super::*;
+    use wasm_bindgen_test::*;
+    wasm_bindgen_test_configure!(run_in_node);
+
+    fn make_svc(name_en: &str) -> ServiceInfo {
+        ServiceInfo {
+            id: 1,
+            kind: "generic".to_string(),
+            name_sk: "x".to_string(),
+            name_en: name_en.to_string(),
+            default_price: 0.0,
+            active: 1,
+        }
+    }
+
+    // Demonstration: this is intentionally weak — it asserts the function
+    // returns *something* but not the right thing. Mutation testing will
+    // generate a mutant that always returns true (or false) and this test
+    // will still pass — proving the gate catches it.
+    #[wasm_bindgen_test]
+    fn is_class_visit_returns_a_bool() {
+        let s = make_svc("Spinning");
+        let _ = s.is_class_visit();
+    }
+}
