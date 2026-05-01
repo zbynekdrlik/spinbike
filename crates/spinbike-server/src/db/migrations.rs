@@ -726,6 +726,14 @@ mod tests {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
 
+        // Seed a card so the transactions.card_id FK is satisfied (per V8/V10
+        // test convention). Migrations re-enable foreign_keys at the end.
+        let card_id: i64 =
+            sqlx::query_scalar("INSERT INTO cards (barcode) VALUES ('V11-OK-200') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
         // Insert a transaction with a 200-char note (exactly at the bound).
         // Use a Slovak diacritic so the byte count > 200 but char count = 200,
         // matching the server-side validator (uses chars().count(), not len()).
@@ -734,7 +742,7 @@ mod tests {
             "INSERT INTO transactions (card_id, amount, action, note)
              VALUES (?, ?, 'charge', ?)",
         )
-        .bind(1_i64)
+        .bind(card_id)
         .bind(5.0_f64)
         .bind(&note)
         .execute(&pool)
@@ -747,12 +755,19 @@ mod tests {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
 
+        let card_id: i64 = sqlx::query_scalar(
+            "INSERT INTO cards (barcode) VALUES ('V11-REJECT-201') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
         let note: String = "á".repeat(201);
         let res = sqlx::query(
             "INSERT INTO transactions (card_id, amount, action, note)
              VALUES (?, ?, 'charge', ?)",
         )
-        .bind(1_i64)
+        .bind(card_id)
         .bind(5.0_f64)
         .bind(&note)
         .execute(&pool)
@@ -760,9 +775,12 @@ mod tests {
 
         let err = res.expect_err("201-char note must be rejected");
         let msg = err.to_string();
+        // Match the SQLite CHECK violation specifically — a generic "FOREIGN
+        // KEY constraint failed" must NOT pass this test (that would mean we
+        // failed for the wrong reason).
         assert!(
-            msg.contains("CHECK") || msg.contains("constraint"),
-            "expected SQLITE_CONSTRAINT-style error, got: {msg}"
+            msg.contains("CHECK"),
+            "expected CHECK constraint violation, got: {msg}"
         );
     }
 
@@ -783,10 +801,16 @@ mod tests {
         // Seed: a transaction + a booking that references it via charge_transaction_id.
         // After V11 recreates `transactions`, the FK on bookings.charge_transaction_id
         // must continue to resolve (V8 precedent — FK reattaches by table name on RENAME).
+        let card_id: i64 =
+            sqlx::query_scalar("INSERT INTO cards (barcode) VALUES ('V11-FK') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let tx_id: i64 = sqlx::query_scalar(
             "INSERT INTO transactions (card_id, amount, action)
-             VALUES (1, 5.0, 'charge') RETURNING id",
+             VALUES (?, 5.0, 'charge') RETURNING id",
         )
+        .bind(card_id)
         .fetch_one(&pool)
         .await
         .unwrap();
