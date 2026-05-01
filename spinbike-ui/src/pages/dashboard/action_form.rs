@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use spinbike_core::services::FITNESS_NAME_EN;
+use spinbike_core::services::{FITNESS_NAME_EN, SPINNING_NAME_EN};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{HtmlInputElement, HtmlSelectElement};
 
@@ -303,6 +303,82 @@ pub fn ActionForm(
         }
     });
 
+    // Spinning quick-charge chip (#34). Snapshot the active Spinning service
+    // ONCE at component mount via get_untracked() — no reactive subscription.
+    // Renders as static DOM. ActionForm re-mounts on each card open (parent's
+    // match selected.get() in dashboard/mod.rs), so each fresh mount re-runs
+    // this snapshot, picking up admin price edits between card opens. The
+    // previous attempt (PR #35, fa7b34d) wrapped the chip in
+    // {move || services.get() ...}, which subscribed the chip's DOM to the
+    // services signal — that subscription interleaved with set_selected.update's
+    // parent re-mount and dropped set_txn_refresh, leaving the txn list empty
+    // after a charge.
+    let spinning_chip = services
+        .get_untracked()
+        .into_iter()
+        .find(|s| s.name_en == SPINNING_NAME_EN && s.active != 0)
+        .map(|svc| {
+            let svc_id = svc.id;
+            let price = svc.default_price;
+            let on_click = move |_ev: web_sys::MouseEvent| {
+                set_err.set(String::new());
+                set_loading.set(true);
+                spawn_local(async move {
+                    #[derive(serde::Serialize)]
+                    struct Req {
+                        card_id: i64,
+                        amount: f64,
+                        service_id: Option<i64>,
+                        note: Option<String>,
+                    }
+                    // service_id is required by /api/payments/charge per #31
+                    // (server rejects null service_id with 400 for data
+                    // integrity). The chip always has a concrete svc_id.
+                    match api::post::<Req, PaymentResp>(
+                        "/api/payments/charge",
+                        &Req {
+                            card_id,
+                            amount: price,
+                            service_id: Some(svc_id),
+                            note: None,
+                        },
+                    )
+                    .await
+                    {
+                        Ok(r) => {
+                            set_msg.set(i18n::tf(
+                                lang.get_untracked(),
+                                "charge_ok_format",
+                                &[&format!("{:.2}", r.new_credit)],
+                            ));
+                            set_selected.update(|s| {
+                                if let Some(c) = s {
+                                    c.credit = r.new_credit;
+                                }
+                            });
+                            set_txn_refresh.update(|n| *n += 1);
+                        }
+                        Err(e) => set_err.set(e),
+                    }
+                    set_loading.set(false);
+                });
+            };
+            view! {
+                <div class="chip-row quick-charge-row">
+                    <button
+                        type="button"
+                        class="btn btn--info"
+                        data-testid="quick-charge-spinning"
+                        on:click=on_click
+                        disabled=move || loading.get()
+                    >
+                        {format!("Spinning {price:.2} €")}
+                    </button>
+                </div>
+            }
+            .into_any()
+        });
+
     view! {
         <div class="stack-12" data-testid="action-form">
             {if pass_active {
@@ -324,7 +400,7 @@ pub fn ActionForm(
                                 // the soft-blue sibling so the pair reads as primary /
                                 // secondary within one hue family — small visual difference,
                                 // not a radical color shift.
-                                let color_cls = if svc.name_en == spinbike_core::services::FITNESS_NAME_EN {
+                                let color_cls = if svc.name_en == FITNESS_NAME_EN {
                                     "btn--info"
                                 } else {
                                     "btn--info-soft"
@@ -345,6 +421,8 @@ pub fn ActionForm(
             } else {
                 view! { <div></div> }.into_any()
             }}
+
+            {spinning_chip}
 
             <div class="form-group">
                 <label>{move || i18n::t(lang.get(), "select_service")}</label>

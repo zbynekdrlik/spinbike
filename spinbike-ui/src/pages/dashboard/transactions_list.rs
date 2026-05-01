@@ -46,7 +46,7 @@ pub fn TransactionsList(
             let t = txns.get();
             if t.is_empty() {
                 return view! {
-                    <div class="empty-state">{move || i18n::t(lang.get(), "no_transactions_card")}</div>
+                    <div class="empty-state" data-testid="transactions-list-empty">{move || i18n::t(lang.get(), "no_transactions_card")}</div>
                 }.into_any();
             }
 
@@ -117,7 +117,7 @@ pub fn TransactionsList(
                 };
 
                 view! {
-                    <div class=row_class>
+                    <div class=row_class data-testid="transaction-row">
                         <div class="list-row__main">
                             <div class="list-row__title">
                                 {action}{until_suffix}
