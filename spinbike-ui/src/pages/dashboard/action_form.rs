@@ -320,7 +320,6 @@ pub fn ActionForm(
         .map(|svc| {
             let svc_id = svc.id;
             let price = svc.default_price;
-            let card_id_for_click = card_id;
             let on_click = move |_ev: web_sys::MouseEvent| {
                 set_err.set(String::new());
                 set_loading.set(true);
@@ -335,7 +334,7 @@ pub fn ActionForm(
                     match api::post::<Req, PaymentResp>(
                         "/api/payments/charge",
                         &Req {
-                            card_id: card_id_for_click,
+                            card_id,
                             amount: price,
                             service_id: Some(svc_id),
                             note: None,
