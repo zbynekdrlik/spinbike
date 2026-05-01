@@ -112,10 +112,26 @@ test.describe('credit improvements', () => {
 
         // Accept the confirm() dialog that fires on void.
         page.once('dialog', (d) => d.accept());
-        await voidBtn.click();
+
+        // Click + explicit wait for DELETE response. Without this, the
+        // assertion race per #24: the click fires DELETE, response triggers
+        // a Resource refetch (GET), then the component rerenders. The
+        // explicit 5s cap on toBeVisible was too short under PR-run CI load
+        // (push run for the same SHA passed; PR run failed twice). Drop the
+        // artificial cap and use the default auto-retry budget so polling
+        // rides through the async DELETE→GET→render pipeline.
+        const [voidResp] = await Promise.all([
+            page.waitForResponse(
+                (r) =>
+                    /\/api\/transactions\/\d+$/.test(r.url()) &&
+                    r.request().method() === 'DELETE',
+            ),
+            voidBtn.click(),
+        ]);
+        expect(voidResp.status()).toBe(200);
 
         // Voided row gets the .txn-row--voided class; the void button disappears for that row.
-        await expect(page.locator('.txn-row--voided').first()).toBeVisible({ timeout: 5000 });
+        await expect(page.locator('.txn-row--voided').first()).toBeVisible();
         await expect(page.locator('[data-testid="txn-void"]')).toHaveCount(0);
 
         assertCleanConsole(consoleMessages);
