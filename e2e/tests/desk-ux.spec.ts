@@ -55,35 +55,26 @@ async function openCardByLastName(page: Page, lastName: string) {
 }
 
 async function getSpinningService(token: string): Promise<{ id: number; default_price: number; active: number }> {
-    const resp = await fetch(`${BASE_URL}/api/services`, {
+    // GET /api/admin/services requires staff role (or admin); both seeded test
+    // users have it. No separate /api/services endpoint exists.
+    const resp = await fetch(`${BASE_URL}/api/admin/services`, {
         headers: { Authorization: `Bearer ${token}` },
     });
-    if (!resp.ok) throw new Error(`GET /api/services failed: ${resp.status} ${await resp.text()}`);
+    if (!resp.ok) throw new Error(`GET /api/admin/services failed: ${resp.status} ${await resp.text()}`);
     const all = await resp.json();
     const spinning = all.find((s: { name_en: string }) => s.name_en === 'Spinning');
-    if (!spinning) throw new Error('Spinning service not found in /api/services response');
+    if (!spinning) throw new Error('Spinning service not found in /api/admin/services response');
     return spinning as { id: number; default_price: number; active: number };
 }
 
-async function setServiceActive(adminToken: string, svcId: number, active: 0 | 1): Promise<void> {
-    // PUT /api/admin/services/{id} requires the full record. Re-fetch to get
-    // name_sk / name_en / kind that getSpinningService didn't ask for, then
-    // PUT with the desired active flag.
-    const resp = await fetch(`${BASE_URL}/api/services`, {
-        headers: { Authorization: `Bearer ${adminToken}` },
-    });
-    if (!resp.ok) throw new Error(`GET /api/services failed: ${resp.status}`);
-    const full = (await resp.json()).find((s: { id: number }) => s.id === svcId);
-    if (!full) throw new Error(`Service id ${svcId} not found`);
+async function setSpinningActive(adminToken: string, svcId: number, active: boolean): Promise<void> {
+    // PUT /api/admin/services/{id} accepts partial updates; send only the
+    // active flag. The server's UpdateServiceRequest expects active: bool
+    // (NOT 0|1) and merges with existing values.
     const put = await fetch(`${BASE_URL}/api/admin/services/${svcId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
-        body: JSON.stringify({
-            name_sk: full.name_sk,
-            name_en: full.name_en,
-            default_price: full.default_price,
-            active,
-        }),
+        body: JSON.stringify({ active }),
     });
     if (!put.ok) throw new Error(`PUT /api/admin/services/${svcId} failed: ${put.status} ${await put.text()}`);
 }
@@ -287,7 +278,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
         // Deactivate Spinning. Use try/finally so the service is reactivated
         // even if assertions throw — leaking active=0 would break unrelated
         // tests on shared CI state.
-        await setServiceActive(adminToken, spinning.id, 0);
+        await setSpinningActive(adminToken, spinning.id, false);
         try {
             const staffToken = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
             const { lastName } = await activateUniqueCard(staffToken, 50.0);
@@ -299,7 +290,7 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
             await expect(page.locator('[data-testid="quick-charge-spinning"]')).toHaveCount(0);
             await expect(page.locator('[data-testid="charge-submit"]')).toBeVisible();
         } finally {
-            await setServiceActive(adminToken, spinning.id, 1);
+            await setSpinningActive(adminToken, spinning.id, true);
         }
 
         assertCleanConsole(msgs);
