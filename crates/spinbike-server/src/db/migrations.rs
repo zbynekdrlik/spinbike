@@ -38,6 +38,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "transactions: free-text note column",
         V10_TRANSACTIONS_NOTE_COLUMN,
     ),
+    (
+        11,
+        "transactions: note length CHECK",
+        V11_TRANSACTIONS_NOTE_CHECK,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -265,6 +270,50 @@ ALTER TABLE transactions ADD COLUMN legacy_backfilled INTEGER NOT NULL DEFAULT 0
 
 const V10_TRANSACTIONS_NOTE_COLUMN: &str = r#"
 ALTER TABLE transactions ADD COLUMN note TEXT;
+"#;
+
+const V11_TRANSACTIONS_NOTE_CHECK: &str = r#"
+-- Defense-in-depth (#28): server already validates note ≤ 200 chars at
+-- every entry point. This adds the same constraint at the DB level so a
+-- direct sqlite3 write — or a future endpoint that forgets to validate —
+-- cannot store an unbounded string.
+--
+-- SQLite cannot ALTER TABLE to add CHECK constraints on existing columns.
+-- Use the CREATE_NEW + INSERT + DROP + RENAME pattern (V8 precedent).
+-- Migration runner toggles PRAGMA foreign_keys around the transaction;
+-- bookings.charge_transaction_id FK reattaches by name after RENAME.
+--
+-- Column list mirrors V1 + V4 (valid_until) + V7 (deleted_at) + V9
+-- (legacy_backfilled) + V10 (note). Keep types and defaults identical.
+-- length() on TEXT counts UTF-8 codepoints, matching the server's
+-- chars().count() semantic.
+
+CREATE TABLE transactions_new (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id           INTEGER REFERENCES users(id),
+    card_id           INTEGER REFERENCES cards(id),
+    staff_id          INTEGER REFERENCES users(id),
+    service_id        INTEGER REFERENCES services(id),
+    amount            REAL    NOT NULL,
+    action            TEXT    NOT NULL,
+    created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+    valid_until       TEXT,
+    deleted_at        TEXT,
+    legacy_backfilled INTEGER NOT NULL DEFAULT 0,
+    note              TEXT    CHECK (note IS NULL OR length(note) <= 200)
+);
+
+INSERT INTO transactions_new (
+    id, user_id, card_id, staff_id, service_id, amount, action, created_at,
+    valid_until, deleted_at, legacy_backfilled, note
+)
+SELECT
+    id, user_id, card_id, staff_id, service_id, amount, action, created_at,
+    valid_until, deleted_at, legacy_backfilled, note
+FROM transactions;
+
+DROP TABLE transactions;
+ALTER TABLE transactions_new RENAME TO transactions;
 "#;
 
 #[cfg(test)]
