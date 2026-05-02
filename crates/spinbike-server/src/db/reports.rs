@@ -1,5 +1,4 @@
 use anyhow::Result;
-use chrono::Datelike;
 use sqlx::SqlitePool;
 
 use spinbike_core::reports::{KpiSummary, ReportEvent};
