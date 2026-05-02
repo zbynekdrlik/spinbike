@@ -1,6 +1,5 @@
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
-use wasm_bindgen_futures::spawn_local;
 
 use crate::auth;
 use crate::components::Sheet;
@@ -41,35 +40,7 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
             // on phone for staff/admin via the body:has(.adaptive-nav) rule.
             let (more_open, set_more_open) = signal(false);
             let user_name = u.name.clone();
-
-            // Language toggle — copy of nav.rs:29-35
             let set_lang = use_context::<WriteSignal<Lang>>().expect("SetLang context");
-            let on_toggle_lang = move |_| {
-                let new_lang = match lang.get() {
-                    Lang::Sk => Lang::En,
-                    Lang::En => Lang::Sk,
-                };
-                i18n::save_lang(new_lang);
-                set_lang.set(new_lang);
-            };
-
-            // Logout — copy of nav.rs:20-27, but DEFERRED to a microtask via
-            // spawn_local. nav.rs's logout lives at the top of the component
-            // tree; this one lives inside the role-gated reactive closure
-            // that unmounts itself when auth_ver bumps. Without the defer,
-            // the click handler is dropped mid-execution (closure-after-drop)
-            // and clear_auth + set_href never run. Same pattern as PR #41's
-            // alerts_banner.rs.
-            let on_logout = move |_| {
-                spawn_local(async move {
-                    auth::clear_auth();
-                    let set_auth_ver = expect_context::<WriteSignal<u32>>();
-                    set_auth_ver.update(|v| *v += 1);
-                    if let Some(w) = web_sys::window() {
-                        let _ = w.location().set_href("/");
-                    }
-                });
-            };
 
             view! {
                 <nav class="adaptive-nav" data-testid="adaptive-nav">
@@ -123,7 +94,14 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
                             <button
                                 class="btn btn--block btn--ghost"
                                 data-testid="more-lang-toggle"
-                                on:click=on_toggle_lang
+                                on:click=move |_| {
+                                    let new_lang = match lang.get() {
+                                        Lang::Sk => Lang::En,
+                                        Lang::En => Lang::Sk,
+                                    };
+                                    i18n::save_lang(new_lang);
+                                    set_lang.set(new_lang);
+                                }
                             >
                                 {move || match lang.get() {
                                     Lang::Sk => "EN",
@@ -133,7 +111,17 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
                             <button
                                 class="btn btn--block btn--danger"
                                 data-testid="more-logout"
-                                on:click=on_logout
+                                on:click=move |_| {
+                                    // Inlined (not a captured named closure).
+                                    // Clearing localStorage + full-page set_href
+                                    // is enough — no signal bump needed because
+                                    // set_href causes a full reload that re-
+                                    // bootstraps WASM with cleared auth.
+                                    auth::clear_auth();
+                                    if let Some(w) = web_sys::window() {
+                                        let _ = w.location().set_href("/");
+                                    }
+                                }
                             >
                                 {move || i18n::t(lang.get(), "logout")}
                             </button>
