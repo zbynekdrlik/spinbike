@@ -327,6 +327,11 @@ jobs:
         with:
           tool: wasm-pack
 
+      - name: Install wasm-bindgen-cli
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-bindgen-cli
+
       - name: Compute PR diff vs base
         run: git diff origin/${{ github.base_ref }}...HEAD > pr.diff
 
