@@ -1353,52 +1353,6 @@ table tbody tr:last-child td,
     font-variant-numeric: tabular-nums;
 }
 
-/* ─────────── Alerts banner ─────────── */
-.alerts-banner {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-left: 3px solid #f59e0b;
-    border-radius: var(--r);
-    overflow: hidden;
-    margin-bottom: var(--s-4);
-}
-
-.alerts-banner__head {
-    padding: var(--s-2) var(--s-4);
-    font-size: var(--fs-xs);
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    background: var(--surface-2);
-}
-
-.alerts-banner__row {
-    display: flex;
-    align-items: center;
-    gap: var(--s-3);
-    padding: var(--s-3) var(--s-4);
-    border-top: 1px solid var(--border);
-    cursor: pointer;
-}
-
-.alerts-banner__row:first-of-type { border-top: none; }
-
-.alerts-banner__body {
-    flex: 1;
-    font-size: var(--fs-sm);
-    color: var(--text);
-}
-
-.alerts-banner__dismiss {
-    min-width: 44px;
-    min-height: 44px;
-    background: transparent;
-    border: 0;
-    color: var(--text-dim);
-    font-size: var(--fs-md);
-    cursor: pointer;
-}
-
 /* ─────────── Feed row colored dots ─────────── */
 .feed-dot {
     width: 8px;

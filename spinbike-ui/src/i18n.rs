@@ -593,34 +593,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("kpi_passes", ("PERMANENTKY", "PASSES"));
     m.insert("kpi_cash_in", ("VKLADY", "CASH IN"));
 
-    // Reports — alerts banner
-    m.insert(
-        "alerts_title",
-        ("Potrebuje pozornost", "Needs attention"),
-    );
-    m.insert(
-        "alerts_expiring_passes",
-        (
-            "{n} permanentiek vyprsi do 7 dni",
-            "{n} passes expire within 7 days",
-        ),
-    );
-    m.insert(
-        "alerts_low_credit",
-        (
-            "{n} kariet s kreditom pod 5 EUR",
-            "{n} cards below EUR 5 credit",
-        ),
-    );
-    m.insert(
-        "alerts_inactive",
-        (
-            "{n} zakaznikov neaktivnych 60+ dni",
-            "{n} customers inactive 60+ days",
-        ),
-    );
-    m.insert("alerts_dismiss", ("Skryt", "Dismiss"));
-
     // Reports — filters
     m.insert("filters_label", ("Filtre", "Filters"));
     m.insert("filters_reset", ("Zrusit filtre", "Reset"));

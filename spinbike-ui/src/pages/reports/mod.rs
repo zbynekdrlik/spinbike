@@ -3,16 +3,14 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
 use crate::i18n::{self, Lang};
-use spinbike_core::reports::{AlertsResponse, KpiSummary, ReportEvent, ReportResponse};
+use spinbike_core::reports::{KpiSummary, ReportEvent, ReportResponse};
 
 mod activity_feed;
-mod alerts_banner;
 mod filters_bar;
 mod kpi_cards;
 mod sheets;
 
 pub use activity_feed::ActivityFeed;
-pub use alerts_banner::AlertsBanner;
 pub use filters_bar::{FiltersBar, FiltersState};
 pub use kpi_cards::KpiCards;
 use sheets::calendar_picker::CalendarPickerSheet;
@@ -44,16 +42,6 @@ pub fn ReportsPage() -> impl IntoView {
     let (error, set_error) = signal(String::new());
 
     let (show_picker, set_show_picker) = signal(false);
-
-    // Alerts data — fetched once in this page, passed to AlertsBanner.
-    let (alerts, set_alerts) = signal(None::<AlertsResponse>);
-    Effect::new(move |_| {
-        spawn_local(async move {
-            if let Ok(a) = api::get::<AlertsResponse>("/api/reports/alerts").await {
-                set_alerts.set(Some(a));
-            }
-        });
-    });
 
     Effect::new(move |_| {
         let a = anchor.get();
@@ -165,7 +153,6 @@ pub fn ReportsPage() -> impl IntoView {
                 view! { <div class="alert alert--error" data-testid="reports-error">{move || error.get()}</div> }.into_any()
             } else { ().into_any() }}
 
-            <AlertsBanner data=alerts />
             <KpiCards kpi=kpi />
             <FiltersBar filters=filters set_filters=set_filters />
             <ActivityFeed events=events loading=loading has_more=has_more filters=filters anchor=anchor mode=mode set_events=set_events set_has_more=set_has_more />
