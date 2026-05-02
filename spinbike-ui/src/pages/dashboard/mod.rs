@@ -303,8 +303,6 @@ pub fn DashboardPage() -> impl IntoView {
     };
 
     view! {
-        <crate::pages::NowPanel />
-
         <div class="card mb-2">
             <input
                 type="search"

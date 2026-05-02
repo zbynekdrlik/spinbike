@@ -1399,45 +1399,6 @@ table tbody tr:last-child td,
     cursor: pointer;
 }
 
-/* ─────────── Now panel ─────────── */
-.now-panel { margin-bottom: var(--s-5); }
-
-.now-panel__head {
-    display: flex;
-    align-items: center;
-    gap: var(--s-3);
-    padding: var(--s-3) var(--s-4);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--r);
-    cursor: pointer;
-    min-height: 56px;
-}
-
-.now-panel__head--running { border-left: 3px solid var(--brand); }
-
-.now-panel__title {
-    flex: 1;
-    font-weight: 500;
-    color: var(--text);
-}
-
-.now-panel__badge {
-    font-size: var(--fs-xs);
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: var(--r-pill);
-    background: var(--surface-2);
-    color: var(--text-muted);
-}
-
-.now-panel__chevron {
-    color: var(--text-dim);
-    font-size: var(--fs-md);
-}
-
-.now-panel__body { margin-top: var(--s-2); }
-
 /* ─────────── Feed row colored dots ─────────── */
 .feed-dot {
     width: 8px;

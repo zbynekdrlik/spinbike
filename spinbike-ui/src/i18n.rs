@@ -655,25 +655,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         ),
     );
 
-    // Desk — Now panel
-    m.insert(
-        "now_no_more_today",
-        ("Dnes uz ziadne hodiny.", "No more classes today."),
-    );
-    m.insert(
-        "now_next_on",
-        ("Dalsia hodina: {when}", "Next class: {when}"),
-    );
-    m.insert("now_walk_in", ("Bez rezervacie", "Walk-in"));
-    m.insert("now_cancel_class", ("Zrusit hodinu", "Cancel class"));
-    m.insert("now_collapse", ("Skryt", "Hide"));
-    m.insert("now_expand", ("Zobrazit", "Show"));
-
-    // Roster status badges
-    m.insert("status_booked", ("Rezervovane", "Booked"));
-    m.insert("status_checked_in", ("Prisiel", "Checked in"));
-    m.insert("status_cancelled", ("Zrusene", "Cancelled"));
-
     // Card detail (collapsed contact)
     m.insert(
         "card_show_contact",
