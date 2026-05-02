@@ -11,14 +11,12 @@ use crate::auth::AuthUser;
 use crate::db;
 use crate::routes::internal_error;
 
-use spinbike_core::reports::{AlertsResponse, NowResponse, ReportResponse};
+use spinbike_core::reports::ReportResponse;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/reports/day", get(day))
         .route("/api/reports/range", get(range))
-        .route("/api/reports/alerts", get(alerts))
-        .route("/api/reports/now", get(now))
 }
 
 /// Require admin role. Reports contain business-level data and are admin-only.
@@ -52,11 +50,9 @@ async fn day(
     let (kpi, events, has_more) = db::reports::day_report(&state.pool, q.date, limit, q.before)
         .await
         .map_err(internal_error)?;
-    let alerts_count = total_alert_count(&state).await.unwrap_or(0);
     Ok(Json(ReportResponse {
         kpi,
         events,
-        alerts_count,
         has_more,
     }))
 }
@@ -87,37 +83,9 @@ async fn range(
         db::reports::range_report(&state.pool, q.from, q.to, limit, q.before)
             .await
             .map_err(internal_error)?;
-    let alerts_count = total_alert_count(&state).await.unwrap_or(0);
     Ok(Json(ReportResponse {
         kpi,
         events,
-        alerts_count,
         has_more,
     }))
-}
-
-async fn alerts(
-    State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
-) -> Result<Json<AlertsResponse>, (StatusCode, Json<serde_json::Value>)> {
-    require_admin(&claims)?;
-    let r = db::reports::alerts_report(&state.pool)
-        .await
-        .map_err(internal_error)?;
-    Ok(Json(r))
-}
-
-async fn now(
-    State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
-) -> Result<Json<NowResponse>, (StatusCode, Json<serde_json::Value>)> {
-    require_admin(&claims)?;
-    let r = db::reports::now_panel(&state.pool)
-        .await
-        .map_err(internal_error)?;
-    Ok(Json(r))
-}
-
-async fn total_alert_count(state: &AppState) -> anyhow::Result<i64> {
-    db::reports::alerts_count(&state.pool).await
 }

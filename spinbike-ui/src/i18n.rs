@@ -577,6 +577,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("nav_schedule", ("Plan", "Schedule"));
     m.insert("nav_reports", ("Prehlad", "Reports"));
     m.insert("nav_settings", ("Nastavenia", "Settings"));
+    m.insert("nav_more", ("Viac", "More"));
 
     // Reports — date navigation
     m.insert("reports_yesterday", ("Vcera", "Yesterday"));
@@ -591,34 +592,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("kpi_attendance", ("NAVSTEVY", "ATTENDANCE"));
     m.insert("kpi_passes", ("PERMANENTKY", "PASSES"));
     m.insert("kpi_cash_in", ("VKLADY", "CASH IN"));
-
-    // Reports — alerts banner
-    m.insert(
-        "alerts_title",
-        ("Potrebuje pozornost", "Needs attention"),
-    );
-    m.insert(
-        "alerts_expiring_passes",
-        (
-            "{n} permanentiek vyprsi do 7 dni",
-            "{n} passes expire within 7 days",
-        ),
-    );
-    m.insert(
-        "alerts_low_credit",
-        (
-            "{n} kariet s kreditom pod 5 EUR",
-            "{n} cards below EUR 5 credit",
-        ),
-    );
-    m.insert(
-        "alerts_inactive",
-        (
-            "{n} zakaznikov neaktivnych 60+ dni",
-            "{n} customers inactive 60+ days",
-        ),
-    );
-    m.insert("alerts_dismiss", ("Skryt", "Dismiss"));
 
     // Reports — filters
     m.insert("filters_label", ("Filtre", "Filters"));
@@ -653,25 +626,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "No results for these filters.",
         ),
     );
-
-    // Desk — Now panel
-    m.insert(
-        "now_no_more_today",
-        ("Dnes uz ziadne hodiny.", "No more classes today."),
-    );
-    m.insert(
-        "now_next_on",
-        ("Dalsia hodina: {when}", "Next class: {when}"),
-    );
-    m.insert("now_walk_in", ("Bez rezervacie", "Walk-in"));
-    m.insert("now_cancel_class", ("Zrusit hodinu", "Cancel class"));
-    m.insert("now_collapse", ("Skryt", "Hide"));
-    m.insert("now_expand", ("Zobrazit", "Show"));
-
-    // Roster status badges
-    m.insert("status_booked", ("Rezervovane", "Booked"));
-    m.insert("status_checked_in", ("Prisiel", "Checked in"));
-    m.insert("status_cancelled", ("Zrusene", "Cancelled"));
 
     // Card detail (collapsed contact)
     m.insert(

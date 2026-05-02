@@ -183,19 +183,24 @@ fn render_row(e: ReportEvent) -> impl IntoView {
         ().into_any()
     };
 
-    // Click → jump to Desk and pre-fill search by barcode (or name fallback).
-    let q_value = e
-        .barcode
-        .clone()
-        .or_else(|| e.card_name.clone())
-        .unwrap_or_default();
+    // Click → jump to Desk in exact-card mode (skips dropdown). Only
+    // meaningful when barcode is known: rows without a barcode (deleted
+    // card or orphan transaction) render presentationally — they get a
+    // plain `.list-row` (no cursor pointer), and the on:click handler
+    // is still attached but early-returns when `bc.is_none()`. Defense
+    // in depth: CSS conveys the affordance, the closure enforces it.
+    let interactive = e.barcode.is_some();
+    let row_class = if interactive {
+        "list-row list-row--interactive"
+    } else {
+        "list-row"
+    };
+    let bc = e.barcode.clone();
     let on_row_click = move |_| {
-        if q_value.is_empty() {
-            return;
-        }
+        let Some(bc) = bc.clone() else { return; };
         if let Some(w) = web_sys::window() {
-            let encoded = url_encode(&q_value);
-            let _ = w.location().set_href(&format!("/staff?q={encoded}"));
+            let encoded = url_encode(&bc);
+            let _ = w.location().set_href(&format!("/staff?card={encoded}"));
         }
     };
 
@@ -220,7 +225,7 @@ fn render_row(e: ReportEvent) -> impl IntoView {
     };
 
     view! {
-        <div class="list-row list-row--interactive" data-testid="feed-row"
+        <div class=row_class data-testid="feed-row"
              on:click=on_row_click>
             <div class=kind_class></div>
             <div class="list-row__sub" style="min-width: 48px;">{time_only}</div>

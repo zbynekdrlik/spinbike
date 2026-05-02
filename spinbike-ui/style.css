@@ -795,6 +795,17 @@ table tbody tr:last-child td,
 
 .sheet__actions .btn { flex: 1; }
 
+/* User-name line at the top of the More sheet (AdaptiveNav).
+   Visually distinct from buttons below; matches sheet body padding. */
+.more-sheet__user {
+    font-size: var(--fs-md);
+    color: var(--text);
+    font-weight: 600;
+    padding: var(--s-2) 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: var(--s-3);
+}
+
 @keyframes sheet-in {
     from { transform: translateY(100%); }
     to   { transform: translateY(0); }
@@ -1076,6 +1087,13 @@ table tbody tr:last-child td,
     .inline-form .form-group { min-width: 0; }
 
     .page-title { font-size: var(--fs-lg); }
+
+    /* On phone, when AdaptiveNav is rendered (= staff/admin logged in),
+       the top navbar wastes 2 wrapped rows on rarely-used controls
+       (username, Logout, EN/SK). Those controls move into the bottom
+       AdaptiveNav 'More' sheet. Customers and logged-out users keep
+       the top navbar (no AdaptiveNav → :has() doesn't match). */
+    body:has(.adaptive-nav) .navbar { display: none; }
 }
 
 @media (min-width: 768px) {
@@ -1345,91 +1363,6 @@ table tbody tr:last-child td,
     color: var(--text);
     font-variant-numeric: tabular-nums;
 }
-
-/* ─────────── Alerts banner ─────────── */
-.alerts-banner {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-left: 3px solid #f59e0b;
-    border-radius: var(--r);
-    overflow: hidden;
-    margin-bottom: var(--s-4);
-}
-
-.alerts-banner__head {
-    padding: var(--s-2) var(--s-4);
-    font-size: var(--fs-xs);
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    background: var(--surface-2);
-}
-
-.alerts-banner__row {
-    display: flex;
-    align-items: center;
-    gap: var(--s-3);
-    padding: var(--s-3) var(--s-4);
-    border-top: 1px solid var(--border);
-    cursor: pointer;
-}
-
-.alerts-banner__row:first-of-type { border-top: none; }
-
-.alerts-banner__body {
-    flex: 1;
-    font-size: var(--fs-sm);
-    color: var(--text);
-}
-
-.alerts-banner__dismiss {
-    min-width: 44px;
-    min-height: 44px;
-    background: transparent;
-    border: 0;
-    color: var(--text-dim);
-    font-size: var(--fs-md);
-    cursor: pointer;
-}
-
-/* ─────────── Now panel ─────────── */
-.now-panel { margin-bottom: var(--s-5); }
-
-.now-panel__head {
-    display: flex;
-    align-items: center;
-    gap: var(--s-3);
-    padding: var(--s-3) var(--s-4);
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--r);
-    cursor: pointer;
-    min-height: 56px;
-}
-
-.now-panel__head--running { border-left: 3px solid var(--brand); }
-
-.now-panel__title {
-    flex: 1;
-    font-weight: 500;
-    color: var(--text);
-}
-
-.now-panel__badge {
-    font-size: var(--fs-xs);
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: var(--r-pill);
-    background: var(--surface-2);
-    color: var(--text-muted);
-}
-
-.now-panel__chevron {
-    color: var(--text-dim);
-    font-size: var(--fs-md);
-}
-
-.now-panel__body { margin-top: var(--s-2); }
 
 /* ─────────── Feed row colored dots ─────────── */
 .feed-dot {

@@ -174,21 +174,53 @@ pub fn DashboardPage() -> impl IntoView {
         }
     });
 
-    // Prefill search from `?q=…` query param (used by Reports → row click jump).
+    // Parse query params used by the Reports → row click jump.
+    //
+    // * `?card=<barcode>` — exact lookup via /api/cards/lookup/{barcode};
+    //   on success, the card panel opens directly (skips dropdown).
+    // * `?q=<text>` — search prefill (existing behavior).
+    //
+    // `?card=` wins when both are present (defensive — Reports only
+    // sets `?card=` since v0.13.15).
     Effect::new(move |_| {
-        if let Some(w) = web_sys::window() {
-            let search = w.location().search().unwrap_or_default();
-            if let Some(stripped) = search.strip_prefix('?') {
-                for kv in stripped.split('&') {
-                    if let Some(rest) = kv.strip_prefix("q=") {
-                        let decoded = decode_uri_component(rest);
-                        if !decoded.is_empty() {
-                            set_query.set(decoded);
-                        }
-                        break;
-                    }
+        let Some(w) = web_sys::window() else { return; };
+        let search = w.location().search().unwrap_or_default();
+        let Some(stripped) = search.strip_prefix('?') else { return; };
+
+        let mut card_param: Option<String> = None;
+        let mut q_param: Option<String> = None;
+        for kv in stripped.split('&') {
+            if let Some(rest) = kv.strip_prefix("card=") {
+                let decoded = decode_uri_component(rest);
+                if !decoded.is_empty() {
+                    card_param = Some(decoded);
+                }
+            } else if let Some(rest) = kv.strip_prefix("q=") {
+                let decoded = decode_uri_component(rest);
+                if !decoded.is_empty() {
+                    q_param = Some(decoded);
                 }
             }
+        }
+
+        if let Some(bc) = card_param {
+            // Direct card lookup. On 404 (card deleted since report rendered),
+            // fall back to populating the search box with the barcode so the
+            // user sees the existing search-empty UX.
+            spawn_local(async move {
+                let encoded = urlencoding_light(&bc);
+                match api::get::<CardInfo>(&format!("/api/cards/lookup/{encoded}")).await {
+                    Ok(card) => {
+                        set_selected.set(Some(card));
+                        set_query.set(String::new());
+                    }
+                    Err(_) => {
+                        set_query.set(bc);
+                    }
+                }
+            });
+        } else if let Some(q) = q_param {
+            set_query.set(q);
         }
     });
 
@@ -303,8 +335,6 @@ pub fn DashboardPage() -> impl IntoView {
     };
 
     view! {
-        <crate::pages::NowPanel />
-
         <div class="card mb-2">
             <input
                 type="search"
