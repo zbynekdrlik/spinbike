@@ -1087,13 +1087,6 @@ table tbody tr:last-child td,
     .inline-form .form-group { min-width: 0; }
 
     .page-title { font-size: var(--fs-lg); }
-
-    /* On phone, when AdaptiveNav is rendered (= staff/admin logged in),
-       the top navbar wastes 2 wrapped rows on rarely-used controls
-       (username, Logout, EN/SK). Those controls move into the bottom
-       AdaptiveNav 'More' sheet. Customers and logged-out users keep
-       the top navbar (no AdaptiveNav → :has() doesn't match). */
-    body:has(.adaptive-nav) .navbar { display: none; }
 }
 
 @media (min-width: 768px) {
@@ -1207,6 +1200,14 @@ table tbody tr:last-child td,
 /* ─────────── Adaptive navigation ─────────── */
 .app-shell { padding-bottom: calc(56px + env(safe-area-inset-bottom)); }
 
+/* When AdaptiveNav is rendered (= staff/admin logged in), the user-identity
+   controls (username, Logout, EN/SK) move into the AdaptiveNav 'More' sheet
+   to avoid two redundant chromes carrying the same controls on desktop. The
+   top navbar collapses to just the SpinBike brand wordmark on a single thin
+   row. Customers and logged-out users keep the full top navbar (login,
+   register, my/bookings etc.) — :has() doesn't match without .adaptive-nav. */
+body:has(.adaptive-nav) .navbar-links { display: none; }
+
 .adaptive-nav {
     position: fixed;
     left: 0;
@@ -1222,6 +1223,14 @@ table tbody tr:last-child td,
 }
 
 .adaptive-nav__item {
+    /* Mixed selector: applies to both <a> nav items and the <button> for
+       'More'. The button-specific resets override OS-default chrome
+       (background, border, font, cursor) so the button matches the <a>
+       siblings visually. */
+    background: none;
+    border: none;
+    cursor: pointer;
+    font-family: inherit;
     flex: 1;
     display: flex;
     flex-direction: column;

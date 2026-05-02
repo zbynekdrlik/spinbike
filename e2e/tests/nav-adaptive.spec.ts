@@ -16,8 +16,12 @@ test.describe('Adaptive nav', () => {
         await expect(page.locator('[data-testid="nav-settings"]')).toBeVisible();
         await expect(page.locator('[data-testid="nav-more"]')).toBeVisible();
 
-        // Top navbar is hidden on phone for staff/admin (body:has rule).
-        await expect(page.locator('.navbar')).toBeHidden();
+        // For staff/admin, the top navbar collapses to just the SpinBike
+        // brand wordmark — `.navbar-links` (username/Logout/EN-SK) is hidden
+        // on every size; the brand stays visible. Identity controls live in
+        // the More sheet.
+        await expect(page.locator('.navbar-brand')).toBeVisible();
+        await expect(page.locator('.navbar-links')).toBeHidden();
 
         // Existing route-tab assertions
         await page.locator('[data-testid="nav-reports"]').click();
@@ -49,16 +53,17 @@ test.describe('Adaptive nav', () => {
         assertCleanConsole(consoleMessages);
     });
 
-    test('sidebar layout on desktop viewport (top navbar still visible)', async ({ page }) => {
+    test('sidebar layout on desktop viewport (brand strip + sidebar)', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
         await page.setViewportSize({ width: 1280, height: 800 });
         await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
         await page.goto('/staff');
         await expect(page.locator('[data-testid="adaptive-nav"]')).toBeVisible();
 
-        // On desktop, the top navbar IS visible (the body:has hide rule
-        // is gated by max-width: 540px).
-        await expect(page.locator('.navbar')).toBeVisible();
+        // Same chrome split on desktop as on phone: brand wordmark stays
+        // in the top navbar, identity controls live in the More sheet.
+        await expect(page.locator('.navbar-brand')).toBeVisible();
+        await expect(page.locator('.navbar-links')).toBeHidden();
 
         await page.locator('[data-testid="nav-reports"]').click();
         await expect(page).toHaveURL(/\/reports/);
