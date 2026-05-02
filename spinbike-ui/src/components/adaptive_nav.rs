@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use leptos_router::hooks::use_location;
+use wasm_bindgen_futures::spawn_local;
 
 use crate::auth;
 use crate::components::Sheet;
@@ -52,14 +53,22 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
                 set_lang.set(new_lang);
             };
 
-            // Logout — copy of nav.rs:20-27
+            // Logout — copy of nav.rs:20-27, but DEFERRED to a microtask via
+            // spawn_local. nav.rs's logout lives at the top of the component
+            // tree; this one lives inside the role-gated reactive closure
+            // that unmounts itself when auth_ver bumps. Without the defer,
+            // the click handler is dropped mid-execution (closure-after-drop)
+            // and clear_auth + set_href never run. Same pattern as PR #41's
+            // alerts_banner.rs.
             let on_logout = move |_| {
-                auth::clear_auth();
-                let set_auth_ver = expect_context::<WriteSignal<u32>>();
-                set_auth_ver.update(|v| *v += 1);
-                if let Some(w) = web_sys::window() {
-                    let _ = w.location().set_href("/");
-                }
+                spawn_local(async move {
+                    auth::clear_auth();
+                    let set_auth_ver = expect_context::<WriteSignal<u32>>();
+                    set_auth_ver.update(|v| *v += 1);
+                    if let Some(w) = web_sys::window() {
+                        let _ = w.location().set_href("/");
+                    }
+                });
             };
 
             view! {
