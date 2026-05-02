@@ -19,25 +19,26 @@ use migrations::MIGRATIONS;
 
 /// Create a persistent SQLite pool with WAL mode and foreign keys.
 ///
-/// `busy_timeout` is set explicitly to 30 seconds. SQLite is single-writer,
-/// and even short admin operations (a 100-row UPDATE batch in the legacy
-/// backfill, a schema migration, etc.) can briefly hold the writer lock.
-/// 30 s is well over any realistic short-write window so concurrent staff
-/// API calls wait for the lock instead of returning SQLITE_BUSY (500 to
-/// the caller). sqlx's default is 5 s, which the first prod backfill run
-/// hit because debug-build batches held the lock too long.
+/// `busy_timeout` is set to 30 seconds via `after_connect`, which runs the
+/// PRAGMA on every new pool connection AFTER sqlx finishes its own setup
+/// (journal_mode, foreign_keys, etc.). This is the single source of truth
+/// for the timeout value — `SqliteConnectOptions::busy_timeout()` is NOT
+/// also set, to avoid a PRAGMA-ordering edge case where WAL setup could
+/// race ahead of the timeout (#45 — observed twice as `database is locked`
+/// under E2E concurrency despite SqliteConnectOptions::busy_timeout=30s).
 ///
-/// The `after_connect` hook re-applies `PRAGMA busy_timeout` per connection
-/// as defense-in-depth: `SqliteConnectOptions::busy_timeout()` already adds
-/// the same PRAGMA, but applying it again *after* sqlx finishes connection
-/// initialization eliminates any PRAGMA-ordering edge case where WAL setup
-/// could race ahead of the timeout (#45 — observed under E2E concurrency).
+/// Why 30 seconds: SQLite is single-writer, and even short admin ops
+/// (a 100-row UPDATE batch in the legacy backfill, a schema migration)
+/// can briefly hold the writer lock. 30 s is well over any realistic
+/// short-write window so concurrent staff API calls wait instead of
+/// returning SQLITE_BUSY (500 to the caller). The unit test below
+/// asserts the value is actually applied, so cargo-mutants catches any
+/// drift in either the integer or the PRAGMA string.
 pub async fn create_pool(db_path: &Path) -> Result<SqlitePool> {
     let options = SqliteConnectOptions::new()
         .filename(db_path)
         .create_if_missing(true)
         .journal_mode(sqlx::sqlite::SqliteJournalMode::Wal)
-        .busy_timeout(std::time::Duration::from_secs(30))
         .foreign_keys(true);
 
     let pool = SqlitePoolOptions::new()
@@ -217,5 +218,23 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(version, 11);
+    }
+
+    /// Pins the after_connect PRAGMA — both the integer (30000) and the
+    /// SQL string. cargo-mutants would otherwise be free to mutate either
+    /// without any test catching it. If this test fails, busy_timeout is
+    /// not being applied to pool connections; investigate before merging.
+    #[tokio::test]
+    async fn busy_timeout_is_30_seconds_per_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let db_path = dir.path().join("test.db");
+        let pool = create_pool(&db_path).await.unwrap();
+
+        let timeout: i64 = sqlx::query_scalar("PRAGMA busy_timeout;")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        assert_eq!(timeout, 30000, "busy_timeout should be 30000 ms (30 s)");
     }
 }
