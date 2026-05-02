@@ -1,23 +1,13 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole, loginViaAPI, selectMonthlyPass } from './helpers';
+import {
+    setupConsoleCheck,
+    assertCleanConsole,
+    loginViaAPI,
+    selectMonthlyPass,
+    activateUniqueCard,
+} from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
-
-async function activateUniqueCard(
-    token: string,
-    initialCredit: number,
-): Promise<{ barcode: string; lastName: string }> {
-    const suffix = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
-    const barcode = `AF-${suffix}`;
-    const lastName = `ActionForm${suffix}`;
-    const resp = await fetch(`${BASE_URL}/api/cards/activate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ barcode, initial_credit: initialCredit, first_name: 'AF', last_name: lastName }),
-    });
-    if (!resp.ok) throw new Error(`activate failed: ${resp.status} ${await resp.text()}`);
-    return { barcode, lastName };
-}
 
 async function openCardByLastName(page: Page, lastName: string) {
     const searchInput = page.locator('input[type="search"]');

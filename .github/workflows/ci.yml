@@ -119,6 +119,31 @@ jobs:
           path: spinbike-ui/dist/
           retention-days: 7
 
+  test-ui:
+    name: Test (UI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: lint
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: spinbike-ui
+          cache-on-failure: true
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Run wasm-pack tests (node)
+        run: wasm-pack test --node spinbike-ui
+
   e2e:
     name: E2E Tests
     runs-on: ubuntu-latest
@@ -271,6 +296,58 @@ jobs:
             --exclude 'crates/spinbike-server/src/bin/*' \
             --package spinbike-core \
             --package spinbike-server
+
+  mutation-ui:
+    name: Mutation Testing (UI)
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    needs: test-ui
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: spinbike-ui
+          cache-on-failure: true
+
+      - name: Install cargo-mutants
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants
+
+      - name: Install wasm-pack
+        uses: taiki-e/install-action@v2
+        with:
+          tool: wasm-pack
+
+      - name: Compute PR diff vs base
+        run: git diff origin/${{ github.base_ref }}...HEAD > pr.diff
+
+      - name: Run cargo-mutants on UI diff
+        run: |
+          # Mutate only PR-changed lines in spinbike-ui.
+          #
+          # NOTE: this gate's wasm-target plumbing is UNTESTED on its first
+          # green PR (#41) — every spinbike-ui change in #41 was inside
+          # `#[cfg(test)]` blocks, so cargo-mutants generated zero candidates
+          # ("No mutants to filter"). The next PR that modifies non-test
+          # spinbike-ui code will be the gate's first real run; if it fails
+          # because cargo test on wasm32 has no runner, follow up by adding
+          # `[target.wasm32-unknown-unknown.runner]` to .cargo/config.toml
+          # (see issue tracking the structural fix).
+          cargo mutants \
+            --in-diff pr.diff \
+            --timeout 60 \
+            --no-shuffle \
+            --manifest-path spinbike-ui/Cargo.toml \
+            -- --target wasm32-unknown-unknown
 
   deploy-dev:
     name: Deploy (dev)

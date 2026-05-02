@@ -534,3 +534,53 @@ fn ActivateCardForm(
         </div>
     }
 }
+
+#[cfg(test)]
+mod is_class_visit_tests {
+    // The truthy assertions pin the contents of CLASS_VISIT_NAMES_EN
+    // (currently "Spinning" + "Fitness"). If the const grows — e.g. a new
+    // class type like "HIIT" — add a positive case here so the gate
+    // surfaces the addition. Renaming an existing entry will break this
+    // test (intended), matching the doc comment on is_class_visit.
+    use super::*;
+    use wasm_bindgen_test::*;
+
+    fn make_svc(name_en: &str) -> ServiceInfo {
+        ServiceInfo {
+            id: 1,
+            kind: "generic".to_string(),
+            name_sk: "x".to_string(),
+            name_en: name_en.to_string(),
+            default_price: 0.0,
+            active: 1,
+        }
+    }
+
+    // Strong: covers the two truthy class-visit names AND a sample of names
+    // that must return false. Catches mutants that flip the return constant
+    // OR replace `contains` with always-true / always-false equivalents.
+    #[wasm_bindgen_test]
+    fn is_class_visit_true_for_spinning() {
+        assert!(make_svc("Spinning").is_class_visit());
+    }
+
+    #[wasm_bindgen_test]
+    fn is_class_visit_true_for_fitness() {
+        assert!(make_svc("Fitness").is_class_visit());
+    }
+
+    #[wasm_bindgen_test]
+    fn is_class_visit_false_for_refreshments() {
+        assert!(!make_svc("Refreshments").is_class_visit());
+    }
+
+    #[wasm_bindgen_test]
+    fn is_class_visit_false_for_unknown() {
+        assert!(!make_svc("Whatever").is_class_visit());
+    }
+
+    #[wasm_bindgen_test]
+    fn is_class_visit_false_for_empty() {
+        assert!(!make_svc("").is_class_visit());
+    }
+}

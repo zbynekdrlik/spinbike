@@ -108,3 +108,41 @@ export async function loginViaAPI(page: Page, baseURL: string, email: string, pa
 
     return data.token as string;
 }
+
+/**
+ * Activate a card with a unique letters-only barcode suffix so it cannot
+ * substring-collide with seeded numeric barcodes (#39).
+ *
+ * The 8-char a-z suffix has 26^8 ≈ 2 × 10^11 distinct values — collision
+ * with another concurrent test in the same Playwright run is statistically
+ * impossible.
+ */
+export async function activateUniqueCard(
+    token: string,
+    initialCredit: number,
+    prefix: string = 'AF',
+): Promise<{ barcode: string; lastName: string }> {
+    const BASE_URL = 'http://localhost:8099';
+    const suffix = Array.from({ length: 8 }, () =>
+        String.fromCharCode(97 + Math.floor(Math.random() * 26)),
+    ).join('');
+    const barcode = `${prefix}-${suffix}`;
+    const lastName = `${prefix}${suffix}`;
+    const resp = await fetch(`${BASE_URL}/api/cards/activate`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+            barcode,
+            initial_credit: initialCredit,
+            first_name: prefix,
+            last_name: lastName,
+        }),
+    });
+    if (!resp.ok) {
+        throw new Error(`activate failed: ${resp.status} ${await resp.text()}`);
+    }
+    return { barcode, lastName };
+}

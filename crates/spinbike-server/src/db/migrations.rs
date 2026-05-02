@@ -38,6 +38,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "transactions: free-text note column",
         V10_TRANSACTIONS_NOTE_COLUMN,
     ),
+    (
+        11,
+        "transactions: note length CHECK",
+        V11_TRANSACTIONS_NOTE_CHECK,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -265,6 +270,50 @@ ALTER TABLE transactions ADD COLUMN legacy_backfilled INTEGER NOT NULL DEFAULT 0
 
 const V10_TRANSACTIONS_NOTE_COLUMN: &str = r#"
 ALTER TABLE transactions ADD COLUMN note TEXT;
+"#;
+
+const V11_TRANSACTIONS_NOTE_CHECK: &str = r#"
+-- Defense-in-depth (#28): server already validates note ≤ 200 chars at
+-- every entry point. This adds the same constraint at the DB level so a
+-- direct sqlite3 write — or a future endpoint that forgets to validate —
+-- cannot store an unbounded string.
+--
+-- SQLite cannot ALTER TABLE to add CHECK constraints on existing columns.
+-- Use the CREATE_NEW + INSERT + DROP + RENAME pattern (V8 precedent).
+-- Migration runner toggles PRAGMA foreign_keys around the transaction;
+-- bookings.charge_transaction_id FK reattaches by name after RENAME.
+--
+-- Column list mirrors V1 + V4 (valid_until) + V7 (deleted_at) + V9
+-- (legacy_backfilled) + V10 (note). Keep types and defaults identical.
+-- length() on TEXT counts UTF-8 codepoints, matching the server's
+-- chars().count() semantic.
+
+CREATE TABLE transactions_new (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id           INTEGER REFERENCES users(id),
+    card_id           INTEGER REFERENCES cards(id),
+    staff_id          INTEGER REFERENCES users(id),
+    service_id        INTEGER REFERENCES services(id),
+    amount            REAL    NOT NULL,
+    action            TEXT    NOT NULL,
+    created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+    valid_until       TEXT,
+    deleted_at        TEXT,
+    legacy_backfilled INTEGER NOT NULL DEFAULT 0,
+    note              TEXT    CHECK (note IS NULL OR length(note) <= 200)
+);
+
+INSERT INTO transactions_new (
+    id, user_id, card_id, staff_id, service_id, amount, action, created_at,
+    valid_until, deleted_at, legacy_backfilled, note
+)
+SELECT
+    id, user_id, card_id, staff_id, service_id, amount, action, created_at,
+    valid_until, deleted_at, legacy_backfilled, note
+FROM transactions;
+
+DROP TABLE transactions;
+ALTER TABLE transactions_new RENAME TO transactions;
 "#;
 
 #[cfg(test)]
@@ -717,5 +766,216 @@ mod tests {
                 .await
                 .unwrap();
         assert!(note.is_none(), "fresh row's note must be NULL");
+    }
+
+    // V11 — note CHECK constraint -------------------------------------
+
+    #[tokio::test]
+    async fn v11_note_check_accepts_200_chars() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // Seed a card so the transactions.card_id FK is satisfied (per V8/V10
+        // test convention). Migrations re-enable foreign_keys at the end.
+        let card_id: i64 =
+            sqlx::query_scalar("INSERT INTO cards (barcode) VALUES ('V11-OK-200') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        // Insert a transaction with a 200-char note (exactly at the bound).
+        // Use a Slovak diacritic so the byte count > 200 but char count = 200,
+        // matching the server-side validator (uses chars().count(), not len()).
+        let note: String = "á".repeat(200);
+        sqlx::query(
+            "INSERT INTO transactions (card_id, amount, action, note)
+             VALUES (?, ?, 'charge', ?)",
+        )
+        .bind(card_id)
+        .bind(5.0_f64)
+        .bind(&note)
+        .execute(&pool)
+        .await
+        .expect("200-char note must be accepted");
+    }
+
+    #[tokio::test]
+    async fn v11_note_check_rejects_201_chars() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let card_id: i64 = sqlx::query_scalar(
+            "INSERT INTO cards (barcode) VALUES ('V11-REJECT-201') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let note: String = "á".repeat(201);
+        let res = sqlx::query(
+            "INSERT INTO transactions (card_id, amount, action, note)
+             VALUES (?, ?, 'charge', ?)",
+        )
+        .bind(card_id)
+        .bind(5.0_f64)
+        .bind(&note)
+        .execute(&pool)
+        .await;
+
+        let err = res.expect_err("201-char note must be rejected");
+        let msg = err.to_string();
+        // Match the SQLite CHECK violation specifically — a generic "FOREIGN
+        // KEY constraint failed" must NOT pass this test (that would mean we
+        // failed for the wrong reason).
+        assert!(
+            msg.contains("CHECK"),
+            "expected CHECK constraint violation, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v11_is_idempotent() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        // Second run must not error — schema_version check should make V11
+        // a no-op on the already-migrated DB.
+        run_migrations(&pool).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn v11_preserves_existing_rows_across_idempotent_rerun() {
+        // Regression fence for the V11 CREATE_NEW + INSERT + DROP + RENAME
+        // pattern: even though run_migrations runs the whole chain once and
+        // V11 is then schema_version-gated to a no-op, exercise the property
+        // that re-running migrations against a populated transactions table
+        // does NOT lose rows. Catches a hypothetical future migration that
+        // re-rebuilds transactions but forgets to copy data, AND verifies
+        // the bookings.charge_transaction_id FK still resolves after a
+        // populated re-run cycle.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let card_id: i64 =
+            sqlx::query_scalar("INSERT INTO cards (barcode) VALUES ('V11-PRESERVE') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let user_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, password_hash, role)
+             VALUES ('preserve@test.local', 'Preserver', 'x', 'admin')
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Seed 5 transactions and 5 bookings, each booking pointing at a
+        // different transaction.
+        for i in 0..5 {
+            let tx_id: i64 = sqlx::query_scalar(
+                "INSERT INTO transactions (card_id, amount, action)
+                 VALUES (?, ?, 'charge') RETURNING id",
+            )
+            .bind(card_id)
+            .bind(1.0_f64 + i as f64)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            sqlx::query(
+                "INSERT INTO bookings (template_id, date, user_id, charge_transaction_id)
+                 VALUES (1, ?, ?, ?)",
+            )
+            .bind(format!("2026-12-{:02}", i + 1))
+            .bind(user_id)
+            .bind(tx_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
+
+        // Re-run migrations; V11 should remain a no-op via schema_version.
+        run_migrations(&pool).await.unwrap();
+
+        let tx_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(tx_count, 5, "transactions row count must survive re-run");
+
+        let bk_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bookings")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(bk_count, 5, "bookings row count must survive re-run");
+
+        // FK-via-join must still resolve for all 5.
+        let joined: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM transactions t
+             JOIN bookings b ON b.charge_transaction_id = t.id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            joined, 5,
+            "bookings.charge_transaction_id FK must resolve for all 5 rows"
+        );
+    }
+
+    #[tokio::test]
+    async fn v11_drop_rename_pattern_preserves_bookings_fk() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // Seed: a transaction + a booking that references it via charge_transaction_id.
+        // After V11 recreates `transactions`, the FK on bookings.charge_transaction_id
+        // must continue to resolve (V8 precedent — FK reattaches by table name on RENAME).
+        let card_id: i64 =
+            sqlx::query_scalar("INSERT INTO cards (barcode) VALUES ('V11-FK') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let tx_id: i64 = sqlx::query_scalar(
+            "INSERT INTO transactions (card_id, amount, action)
+             VALUES (?, 5.0, 'charge') RETURNING id",
+        )
+        .bind(card_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // bookings requires (template_id, date, user_id) NOT NULL FKs.
+        // Migrations seed a class_template at id=1 (V6_SEED_SPIN_CLASSES).
+        // users requires (email, name, role) — name is NOT NULL.
+        let user_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, password_hash, role)
+             VALUES ('booker@test.local', 'Test Booker', 'x', 'admin')
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO bookings (template_id, date, user_id, charge_transaction_id)
+             VALUES (1, '2026-12-01', ?, ?)",
+        )
+        .bind(user_id)
+        .bind(tx_id)
+        .execute(&pool)
+        .await
+        .expect("booking insert must succeed with V11 in place");
+
+        // Verify FK resolves: join must produce a row.
+        let joined: i64 = sqlx::query_scalar(
+            "SELECT t.id FROM transactions t
+             JOIN bookings b ON b.charge_transaction_id = t.id
+             WHERE b.charge_transaction_id IS NOT NULL
+             LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("transactions ↔ bookings FK must resolve after V11 rebuild");
+        assert_eq!(joined, tx_id);
     }
 }
