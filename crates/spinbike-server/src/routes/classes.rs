@@ -76,18 +76,10 @@ async fn list_classes(
     OptionalAuthUser(claims): OptionalAuthUser,
     Query(query): Query<ScheduleQuery>,
 ) -> Result<Json<Vec<ClassOccurrenceResponse>>, (StatusCode, Json<serde_json::Value>)> {
-    let from = NaiveDate::parse_from_str(&query.from, "%Y-%m-%d").map_err(|_| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid 'from' date format, expected YYYY-MM-DD"})),
-        )
-    })?;
-    let to = NaiveDate::parse_from_str(&query.to, "%Y-%m-%d").map_err(|_| {
-        (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid 'to' date format, expected YYYY-MM-DD"})),
-        )
-    })?;
+    let from = NaiveDate::parse_from_str(&query.from, "%Y-%m-%d")
+        .map_err(|_| super::bad_request("Invalid 'from' date format, expected YYYY-MM-DD"))?;
+    let to = NaiveDate::parse_from_str(&query.to, "%Y-%m-%d")
+        .map_err(|_| super::bad_request("Invalid 'to' date format, expected YYYY-MM-DD"))?;
 
     let templates = db::list_active_templates(&state.pool)
         .await
@@ -225,10 +217,7 @@ async fn create_booking(
             .map_err(internal_error)?
             .flatten();
         let Some(uid) = uid else {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({"error": "Card has no linked user"})),
-            ));
+            return Err(super::bad_request("Card has no linked user"));
         };
         if uid != claims.sub && !claims.role.can_book_for_others() {
             return Err((

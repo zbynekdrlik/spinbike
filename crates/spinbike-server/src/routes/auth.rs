@@ -53,24 +53,15 @@ async fn register(
     // I4: Input validation.
     let name = body.name.trim();
     if name.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Name must not be empty"})),
-        ));
+        return Err(super::bad_request("Name must not be empty"));
     }
 
     if !body.email.contains('@') || !body.email.contains('.') {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid email address"})),
-        ));
+        return Err(super::bad_request("Invalid email address"));
     }
 
     if body.password.len() < 8 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Password must be at least 8 characters"})),
-        ));
+        return Err(super::bad_request("Password must be at least 8 characters"));
     }
 
     // Check for duplicate email.

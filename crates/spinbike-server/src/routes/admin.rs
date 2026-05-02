@@ -482,16 +482,12 @@ async fn create_service(
     }
 
     if body.name_sk.trim().is_empty() || body.name_en.trim().is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "name_sk and name_en are required"})),
-        ));
+        return Err(super::bad_request("name_sk and name_en are required"));
     }
     let kind = body.kind.as_deref().unwrap_or("generic");
     if !matches!(kind, "generic" | "monthly_pass") {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "kind must be 'generic' or 'monthly_pass'"})),
+        return Err(super::bad_request(
+            "kind must be 'generic' or 'monthly_pass'",
         ));
     }
     let id = sqlx::query_scalar::<_, i64>(
@@ -668,9 +664,8 @@ async fn update_user_role(
 
     // I6: Validate role string before writing to DB.
     if !["admin", "staff", "customer"].contains(&body.role.as_str()) {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Invalid role. Must be admin, staff, or customer"})),
+        return Err(super::bad_request(
+            "Invalid role. Must be admin, staff, or customer",
         ));
     }
 
