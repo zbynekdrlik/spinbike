@@ -67,19 +67,6 @@ pub fn routes() -> Router<AppState> {
         .route("/api/payments/log-visit", post(log_visit))
 }
 
-/// Build a BAD_REQUEST response with an error message body.
-///
-/// Wraps the `(StatusCode, Json<Value>)` tuple so cargo-mutants can mutate
-/// the message string reliably (#36 — `axum::Json` newtype has no `::new()`
-/// constructor for cargo-mutants to synthesize). Behaviorally identical to
-/// inline `(StatusCode::BAD_REQUEST, Json(json!({"error": msg})))`.
-fn bad_request(msg: &str) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({ "error": msg })),
-    )
-}
-
 async fn charge(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
@@ -99,7 +86,7 @@ async fn charge(
     let service_id = match body.service_id {
         Some(sid) => sid,
         None => {
-            return Err(bad_request("service_id required for charge"));
+            return Err(super::bad_request("service_id required for charge"));
         }
     };
 
@@ -113,19 +100,19 @@ async fn charge(
             .map_err(internal_error)?
             .unwrap_or(false);
     if is_pass {
-        return Err(bad_request(
+        return Err(super::bad_request(
             "Use /api/payments/sell-pass for Monthly pass sales (requires valid_until)",
         ));
     }
 
     // C3: Validate amount is positive.
     if body.amount <= 0.0 {
-        return Err(bad_request("Amount must be greater than zero"));
+        return Err(super::bad_request("Amount must be greater than zero"));
     }
     if let Some(n) = body.note.as_deref()
         && n.chars().count() > NOTE_MAX_CHARS
     {
-        return Err(bad_request("Note must be 200 characters or fewer"));
+        return Err(super::bad_request("Note must be 200 characters or fewer"));
     }
     let note_for_db = body.note.as_deref().filter(|s| !s.trim().is_empty());
 
@@ -203,7 +190,7 @@ async fn storno(
 
     // C3: Validate amount is positive.
     if body.amount <= 0.0 {
-        return Err(bad_request("Amount must be greater than zero"));
+        return Err(super::bad_request("Amount must be greater than zero"));
     }
 
     let amount = cards::round_cents(body.amount);
@@ -267,16 +254,16 @@ async fn sell_pass(
         ));
     }
     if body.price < 0.0 {
-        return Err(bad_request("Price must be zero or greater"));
+        return Err(super::bad_request("Price must be zero or greater"));
     }
     let today = chrono::Local::now().date_naive();
     if body.valid_until <= today {
-        return Err(bad_request("valid_until must be in the future"));
+        return Err(super::bad_request("valid_until must be in the future"));
     }
     if let Some(n) = body.note.as_deref()
         && n.chars().count() > NOTE_MAX_CHARS
     {
-        return Err(bad_request("Note must be 200 characters or fewer"));
+        return Err(super::bad_request("Note must be 200 characters or fewer"));
     }
     let note_for_db = body.note.as_deref().filter(|s| !s.trim().is_empty());
 
@@ -389,7 +376,7 @@ async fn log_visit(
     if let Some(n) = body.note.as_deref()
         && n.chars().count() > NOTE_MAX_CHARS
     {
-        return Err(bad_request("Note must be 200 characters or fewer"));
+        return Err(super::bad_request("Note must be 200 characters or fewer"));
     }
     let note_for_db = body.note.as_deref().filter(|s| !s.trim().is_empty());
 

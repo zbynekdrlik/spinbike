@@ -76,11 +76,11 @@ async fn range(
 ) -> Result<Json<ReportResponse>, (StatusCode, Json<serde_json::Value>)> {
     require_admin(&claims)?;
     if q.to < q.from {
-        return Err(bad_request("to < from"));
+        return Err(super::bad_request("to < from"));
     }
     let days = (q.to - q.from).num_days();
     if days > db::reports::RANGE_MAX_DAYS {
-        return Err(bad_request("range too large (max 93 days)"));
+        return Err(super::bad_request("range too large (max 93 days)"));
     }
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let (kpi, events, has_more) =
@@ -120,11 +120,4 @@ async fn now(
 
 async fn total_alert_count(state: &AppState) -> anyhow::Result<i64> {
     db::reports::alerts_count(&state.pool).await
-}
-
-fn bad_request(msg: &str) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({"error": msg})),
-    )
 }
