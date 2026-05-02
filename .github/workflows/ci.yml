@@ -335,18 +335,32 @@ jobs:
       - name: Compute PR diff vs base
         run: git diff origin/${{ github.base_ref }}...HEAD > pr.diff
 
+      - name: Sanity check — fail on silent no-op
+        run: |
+          # If non-test spinbike-ui/src/ code changed AND mutants list is empty,
+          # something is wrong (likely the wasm runner is broken again).
+          # Conservative heuristic: counts any added line outside #[cfg(test)],
+          # blank lines, or single-line // comments. May produce false positives
+          # on test-only PRs that put non-test attributes near test blocks; we
+          # accept that for first cut.
+          NONTEST_CHANGED=$(git diff origin/${{ github.base_ref }}...HEAD -- 'spinbike-ui/src/**/*.rs' \
+            | grep -E '^\+' | grep -vE '^(\+\+\+|\+\s*//|\+\s*$)' \
+            | grep -v '#\[cfg(test)\]' | wc -l)
+          MUTANTS_COUNT=$(cargo mutants --list --in-diff pr.diff \
+            --manifest-path spinbike-ui/Cargo.toml \
+            -- --target wasm32-unknown-unknown 2>/dev/null | wc -l)
+          if [ "$NONTEST_CHANGED" -gt 0 ] && [ "$MUTANTS_COUNT" -eq 0 ]; then
+            echo "::error::Non-test spinbike-ui/src/ code changed but cargo mutants found 0 candidates."
+            echo "This likely means the wasm32 test runner is broken. Investigate before merging."
+            exit 1
+          fi
+          echo "Sanity check OK: $NONTEST_CHANGED non-test src/ lines changed, $MUTANTS_COUNT mutants."
+
       - name: Run cargo-mutants on UI diff
         run: |
-          # Mutate only PR-changed lines in spinbike-ui.
-          #
-          # NOTE: this gate's wasm-target plumbing is UNTESTED on its first
-          # green PR (#41) — every spinbike-ui change in #41 was inside
-          # `#[cfg(test)]` blocks, so cargo-mutants generated zero candidates
-          # ("No mutants to filter"). The next PR that modifies non-test
-          # spinbike-ui code will be the gate's first real run; if it fails
-          # because cargo test on wasm32 has no runner, follow up by adding
-          # `[target.wasm32-unknown-unknown.runner]` to .cargo/config.toml
-          # (see issue tracking the structural fix).
+          # Mutate only PR-changed lines in spinbike-ui. The preceding
+          # sanity-check step guards against the silent-no-op pattern
+          # (mutants list empty when production code changed).
           cargo mutants \
             --in-diff pr.diff \
             --timeout 60 \
