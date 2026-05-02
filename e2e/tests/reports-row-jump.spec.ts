@@ -41,7 +41,7 @@ test.describe('Reports row → card panel direct jump', () => {
         await page.waitForURL(/\/staff\?card=/, { timeout: 5000 });
 
         // The URL must contain our exact barcode (URL-encoded).
-        expect(page.url()).toContain(encodeURIComponent(barcode).replace(/%2F/gi, '%2F'));
+        expect(page.url()).toContain(encodeURIComponent(barcode));
 
         // Card action panel renders directly — no dropdown step required.
         await expect(page.locator('[data-testid="action-panel"]')).toBeVisible({ timeout: 10000 });
