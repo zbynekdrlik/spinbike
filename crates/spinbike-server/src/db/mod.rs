@@ -26,6 +26,12 @@ use migrations::MIGRATIONS;
 /// API calls wait for the lock instead of returning SQLITE_BUSY (500 to
 /// the caller). sqlx's default is 5 s, which the first prod backfill run
 /// hit because debug-build batches held the lock too long.
+///
+/// The `after_connect` hook re-applies `PRAGMA busy_timeout` per connection
+/// as defense-in-depth: `SqliteConnectOptions::busy_timeout()` already adds
+/// the same PRAGMA, but applying it again *after* sqlx finishes connection
+/// initialization eliminates any PRAGMA-ordering edge case where WAL setup
+/// could race ahead of the timeout (#45 — observed under E2E concurrency).
 pub async fn create_pool(db_path: &Path) -> Result<SqlitePool> {
     let options = SqliteConnectOptions::new()
         .filename(db_path)
@@ -36,6 +42,14 @@ pub async fn create_pool(db_path: &Path) -> Result<SqlitePool> {
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
+        .after_connect(|conn, _meta| {
+            Box::pin(async move {
+                sqlx::query("PRAGMA busy_timeout = 30000;")
+                    .execute(&mut *conn)
+                    .await?;
+                Ok(())
+            })
+        })
         .connect_with(options)
         .await
         .context("Failed to connect to SQLite")?;
