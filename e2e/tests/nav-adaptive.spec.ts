@@ -35,9 +35,16 @@ test.describe('Adaptive nav', () => {
         await expect(page.locator('[data-testid="more-lang-toggle"]')).toBeVisible();
         await expect(page.locator('[data-testid="more-logout"]')).toBeVisible();
 
-        // Logging out from the sheet → redirects (post-logout default URL).
+        // Logging out from the sheet clears localStorage and calls
+        // location.set_href("/"). waitForURL with the default 'load' event
+        // is unreliable on CI because the post-logout page rebootstraps WASM.
+        // Poll for the cleared token + URL change instead — both flip
+        // synchronously inside the click handler before navigation completes.
         await page.locator('[data-testid="more-logout"]').click();
-        await page.waitForURL(/\/(login)?$/, { timeout: 5000 });
+        await page.waitForFunction(
+            () => !localStorage.getItem('spinbike_token') && window.location.pathname !== '/staff',
+            { timeout: 15000 },
+        );
 
         assertCleanConsole(consoleMessages);
     });
