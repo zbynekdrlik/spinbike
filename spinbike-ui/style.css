@@ -1076,6 +1076,13 @@ table tbody tr:last-child td,
     .inline-form .form-group { min-width: 0; }
 
     .page-title { font-size: var(--fs-lg); }
+
+    /* On phone, when AdaptiveNav is rendered (= staff/admin logged in),
+       the top navbar wastes 2 wrapped rows on rarely-used controls
+       (username, Logout, EN/SK). Those controls move into the bottom
+       AdaptiveNav 'More' sheet. Customers and logged-out users keep
+       the top navbar (no AdaptiveNav → :has() doesn't match). */
+    body:has(.adaptive-nav) .navbar { display: none; }
 }
 
 @media (min-width: 768px) {
