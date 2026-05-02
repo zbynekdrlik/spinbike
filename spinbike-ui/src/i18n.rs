@@ -577,6 +577,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("nav_schedule", ("Plan", "Schedule"));
     m.insert("nav_reports", ("Prehlad", "Reports"));
     m.insert("nav_settings", ("Nastavenia", "Settings"));
+    m.insert("nav_more", ("Viac", "More"));
 
     // Reports — date navigation
     m.insert("reports_yesterday", ("Vcera", "Yesterday"));
