@@ -54,7 +54,7 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
 
             // Logout — copy of nav.rs:20-27
             let on_logout = move |_| {
-                crate::auth::clear_auth();
+                auth::clear_auth();
                 let set_auth_ver = expect_context::<WriteSignal<u32>>();
                 set_auth_ver.update(|v| *v += 1);
                 if let Some(w) = web_sys::window() {
@@ -107,7 +107,7 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
                     view! {
                         <Sheet
                             testid="more-sheet".to_string()
-                            title=i18n::t(lang.get_untracked(), "nav_more").to_string()
+                            title=i18n::t(lang.get(), "nav_more").to_string()
                             on_close=Callback::new(move |_| set_more_open.set(false))
                         >
                             <div class="more-sheet__user">{user_name}</div>
