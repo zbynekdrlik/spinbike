@@ -25,6 +25,19 @@ pub fn internal_error(e: impl std::fmt::Display) -> (StatusCode, Json<serde_json
     )
 }
 
+/// Build a BAD_REQUEST response with an error message body.
+///
+/// Wraps the `(StatusCode, Json<Value>)` tuple so cargo-mutants can mutate
+/// the message string reliably (#36 — `axum::Json` newtype has no `::new()`
+/// constructor for cargo-mutants to synthesize). Behaviorally identical to
+/// inline `(StatusCode::BAD_REQUEST, Json(json!({"error": msg})))`.
+pub fn bad_request(msg: &str) -> (StatusCode, Json<serde_json::Value>) {
+    (
+        StatusCode::BAD_REQUEST,
+        Json(serde_json::json!({"error": msg})),
+    )
+}
+
 /// All API routes merged together.
 pub fn api_routes() -> Router<AppState> {
     Router::new()

@@ -140,9 +140,8 @@ async fn patch_valid_until(
         ));
     };
     if row.valid_until.is_none() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Only pass transactions have valid_until"})),
+        return Err(super::bad_request(
+            "Only pass transactions have valid_until",
         ));
     }
 
@@ -178,10 +177,7 @@ async fn patch_note(
     let normalized: Option<String> = match body.note.as_deref() {
         Some(s) if !s.trim().is_empty() => {
             if s.chars().count() > NOTE_MAX_CHARS {
-                return Err((
-                    StatusCode::BAD_REQUEST,
-                    Json(serde_json::json!({"error": "Note must be 200 characters or fewer"})),
-                ));
+                return Err(super::bad_request("Note must be 200 characters or fewer"));
             }
             Some(s.to_string())
         }

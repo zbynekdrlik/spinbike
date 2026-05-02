@@ -373,18 +373,12 @@ async fn topup_card(
 
     // I7: Validate topup amount is positive.
     if body.amount <= 0.0 {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Amount must be greater than zero"})),
-        ));
+        return Err(super::bad_request("Amount must be greater than zero"));
     }
     if let Some(n) = body.note.as_deref()
         && n.chars().count() > NOTE_MAX_CHARS
     {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "Note must be 200 characters or fewer"})),
-        ));
+        return Err(super::bad_request("Note must be 200 characters or fewer"));
     }
     let note_for_db = body.note.as_deref().filter(|s| !s.trim().is_empty());
 
