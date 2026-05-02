@@ -184,8 +184,11 @@ fn render_row(e: ReportEvent) -> impl IntoView {
     };
 
     // Click → jump to Desk in exact-card mode (skips dropdown). Only
-    // available when barcode is known: rows without a card_id (old or
-    // orphan transactions) render presentationally, no click handler.
+    // meaningful when barcode is known: rows without a barcode (deleted
+    // card or orphan transaction) render presentationally — they get a
+    // plain `.list-row` (no cursor pointer), and the on:click handler
+    // is still attached but early-returns when `bc.is_none()`. Defense
+    // in depth: CSS conveys the affordance, the closure enforces it.
     let interactive = e.barcode.is_some();
     let row_class = if interactive {
         "list-row list-row--interactive"

@@ -112,11 +112,22 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
                                 class="btn btn--block btn--danger"
                                 data-testid="more-logout"
                                 on:click=move |_| {
-                                    // Inlined (not a captured named closure).
-                                    // Clearing localStorage + full-page set_href
-                                    // is enough — no signal bump needed because
-                                    // set_href causes a full reload that re-
-                                    // bootstraps WASM with cleared auth.
+                                    // Deliberately diverges from nav.rs's
+                                    // logout (which does set_auth_ver.update
+                                    // before set_href). nav.rs lives at the
+                                    // top of the component tree; this button
+                                    // lives inside the role-gated reactive
+                                    // closure that unmounts itself when
+                                    // auth_ver bumps. Earlier attempts to
+                                    // include the bump here (with both named-
+                                    // closure-capture AND spawn_local defer
+                                    // patterns) timed out in E2E because the
+                                    // click handler's surrounding DOM was
+                                    // unmounted before the navigation could
+                                    // commit. set_href("/") is a full-page
+                                    // reload that re-bootstraps WASM with
+                                    // cleared auth — no reactive update
+                                    // needed.
                                     auth::clear_auth();
                                     if let Some(w) = web_sys::window() {
                                         let _ = w.location().set_href("/");
