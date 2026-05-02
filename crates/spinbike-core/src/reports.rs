@@ -79,40 +79,7 @@ impl ReportEvent {
 pub struct ReportResponse {
     pub kpi: KpiSummary,
     pub events: Vec<ReportEvent>,
-    pub alerts_count: i64,
     pub has_more: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ExpiringPass {
-    pub card_id: i64,
-    pub name: String,
-    pub barcode: String,
-    pub valid_until: chrono::NaiveDate,
-    pub days_left: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LowCreditCard {
-    pub card_id: i64,
-    pub name: String,
-    pub barcode: String,
-    pub credit: f64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InactiveCustomer {
-    pub card_id: i64,
-    pub name: String,
-    pub barcode: String,
-    pub last_visit: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AlertsResponse {
-    pub expiring_passes: Vec<ExpiringPass>,
-    pub low_credit: Vec<LowCreditCard>,
-    pub inactive: Vec<InactiveCustomer>,
 }
 
 #[cfg(test)]
