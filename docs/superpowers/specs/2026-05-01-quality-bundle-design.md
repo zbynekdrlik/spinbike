@@ -28,7 +28,7 @@ User explicitly requested "do in one run" — single PR closing all four.
   export async function activateUniqueCard(
       adminToken: string,
       credit: number,
-  ): Promise<{ lastName: string; barcode: string; cardId: number }> {
+  ): Promise<{ lastName: string; barcode: string }> {
       // Letters-only suffix avoids substring collision with seeded numeric barcodes.
       const suffix = Array.from({ length: 8 }, () =>
           String.fromCharCode(97 + Math.floor(Math.random() * 26)),
