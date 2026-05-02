@@ -115,51 +115,6 @@ pub struct AlertsResponse {
     pub inactive: Vec<InactiveCustomer>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum RosterStatus {
-    Booked,
-    CheckedIn,
-    Cancelled,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct RosterEntry {
-    pub card_id: Option<i64>,
-    pub name: String,
-    pub barcode: Option<String>,
-    pub booking_id: i64,
-    pub status: RosterStatus,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct CurrentClass {
-    pub template_id: i64,
-    pub date: chrono::NaiveDate,
-    pub start_time: String, // "HH:MM"
-    pub service_name: String,
-    pub instructor_name: Option<String>,
-    pub capacity: i64,
-    pub roster: Vec<RosterEntry>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NextClass {
-    pub template_id: i64,
-    pub date: chrono::NaiveDate,
-    pub start_time: String,
-    pub service_name: String,
-    pub instructor_name: Option<String>,
-    pub booked: i64,
-    pub capacity: i64,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NowResponse {
-    pub current_class: Option<CurrentClass>,
-    pub next_class: Option<NextClass>,
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
