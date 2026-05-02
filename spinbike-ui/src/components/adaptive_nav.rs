@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use leptos_router::hooks::use_location;
 
 use crate::auth;
+use crate::components::Sheet;
 use crate::i18n::{self, Lang};
 
 /// Adaptive navigation for admin/staff: bottom tab bar on phone,
@@ -33,6 +34,34 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
             let reports_active = path.starts_with("/reports");
             let settings_active = path.starts_with("/settings") || path.starts_with("/admin");
 
+            // 'More' sheet state — opens on tap, contains username + lang
+            // toggle + logout. Mirrors the controls that live in the top
+            // navbar (nav.rs) for desktop users; the top navbar is hidden
+            // on phone for staff/admin via the body:has(.adaptive-nav) rule.
+            let (more_open, set_more_open) = signal(false);
+            let user_name = u.name.clone();
+
+            // Language toggle — copy of nav.rs:29-35
+            let set_lang = use_context::<WriteSignal<Lang>>().expect("SetLang context");
+            let on_toggle_lang = move |_| {
+                let new_lang = match lang.get() {
+                    Lang::Sk => Lang::En,
+                    Lang::En => Lang::Sk,
+                };
+                i18n::save_lang(new_lang);
+                set_lang.set(new_lang);
+            };
+
+            // Logout — copy of nav.rs:20-27
+            let on_logout = move |_| {
+                crate::auth::clear_auth();
+                let set_auth_ver = expect_context::<WriteSignal<u32>>();
+                set_auth_ver.update(|v| *v += 1);
+                if let Some(w) = web_sys::window() {
+                    let _ = w.location().set_href("/");
+                }
+            };
+
             view! {
                 <nav class="adaptive-nav" data-testid="adaptive-nav">
                     <a href="/staff" class="adaptive-nav__item"
@@ -63,7 +92,45 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
                             </a>
                         }.into_any()
                     } else { ().into_any() }}
+                    <button
+                        class="adaptive-nav__item"
+                        data-testid="nav-more"
+                        type="button"
+                        on:click=move |_| set_more_open.update(|v| *v = !*v)
+                    >
+                        <span class="adaptive-nav__icon" inner_html=ICON_MORE></span>
+                        <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_more")}</span>
+                    </button>
                 </nav>
+                {move || if more_open.get() {
+                    let user_name = user_name.clone();
+                    view! {
+                        <Sheet
+                            testid="more-sheet".to_string()
+                            title=i18n::t(lang.get_untracked(), "nav_more").to_string()
+                            on_close=Callback::new(move |_| set_more_open.set(false))
+                        >
+                            <div class="more-sheet__user">{user_name}</div>
+                            <button
+                                class="btn btn--block btn--ghost"
+                                data-testid="more-lang-toggle"
+                                on:click=on_toggle_lang
+                            >
+                                {move || match lang.get() {
+                                    Lang::Sk => "EN",
+                                    Lang::En => "SK",
+                                }}
+                            </button>
+                            <button
+                                class="btn btn--block btn--danger"
+                                data-testid="more-logout"
+                                on:click=on_logout
+                            >
+                                {move || i18n::t(lang.get(), "logout")}
+                            </button>
+                        </Sheet>
+                    }.into_any()
+                } else { ().into_any() }}
             }.into_any()
         }}
     }

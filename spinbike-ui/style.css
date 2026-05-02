@@ -795,6 +795,17 @@ table tbody tr:last-child td,
 
 .sheet__actions .btn { flex: 1; }
 
+/* User-name line at the top of the More sheet (AdaptiveNav).
+   Visually distinct from buttons below; matches sheet body padding. */
+.more-sheet__user {
+    font-size: var(--fs-md);
+    color: var(--text);
+    font-weight: 600;
+    padding: var(--s-2) 0;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: var(--s-3);
+}
+
 @keyframes sheet-in {
     from { transform: translateY(100%); }
     to   { transform: translateY(0); }
