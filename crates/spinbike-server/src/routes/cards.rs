@@ -546,8 +546,7 @@ async fn card_stats(
     // Build the IN-clause placeholders dynamically from the constants. With
     // 2 entries today this is a 2-placeholder string; if CLASS_VISIT_NAMES_EN
     // grows (e.g. add HIIT), no SQL change is needed.
-    let placeholders: String = std::iter::repeat("?")
-        .take(CLASS_VISIT_NAMES_EN.len())
+    let placeholders: String = std::iter::repeat_n("?", CLASS_VISIT_NAMES_EN.len())
         .collect::<Vec<_>>()
         .join(",");
     let visit_filter_sql =
@@ -600,7 +599,7 @@ async fn card_stats(
     let mut labels: Vec<String> = Vec::with_capacity(12);
     for i in (0..12).rev() {
         let mut year = now.year();
-        let mut month = now.month() as i32 - i as i32;
+        let mut month = now.month() as i32 - i;
         while month < 1 {
             month += 12;
             year -= 1;
