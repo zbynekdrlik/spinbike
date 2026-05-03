@@ -51,14 +51,22 @@ pub enum EventKind {
 /// Precedence (top-down, first match wins):
 ///   1. valid_until.is_some() → PassSale
 ///   2. action == "visit"     → Visit
-///   3. amount < 0.0          → Charge
-///   4. amount > 0.0          → TopUp
-///   5. else                  → Other
+///   3. action == "storno"    → Other  (void rows, regardless of sign)
+///   4. amount < 0.0          → Charge
+///   5. amount > 0.0          → TopUp
+///   6. else                  → Other
+///
+/// The `storno` branch is positioned BEFORE the amount checks so legacy
+/// positive-amount voids (~64 historical refund rows) classify as Other
+/// instead of TopUp — preserving the void semantic that V12 deliberately
+/// does NOT collapse into `topup`.
 pub fn classify(action: &str, amount: f64, valid_until: Option<chrono::NaiveDate>) -> EventKind {
     if valid_until.is_some() {
         EventKind::PassSale
     } else if action == "visit" {
         EventKind::Visit
+    } else if action == "storno" {
+        EventKind::Other
     } else if amount < 0.0 {
         EventKind::Charge
     } else if amount > 0.0 {
@@ -192,5 +200,35 @@ mod tests {
         // Guards Other as the residual bucket for a 'storno' or unknown action
         // with amount=0.
         assert_eq!(ev_with_action("storno", 0.0, None).kind(), EventKind::Other,);
+    }
+
+    #[test]
+    fn kind_other_when_action_storno_positive_amount_no_pass() {
+        // Storno = void. ~64 historical legacy refund rows have positive
+        // amounts. Without the storno branch they would fall through to
+        // amount > 0.0 → TopUp, which would mis-render a void as a top-up.
+        // The classifier maps every storno row to Other regardless of sign.
+        assert_eq!(ev_with_action("storno", 2.5, None).kind(), EventKind::Other,);
+    }
+
+    #[test]
+    fn kind_other_when_action_storno_negative_amount_no_pass() {
+        // Defensive: even a hypothetical negative storno classifies as Other,
+        // not Charge. Storno wins over the amount-sign check.
+        assert_eq!(
+            ev_with_action("storno", -2.5, None).kind(),
+            EventKind::Other,
+        );
+    }
+
+    #[test]
+    fn kind_pass_sale_overrides_storno_when_valid_until_set() {
+        // Defensive: valid_until still wins over action='storno' so a future
+        // storno-shaped row carrying a pass expiry would render as PassSale.
+        let d = chrono::NaiveDate::from_ymd_opt(2026, 5, 24).unwrap();
+        assert_eq!(
+            ev_with_action("storno", 0.0, Some(d)).kind(),
+            EventKind::PassSale,
+        );
     }
 }

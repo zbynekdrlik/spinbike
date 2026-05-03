@@ -355,8 +355,10 @@ UPDATE transactions SET action='topup'
 UPDATE transactions SET action='topup'
   WHERE action='activation';
 
-UPDATE transactions SET action='topup'
-  WHERE action='storno' AND amount > 0;
+-- storno rows (void of a prior transaction) are NOT mutated. The classifier
+-- maps action='storno' to EventKind::Other regardless of amount sign, so the
+-- ~64 historical refund rows render as Other instead of TopUp without losing
+-- the void semantic. See spinbike_core::reports::classify.
 "#;
 
 #[cfg(test)]
@@ -1076,7 +1078,7 @@ mod tests {
             (1005, "topup", 0.0),    // credit = 0 → topup
             (1006, "charge", -30.0), // credit < 0 → charge (already negative)
             (1007, "topup", 30.0),   // activation → topup
-            (1008, "topup", 2.5),    // storno > 0 → topup
+            (1008, "storno", 2.5),   // storno > 0 → unchanged (void semantic)
             (1009, "storno", 0.0),   // storno = 0 → unchanged
             (1010, "charge", -5.0),  // already-new charge → unchanged
             (1011, "topup", 7.5),    // already-new topup → unchanged

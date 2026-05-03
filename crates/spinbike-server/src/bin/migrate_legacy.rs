@@ -152,10 +152,10 @@ fn map_legacy(action: &str, amount: f64, has_valid_until: bool) -> Option<Mapped
             action: "topup",
             amount: amount.abs(),
         },
-        "Storno" if amount > 0.0 => MappedTxn {
-            action: "topup",
-            amount,
-        },
+        // Storno preserves the void semantic instead of folding into topup.
+        // The classifier maps action='storno' → EventKind::Other for any
+        // amount sign, so V12 leaves these rows alone and re-imports do
+        // the same.
         "Storno" => MappedTxn {
             action: "storno",
             amount,
@@ -593,11 +593,14 @@ mod tests {
     }
 
     #[test]
-    fn map_legacy_storno_positive_becomes_topup() {
+    fn map_legacy_storno_positive_stays_storno() {
+        // V12 preserves the void semantic — storno rows are NOT folded
+        // into topup. The classifier maps action='storno' to Other for
+        // any amount sign.
         assert_eq!(
             map_legacy("Storno", 2.5, false),
             Some(MappedTxn {
-                action: "topup",
+                action: "storno",
                 amount: 2.5
             })
         );
