@@ -43,6 +43,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "transactions: note length CHECK",
         V11_TRANSACTIONS_NOTE_CHECK,
     ),
+    (
+        12,
+        "transactions: normalize legacy actions to new convention",
+        V12_NORMALIZE_LEGACY_ACTIONS,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -314,6 +319,46 @@ FROM transactions;
 
 DROP TABLE transactions;
 ALTER TABLE transactions_new RENAME TO transactions;
+"#;
+
+// Normalize legacy positive-magnitude + signed-by-action transaction rows to
+// the new signed-amount + neutral-action convention used by spinbike_core::
+// reports::classify. Pre-rewrite, the MS Access importer wrote action='debit'
+// (positive amount) for spends and action='credit'/'activation' (positive
+// amount) for top-ups. The classifier only knows 'charge' (negative) /
+// 'topup' (positive) / 'visit' (zero), so legacy rows mis-rendered as TopUp
+// regardless of whether they were debits or credits. This migration mutates
+// every legacy row to the new vocabulary; subsequent runs are no-ops because
+// the action-name guards no longer match anything.
+//
+// Each statement is independently idempotent — re-running this migration
+// finds zero matching rows after the first successful pass.
+//
+// The runner at crate::db::mod (file db/mod.rs) runs every migration inside
+// a single tx, so BEGIN/COMMIT are intentionally omitted here.
+const V12_NORMALIZE_LEGACY_ACTIONS: &str = r#"
+UPDATE transactions SET action='charge', amount = -amount
+  WHERE action='debit' AND amount > 0;
+
+UPDATE transactions SET action='visit'
+  WHERE action='debit' AND amount = 0 AND valid_until IS NULL;
+
+UPDATE transactions SET action='charge'
+  WHERE action='debit' AND amount = 0 AND valid_until IS NOT NULL;
+
+UPDATE transactions SET action='charge'
+  WHERE action='credit' AND amount < 0;
+
+UPDATE transactions SET action='topup'
+  WHERE action='credit';
+
+UPDATE transactions SET action='topup'
+  WHERE action='activation';
+
+-- storno rows (void of a prior transaction) are NOT mutated. The classifier
+-- maps action='storno' to EventKind::Other regardless of amount sign, so the
+-- ~64 historical refund rows render as Other instead of TopUp without losing
+-- the void semantic. See spinbike_core::reports::classify.
 "#;
 
 #[cfg(test)]
@@ -977,5 +1022,133 @@ mod tests {
         .await
         .expect("transactions ↔ bookings FK must resolve after V11 rebuild");
         assert_eq!(joined, tx_id);
+    }
+
+    #[tokio::test]
+    async fn v12_normalizes_every_legacy_pattern() {
+        use crate::db::{create_memory_pool, run_migrations};
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // Seed one row of every pattern from the spec mutation table.
+        // Insert raw legacy-shape rows post-migration, then force V12 to
+        // re-run by clearing its schema_version entry.
+        sqlx::query(
+            "INSERT INTO transactions (id, action, amount, valid_until) VALUES
+               (1001, 'debit',      3.0,  NULL),
+               (1002, 'debit',      0.0,  NULL),
+               (1003, 'debit',      0.0,  '2026-12-31'),
+               (1004, 'credit',     2.0,  NULL),
+               (1005, 'credit',     0.0,  NULL),
+               (1006, 'credit',    -30.0, NULL),
+               (1007, 'activation', 30.0, NULL),
+               (1008, 'storno',     2.5,  NULL),
+               (1009, 'storno',     0.0,  NULL),
+               -- New-convention rows: V12 must leave these unchanged
+               -- (no guard matches their action labels).
+               (1010, 'charge',    -5.0,  NULL),
+               (1011, 'topup',      7.5,  NULL),
+               (1012, 'visit',      0.0,  NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Force V12 to re-run.
+        sqlx::query("DELETE FROM schema_version WHERE version = 12")
+            .execute(&pool)
+            .await
+            .unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let rows: Vec<(i64, String, f64)> = sqlx::query_as(
+            "SELECT id, action, amount FROM transactions
+             WHERE id BETWEEN 1001 AND 1012
+             ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        let expected: Vec<(i64, &str, f64)> = vec![
+            (1001, "charge", -3.0),  // debit > 0 → charge, negated
+            (1002, "visit", 0.0),    // debit = 0, no valid_until → visit
+            (1003, "charge", 0.0),   // debit = 0, valid_until set → charge
+            (1004, "topup", 2.0),    // credit > 0 → topup
+            (1005, "topup", 0.0),    // credit = 0 → topup
+            (1006, "charge", -30.0), // credit < 0 → charge (already negative)
+            (1007, "topup", 30.0),   // activation → topup
+            (1008, "storno", 2.5),   // storno > 0 → unchanged (void semantic)
+            (1009, "storno", 0.0),   // storno = 0 → unchanged
+            (1010, "charge", -5.0),  // already-new charge → unchanged
+            (1011, "topup", 7.5),    // already-new topup → unchanged
+            (1012, "visit", 0.0),    // already-new visit → unchanged
+        ];
+
+        assert_eq!(rows.len(), expected.len(), "all 12 rows must survive");
+        for ((id, action, amount), (eid, eaction, eamount)) in rows.iter().zip(expected.iter()) {
+            assert_eq!(id, eid, "row id mismatch");
+            assert_eq!(action, eaction, "row {id}: action mismatch");
+            assert!(
+                (amount - eamount).abs() < 1e-9,
+                "row {id}: amount {amount} != {eamount}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn v12_is_idempotent() {
+        use crate::db::{create_memory_pool, run_migrations};
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO transactions (id, action, amount) VALUES
+               (2001, 'debit',  3.0),
+               (2002, 'credit', 5.0)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // First run: mutate.
+        sqlx::query("DELETE FROM schema_version WHERE version = 12")
+            .execute(&pool)
+            .await
+            .unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let after_first: Vec<(i64, String, f64)> = sqlx::query_as(
+            "SELECT id, action, amount FROM transactions
+             WHERE id IN (2001, 2002) ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        // Second run: no-op (no rows match the legacy guards anymore).
+        sqlx::query("DELETE FROM schema_version WHERE version = 12")
+            .execute(&pool)
+            .await
+            .unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let after_second: Vec<(i64, String, f64)> = sqlx::query_as(
+            "SELECT id, action, amount FROM transactions
+             WHERE id IN (2001, 2002) ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            after_first, after_second,
+            "second V12 run must leave rows unchanged (idempotency)"
+        );
+        // Sanity: state is the post-backfill shape.
+        assert_eq!(after_first[0].1, "charge");
+        assert!((after_first[0].2 - (-3.0)).abs() < 1e-9);
+        assert_eq!(after_first[1].1, "topup");
+        assert!((after_first[1].2 - 5.0).abs() < 1e-9);
     }
 }
