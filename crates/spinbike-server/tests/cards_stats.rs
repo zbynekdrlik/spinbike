@@ -69,6 +69,37 @@ async fn empty_card_returns_zero_totals_and_twelve_zero_buckets() {
     let now = chrono::Local::now();
     let expected_last = format!("{:04}-{:02}", now.year(), now.month());
     assert_eq!(resp.monthly.last().unwrap().year_month, expected_last);
+
+    // All 12 labels must be well-formed YYYY-MM with month in 1..=12,
+    // strictly ascending, and unique. Kills mutants on the year wrap-
+    // around (`while month < 1` → `<= 1` or `== 1` would produce
+    // labels like "2025-13" or "2026--6").
+    let mut prev: Option<(i32, u32)> = None;
+    for b in &resp.monthly {
+        let parts: Vec<&str> = b.year_month.split('-').collect();
+        assert_eq!(parts.len(), 2, "malformed label: {}", b.year_month);
+        let y: i32 = parts[0]
+            .parse()
+            .unwrap_or_else(|_| panic!("bad year in {}", b.year_month));
+        let m: u32 = parts[1]
+            .parse()
+            .unwrap_or_else(|_| panic!("bad month in {}", b.year_month));
+        assert!(
+            (1..=12).contains(&m),
+            "month out of range in {}",
+            b.year_month
+        );
+        if let Some((py, pm)) = prev {
+            // Next label must be exactly one calendar month after the previous:
+            // either same year + month+1, or January of the next year.
+            let valid = (y == py && m == pm + 1) || (y == py + 1 && pm == 12 && m == 1);
+            assert!(
+                valid,
+                "non-sequential labels: {py:04}-{pm:02} → {y:04}-{m:02}"
+            );
+        }
+        prev = Some((y, m));
+    }
 }
 
 #[tokio::test]
