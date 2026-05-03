@@ -553,6 +553,12 @@ async fn card_stats(
         format!("service_id IN (SELECT id FROM services WHERE name_en IN ({placeholders}))");
 
     // ── Totals: one row, six numbers, three time windows ────────────────
+    //
+    // Note on `ELSE 0.0` (not `ELSE 0`): SQLite's SUM result type is REAL
+    // only when at least one input row is REAL. When every row falls into
+    // the `ELSE` branch (no matching topup rows), `ELSE 0` would produce
+    // an INTEGER SUM that sqlx::Decode<f64> rejects. `0.0` keeps the SUM
+    // typed as REAL even on the all-skip path.
     let totals_sql = format!(
         "SELECT
             COALESCE(SUM(CASE WHEN {visit_filter} AND deleted_at IS NULL
@@ -562,7 +568,7 @@ async fn card_stats(
             COALESCE(SUM(CASE WHEN action='topup' AND amount > 0 AND deleted_at IS NULL
                               AND strftime('%Y-%m', created_at, 'localtime') =
                                   strftime('%Y-%m','now','localtime')
-                         THEN amount ELSE 0 END), 0.0) AS topup_month,
+                         THEN amount ELSE 0.0 END), 0.0) AS topup_month,
             COALESCE(SUM(CASE WHEN {visit_filter} AND deleted_at IS NULL
                               AND strftime('%Y',    created_at, 'localtime') =
                                   strftime('%Y','now','localtime')
@@ -570,11 +576,11 @@ async fn card_stats(
             COALESCE(SUM(CASE WHEN action='topup' AND amount > 0 AND deleted_at IS NULL
                               AND strftime('%Y',    created_at, 'localtime') =
                                   strftime('%Y','now','localtime')
-                         THEN amount ELSE 0 END), 0.0) AS topup_year,
+                         THEN amount ELSE 0.0 END), 0.0) AS topup_year,
             COALESCE(SUM(CASE WHEN {visit_filter} AND deleted_at IS NULL
                          THEN 1 ELSE 0 END), 0) AS visits_all,
             COALESCE(SUM(CASE WHEN action='topup' AND amount > 0 AND deleted_at IS NULL
-                         THEN amount ELSE 0 END), 0.0) AS topup_all
+                         THEN amount ELSE 0.0 END), 0.0) AS topup_all
          FROM transactions
          WHERE card_id = ?",
         visit_filter = visit_filter_sql
@@ -607,11 +613,13 @@ async fn card_stats(
         labels.push(format!("{:04}-{:02}", year, month));
     }
     let oldest_label = labels.first().unwrap().clone();
+    // `ELSE 0.0` for topped_up: same reason as the totals query — keeps the
+    // column typed as REAL even when a month has no topup rows.
     let bucket_sql = format!(
         "SELECT
             strftime('%Y-%m', created_at, 'localtime') AS ym,
             SUM(CASE WHEN {visit_filter} THEN 1 ELSE 0 END) AS visits,
-            SUM(CASE WHEN action='topup' AND amount > 0 THEN amount ELSE 0 END) AS topped_up
+            SUM(CASE WHEN action='topup' AND amount > 0 THEN amount ELSE 0.0 END) AS topped_up
          FROM transactions
          WHERE card_id = ?
            AND deleted_at IS NULL
