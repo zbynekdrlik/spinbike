@@ -1435,3 +1435,65 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
 @media (min-width: 768px) {
     .app-version { bottom: var(--s-3, 8px); }
 }
+
+/* ─── Per-card Overview tab (v0.13.18) ───────────────────────────── */
+.stats-kpi {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 1rem;
+}
+.stats-kpi th,
+.stats-kpi td {
+    padding: 0.4rem 0.6rem;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+}
+.stats-kpi th:first-child,
+.stats-kpi td:first-child {
+    text-align: left;
+    font-weight: 500;
+}
+.stats-kpi th {
+    font-size: 0.8rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted, #888);
+}
+
+.stats-chart-title {
+    font-size: 0.95rem;
+    margin: 1rem 0 0.4rem;
+    color: var(--text-muted, #555);
+}
+.stats-chart {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+}
+.stats-row {
+    display: grid;
+    grid-template-columns: 4.5rem 1fr 5rem;
+    align-items: center;
+    gap: 0.5rem;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.9rem;
+}
+.stats-row__label {
+    color: var(--text-muted, #666);
+}
+.stats-row__bar-wrap {
+    background: var(--surface-2, #f0f0f0);
+    border-radius: 3px;
+    height: 0.85rem;
+    overflow: hidden;
+}
+.stats-row__bar {
+    height: 100%;
+    background: var(--accent, #4caf50);
+    border-radius: 3px;
+    transition: width 200ms ease;
+    min-width: 0;
+}
+.stats-row__value {
+    text-align: right;
+}
