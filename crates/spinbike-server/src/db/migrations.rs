@@ -334,8 +334,8 @@ ALTER TABLE transactions_new RENAME TO transactions;
 // Each statement is independently idempotent — re-running this migration
 // finds zero matching rows after the first successful pass.
 //
-// The runner at db::mod runs every migration inside a single tx, so BEGIN/
-// COMMIT are intentionally omitted here.
+// The runner at crate::db::mod (file db/mod.rs) runs every migration inside
+// a single tx, so BEGIN/COMMIT are intentionally omitted here.
 const V12_NORMALIZE_LEGACY_ACTIONS: &str = r#"
 UPDATE transactions SET action='charge', amount = -amount
   WHERE action='debit' AND amount > 0;
@@ -1041,7 +1041,12 @@ mod tests {
                (1006, 'credit',    -30.0, NULL),
                (1007, 'activation', 30.0, NULL),
                (1008, 'storno',     2.5,  NULL),
-               (1009, 'storno',     0.0,  NULL)",
+               (1009, 'storno',     0.0,  NULL),
+               -- New-convention rows: V12 must leave these unchanged
+               -- (no guard matches their action labels).
+               (1010, 'charge',    -5.0,  NULL),
+               (1011, 'topup',      7.5,  NULL),
+               (1012, 'visit',      0.0,  NULL)",
         )
         .execute(&pool)
         .await
@@ -1056,7 +1061,7 @@ mod tests {
 
         let rows: Vec<(i64, String, f64)> = sqlx::query_as(
             "SELECT id, action, amount FROM transactions
-             WHERE id BETWEEN 1001 AND 1009
+             WHERE id BETWEEN 1001 AND 1012
              ORDER BY id",
         )
         .fetch_all(&pool)
@@ -1073,9 +1078,12 @@ mod tests {
             (1007, "topup", 30.0),   // activation → topup
             (1008, "topup", 2.5),    // storno > 0 → topup
             (1009, "storno", 0.0),   // storno = 0 → unchanged
+            (1010, "charge", -5.0),  // already-new charge → unchanged
+            (1011, "topup", 7.5),    // already-new topup → unchanged
+            (1012, "visit", 0.0),    // already-new visit → unchanged
         ];
 
-        assert_eq!(rows.len(), expected.len(), "all 9 rows must survive");
+        assert_eq!(rows.len(), expected.len(), "all 12 rows must survive");
         for ((id, action, amount), (eid, eaction, eamount)) in rows.iter().zip(expected.iter()) {
             assert_eq!(id, eid, "row id mismatch");
             assert_eq!(action, eaction, "row {id}: action mismatch");
