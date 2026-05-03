@@ -135,6 +135,18 @@ async fn mixed_services_count_only_spinning_and_fitness_as_visits() {
 
 #[tokio::test]
 async fn topup_count_excludes_zero_amount_and_non_topup_actions() {
+    // Seeds chosen to kill the most-likely mutants on the topup predicate
+    // `action='topup' AND amount > 0`:
+    //
+    //   * amount=0.0 topup row     → excluded (zero contributes 0 to sum either way)
+    //   * amount=7.0 charge row    → excluded by action filter
+    //   * amount=-5.0 topup row    → excluded by `> 0`; presence kills several
+    //                                comparison-flip mutants (>0 → <0, <=0, ==0, !=0)
+    //
+    // Note: the `> 0` → `>= 0` mutant is observationally equivalent on a
+    // sum-only output (a zero-amount row contributes 0 either way). If
+    // cargo-mutants flags it, the proper fix is to expose a `topup_count`
+    // field in the response — out of scope for this PR.
     let app = TestApp::new().await;
     let card_id = app.seed_card("MIX2", 0.0, None, None, None, None).await;
 
@@ -144,6 +156,7 @@ async fn topup_count_excludes_zero_amount_and_non_topup_actions() {
     seed_txn(&app.pool, card_id, None, 10.0, "topup", &today).await;
     seed_txn(&app.pool, card_id, None, 25.0, "topup", &today).await;
     seed_txn(&app.pool, card_id, None, 0.0, "topup", &today).await;
+    seed_txn(&app.pool, card_id, None, -5.0, "topup", &today).await;
     seed_txn(&app.pool, card_id, Some("Spinning"), 7.0, "charge", &today).await;
 
     let (_, resp) = get_stats(&app, card_id).await;
