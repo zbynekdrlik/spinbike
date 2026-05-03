@@ -106,9 +106,9 @@ fn parse_legacy_end_date(s: &str) -> anyhow::Result<Option<chrono::NaiveDate>> {
 /// `action` and `amount` directly; downstream consumers (classifier, SQL
 /// filters) treat these rows identically to live writes from the new server.
 #[derive(Debug, PartialEq)]
-pub(crate) struct MappedTxn {
-    pub action: &'static str,
-    pub amount: f64,
+struct MappedTxn {
+    action: &'static str,
+    amount: f64,
 }
 
 /// Map a legacy action + amount + valid_until-presence into the new
@@ -138,6 +138,16 @@ fn map_legacy(action: &str, amount: f64, has_valid_until: bool) -> Option<Mapped
                 }
             }
         }
+        "Kredit" | "Novy kredit" | "AKTIVACIA" if amount < 0.0 => {
+            // V12 mirror: a single 2010 prod row exists with action='credit'
+            // and amount=-30.0 (manual correction in the legacy DB). V12 maps
+            // it to (charge, amount) — preserve that here so re-imports of
+            // any such future row land in the same shape.
+            MappedTxn {
+                action: "charge",
+                amount,
+            }
+        }
         "Kredit" | "Novy kredit" | "AKTIVACIA" => MappedTxn {
             action: "topup",
             amount: amount.abs(),
@@ -153,8 +163,8 @@ fn map_legacy(action: &str, amount: f64, has_valid_until: bool) -> Option<Mapped
         "BLOKOVANA" => return None,
         other => {
             warn!(
-                "Unknown legacy action: '{other}', mapping to 'topup' \
-                 with positive amount as fallback"
+                "Unknown legacy action: '{other}' (amount={amount}), \
+                 mapping to 'topup' with positive amount as fallback"
             );
             MappedTxn {
                 action: "topup",
@@ -502,7 +512,7 @@ mod tests {
     }
 
     #[test]
-    fn map_legacy_debet_with_valid_until_becomes_negative_charge_pass_sale() {
+    fn map_legacy_debet_with_valid_until_becomes_negative_charge() {
         assert_eq!(
             map_legacy("Debet", 28.0, true),
             Some(MappedTxn {
@@ -568,6 +578,21 @@ mod tests {
     }
 
     #[test]
+    fn map_legacy_kredit_negative_amount_mirrors_v12_to_charge() {
+        // V12 maps action='credit' AND amount < 0 to (charge, amount).
+        // The importer must mirror that, otherwise a re-import of the
+        // single documented 2010 prod row would diverge from V12's
+        // post-state.
+        assert_eq!(
+            map_legacy("Kredit", -30.0, false),
+            Some(MappedTxn {
+                action: "charge",
+                amount: -30.0
+            })
+        );
+    }
+
+    #[test]
     fn map_legacy_storno_positive_becomes_topup() {
         assert_eq!(
             map_legacy("Storno", 2.5, false),
@@ -598,6 +623,20 @@ mod tests {
     fn map_legacy_unknown_falls_back_to_positive_topup() {
         assert_eq!(
             map_legacy("MysteryAction", 5.0, false),
+            Some(MappedTxn {
+                action: "topup",
+                amount: 5.0
+            })
+        );
+    }
+
+    #[test]
+    fn map_legacy_unknown_negative_amount_falls_back_to_positive_topup() {
+        // .abs() in the unknown fallback ensures even a malformed
+        // negative-amount mystery action lands as a positive-amount
+        // topup. Kills cargo-mutants .abs() removal mutants.
+        assert_eq!(
+            map_legacy("MysteryAction", -5.0, false),
             Some(MappedTxn {
                 action: "topup",
                 amount: 5.0
