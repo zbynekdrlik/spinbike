@@ -102,21 +102,67 @@ fn parse_legacy_end_date(s: &str) -> anyhow::Result<Option<chrono::NaiveDate>> {
     }
 }
 
-/// Map a legacy action string to the new action format.
-/// Returns None for actions that should not create a transaction (e.g., BLOKOVANA).
-fn map_action(action: &str) -> Option<&'static str> {
-    match action.trim().trim_matches('"') {
-        "Debet" => Some("debit"),
-        "Kredit" | "Novy kredit" => Some("credit"),
-        "AKTIVACIA" => Some("activation"),
-        "Storno" => Some("storno"),
-        "Vstup" => Some("debit"),
-        "BLOKOVANA" => None, // handled by setting card.blocked = true
-        other => {
-            warn!("Unknown legacy action: '{other}', mapping to 'unknown'");
-            Some("unknown")
+/// New-convention mapping output for a single legacy row. The migrator writes
+/// `action` and `amount` directly; downstream consumers (classifier, SQL
+/// filters) treat these rows identically to live writes from the new server.
+#[derive(Debug, PartialEq)]
+pub(crate) struct MappedTxn {
+    pub action: &'static str,
+    pub amount: f64,
+}
+
+/// Map a legacy action + amount + valid_until-presence into the new
+/// signed-amount + neutral-action convention used everywhere in the rewrite
+/// (charge / topup / visit / storno). Returns None for actions that should
+/// not produce a transaction row (e.g., BLOKOVANA — handled by setting
+/// card.blocked = true at the call site).
+///
+/// Mirrors the V12 schema migration table — re-imports via this function
+/// produce rows that V12 would already consider new-convention, so V12 is a
+/// no-op on freshly imported data.
+fn map_legacy(action: &str, amount: f64, has_valid_until: bool) -> Option<MappedTxn> {
+    let mapped = match action.trim().trim_matches('"') {
+        "Debet" | "Vstup" => {
+            if amount == 0.0 && !has_valid_until {
+                MappedTxn {
+                    action: "visit",
+                    amount: 0.0,
+                }
+            } else {
+                // A real debit / paid visit / pass purchase — flip sign so
+                // amount < 0 (or amount = 0 for free pass purchases when
+                // has_valid_until is true).
+                MappedTxn {
+                    action: "charge",
+                    amount: -amount.abs(),
+                }
+            }
         }
-    }
+        "Kredit" | "Novy kredit" | "AKTIVACIA" => MappedTxn {
+            action: "topup",
+            amount: amount.abs(),
+        },
+        "Storno" if amount > 0.0 => MappedTxn {
+            action: "topup",
+            amount,
+        },
+        "Storno" => MappedTxn {
+            action: "storno",
+            amount,
+        },
+        "BLOKOVANA" => return None,
+        other => {
+            warn!(
+                "Unknown legacy action: '{other}', mapping to 'topup' \
+                 with positive amount as fallback"
+            );
+            MappedTxn {
+                action: "topup",
+                amount: amount.abs(),
+            }
+        }
+    };
+    Some(mapped)
 }
 
 async fn run_fresh_import(mdb_path: PathBuf, output_path: PathBuf) -> Result<()> {
@@ -289,7 +335,7 @@ async fn run_fresh_import(mdb_path: PathBuf, output_path: PathBuf) -> Result<()>
 
         let new_card_id = legacy_card_map.get(legacy_card_id).copied();
 
-        match map_action(action) {
+        match map_legacy(action, amount_eur, valid_until.is_some()) {
             None => {
                 // BLOKOVANA — mark card as blocked.
                 if let Some(card_id) = new_card_id {
@@ -297,7 +343,7 @@ async fn run_fresh_import(mdb_path: PathBuf, output_path: PathBuf) -> Result<()>
                 }
                 skipped_count += 1;
             }
-            Some(mapped_action) => {
+            Some(mapped) => {
                 // Format the legacy date for created_at.
                 // Legacy format: "MM/DD/YY HH:MM:SS" — store as-is since SQLite is flexible.
                 sqlx::query(
@@ -305,8 +351,8 @@ async fn run_fresh_import(mdb_path: PathBuf, output_path: PathBuf) -> Result<()>
                      VALUES (?, ?, ?, ?, ?, ?)",
                 )
                 .bind(new_card_id)
-                .bind(amount_eur)
-                .bind(mapped_action)
+                .bind(mapped.amount)
+                .bind(mapped.action)
                 .bind(date)
                 .bind(service_id)
                 .bind(valid_until)
@@ -421,6 +467,154 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn map_legacy_debet_positive_amount_becomes_negative_charge() {
+        assert_eq!(
+            map_legacy("Debet", 3.0, false),
+            Some(MappedTxn {
+                action: "charge",
+                amount: -3.0
+            })
+        );
+    }
+
+    #[test]
+    fn map_legacy_debet_zero_no_valid_until_becomes_visit() {
+        assert_eq!(
+            map_legacy("Debet", 0.0, false),
+            Some(MappedTxn {
+                action: "visit",
+                amount: 0.0
+            })
+        );
+    }
+
+    #[test]
+    fn map_legacy_debet_zero_with_valid_until_becomes_zero_charge() {
+        assert_eq!(
+            map_legacy("Debet", 0.0, true),
+            Some(MappedTxn {
+                action: "charge",
+                amount: 0.0
+            })
+        );
+    }
+
+    #[test]
+    fn map_legacy_debet_with_valid_until_becomes_negative_charge_pass_sale() {
+        assert_eq!(
+            map_legacy("Debet", 28.0, true),
+            Some(MappedTxn {
+                action: "charge",
+                amount: -28.0
+            })
+        );
+    }
+
+    #[test]
+    fn map_legacy_vstup_positive_amount_becomes_negative_charge() {
+        assert_eq!(
+            map_legacy("Vstup", 2.5, false),
+            Some(MappedTxn {
+                action: "charge",
+                amount: -2.5
+            })
+        );
+    }
+
+    #[test]
+    fn map_legacy_vstup_zero_no_valid_until_becomes_visit() {
+        assert_eq!(
+            map_legacy("Vstup", 0.0, false),
+            Some(MappedTxn {
+                action: "visit",
+                amount: 0.0
+            })
+        );
+    }
+
+    #[test]
+    fn map_legacy_kredit_becomes_topup() {
+        assert_eq!(
+            map_legacy("Kredit", 30.0, false),
+            Some(MappedTxn {
+                action: "topup",
+                amount: 30.0
+            })
+        );
+    }
+
+    #[test]
+    fn map_legacy_novy_kredit_becomes_topup() {
+        assert_eq!(
+            map_legacy("Novy kredit", 30.0, false),
+            Some(MappedTxn {
+                action: "topup",
+                amount: 30.0
+            })
+        );
+    }
+
+    #[test]
+    fn map_legacy_aktivacia_becomes_topup() {
+        assert_eq!(
+            map_legacy("AKTIVACIA", 30.0, false),
+            Some(MappedTxn {
+                action: "topup",
+                amount: 30.0
+            })
+        );
+    }
+
+    #[test]
+    fn map_legacy_storno_positive_becomes_topup() {
+        assert_eq!(
+            map_legacy("Storno", 2.5, false),
+            Some(MappedTxn {
+                action: "topup",
+                amount: 2.5
+            })
+        );
+    }
+
+    #[test]
+    fn map_legacy_storno_zero_stays_storno() {
+        assert_eq!(
+            map_legacy("Storno", 0.0, false),
+            Some(MappedTxn {
+                action: "storno",
+                amount: 0.0
+            })
+        );
+    }
+
+    #[test]
+    fn map_legacy_blokovana_returns_none() {
+        assert_eq!(map_legacy("BLOKOVANA", 0.0, false), None);
+    }
+
+    #[test]
+    fn map_legacy_unknown_falls_back_to_positive_topup() {
+        assert_eq!(
+            map_legacy("MysteryAction", 5.0, false),
+            Some(MappedTxn {
+                action: "topup",
+                amount: 5.0
+            })
+        );
+    }
+
+    #[test]
+    fn map_legacy_strips_quotes_and_whitespace() {
+        assert_eq!(
+            map_legacy("  \"Debet\"  ", 3.0, false),
+            Some(MappedTxn {
+                action: "charge",
+                amount: -3.0
+            })
+        );
+    }
 
     #[test]
     fn parse_end_date_valid() {
