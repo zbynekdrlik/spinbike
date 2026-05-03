@@ -545,6 +545,26 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("tab_history", ("Historia", "History"));
     m.insert("tab_upcoming", ("Pripravovane", "Upcoming"));
     m.insert("tab_persistent", ("Opakovane", "Persistent"));
+    m.insert("tab_overview", ("Prehlad", "Overview"));
+
+    // Overview tab — KPI table + bar charts
+    m.insert("overview_period_month", ("Tento mesiac", "This month"));
+    m.insert("overview_period_year", ("Tento rok", "This year"));
+    m.insert("overview_period_all", ("Spolu", "All time"));
+    m.insert("overview_col_visits", ("Vstupy", "Visits"));
+    m.insert("overview_col_topup", ("Dobitie", "Topped up"));
+    m.insert(
+        "overview_chart_visits",
+        ("Vstupy po mesiacoch", "Visits per month"),
+    );
+    m.insert(
+        "overview_chart_topup",
+        (
+            "Dobitie po mesiacoch (\u{20ac})",
+            "Topped up per month (\u{20ac})",
+        ),
+    );
+    m.insert("overview_loading", ("Nacitavam stat...", "Loading..."));
 
     // General
     m.insert("loading", ("Nacitavanie...", "Loading..."));
