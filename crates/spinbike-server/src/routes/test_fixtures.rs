@@ -22,6 +22,11 @@ pub struct SeedEntry {
     pub amount: f64,
     pub action: String,
     pub service_name_sk: String,
+    /// Optional pass-sale expiry. None for normal transactions; Some(date)
+    /// when the seeded row should classify as PassSale. The serde default
+    /// keeps existing E2E callers source-compatible.
+    #[serde(default)]
+    pub valid_until: Option<chrono::NaiveDate>,
 }
 
 pub fn routes() -> Router<AppState> {
@@ -97,13 +102,14 @@ async fn seed_transactions(
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
         sqlx::query(
-            "INSERT INTO transactions (card_id, service_id, amount, action, legacy_backfilled, created_at)
-             VALUES (?, ?, ?, ?, 1, datetime('now'))",
+            "INSERT INTO transactions (card_id, service_id, amount, action, valid_until, legacy_backfilled, created_at)
+             VALUES (?, ?, ?, ?, ?, 1, datetime('now'))",
         )
         .bind(card_id)
         .bind(svc_id)
         .bind(e.amount)
         .bind(&e.action)
+        .bind(e.valid_until)
         .execute(&state.pool)
         .await
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
