@@ -29,6 +29,7 @@ pub fn CardActionPanel(
     card: CardInfo,
     services: ReadSignal<Vec<ServiceInfo>>,
     set_selected: WriteSignal<Option<CardInfo>>,
+    msg: ReadSignal<String>,
     set_msg: WriteSignal<String>,
     #[prop(into)] on_close: Callback<web_sys::MouseEvent>,
 ) -> impl IntoView {
@@ -151,6 +152,7 @@ pub fn CardActionPanel(
                 card=card_for_form.clone()
                 services=services
                 set_selected=set_selected
+                msg=msg
                 set_msg=set_msg
                 set_txn_refresh=txn_refresh.write_only()
             />

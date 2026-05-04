@@ -17,6 +17,7 @@ pub fn ActionForm(
     card: CardInfo,
     services: ReadSignal<Vec<ServiceInfo>>,
     set_selected: WriteSignal<Option<CardInfo>>,
+    msg: ReadSignal<String>,
     set_msg: WriteSignal<String>,
     set_txn_refresh: WriteSignal<u32>,
 ) -> impl IntoView {
@@ -238,9 +239,20 @@ pub fn ActionForm(
         }
     };
 
-    let visit_click_for = move |service_id: i64| {
+    let visit_click_for = move |service_id: i64, svc_name: String| {
         move |_: web_sys::MouseEvent| {
+            // Re-entry guard: if a previous press is still in flight, the
+            // disabled binding may not have repainted yet. This protects
+            // against a fast double-tap before the next-frame disable
+            // takes effect.
+            if loading.get_untracked() {
+                return;
+            }
+            set_err.set(String::new());
+            set_loading.set(true);
             let note = read_note();
+            // Clone so the outer FnMut handler can capture svc_name on every click.
+            let svc_name = svc_name.clone();
             spawn_local(async move {
                 #[derive(serde::Serialize)]
                 struct Req {
@@ -264,11 +276,28 @@ pub fn ActionForm(
                 .await
                 {
                     Ok(_) => {
+                        let m = i18n::tf(
+                            lang.get_untracked(),
+                            "visit_added_format",
+                            &[&svc_name],
+                        );
+                        set_msg.set(m.clone());
                         set_txn_refresh.update(|n| *n += 1);
                         clear_note();
+                        // Auto-clear: 2.5s after this set, clear msg only if
+                        // it still equals m. A subsequent visit / charge in
+                        // the window will replace msg with new text, the
+                        // comparison fails, and this timer becomes a no-op.
+                        spawn_local(async move {
+                            gloo_timers::future::TimeoutFuture::new(2500).await;
+                            if msg.get_untracked() == m {
+                                set_msg.set(String::new());
+                            }
+                        });
                     }
-                    Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
+                    Err(e) => set_err.set(e),
                 }
+                set_loading.set(false);
             });
         }
     };
@@ -409,7 +438,8 @@ pub fn ActionForm(
                                     <button
                                         class=format!("btn {color_cls}")
                                         data-testid="log-visit-btn"
-                                        on:click=visit_click_for(service_id)
+                                        disabled=move || loading.get()
+                                        on:click=visit_click_for(service_id, svc_name.clone())
                                     >
                                         {move || i18n::t(lang.get(), "log_visit")}" "{svc_name.clone()}
                                     </button>
