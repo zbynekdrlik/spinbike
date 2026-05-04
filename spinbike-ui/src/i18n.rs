@@ -826,11 +826,7 @@ mod format_key_tests {
     use super::{tf, Lang};
     use wasm_bindgen_test::*;
 
-    // CRITICAL: do NOT add `wasm_bindgen_test_configure!(run_in_browser);`
-    // here. CI runs these via `wasm-pack test --node`, where the
-    // run_in_browser configure causes the entire test set to silently skip
-    // (zero failures, zero passes — invisible). The existing `datetime_tests`
-    // module above also has no configure line for the same reason.
+    // No wasm_bindgen_test_configure! — CI uses wasm-pack test --node (not browser).
 
     #[wasm_bindgen_test]
     fn visit_added_format_renders_slovak() {
@@ -843,8 +839,8 @@ mod format_key_tests {
     #[wasm_bindgen_test]
     fn visit_added_format_renders_english() {
         assert_eq!(
-            tf(Lang::En, "visit_added_format", &["Spinning"]),
-            "Visit added: Spinning"
+            tf(Lang::En, "visit_added_format", &["Fitness"]),
+            "Visit added: Fitness"
         );
     }
 }
