@@ -390,7 +390,7 @@ async fn barcode_prefix_match_overrides_last_visit_sort() {
         .seed_card("LVPFX99X", 0.0, Some("OldVisit"), Some("Z"), None, None)
         .await;
     let card_new = app
-        .seed_card("OTHER01LVPFX", 0.0, Some("NewVisit"), Some("Z"), None, None)
+        .seed_card("XY_LVPFX99Z", 0.0, Some("NewVisit"), Some("Z"), None, None)
         .await;
 
     let now = chrono::Local::now();

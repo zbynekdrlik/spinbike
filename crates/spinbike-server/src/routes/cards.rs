@@ -203,8 +203,8 @@ async fn search_cards(
         .await
         .map_err(internal_error)?;
     let out = rows
-        .iter()
-        .map(|(c, pass, last_visit)| card_response_from_row_with_pass(c, *pass, last_visit.clone()))
+        .into_iter()
+        .map(|(c, pass, last_visit)| card_response_from_row_with_pass(&c, pass, last_visit))
         .collect();
     Ok(Json(out))
 }
@@ -224,8 +224,8 @@ async fn list_cards(
         .await
         .map_err(internal_error)?;
     let out = rows
-        .iter()
-        .map(|(c, pass, last_visit)| card_response_from_row_with_pass(c, *pass, last_visit.clone()))
+        .into_iter()
+        .map(|(c, pass, last_visit)| card_response_from_row_with_pass(&c, pass, last_visit))
         .collect();
     Ok(Json(out))
 }

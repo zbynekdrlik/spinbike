@@ -184,7 +184,7 @@ impl CardRowWithPass {
             (Some(id), Some(date)) => Some((id, date)),
             _ => None,
         };
-        let last_visit = self.last_visit_at;
+        let last_visit_at = self.last_visit_at;
         (
             CardRow {
                 id: self.id,
@@ -200,7 +200,7 @@ impl CardRowWithPass {
                 phone: self.phone,
             },
             pass,
-            last_visit,
+            last_visit_at,
         )
     }
 }
