@@ -9,7 +9,7 @@ const BASE_URL = 'http://localhost:8099';
 // fires — the card barcodes are deliberately ordered so that alphabetic fallback
 // would produce a DIFFERENT order than temporal sort:
 //
-//   Temporal (correct): Zulu (1d ago) → Alpha (100d ago) → Mike (NULL)
+//   Temporal (correct): Zulu (3d ago) → Alpha (100d ago) → Mike (NULL)
 //   Alphabetic fallback: Alpha → Mike → Zulu (broken sort would give this)
 //
 // The assertion Zulu → Alpha → Mike therefore requires last_visit_at DESC to work.
@@ -23,13 +23,17 @@ test('last-visit display + Quick Search sort by last visit', async ({ page }) =>
     const fmtTs = (d: Date): string =>
         `${d.toISOString().slice(0, 10)} 12:00:00`;
 
+    // Note: `Date.toISOString()` is always UTC, so a `getTime() - N * 86400000`
+    // offset can land on the wrong local calendar day in the 00:00-02:00 local
+    // window. We pick 3 days ago (not 1) and assert with a `'days ago'` substring
+    // so the test is robust under that edge.
     const today = new Date();
-    const oneDayAgo = new Date(today.getTime() - 1 * 24 * 60 * 60 * 1000);
+    const threeDaysAgo = new Date(today.getTime() - 3 * 24 * 60 * 60 * 1000);
     const hundredDaysAgo = new Date(today.getTime() - 100 * 24 * 60 * 60 * 1000);
 
     const cards = [
         {
-            // Spinning visit 1 day ago → last_visit_at = yesterday → "1 day ago".
+            // Spinning visit 3 days ago → last_visit_at = 3d ago → "X days ago".
             // Barcode starts with "Zulu" — alphabetically LAST among the three.
             // With correct last_visit_at DESC sort, Zulu comes first because it
             // is the most recent class visitor.
@@ -38,7 +42,7 @@ test('last-visit display + Quick Search sort by last visit', async ({ page }) =>
                 amount: -3.30,
                 action: 'charge',
                 service_name_sk: 'Spinning',
-                created_at: fmtTs(oneDayAgo),
+                created_at: fmtTs(threeDaysAgo),
             }],
         },
         {
@@ -87,7 +91,7 @@ test('last-visit display + Quick Search sort by last visit', async ({ page }) =>
     await expect(results).toHaveCount(3);
 
     // Sort assertion (temporal, not alphabetic):
-    //   0 → Zulu  (last_visit_at = 1 day ago, most recent)
+    //   0 → Zulu  (last_visit_at = 3 days ago, most recent)
     //   1 → Alpha (last_visit_at = 100 days ago)
     //   2 → Mike  (last_visit_at = NULL, always last)
     //
@@ -97,13 +101,13 @@ test('last-visit display + Quick Search sort by last visit', async ({ page }) =>
     await expect(results.nth(1)).toContainText(`Alpha${RUN_TAG}`);
     await expect(results.nth(2)).toContainText(`Mike${RUN_TAG}`);
 
-    // ── ZuluTest: opens to "Last visit … (1 day ago)" ──
+    // ── ZuluTest: opens to "Last visit … (X days ago)" ──
     await results.nth(0).click();
     await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
     const zuluLastVisit = page.locator('[data-testid="card-last-visit"]');
     await expect(zuluLastVisit).toBeVisible();
     await expect(zuluLastVisit).toContainText('Last visit');
-    await expect(zuluLastVisit).toContainText('1 day ago');
+    await expect(zuluLastVisit).toContainText('days ago');
 
     // ── AlphaTest: opens to "Last visit … (3 months ago)" ──
     await page.locator('[data-testid="action-panel"] button[title="close"]').click();

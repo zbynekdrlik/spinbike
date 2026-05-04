@@ -101,6 +101,7 @@ async fn seed_transactions(
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
     };
 
+    let count = body.entries.len();
     for e in body.entries {
         let svc_id: Option<i64> = sqlx::query_scalar("SELECT id FROM services WHERE name_sk = ?")
             .bind(&e.service_name_sk)
@@ -125,5 +126,7 @@ async fn seed_transactions(
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
     }
 
-    Ok(Json(serde_json::json!({ "card_id": card_id, "count": 1 })))
+    Ok(Json(
+        serde_json::json!({ "card_id": card_id, "count": count }),
+    ))
 }
