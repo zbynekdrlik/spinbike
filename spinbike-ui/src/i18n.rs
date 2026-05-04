@@ -662,6 +662,11 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("settings_tab_users", ("Pouzivatelia", "Users"));
 
     // Relative-time labels (last visit display — #57)
+    // Note: `rel_days_one` and `rel_months_one` are currently UNREACHABLE under
+    // the bucket logic in `relative_date::relative` — `days==1` short-circuits
+    // to "yesterday" before reaching the days bucket, and the months bucket
+    // starts at days=61 where N is always >=2. Kept for symmetry with the
+    // `_few` forms in case a future bucket adjustment makes them reachable.
     m.insert("last_visit_label", ("Posledna navsteva", "Last visit"));
     m.insert("rel_today", ("dnes", "today"));
     m.insert("rel_yesterday", ("vcera", "yesterday"));

@@ -72,8 +72,6 @@ mod tests {
     use chrono::NaiveDate;
     use wasm_bindgen_test::*;
 
-    wasm_bindgen_test_configure!(run_in_browser);
-
     fn mk(today_y: i32, today_m: u32, today_d: u32, days_ago: i64) -> (NaiveDate, NaiveDate) {
         let today = NaiveDate::from_ymd_opt(today_y, today_m, today_d).unwrap();
         let visited = today - chrono::Duration::days(days_ago);
