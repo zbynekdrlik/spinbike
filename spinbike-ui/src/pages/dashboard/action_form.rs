@@ -251,6 +251,7 @@ pub fn ActionForm(
             set_err.set(String::new());
             set_loading.set(true);
             let note = read_note();
+            // Clone so the outer FnMut handler can capture svc_name on every click.
             let svc_name = svc_name.clone();
             spawn_local(async move {
                 #[derive(serde::Serialize)]
