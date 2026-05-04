@@ -453,6 +453,7 @@ pub fn DashboardPage() -> impl IntoView {
                     card=c
                     services=services
                     set_selected=set_selected
+                    msg=msg
                     set_msg=set_msg
                     on_close=Callback::new(clear_selection)
                 />
