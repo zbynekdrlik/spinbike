@@ -370,6 +370,10 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         "charge_ok_format",
         ("Uctovane. Zostatok: {} €", "Charged. Balance: {} €"),
     );
+    m.insert(
+        "visit_added_format",
+        ("Vstup pridany: {}", "Visit added: {}"),
+    );
     m.insert("block_ok", ("Karta zablokovana", "Card blocked"));
     m.insert("unblock_ok", ("Karta odblokovana", "Card unblocked"));
     m.insert("activate_ok", ("Karta aktivovana", "Card activated"));
@@ -814,5 +818,33 @@ mod datetime_tests {
     #[wasm_bindgen_test]
     fn fmt_time_str_unknown_returns_empty() {
         assert_eq!(fmt_time_str("not-a-date"), "");
+    }
+}
+
+#[cfg(test)]
+mod format_key_tests {
+    use super::{tf, Lang};
+    use wasm_bindgen_test::*;
+
+    // CRITICAL: do NOT add `wasm_bindgen_test_configure!(run_in_browser);`
+    // here. CI runs these via `wasm-pack test --node`, where the
+    // run_in_browser configure causes the entire test set to silently skip
+    // (zero failures, zero passes — invisible). The existing `datetime_tests`
+    // module above also has no configure line for the same reason.
+
+    #[wasm_bindgen_test]
+    fn visit_added_format_renders_slovak() {
+        assert_eq!(
+            tf(Lang::Sk, "visit_added_format", &["Fitness"]),
+            "Vstup pridany: Fitness"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn visit_added_format_renders_english() {
+        assert_eq!(
+            tf(Lang::En, "visit_added_format", &["Spinning"]),
+            "Visit added: Spinning"
+        );
     }
 }
