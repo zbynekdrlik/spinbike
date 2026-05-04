@@ -661,6 +661,19 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("settings_tab_instructors", ("Instruktori", "Instructors"));
     m.insert("settings_tab_users", ("Pouzivatelia", "Users"));
 
+    // Relative-time labels (last visit display — #57)
+    m.insert("last_visit_label", ("Posledna navsteva", "Last visit"));
+    m.insert("rel_today", ("dnes", "today"));
+    m.insert("rel_yesterday", ("vcera", "yesterday"));
+    m.insert("rel_days_one", ("pred 1 dnom", "1 day ago"));
+    m.insert("rel_days_few", ("pred {n} dnami", "{n} days ago"));
+    m.insert("rel_weeks_one", ("pred 1 tyzdnom", "1 week ago"));
+    m.insert("rel_weeks_few", ("pred {n} tyzdnami", "{n} weeks ago"));
+    m.insert("rel_months_one", ("pred 1 mesiacom", "1 month ago"));
+    m.insert("rel_months_few", ("pred {n} mesiacmi", "{n} months ago"));
+    m.insert("rel_years_one", ("pred 1 rokom", "1 year ago"));
+    m.insert("rel_years_few", ("pred {n} rokmi", "{n} years ago"));
+
     m
 });
 
