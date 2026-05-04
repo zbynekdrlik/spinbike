@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use spinbike_core::services::CLASS_VISIT_NAMES_EN;
 use sqlx::SqlitePool;
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
@@ -173,15 +174,17 @@ pub struct CardRowWithPass {
     pub phone: Option<String>,
     pub pass_valid_until: Option<chrono::NaiveDate>,
     pub pass_tx_id: Option<i64>,
+    pub last_visit_at: Option<String>,
 }
 
 impl CardRowWithPass {
-    /// Decompose into the card portion and the pass (id + date).
-    pub fn into_parts(self) -> (CardRow, Option<(i64, chrono::NaiveDate)>) {
+    /// Decompose into the card portion, the pass (id + date), and the last visit timestamp.
+    pub fn into_parts(self) -> (CardRow, Option<(i64, chrono::NaiveDate)>, Option<String>) {
         let pass = match (self.pass_tx_id, self.pass_valid_until) {
             (Some(id), Some(date)) => Some((id, date)),
             _ => None,
         };
+        let last_visit = self.last_visit_at;
         (
             CardRow {
                 id: self.id,
@@ -197,6 +200,7 @@ impl CardRowWithPass {
                 phone: self.phone,
             },
             pass,
+            last_visit,
         )
     }
 }
@@ -206,8 +210,8 @@ impl CardRowWithPass {
 /// transaction per card (ties broken by id DESC).
 pub async fn list_all_cards_with_pass(
     pool: &SqlitePool,
-) -> Result<Vec<(CardRow, Option<(i64, chrono::NaiveDate)>)>> {
-    let rows: Vec<CardRowWithPass> = sqlx::query_as(
+) -> Result<Vec<(CardRow, Option<(i64, chrono::NaiveDate)>, Option<String>)>> {
+    let rows: Vec<CardRowWithPass> = sqlx::query_as::<_, CardRowWithPass>(
         "SELECT c.id, c.barcode, c.user_id, c.blocked, c.credit, c.allow_debit,
                 c.created_at, c.first_name, c.last_name, c.company, c.phone,
                 (SELECT MAX(valid_until) FROM transactions
@@ -216,10 +220,17 @@ pub async fn list_all_cards_with_pass(
                 (SELECT id FROM transactions
                  WHERE card_id = c.id AND valid_until IS NOT NULL AND deleted_at IS NULL
                  ORDER BY valid_until DESC, id DESC LIMIT 1
-                ) AS pass_tx_id
+                ) AS pass_tx_id,
+                (SELECT MAX(created_at) FROM transactions
+                 WHERE card_id = c.id
+                   AND deleted_at IS NULL
+                   AND service_id IN (SELECT id FROM services WHERE name_en IN (?, ?))
+                ) AS last_visit_at
          FROM cards c
          ORDER BY c.barcode",
     )
+    .bind(CLASS_VISIT_NAMES_EN[0])
+    .bind(CLASS_VISIT_NAMES_EN[1])
     .fetch_all(pool)
     .await
     .context("Failed to list cards with pass")?;
@@ -231,7 +242,7 @@ pub async fn search_cards_with_pass(
     pool: &SqlitePool,
     query: &str,
     limit: i64,
-) -> Result<Vec<(CardRow, Option<(i64, chrono::NaiveDate)>)>> {
+) -> Result<Vec<(CardRow, Option<(i64, chrono::NaiveDate)>, Option<String>)>> {
     let q = query.trim();
     if q.is_empty() {
         return Ok(Vec::new());
@@ -239,7 +250,7 @@ pub async fn search_cards_with_pass(
     let normalized = normalize_search(q);
     let like = format!("%{normalized}%");
     let prefix = format!("{q}%");
-    let rows: Vec<CardRowWithPass> = sqlx::query_as(
+    let rows: Vec<CardRowWithPass> = sqlx::query_as::<_, CardRowWithPass>(
         "SELECT c.id, c.barcode, c.user_id, c.blocked, c.credit, c.allow_debit,
                 c.created_at, c.first_name, c.last_name, c.company, c.phone,
                 (SELECT MAX(valid_until) FROM transactions
@@ -248,16 +259,25 @@ pub async fn search_cards_with_pass(
                 (SELECT id FROM transactions
                  WHERE card_id = c.id AND valid_until IS NOT NULL AND deleted_at IS NULL
                  ORDER BY valid_until DESC, id DESC LIMIT 1
-                ) AS pass_tx_id
+                ) AS pass_tx_id,
+                (SELECT MAX(created_at) FROM transactions
+                 WHERE card_id = c.id
+                   AND deleted_at IS NULL
+                   AND service_id IN (SELECT id FROM services WHERE name_en IN (?, ?))
+                ) AS last_visit_at
          FROM cards c
          WHERE c.search_text LIKE ?
          ORDER BY
            CASE WHEN c.barcode LIKE ? THEN 0 ELSE 1 END,
+           last_visit_at IS NULL,
+           last_visit_at DESC,
            c.last_name IS NULL, c.last_name ASC,
            c.first_name IS NULL, c.first_name ASC,
            c.barcode ASC
          LIMIT ?",
     )
+    .bind(CLASS_VISIT_NAMES_EN[0])
+    .bind(CLASS_VISIT_NAMES_EN[1])
     .bind(&like)
     .bind(&prefix)
     .bind(limit)
@@ -321,8 +341,8 @@ pub async fn get_card_by_user(pool: &SqlitePool, user_id: i64) -> Result<Vec<Car
 pub async fn get_cards_with_pass_by_user(
     pool: &SqlitePool,
     user_id: i64,
-) -> Result<Vec<(CardRow, Option<(i64, chrono::NaiveDate)>)>> {
-    let rows: Vec<CardRowWithPass> = sqlx::query_as(
+) -> Result<Vec<(CardRow, Option<(i64, chrono::NaiveDate)>, Option<String>)>> {
+    let rows: Vec<CardRowWithPass> = sqlx::query_as::<_, CardRowWithPass>(
         "SELECT c.id, c.barcode, c.user_id, c.blocked, c.credit, c.allow_debit,
                 c.created_at, c.first_name, c.last_name, c.company, c.phone,
                 (SELECT MAX(valid_until) FROM transactions
@@ -331,10 +351,17 @@ pub async fn get_cards_with_pass_by_user(
                 (SELECT id FROM transactions
                  WHERE card_id = c.id AND valid_until IS NOT NULL AND deleted_at IS NULL
                  ORDER BY valid_until DESC, id DESC LIMIT 1
-                ) AS pass_tx_id
+                ) AS pass_tx_id,
+                (SELECT MAX(created_at) FROM transactions
+                 WHERE card_id = c.id
+                   AND deleted_at IS NULL
+                   AND service_id IN (SELECT id FROM services WHERE name_en IN (?, ?))
+                ) AS last_visit_at
          FROM cards c
          WHERE c.user_id = ?",
     )
+    .bind(CLASS_VISIT_NAMES_EN[0])
+    .bind(CLASS_VISIT_NAMES_EN[1])
     .bind(user_id)
     .fetch_all(pool)
     .await
