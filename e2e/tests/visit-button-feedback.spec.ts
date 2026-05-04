@@ -53,7 +53,7 @@ test('visit button shows loading + success banner + auto-clears', async ({ page 
 
     // Both visit buttons (Fitness, Spinning) should be visible because
     // pass_is_active is true. We click the first one (Fitness, by the
-    // alphabetical sort applied in action_form.rs:394).
+    // alphabetical sort applied in action_form.rs).
     const visitButtons = page.locator('[data-testid="log-visit-btn"]');
     await expect(visitButtons).toHaveCount(2);
     const fitnessBtn = visitButtons.first();
