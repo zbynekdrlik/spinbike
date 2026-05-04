@@ -27,6 +27,12 @@ pub struct SeedEntry {
     /// keeps existing E2E callers source-compatible.
     #[serde(default)]
     pub valid_until: Option<chrono::NaiveDate>,
+    /// Optional override of the row's created_at. Format: "YYYY-MM-DD HH:MM:SS"
+    /// (the SQLite literal). When omitted, the handler uses datetime('now') as
+    /// before. Used by E2E tests that need to seed historical visits at specific
+    /// timestamps to exercise the relative-time bucket logic (issue #57).
+    #[serde(default)]
+    pub created_at: Option<String>,
 }
 
 pub fn routes() -> Router<AppState> {
@@ -95,25 +101,32 @@ async fn seed_transactions(
             .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
     };
 
+    let count = body.entries.len();
     for e in body.entries {
         let svc_id: Option<i64> = sqlx::query_scalar("SELECT id FROM services WHERE name_sk = ?")
             .bind(&e.service_name_sk)
             .fetch_optional(&state.pool)
             .await
             .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+        // COALESCE lets callers override created_at for historical seeds (issue #57).
+        // When None is bound, COALESCE falls back to datetime('now') — same as the
+        // original hard-coded default.
         sqlx::query(
             "INSERT INTO transactions (card_id, service_id, amount, action, valid_until, legacy_backfilled, created_at)
-             VALUES (?, ?, ?, ?, ?, 1, datetime('now'))",
+             VALUES (?, ?, ?, ?, ?, 1, COALESCE(?, datetime('now')))",
         )
         .bind(card_id)
         .bind(svc_id)
         .bind(e.amount)
         .bind(&e.action)
         .bind(e.valid_until)
+        .bind(e.created_at.as_deref())
         .execute(&state.pool)
         .await
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
     }
 
-    Ok(Json(serde_json::json!({ "card_id": card_id, "count": 1 })))
+    Ok(Json(
+        serde_json::json!({ "card_id": card_id, "count": count }),
+    ))
 }

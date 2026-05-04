@@ -517,6 +517,12 @@ select.form-control {
     font-family: ui-monospace, monospace;
 }
 
+.card-title__last-visit {
+    font-size: 0.875rem;
+    color: var(--text-muted);
+    margin-top: 0.125rem;
+}
+
 /* Card balance — prominent credit display (used in Task 13) */
 .card-balance {
     display: flex;

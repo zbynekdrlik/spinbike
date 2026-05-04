@@ -98,6 +98,9 @@ pub struct CardResponse {
     pub company: Option<String>,
     pub phone: Option<String>,
     pub pass: Option<CardPass>,
+    /// MAX(transactions.created_at) for non-soft-deleted Spinning/Fitness rows.
+    /// `None` if the card has never had a qualifying class visit.
+    pub last_visit_at: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -134,14 +137,16 @@ async fn card_response_from_row(
     c: &db::CardRow,
 ) -> anyhow::Result<CardResponse> {
     let pass = db::get_card_pass_tx(pool, c.id).await?;
-    Ok(card_response_from_row_with_pass(c, pass))
+    Ok(card_response_from_row_with_pass(c, pass, None))
 }
 
-/// Build a CardResponse from a pre-fetched pass (tx id + date) — avoids per-card DB round-trip.
-/// Used by list_cards and search_cards which retrieve pass info in a single query.
+/// Build a CardResponse from a pre-fetched pass (tx id + date) and last visit timestamp —
+/// avoids per-card DB round-trip. Used by list_cards and search_cards which retrieve
+/// pass info and last_visit_at in a single query.
 fn card_response_from_row_with_pass(
     c: &db::CardRow,
     pass: Option<(i64, chrono::NaiveDate)>,
+    last_visit_at: Option<String>,
 ) -> CardResponse {
     let today = chrono::Local::now().date_naive();
     let pass = pass.map(|(tx_id, d)| CardPass {
@@ -161,6 +166,7 @@ fn card_response_from_row_with_pass(
         company: c.company.clone(),
         phone: c.phone.clone(),
         pass,
+        last_visit_at,
     }
 }
 
@@ -197,8 +203,8 @@ async fn search_cards(
         .await
         .map_err(internal_error)?;
     let out = rows
-        .iter()
-        .map(|(c, pass)| card_response_from_row_with_pass(c, *pass))
+        .into_iter()
+        .map(|(c, pass, last_visit)| card_response_from_row_with_pass(&c, pass, last_visit))
         .collect();
     Ok(Json(out))
 }
@@ -218,8 +224,8 @@ async fn list_cards(
         .await
         .map_err(internal_error)?;
     let out = rows
-        .iter()
-        .map(|(c, pass)| card_response_from_row_with_pass(c, *pass))
+        .into_iter()
+        .map(|(c, pass, last_visit)| card_response_from_row_with_pass(&c, pass, last_visit))
         .collect();
     Ok(Json(out))
 }
@@ -682,7 +688,7 @@ async fn my_balance(
 
     let card_responses = rows
         .iter()
-        .map(|(c, pass)| card_response_from_row_with_pass(c, *pass))
+        .map(|(c, pass, _last_visit)| card_response_from_row_with_pass(c, *pass, None))
         .collect();
 
     Ok(Json(BalanceResponse {

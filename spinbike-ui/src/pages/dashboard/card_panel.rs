@@ -1,7 +1,9 @@
+use chrono::NaiveDate;
 use leptos::prelude::*;
 
 use crate::components::{PersistentToggles, Segmented, UpcomingClasses};
 use crate::i18n::{self, Lang};
+use crate::relative_date::format_last_visit;
 
 use super::action_form::ActionForm;
 use super::block_button::BlockButton;
@@ -11,6 +13,16 @@ use super::overview_tab::OverviewTab;
 use super::pass_banner::PassBanner;
 use super::transactions_list::TransactionsList;
 use super::{CardInfo, ServiceInfo};
+
+/// Parse the SQLite `created_at` shape ("YYYY-MM-DD HH:MM:SS") into a date.
+/// Returns None if the input doesn't match the expected leading 10 chars.
+fn parse_last_visit(s: &Option<String>) -> Option<NaiveDate> {
+    let s = s.as_deref()?;
+    if s.len() < 10 {
+        return None;
+    }
+    NaiveDate::parse_from_str(&s[..10], "%Y-%m-%d").ok()
+}
 
 #[component]
 pub fn CardActionPanel(
@@ -35,6 +47,7 @@ pub fn CardActionPanel(
     let company = card.company.clone().unwrap_or_default();
     let phone = card.phone.clone().unwrap_or_default();
     let card_pass = card.pass.clone();
+    let last_visit_at = card.last_visit_at.clone();
     let card_for_edit = card.clone();
     let card_for_form = card.clone();
 
@@ -55,6 +68,22 @@ pub fn CardActionPanel(
                         " "
                         <code class="card-title__barcode">{barcode.clone()}</code>
                     </div>
+                    {move || {
+                        match parse_last_visit(&last_visit_at) {
+                            Some(visited) => {
+                                let today = chrono::Local::now().date_naive();
+                                let label = i18n::t(lang.get(), "last_visit_label");
+                                let value = format_last_visit(visited, today, lang.get());
+                                view! {
+                                    <div class="card-title__last-visit" data-testid="card-last-visit">
+                                        {label} ": " {value}
+                                    </div>
+                                }
+                                .into_any()
+                            }
+                            None => ().into_any(),
+                        }
+                    }}
                 </div>
                 <button
                     class="btn btn--compact btn--ghost"
