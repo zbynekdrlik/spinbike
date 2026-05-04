@@ -17,7 +17,7 @@ use super::{CardInfo, ServiceInfo};
 /// Parse the SQLite `created_at` shape ("YYYY-MM-DD HH:MM:SS") into a date.
 /// Returns None if the input doesn't match the expected leading 10 chars.
 fn parse_last_visit(s: &Option<String>) -> Option<NaiveDate> {
-    let s = s.as_ref()?;
+    let s = s.as_deref()?;
     if s.len() < 10 {
         return None;
     }
@@ -81,7 +81,7 @@ pub fn CardActionPanel(
                                 }
                                 .into_any()
                             }
-                            None => view! { <span></span> }.into_any(),
+                            None => ().into_any(),
                         }
                     }}
                 </div>

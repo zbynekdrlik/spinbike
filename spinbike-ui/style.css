@@ -519,7 +519,7 @@ select.form-control {
 
 .card-title__last-visit {
     font-size: 0.875rem;
-    color: var(--text-muted, #6c757d);
+    color: var(--text-muted);
     margin-top: 0.125rem;
 }
 
