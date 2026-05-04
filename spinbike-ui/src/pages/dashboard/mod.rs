@@ -64,6 +64,12 @@ pub struct CardInfo {
     pub phone: Option<String>,
     #[serde(default)]
     pub pass: Option<CardPass>,
+    /// MAX(transactions.created_at) for non-soft-deleted Spinning/Fitness rows
+    /// from /api/cards/search. `None` when the card has never been used for a
+    /// class. The shape is the SQLite literal "YYYY-MM-DD HH:MM:SS"; the
+    /// helper in `card_panel::parse_last_visit` extracts the date for display.
+    #[serde(default)]
+    pub last_visit_at: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
