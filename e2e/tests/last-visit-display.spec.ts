@@ -3,16 +3,16 @@ import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
-// Issue #57: card panel header shows "Last visit: <date> (<relative>)" and
-// Quick Search results are ordered last-visit-DESC (NULL last_visit sinks to
-// bottom). Three test cards with DIFFERENT timestamps verify the sort actually
-// fires — the card barcodes are deliberately ordered so that alphabetic fallback
-// would produce a DIFFERENT order than temporal sort:
+// Issue #57: card panel header shows "Last visit: <date> (<relative>)" for
+// cards with class visits, no element for cards with no class visits, and
+// Quick Search results are ordered last-visit-DESC.
 //
-//   Temporal (correct): Zulu (3d ago) → Alpha (100d ago) → Mike (NULL)
-//   Alphabetic fallback: Alpha → Mike → Zulu (broken sort would give this)
-//
-// The assertion Zulu → Alpha → Mike therefore requires last_visit_at DESC to work.
+// Search-result rows only show the LAST 4 chars of the barcode + the
+// card's name; our seeded cards have no name and unique base36 barcodes,
+// so we can't easily identify them by search-result text alone. Instead,
+// we click each nth(N) and verify the OPENED card panel's full barcode
+// matches the expected card. If the sort is broken, the wrong card opens
+// and the barcode mismatch fails the test.
 test('last-visit display + Quick Search sort by last visit', async ({ page }) => {
     const msgs = setupConsoleCheck(page);
     const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
@@ -91,20 +91,16 @@ test('last-visit display + Quick Search sort by last visit', async ({ page }) =>
     const results = page.locator('[data-testid="search-result"]');
     await expect(results).toHaveCount(3);
 
-    // Sort assertion (temporal, not alphabetic):
-    //   0 → Zulu  (last_visit_at = 3 days ago, most recent)
-    //   1 → Alpha (last_visit_at = 100 days ago)
-    //   2 → Mike  (last_visit_at = NULL, always last)
-    //
-    // If last_visit_at DESC is broken and alphabetic fallback kicks in, the
-    // order would be Alpha → Mike → Zulu — this assertion would fail.
-    await expect(results.nth(0)).toContainText(`Zulu${RUN_TAG}`);
-    await expect(results.nth(1)).toContainText(`Alpha${RUN_TAG}`);
-    await expect(results.nth(2)).toContainText(`Mike${RUN_TAG}`);
-
     // ── ZuluTest: opens to "Last visit … (X days ago)" ──
+    // Sort order is verified by asserting the OPENED panel's full barcode:
+    // if last_visit_at DESC is broken and alphabetic fallback fires, the
+    // wrong card opens at nth(0) and the barcode mismatch fails the test.
     await results.nth(0).click();
     await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+    // Verify sort order via the OPENED panel's barcode (full barcode is visible
+    // here, unlike search results which only show the last 4 chars).
+    await expect(page.locator('[data-testid="action-panel"] .card-title__barcode'))
+        .toHaveText(`Zulu${RUN_TAG}`);
     const zuluLastVisit = page.locator('[data-testid="card-last-visit"]');
     await expect(zuluLastVisit).toBeVisible();
     await expect(zuluLastVisit).toContainText('Last visit');
@@ -116,6 +112,10 @@ test('last-visit display + Quick Search sort by last visit', async ({ page }) =>
     await expect(results).toHaveCount(3);
     await results.nth(1).click();
     await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+    // Verify sort order via the OPENED panel's barcode (full barcode is visible
+    // here, unlike search results which only show the last 4 chars).
+    await expect(page.locator('[data-testid="action-panel"] .card-title__barcode'))
+        .toHaveText(`Alpha${RUN_TAG}`);
     const alphaLastVisit = page.locator('[data-testid="card-last-visit"]');
     await expect(alphaLastVisit).toBeVisible();
     await expect(alphaLastVisit).toContainText('Last visit');
@@ -127,6 +127,10 @@ test('last-visit display + Quick Search sort by last visit', async ({ page }) =>
     await expect(results).toHaveCount(3);
     await results.nth(2).click();
     await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+    // Verify sort order via the OPENED panel's barcode (full barcode is visible
+    // here, unlike search results which only show the last 4 chars).
+    await expect(page.locator('[data-testid="action-panel"] .card-title__barcode'))
+        .toHaveText(`Mike${RUN_TAG}`);
     await expect(page.locator('[data-testid="card-last-visit"]')).toHaveCount(0);
 
     assertCleanConsole(msgs);
