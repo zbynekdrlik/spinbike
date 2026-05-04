@@ -7,6 +7,7 @@ use super::action_form::ActionForm;
 use super::block_button::BlockButton;
 use super::edit_info_form::EditInfoForm;
 use super::helpers::full_name;
+use super::overview_tab::OverviewTab;
 use super::pass_banner::PassBanner;
 use super::transactions_list::TransactionsList;
 use super::{CardInfo, ServiceInfo};
@@ -41,6 +42,7 @@ pub fn CardActionPanel(
         ("history".to_string(), i18n::t(lang.get_untracked(), "tab_history").to_string()),
         ("upcoming".to_string(), i18n::t(lang.get_untracked(), "tab_upcoming").to_string()),
         ("persistent".to_string(), i18n::t(lang.get_untracked(), "tab_persistent").to_string()),
+        ("overview".to_string(), i18n::t(lang.get_untracked(), "tab_overview").to_string()),
     ];
 
     view! {
@@ -164,6 +166,9 @@ pub fn CardActionPanel(
                                     card_id=card_id
                                     on_changed=Callback::new(move |()| upc_tick.update(|n| *n += 1))
                                 />
+                            }.into_any(),
+                            "overview" => view! {
+                                <OverviewTab card_id=card_id />
                             }.into_any(),
                             _ => view! { <div></div> }.into_any(),
                         }

@@ -8,11 +8,13 @@ pub mod block_button;
 pub mod card_panel;
 pub mod edit_info_form;
 pub mod helpers;
+pub mod overview_tab;
 pub mod pass_banner;
 pub mod sheets;
 pub mod transactions_list;
 
 pub use card_panel::CardActionPanel;
+pub use overview_tab::OverviewTab;
 pub use transactions_list::TransactionsList;
 
 use leptos::prelude::*;
