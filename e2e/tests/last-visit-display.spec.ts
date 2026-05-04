@@ -17,7 +17,9 @@ test('last-visit display + Quick Search sort by last visit', async ({ page }) =>
     const msgs = setupConsoleCheck(page);
     const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
 
-    const RUN_TAG = `LV57${Date.now().toString().slice(-8)}`;
+    // Letter-heavy prefix avoids substring collision with the prod-synced dev DB
+    // (real customer data — names, phones, barcodes — is in the search_text column).
+    const RUN_TAG = `LVUNIQ${Math.random().toString(36).slice(2, 12).toUpperCase()}`;
 
     // Format a Date as the SQLite created_at literal "YYYY-MM-DD HH:MM:SS".
     const fmtTs = (d: Date): string =>
@@ -84,8 +86,7 @@ test('last-visit display + Quick Search sort by last visit', async ({ page }) =>
     await page.goto('/staff');
     const search = page.locator('input[type="search"]').first();
     await search.waitFor();
-    await search.focus();
-    await page.keyboard.type(RUN_TAG, { delay: 30 });
+    await search.fill(RUN_TAG);
 
     const results = page.locator('[data-testid="search-result"]');
     await expect(results).toHaveCount(3);
@@ -111,9 +112,7 @@ test('last-visit display + Quick Search sort by last visit', async ({ page }) =>
 
     // ── AlphaTest: opens to "Last visit … (3 months ago)" ──
     await page.locator('[data-testid="action-panel"] button[title="close"]').click();
-    await search.focus();
-    await search.fill('');
-    await page.keyboard.type(RUN_TAG, { delay: 30 });
+    await search.fill(RUN_TAG);
     await expect(results).toHaveCount(3);
     await results.nth(1).click();
     await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
@@ -124,9 +123,7 @@ test('last-visit display + Quick Search sort by last visit', async ({ page }) =>
 
     // ── MikeTest: no card-last-visit testid in DOM ──
     await page.locator('[data-testid="action-panel"] button[title="close"]').click();
-    await search.focus();
-    await search.fill('');
-    await page.keyboard.type(RUN_TAG, { delay: 30 });
+    await search.fill(RUN_TAG);
     await expect(results).toHaveCount(3);
     await results.nth(2).click();
     await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
