@@ -292,38 +292,13 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
 
     // My balance
     m.insert("my_balance", ("Moj zostatok", "My Balance"));
-    m.insert(
-        "no_card_linked",
-        ("Ziadna prepojena karta.", "No card linked to your account."),
-    );
-    m.insert("link_a_card", ("Prepojit kartu", "Link a Card"));
-    m.insert("transactions", ("Transakcie", "Transactions"));
-    m.insert(
-        "no_transactions",
-        ("Zatial ziadne transakcie.", "No transactions yet."),
-    );
 
-    // Link card
-    m.insert("link_card", ("Prepojit kartu", "Link Card"));
-    m.insert("card_barcode", ("Ciarovy kod karty", "Card Barcode"));
-    m.insert(
-        "scan_or_enter",
-        (
-            "Naskenujte alebo zadajte ciarovy kod",
-            "Scan or enter barcode",
-        ),
-    );
-    m.insert("linking", ("Prepajam...", "Linking..."));
 
     // Card operations
     m.insert("card_operations", ("Operacie s kartami", "Card Operations"));
     m.insert("barcode_lookup", ("Vyhladanie karty", "Barcode Lookup"));
     m.insert("enter_barcode", ("Zadajte ciarovy kod", "Enter barcode"));
     m.insert("lookup", ("Vyhladat", "Lookup"));
-    m.insert(
-        "activate_new_card",
-        ("Aktivovat novu kartu", "Activate New Card"),
-    );
     m.insert("activate", ("Aktivovat", "Activate"));
     m.insert(
         "all_member_cards",
@@ -341,6 +316,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("block", ("Zablokovat", "Block"));
     m.insert("unblock", ("Odblokovat", "Unblock"));
     m.insert("barcode", ("Ciarovy kod", "Barcode"));
+    m.insert("card_code", ("Kod karty", "Card code"));
     m.insert("initial_credit", ("Pociatocny kredit", "Initial Credit"));
     m.insert("no_cards_found", ("Ziadne karty", "No cards found"));
     m.insert("loading_cards", ("Nacitavam karty...", "Loading cards..."));
@@ -361,7 +337,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("quick_topup", ("Rychle dobitie", "Quick top-up"));
     m.insert("quick_charge", ("Rychla platba", "Quick charge"));
     m.insert("custom_amount", ("Vlastna suma", "Custom amount"));
-    m.insert("hide_activate", ("Skryt aktivaciu", "Hide activation"));
     m.insert(
         "topup_ok_format",
         ("Dobite! Novy kredit: {} €", "Topped up! New credit: {} €"),
@@ -376,7 +351,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     );
     m.insert("block_ok", ("Karta zablokovana", "Card blocked"));
     m.insert("unblock_ok", ("Karta odblokovana", "Card unblocked"));
-    m.insert("activate_ok", ("Karta aktivovana", "Card activated"));
     m.insert("saved", ("Ulozene", "Saved"));
 
     // Staff dashboard
@@ -398,17 +372,8 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "Name, surname or barcode",
         ),
     );
-    m.insert(
-        "card_has_no_user",
-        (
-            "Karta nema priradeneho pouzivatela",
-            "Card has no linked user",
-        ),
-    );
 
     // Payments
-    m.insert("card_barcode_label", ("Ciarovy kod karty", "Card Barcode"));
-    m.insert("scan_barcode", ("Naskenujte ciarovy kod", "Scan barcode"));
     m.insert("charge", ("Platba", "Charge"));
     m.insert("storno", ("Storno", "Storno"));
     m.insert("storno_refund", ("Storno (Vratenie)", "Storno (Refund)"));
@@ -687,6 +652,14 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("rel_months_few", ("pred {n} mesiacmi", "{n} months ago"));
     m.insert("rel_years_one", ("pred 1 rokom", "1 year ago"));
     m.insert("rel_years_few", ("pred {n} rokmi", "{n} years ago"));
+
+    // Add person form (#55)
+    m.insert("add_person",           ("Pridat osobu",    "Add Person"));
+    m.insert("hide_add_person",      ("Skryt formular",  "Hide form"));
+    m.insert("add_person_submit",    ("Ulozit osobu",    "Save Person"));
+    m.insert("add_person_ok_format", ("Osoba pridana: {}", "Person added: {}"));
+    m.insert("name_required",        ("Meno je povinne", "Name is required"));
+    m.insert("optional_paren",       ("(volitelne)",     "(optional)"));
 
     m
 });

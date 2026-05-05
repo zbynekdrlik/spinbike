@@ -8,27 +8,17 @@ use crate::i18n::{self, Lang};
 use crate::pages::schedule::ClassSlot;
 
 #[derive(Debug, Clone, serde::Deserialize)]
-struct WalkinCardHit {
+struct WalkinUserHit {
     id: i64,
-    barcode: String,
-    user_id: Option<i64>,
-    #[serde(default)]
-    first_name: Option<String>,
-    #[serde(default)]
-    last_name: Option<String>,
+    name: String,
+    card_code: Option<String>,
 }
 
-fn walkin_display(card: &WalkinCardHit) -> String {
-    let name = match (&card.first_name, &card.last_name) {
-        (Some(f), Some(l)) => format!("{f} {l}"),
-        (Some(f), None) => f.clone(),
-        (None, Some(l)) => l.clone(),
-        (None, None) => String::new(),
-    };
-    if name.is_empty() {
-        card.barcode.clone()
+fn walkin_display(user: &WalkinUserHit) -> String {
+    if let Some(code) = &user.card_code {
+        format!("{} · {}", user.name, code)
     } else {
-        format!("{name} · {}", card.barcode)
+        user.name.clone()
     }
 }
 
@@ -295,7 +285,7 @@ fn WalkinForm(
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let search_ref = NodeRef::<leptos::html::Input>::new();
     let (query, set_query) = signal(String::new());
-    let (results, set_results) = signal(Vec::<WalkinCardHit>::new());
+    let (results, set_results) = signal(Vec::<WalkinUserHit>::new());
     let (err, set_err) = signal(String::new());
     let (loading, set_loading) = signal(false);
 
@@ -314,7 +304,7 @@ fn WalkinForm(
                 return;
             }
             let encoded = walkin_urlencode(&q_at_start);
-            match api::get::<Vec<WalkinCardHit>>(&format!("/api/cards/search?q={encoded}&limit=10"))
+            match api::get::<Vec<WalkinUserHit>>(&format!("/api/users/search?q={encoded}&limit=10"))
                 .await
             {
                 Ok(list) => {
@@ -337,11 +327,8 @@ fn WalkinForm(
     };
 
     let date_for_pick = date.clone();
-    let pick = move |card: WalkinCardHit| {
-        let Some(user_id) = card.user_id else {
-            set_err.set(i18n::t(lang.get_untracked(), "card_has_no_user").to_string());
-            return;
-        };
+    let pick = move |user: WalkinUserHit| {
+        let user_id = user.id;
         let date = date_for_pick.clone();
         set_loading.set(true);
         set_err.set(String::new());
@@ -350,8 +337,7 @@ fn WalkinForm(
             struct Req {
                 template_id: i64,
                 date: String,
-                user_id: Option<i64>,
-                card_id: Option<i64>,
+                user_id: i64,
             }
             #[derive(serde::Deserialize)]
             struct Resp {
@@ -363,8 +349,7 @@ fn WalkinForm(
                 &Req {
                     template_id,
                     date,
-                    user_id: Some(user_id),
-                    card_id: Some(card.id),
+                    user_id,
                 },
             )
             .await
@@ -395,17 +380,17 @@ fn WalkinForm(
                 {move || {
                     let list = results.get();
                     let is_loading = loading.get();
-                    list.into_iter().map(|card| {
-                        let label = walkin_display(&card);
+                    list.into_iter().map(|user| {
+                        let label = walkin_display(&user);
                         let pick = pick.clone();
-                        let card_id = card.id;
+                        let user_id = user.id;
                         view! {
-                            <li class="walkin-row" data-testid=format!("walkin-pick-{card_id}")>
+                            <li class="walkin-row" data-testid=format!("walkin-pick-{user_id}")>
                                 <button
                                     type="button"
                                     class="btn btn--primary btn--compact"
                                     disabled=is_loading
-                                    on:click=move |_| pick(card.clone())
+                                    on:click=move |_| pick(user.clone())
                                 >
                                     {label}
                                 </button>

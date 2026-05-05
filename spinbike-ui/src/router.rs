@@ -66,7 +66,6 @@ use crate::components::nav::Navbar;
 use crate::i18n;
 use crate::pages::admin::AdminPage;
 use crate::pages::dashboard::DashboardPage;
-use crate::pages::link_card::LinkCardPage;
 use crate::pages::login::{LoginPage, RegisterPage};
 use crate::pages::my_balance::MyBalancePage;
 use crate::pages::my_bookings::MyBookingsPage;
@@ -102,7 +101,6 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/register") view=RegisterPage />
                         <Route path=path!("/my/bookings") view=MyBookingsPage />
                         <Route path=path!("/my/balance") view=MyBalancePage />
-                        <Route path=path!("/link-card") view=LinkCardPage />
                         <Route path=path!("/staff") view=DashboardPage />
                         // Admin schedule view (rosters, walk-in, cancel) lives at /schedule.
                         // /staff/classes kept as alias for back-compat.
