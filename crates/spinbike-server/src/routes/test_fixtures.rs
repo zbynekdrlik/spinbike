@@ -204,45 +204,6 @@ async fn seed_expired_pass(
     Ok(Json(serde_json::json!({ "user_id": user_id })))
 }
 
-// ---------------------------------------------------------------------------
-// Unit tests
-// ---------------------------------------------------------------------------
-
-#[cfg(test)]
-mod tests {
-    use super::find_or_create_user_by_card_code;
-    use crate::db;
-
-    // ── mutant #2: replace find_or_create_user_by_card_code → Ok(1) ──────────
-    // If the function always returns Ok(1), id1 == id2 == 1 and the assert_ne!
-    // fires. The find-branch test also fails because id1 != 1 on subsequent
-    // calls (two different codes can't both be user 1 in a fresh DB).
-    #[tokio::test]
-    async fn find_or_create_user_by_card_code_creates_distinct_users() {
-        let pool = db::create_memory_pool().await.unwrap();
-        db::run_migrations(&pool).await.unwrap();
-
-        let id1 = find_or_create_user_by_card_code(&pool, "TESTCODE_A")
-            .await
-            .unwrap();
-        let id2 = find_or_create_user_by_card_code(&pool, "TESTCODE_B")
-            .await
-            .unwrap();
-        assert_ne!(id1, id2, "different codes must yield different user IDs");
-        assert!(id1 > 0);
-        assert!(id2 > 0);
-
-        // Same code returns the same user (find-branch).
-        let again = find_or_create_user_by_card_code(&pool, "TESTCODE_A")
-            .await
-            .unwrap();
-        assert_eq!(
-            again, id1,
-            "same code must return the same user (find path)"
-        );
-    }
-}
-
 /// Seed a user (if missing by card_code) and insert one transaction per entry,
 /// each pre-linked to the service whose `name_sk` matches `service_name_sk`.
 /// Used by E2E to verify backfilled history rendering — flags the rows with
@@ -286,4 +247,42 @@ async fn seed_transactions(
     Ok(Json(
         serde_json::json!({ "user_id": user_id, "count": count }),
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Unit tests
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::find_or_create_user_by_card_code;
+    use crate::db;
+
+    // Mutant #2: replace find_or_create_user_by_card_code → Ok(1).
+    // If the function always returns Ok(1), id1 == id2 == 1 and the assert_ne!
+    // fires. The find-branch test also fails because id1 != 1 on subsequent
+    // calls (two different codes can't both be user 1 in a fresh DB).
+    #[tokio::test]
+    async fn find_or_create_user_by_card_code_creates_distinct_users() {
+        let pool = db::create_memory_pool().await.unwrap();
+        db::run_migrations(&pool).await.unwrap();
+
+        let id1 = find_or_create_user_by_card_code(&pool, "TESTCODE_A")
+            .await
+            .unwrap();
+        let id2 = find_or_create_user_by_card_code(&pool, "TESTCODE_B")
+            .await
+            .unwrap();
+        assert_ne!(id1, id2, "different codes must yield different user IDs");
+        assert!(id1 > 0);
+        assert!(id2 > 0);
+
+        let again = find_or_create_user_by_card_code(&pool, "TESTCODE_A")
+            .await
+            .unwrap();
+        assert_eq!(
+            again, id1,
+            "same code must return the same user (find path)"
+        );
+    }
 }
