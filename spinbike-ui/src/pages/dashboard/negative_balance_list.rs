@@ -6,14 +6,14 @@
 
 use chrono::NaiveDate;
 use leptos::prelude::*;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::api;
 use crate::i18n::{self, Lang};
 use crate::pages::dashboard::CardInfo;
 use crate::relative_date::format_last_visit;
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct NegativeBalanceCard {
     pub id: i64,
     pub barcode: String,
