@@ -201,9 +201,17 @@ pub async fn soft_delete(pool: &SqlitePool, id: i64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::db::cards::create_card;
     use crate::db::users::create_user;
     use crate::db::{create_memory_pool, run_migrations};
+
+    /// Insert a bare card row for tests that need a card_id.
+    async fn insert_test_card(pool: &SqlitePool, barcode: &str) -> i64 {
+        sqlx::query_scalar("INSERT INTO cards (barcode, allow_debit) VALUES (?, 1) RETURNING id")
+            .bind(barcode)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
 
     async fn setup() -> SqlitePool {
         let pool = create_memory_pool().await.unwrap();
@@ -217,17 +225,20 @@ mod tests {
 
         let user_id = create_user(
             &pool,
-            "tx@test.com",
+            Some("tx@test.com"),
             None,
             "Tx",
             None,
+            None,
+            None,
             "customer",
+            None,
             None,
             None,
         )
         .await
         .unwrap();
-        let card_id = create_card(&pool, "TX-CARD").await.unwrap();
+        let card_id = insert_test_card(&pool, "TX-CARD").await.unwrap();
 
         create_transaction(
             &pool,
@@ -265,7 +276,7 @@ mod tests {
     #[tokio::test]
     async fn transaction_stores_and_retrieves_valid_until() {
         let pool = setup().await;
-        let card_id = create_card(&pool, "VU-1").await.unwrap();
+        let card_id = insert_test_card(&pool, "VU-1").await.unwrap();
         let date = chrono::NaiveDate::from_ymd_opt(2026, 5, 15).unwrap();
         create_transaction_with_valid_until(
             &pool,
@@ -289,7 +300,7 @@ mod tests {
     #[tokio::test]
     async fn transaction_without_valid_until_reads_back_as_none() {
         let pool = setup().await;
-        let card_id = create_card(&pool, "VU-2").await.unwrap();
+        let card_id = insert_test_card(&pool, "VU-2").await.unwrap();
         create_transaction(&pool, None, Some(card_id), None, None, 10.0, "topup", None)
             .await
             .unwrap();
@@ -300,7 +311,7 @@ mod tests {
     #[tokio::test]
     async fn soft_delete_sets_deleted_at() {
         let pool = setup().await;
-        let card_id = create_card(&pool, "SD-1").await.unwrap();
+        let card_id = insert_test_card(&pool, "SD-1").await.unwrap();
         let tx_id = create_transaction(&pool, None, Some(card_id), None, None, 5.0, "topup", None)
             .await
             .unwrap();
@@ -326,7 +337,7 @@ mod tests {
     #[tokio::test]
     async fn list_transactions_returns_deleted_at_flag() {
         let pool = setup().await;
-        let card_id = create_card(&pool, "SD-LIST").await.unwrap();
+        let card_id = insert_test_card(&pool, "SD-LIST").await.unwrap();
         let tx_id = create_transaction(&pool, None, Some(card_id), None, None, 5.0, "topup", None)
             .await
             .unwrap();
@@ -368,7 +379,7 @@ mod tests {
     #[tokio::test]
     async fn paginated_default_returns_at_most_10_newest_first() {
         let pool = setup().await;
-        let card_id = create_card(&pool, "PAG-1").await.unwrap();
+        let card_id = insert_test_card(&pool, "PAG-1").await.unwrap();
         let timestamps = insert_n_transactions(&pool, card_id, 15).await;
 
         let rows = list_transactions_for_card_paginated(&pool, card_id, None, None)
@@ -392,7 +403,7 @@ mod tests {
     #[tokio::test]
     async fn paginated_before_cursor_returns_only_older_rows() {
         let pool = setup().await;
-        let card_id = create_card(&pool, "PAG-2").await.unwrap();
+        let card_id = insert_test_card(&pool, "PAG-2").await.unwrap();
         let timestamps = insert_n_transactions(&pool, card_id, 5).await;
 
         // cursor is the 3rd timestamp (index 2, "2026-01-01T00:00:02").
@@ -419,7 +430,7 @@ mod tests {
     #[tokio::test]
     async fn paginated_explicit_limit_and_cap() {
         let pool = setup().await;
-        let card_id = create_card(&pool, "PAG-3").await.unwrap();
+        let card_id = insert_test_card(&pool, "PAG-3").await.unwrap();
         insert_n_transactions(&pool, card_id, 10).await;
 
         // explicit limit=3 returns 3 rows

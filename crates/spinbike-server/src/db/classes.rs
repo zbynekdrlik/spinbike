@@ -319,9 +319,21 @@ mod tests {
     }
 
     async fn make_user(pool: &SqlitePool, email: &str) -> i64 {
-        create_user(pool, email, None, "Test", None, "customer", None, None)
-            .await
-            .unwrap()
+        create_user(
+            pool,
+            Some(email),
+            None,
+            "Test",
+            None,
+            None,
+            None,
+            "customer",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap()
     }
 
     #[tokio::test]

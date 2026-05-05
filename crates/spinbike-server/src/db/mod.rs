@@ -1,5 +1,4 @@
 pub mod backfill;
-pub mod cards;
 pub mod classes;
 pub mod migrations;
 pub mod persistent_bookings;
