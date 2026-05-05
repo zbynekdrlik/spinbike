@@ -603,3 +603,275 @@ async fn negative_balance_includes_minus_one_cent() {
         "user with credit=-0.01 must appear in negative-balance list"
     );
 }
+
+// ─── seed-user fixture auth gate (mutant #3) ──────────────────────────────────
+
+// Mutant #3: delete `!` in `if !claims.role.can_process_payments()` gate.
+// With the mutation a customer can POST seed-user (returns 201); staff is
+// denied (returns 403). Both tests are required to catch the flip.
+
+#[tokio::test]
+async fn seed_user_fixture_forbidden_for_customer() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"name": "SeedX", "email": "seedx@x.com", "credit": 1.0});
+    let (status, _) = app
+        .request(post_json("/api/test/seed-user", &app.customer_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn seed_user_fixture_allowed_for_staff() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"name": "SeedY", "email": "seedy@x.com", "credit": 1.0});
+    let (status, _) = app
+        .request(post_json("/api/test/seed-user", &app.staff_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+}
+
+// ─── create_user email format checks (mutants #4, #8-10) ─────────────────────
+
+// Mutant #4 / #8-10: replace `||` with `&&` (or delete either `!`) in the
+// email format guard `!email.contains('@') || !email.contains('.')`.
+// With `&&` a single-char absence is no longer sufficient to fail; each test
+// sends an email that is missing exactly ONE of the required chars so that:
+//   - correct code (||): both checks fail → 400
+//   - mutant (&&): only one check is true → no error → 201
+
+#[tokio::test]
+async fn create_user_rejects_email_with_at_but_no_dot() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"name": "NoDot", "email": "no@dot"});
+    let (status, _) = app
+        .request(post_json("/api/users", &app.staff_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_user_rejects_email_with_dot_but_no_at() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"name": "NoAt", "email": "no.at.com"});
+    let (status, _) = app
+        .request(post_json("/api/users", &app.staff_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
+// ─── create_user initial_credit filter (mutants #5-7) ────────────────────────
+
+// Mutants #5-7: replace `>` with `==`, `<`, or `>=` in `.filter(|&c| c > 0.0)`.
+// zero: must NOT write a transaction (mutant `>=` would write one for zero).
+// positive: MUST write exactly one transaction (mutant `< 0` would suppress it).
+// negative: must NOT write a transaction (mutant `< 0.0` would write one).
+
+#[tokio::test]
+async fn create_user_with_zero_initial_credit_writes_no_transaction() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"name": "ZeroCred", "email": "zc@x.com", "initial_credit": 0.0});
+    let (status, resp) = app
+        .request(post_json("/api/users", &app.staff_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+    let user_id = resp["id"].as_i64().unwrap();
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM transactions WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(row.0, 0, "initial_credit=0 must NOT write a transaction");
+}
+
+#[tokio::test]
+async fn create_user_with_positive_initial_credit_writes_one_transaction() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"name": "PosCred", "email": "pc@x.com", "initial_credit": 25.0});
+    let (status, resp) = app
+        .request(post_json("/api/users", &app.staff_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+    let user_id = resp["id"].as_i64().unwrap();
+    let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM transactions WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        row.0, 1,
+        "initial_credit>0 must write exactly one topup transaction"
+    );
+}
+
+#[tokio::test]
+async fn create_user_with_negative_initial_credit_writes_no_transaction() {
+    // Negative initial_credit is either rejected (400) or silently filtered
+    // out (no txn). Either outcome is acceptable. We just assert that if a
+    // user is created, no transaction row is written — killing the `c < 0.0`
+    // and `c >= 0.0` mutants which would write a row for negative / zero values.
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"name": "NegCred", "email": "nc@x.com", "initial_credit": -5.0});
+    let (_, resp) = app
+        .request(post_json("/api/users", &app.staff_token, &body))
+        .await;
+    if let Some(user_id) = resp["id"].as_i64() {
+        let row: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM transactions WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            row.0, 0,
+            "negative initial_credit must NOT write a transaction"
+        );
+    }
+}
+
+// ─── update_user email format checks (mutants #8-10) ─────────────────────────
+
+#[tokio::test]
+async fn update_user_rejects_email_without_at() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"name": "UpdNoAt", "email": "upd1@x.com"});
+    let (_, resp) = app
+        .request(post_json("/api/users", &app.staff_token, &body))
+        .await;
+    let id = resp["id"].as_i64().unwrap();
+    let upd = serde_json::json!({"email": "no.at.com"});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{id}"),
+            &app.staff_token,
+            &upd,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn update_user_rejects_email_without_dot() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"name": "UpdNoDot", "email": "upd2@x.com"});
+    let (_, resp) = app
+        .request(post_json("/api/users", &app.staff_token, &body))
+        .await;
+    let id = resp["id"].as_i64().unwrap();
+    let upd = serde_json::json!({"email": "no@dot"});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{id}"),
+            &app.staff_token,
+            &upd,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
+// ─── update_user collision checks (mutants #11, #12) ─────────────────────────
+
+// Mutant #11: replace `!=` with `==` in `existing.id != id` (email collision).
+// With `==`: updating A with B's email is allowed (existing.id==A==id → no
+// conflict → 200 instead of 409). Updating A with A's own email is blocked
+// (existing.id==id → 409 instead of 200). Both tests are required.
+
+#[tokio::test]
+async fn update_user_email_collision_with_other_user_returns_409() {
+    let app = TestApp::new().await;
+    let (_, ra) = app
+        .request(post_json(
+            "/api/users",
+            &app.staff_token,
+            &serde_json::json!({"name": "ColA", "email": "cola@x.com"}),
+        ))
+        .await;
+    let (_, rb) = app
+        .request(post_json(
+            "/api/users",
+            &app.staff_token,
+            &serde_json::json!({"name": "ColB", "email": "colb@x.com"}),
+        ))
+        .await;
+    let a = ra["id"].as_i64().unwrap();
+    // Try to update A's email to B's email — must be rejected.
+    let upd = serde_json::json!({"email": "colb@x.com"});
+    let (status, _) = app
+        .request(put_json(&format!("/api/users/{a}"), &app.staff_token, &upd))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT);
+    // Suppress "unused binding" warning on rb.
+    let _ = rb;
+}
+
+#[tokio::test]
+async fn update_user_email_unchanged_returns_200() {
+    let app = TestApp::new().await;
+    let (_, r) = app
+        .request(post_json(
+            "/api/users",
+            &app.staff_token,
+            &serde_json::json!({"name": "SameEmail", "email": "same@x.com"}),
+        ))
+        .await;
+    let id = r["id"].as_i64().unwrap();
+    // Updating with the same email must NOT trigger a collision.
+    let upd = serde_json::json!({"email": "same@x.com"});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{id}"),
+            &app.staff_token,
+            &upd,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+}
+
+// Mutant #12: replace `!=` with `==` in `existing.id != id` (card_code collision).
+
+#[tokio::test]
+async fn update_user_card_code_collision_with_other_user_returns_409() {
+    let app = TestApp::new().await;
+    let (_, ra) = app
+        .request(post_json(
+            "/api/users",
+            &app.staff_token,
+            &serde_json::json!({"name": "CcA", "email": "cca@x.com", "card_code": "CC_A"}),
+        ))
+        .await;
+    let (_, _rb) = app
+        .request(post_json(
+            "/api/users",
+            &app.staff_token,
+            &serde_json::json!({"name": "CcB", "email": "ccb@x.com", "card_code": "CC_B"}),
+        ))
+        .await;
+    let a = ra["id"].as_i64().unwrap();
+    // Try to set A's card_code to B's card_code — must be rejected.
+    let upd = serde_json::json!({"card_code": "CC_B"});
+    let (status, _) = app
+        .request(put_json(&format!("/api/users/{a}"), &app.staff_token, &upd))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn update_user_card_code_unchanged_returns_200() {
+    let app = TestApp::new().await;
+    let (_, r) = app
+        .request(post_json(
+            "/api/users",
+            &app.staff_token,
+            &serde_json::json!({"name": "SameCode", "email": "scod@x.com", "card_code": "CC_D"}),
+        ))
+        .await;
+    let id = r["id"].as_i64().unwrap();
+    // Updating with the same card_code must NOT trigger a collision.
+    let upd = serde_json::json!({"card_code": "CC_D"});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{id}"),
+            &app.staff_token,
+            &upd,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+}

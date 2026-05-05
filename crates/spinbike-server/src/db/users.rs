@@ -1118,4 +1118,35 @@ mod tests {
         let expected = normalize_search("Alice Renamed Acme CODE1");
         assert_eq!(u.search_text.as_deref(), Some(expected.as_str()));
     }
+
+    // ── mutant #1: replace set_allow_debit → Ok(()) ───────────────────────
+    // If set_allow_debit is a no-op, the flag never changes and the assertions
+    // fail because allow_debit stays at its default (false).
+    #[tokio::test]
+    async fn set_allow_debit_round_trips() {
+        let pool = setup().await;
+        let id = create_user(
+            &pool,
+            Some("ad@x.com"),
+            None,
+            "AD",
+            None,
+            None,
+            None,
+            "customer",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        set_allow_debit(&pool, id, true).await.unwrap();
+        let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert!(u.allow_debit, "set_allow_debit(true) must persist");
+
+        set_allow_debit(&pool, id, false).await.unwrap();
+        let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert!(!u.allow_debit, "set_allow_debit(false) must persist");
+    }
 }
