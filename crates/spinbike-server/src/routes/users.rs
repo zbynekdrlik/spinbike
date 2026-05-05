@@ -266,17 +266,16 @@ async fn create_user(
         }
     }
 
-    if let Some(ref code) = body.card_code {
-        if db::get_user_by_card_code(&state.pool, code)
+    if let Some(ref code) = body.card_code
+        && db::get_user_by_card_code(&state.pool, code)
             .await
             .map_err(internal_error)?
             .is_some()
-        {
-            return Err((
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({"error": "A user with this card code already exists"})),
-            ));
-        }
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "A user with this card code already exists"})),
+        ));
     }
 
     let user_id = db::create_user(
@@ -526,28 +525,25 @@ async fn update_user(
         if let Some(existing) = db::get_user_by_email(&state.pool, email)
             .await
             .map_err(internal_error)?
+            && existing.id != id
         {
-            if existing.id != id {
-                return Err((
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({"error": "A user with this email already exists"})),
-                ));
-            }
+            return Err((
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({"error": "A user with this email already exists"})),
+            ));
         }
     }
 
-    if let Some(ref code) = body.card_code {
-        if let Some(existing) = db::get_user_by_card_code(&state.pool, code)
+    if let Some(ref code) = body.card_code
+        && let Some(existing) = db::get_user_by_card_code(&state.pool, code)
             .await
             .map_err(internal_error)?
-        {
-            if existing.id != id {
-                return Err((
-                    StatusCode::CONFLICT,
-                    Json(serde_json::json!({"error": "A user with this card code already exists"})),
-                ));
-            }
-        }
+        && existing.id != id
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "A user with this card code already exists"})),
+        ));
     }
 
     db::update_user_info(
