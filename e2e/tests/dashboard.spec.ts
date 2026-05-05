@@ -55,7 +55,7 @@ test.describe('Card dashboard (staff /staff)', () => {
         assertCleanConsole(consoleMessages);
     });
 
-    test('no matches shows activate-card CTA', async ({ page }) => {
+    test('no matches shows add-person CTA', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
 
         await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
@@ -64,8 +64,8 @@ test.describe('Card dashboard (staff /staff)', () => {
 
         await page.fill('input[type="search"]', 'nonexistent-xyz-qqq');
         await expect(page.getByText('No matches')).toBeVisible({ timeout: 3000 });
-        // The "Activate New Card" button should appear inline with the empty state.
-        await expect(page.locator('button:has-text("Activate New Card")').first()).toBeVisible();
+        // The "Add Person" button should appear inline with the empty state.
+        await expect(page.locator('[data-testid="add-person-submit"]').first()).toBeVisible();
 
         assertCleanConsole(consoleMessages);
     });
@@ -80,7 +80,7 @@ test.describe('Card dashboard (staff /staff)', () => {
         // Fetch baseline balance for 70702002.
         const before = await page.evaluate(async () => {
             const token = localStorage.getItem('spinbike_token');
-            const r = await fetch('/api/cards/lookup/70702002', {
+            const r = await fetch('/api/users/lookup/70702002', {
                 headers: { Authorization: `Bearer ${token}` },
             });
             return (await r.json()).credit as number;
@@ -103,7 +103,7 @@ test.describe('Card dashboard (staff /staff)', () => {
         // Verify server-side persistence.
         const after = await page.evaluate(async () => {
             const token = localStorage.getItem('spinbike_token');
-            const r = await fetch('/api/cards/lookup/70702002', {
+            const r = await fetch('/api/users/lookup/70702002', {
                 headers: { Authorization: `Bearer ${token}` },
             });
             return (await r.json()).credit as number;
@@ -123,7 +123,7 @@ test.describe('Card dashboard (staff /staff)', () => {
         // Baseline.
         const before = await page.evaluate(async () => {
             const token = localStorage.getItem('spinbike_token');
-            const r = await fetch('/api/cards/lookup/70703003', {
+            const r = await fetch('/api/users/lookup/70703003', {
                 headers: { Authorization: `Bearer ${token}` },
             });
             return (await r.json()).credit as number;
@@ -162,7 +162,7 @@ test.describe('Card dashboard (staff /staff)', () => {
 
         const after = await page.evaluate(async () => {
             const token = localStorage.getItem('spinbike_token');
-            const r = await fetch('/api/cards/lookup/70703003', {
+            const r = await fetch('/api/users/lookup/70703003', {
                 headers: { Authorization: `Bearer ${token}` },
             });
             return (await r.json()).credit as number;

@@ -3,20 +3,20 @@ import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
-async function activateUniqueCard(
+async function createUniqueUser(
     token: string,
     initialCredit: number,
-): Promise<{ barcode: string; lastName: string }> {
+): Promise<{ card_code: string; lastName: string }> {
     const suffix = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
-    const barcode = `BL-${suffix}`;
+    const cardCode = `BL-${suffix}`;
     const lastName = `Btnlayout${suffix}`;
-    const resp = await fetch(`${BASE_URL}/api/cards/activate`, {
+    const resp = await fetch(`${BASE_URL}/api/users`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ barcode, initial_credit: initialCredit, first_name: 'BL', last_name: lastName }),
+        body: JSON.stringify({ name: `BL ${lastName}`, initial_credit: initialCredit, card_code: cardCode }),
     });
-    if (!resp.ok) throw new Error(`activate failed: ${resp.status} ${await resp.text()}`);
-    return { barcode, lastName };
+    if (!resp.ok) throw new Error(`createUniqueUser failed: ${resp.status} ${await resp.text()}`);
+    return { card_code: cardCode, lastName };
 }
 
 async function openCardByLastName(page: Page, lastName: string) {
@@ -54,7 +54,7 @@ test.describe('Staff dashboard — button layout & colors (#13)', () => {
     test('action-row: Charge left of Topup, with same-hue soft sibling', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 80.0);
+        const { lastName } = await createUniqueUser(token, 80.0);
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
@@ -86,7 +86,7 @@ test.describe('Staff dashboard — button layout & colors (#13)', () => {
     test('visit-row: Fitness left of Spinning with same-hue soft sibling', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 80.0);
+        const { lastName } = await createUniqueUser(token, 80.0);
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
         await sellMonthlyPass(page);

@@ -8,9 +8,9 @@ import {
 
 const BASE_URL = 'http://localhost:8099';
 
-async function sellPassToCard(
+async function sellPassToUser(
     token: string,
-    cardId: number,
+    userId: number,
     daysFromToday: number,
 ): Promise<void> {
     const validUntil = new Date(Date.now() + daysFromToday * 86400e3)
@@ -19,14 +19,14 @@ async function sellPassToCard(
     const resp = await fetch(`${BASE_URL}/api/payments/sell-pass`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ card_id: cardId, price: 35.0, valid_until: validUntil }),
+        body: JSON.stringify({ user_id: userId, price: 35.0, valid_until: validUntil }),
     });
     if (!resp.ok) throw new Error(`sell-pass failed: ${resp.status} ${await resp.text()}`);
 }
 
-async function lookupCardId(token: string, barcode: string): Promise<number> {
+async function lookupUserId(token: string, cardCode: string): Promise<number> {
     const resp = await fetch(
-        `${BASE_URL}/api/cards/lookup/${encodeURIComponent(barcode)}`,
+        `${BASE_URL}/api/users/lookup/${encodeURIComponent(cardCode)}`,
         { headers: { Authorization: `Bearer ${token}` } },
     );
     if (!resp.ok) throw new Error(`lookup failed: ${resp.status}`);
@@ -99,8 +99,8 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
         const { lastName, barcode } = await activateUniqueCard(token, 100.0, 'UX');
-        const cardId = await lookupCardId(token, barcode);
-        await sellPassToCard(token, cardId, 14);
+        const userId = await lookupUserId(token, barcode);
+        await sellPassToUser(token, userId, 14);
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
@@ -163,8 +163,8 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
         const { lastName, barcode } = await activateUniqueCard(token, 100.0, 'UX');
-        const cardId = await lookupCardId(token, barcode);
-        await sellPassToCard(token, cardId, 14);
+        const userId = await lookupUserId(token, barcode);
+        await sellPassToUser(token, userId, 14);
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 

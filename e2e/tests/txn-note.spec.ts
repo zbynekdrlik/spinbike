@@ -3,20 +3,20 @@ import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
-async function activateUniqueCard(
+async function createUniqueUser(
     token: string,
     initialCredit: number,
-): Promise<{ barcode: string; lastName: string }> {
+): Promise<{ card_code: string; lastName: string }> {
     const suffix = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
-    const barcode = `NOTE-${suffix}`;
+    const cardCode = `NOTE-${suffix}`;
     const lastName = `Note${suffix}`;
-    const resp = await fetch(`${BASE_URL}/api/cards/activate`, {
+    const resp = await fetch(`${BASE_URL}/api/users`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ barcode, initial_credit: initialCredit, first_name: 'NT', last_name: lastName }),
+        body: JSON.stringify({ name: `NT ${lastName}`, initial_credit: initialCredit, card_code: cardCode }),
     });
-    if (!resp.ok) throw new Error(`activate failed: ${resp.status} ${await resp.text()}`);
-    return { barcode, lastName };
+    if (!resp.ok) throw new Error(`createUniqueUser failed: ${resp.status} ${await resp.text()}`);
+    return { card_code: cardCode, lastName };
 }
 
 async function openCardByLastName(page: Page, lastName: string) {
@@ -54,7 +54,7 @@ test.describe('Transaction notes — issue #26', () => {
     test('charge with note shows note inline on card history', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 50.0);
+        const { lastName } = await createUniqueUser(token, 50.0);
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
         await chargeWithNote(page, '2.50', 'Proteinová tyčinka');
@@ -72,7 +72,7 @@ test.describe('Transaction notes — issue #26', () => {
         // staff dashboard to create the seeded charge.
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
-        const { lastName } = await activateUniqueCard(token, 50.0);
+        const { lastName } = await createUniqueUser(token, 50.0);
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
         const noteText = `feed-${Date.now()}`;
@@ -97,7 +97,7 @@ test.describe('Transaction notes — issue #26', () => {
     test('inline pencil edits an existing note', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 50.0);
+        const { lastName } = await createUniqueUser(token, 50.0);
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
         await chargeWithNote(page, '1.50', 'old note');
@@ -122,7 +122,7 @@ test.describe('Transaction notes — issue #26', () => {
     test('clearing a note removes the note line', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 50.0);
+        const { lastName } = await createUniqueUser(token, 50.0);
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
         await chargeWithNote(page, '1.50', 'temporary');
@@ -143,7 +143,7 @@ test.describe('Transaction notes — issue #26', () => {
     test('charge without a note renders no note line', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 50.0);
+        const { lastName } = await createUniqueUser(token, 50.0);
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
         await chargeWithNote(page, '1.50', '');
@@ -158,7 +158,7 @@ test.describe('Transaction notes — issue #26', () => {
     test('voided transaction hides the pencil but keeps the note text visible', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 50.0);
+        const { lastName } = await createUniqueUser(token, 50.0);
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
         await chargeWithNote(page, '1.50', 'doomed');
