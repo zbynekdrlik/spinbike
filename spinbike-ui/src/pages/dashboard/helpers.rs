@@ -18,6 +18,27 @@ pub fn full_name(c: &super::CardInfo) -> String {
     }
 }
 
+/// Display name with a richer fallback chain than `full_name`: prefers
+/// "first last", then company, then barcode. Useful for list rows where
+/// "—" would be uninformative (e.g. a corporate card with no person name).
+pub fn full_name_or_fallback(
+    first_name: Option<&str>,
+    last_name: Option<&str>,
+    company: Option<&str>,
+    barcode: &str,
+) -> String {
+    let f = first_name.unwrap_or_default();
+    let l = last_name.unwrap_or_default();
+    let combined = format!("{f} {l}").trim().to_string();
+    if !combined.is_empty() {
+        combined
+    } else if let Some(c) = company.filter(|s| !s.is_empty()) {
+        c.to_string()
+    } else {
+        barcode.to_string()
+    }
+}
+
 // tiny percent-encoder for the search query (avoids pulling urlencoding crate
 // just for this — we only need to escape a handful of chars).
 pub fn urlencoding_light(s: &str) -> String {

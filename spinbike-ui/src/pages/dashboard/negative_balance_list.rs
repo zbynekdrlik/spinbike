@@ -59,7 +59,12 @@ pub fn NegativeBalanceList(
                 let today = today_local();
 
                 let items = rows.into_iter().map(|r| {
-                    let name = card_full_name(&r);
+                    let name = super::helpers::full_name_or_fallback(
+                        r.first_name.as_deref(),
+                        r.last_name.as_deref(),
+                        r.company.as_deref(),
+                        &r.barcode,
+                    );
                     let credit = format!("{:.2} €", r.credit);
                     let last_visit = format_optional_date(&r.last_visit_at, today, lang_now, &never_label);
                     let last_payment = format_optional_date(&r.last_payment_at, today, lang_now, &never_label);
@@ -98,17 +103,6 @@ pub fn NegativeBalanceList(
                 }.into_any()
             }}
         </Suspense>
-    }
-}
-
-fn card_full_name(c: &NegativeBalanceCard) -> String {
-    let f = c.first_name.clone().unwrap_or_default();
-    let l = c.last_name.clone().unwrap_or_default();
-    let combined = format!("{f} {l}").trim().to_string();
-    if combined.is_empty() {
-        c.company.clone().unwrap_or_else(|| c.barcode.clone())
-    } else {
-        combined
     }
 }
 
