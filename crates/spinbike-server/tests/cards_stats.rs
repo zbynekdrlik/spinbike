@@ -1,4 +1,4 @@
-//! Integration tests for GET /api/cards/{id}/stats.
+//! Integration tests for GET /api/users/{id}/stats.
 
 mod helpers;
 
@@ -28,7 +28,7 @@ async fn seed_txn(
         None
     };
     sqlx::query(
-        "INSERT INTO transactions (card_id, service_id, amount, action, created_at)
+        "INSERT INTO transactions (user_id, service_id, amount, action, created_at)
          VALUES (?, ?, ?, ?, ?)",
     )
     .bind(card_id)
@@ -43,7 +43,7 @@ async fn seed_txn(
 
 async fn get_stats(app: &TestApp, card_id: i64) -> (axum::http::StatusCode, StatsResponse) {
     app.request_typed::<StatsResponse>(get(
-        &format!("/api/cards/{card_id}/stats"),
+        &format!("/api/users/{card_id}/stats"),
         &app.staff_token,
     ))
     .await
@@ -290,7 +290,7 @@ async fn soft_deleted_rows_excluded() {
     .await;
     sqlx::query(
         "UPDATE transactions SET deleted_at = datetime('now')
-         WHERE card_id = ? AND service_id = (SELECT id FROM services WHERE name_en='Spinning')",
+         WHERE user_id = ? AND service_id = (SELECT id FROM services WHERE name_en='Spinning')",
     )
     .bind(card_id)
     .execute(&app.pool)
@@ -299,7 +299,7 @@ async fn soft_deleted_rows_excluded() {
 
     seed_txn(&app.pool, card_id, None, 10.0, "topup", &now_str).await;
     sqlx::query(
-        "UPDATE transactions SET deleted_at = datetime('now') WHERE action='topup' AND card_id = ?",
+        "UPDATE transactions SET deleted_at = datetime('now') WHERE action='topup' AND user_id = ?",
     )
     .bind(card_id)
     .execute(&app.pool)
@@ -318,7 +318,7 @@ async fn customer_role_forbidden() {
 
     let (status, _) = app
         .request(get(
-            &format!("/api/cards/{card_id}/stats"),
+            &format!("/api/users/{card_id}/stats"),
             &app.customer_token,
         ))
         .await;

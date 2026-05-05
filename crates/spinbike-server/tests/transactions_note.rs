@@ -19,7 +19,7 @@ async fn charge_persists_note() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 2.50, "service_id": spinning_id, "note": "Proteinová tyčinka"}),
+            &json!({"user_id": card_id, "amount": 2.50, "service_id": spinning_id, "note": "Proteinová tyčinka"}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -42,15 +42,15 @@ async fn topup_persists_note() {
 
     let (status, _) = app
         .request(post_json(
-            "/api/cards/topup",
+            "/api/users/topup",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 30.0, "note": "Platil v hotovosti"}),
+            &json!({"user_id": card_id, "amount": 30.0, "note": "Platil v hotovosti"}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
 
     let note: Option<String> = sqlx::query_scalar(
-        "SELECT note FROM transactions WHERE card_id = ? ORDER BY id DESC LIMIT 1",
+        "SELECT note FROM transactions WHERE user_id = ? ORDER BY id DESC LIMIT 1",
     )
     .bind(card_id)
     .fetch_one(&app.pool)
@@ -73,7 +73,7 @@ async fn sell_pass_persists_note() {
         .request(post_json(
             "/api/payments/sell-pass",
             &app.staff_token,
-            &json!({"card_id": card_id, "price": 35.0, "valid_until": valid_until,
+            &json!({"user_id": card_id, "price": 35.0, "valid_until": valid_until,
                     "note": "Zľava 10%"}),
         ))
         .await;
@@ -101,7 +101,7 @@ async fn empty_note_stored_as_null() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": "   "}),
+            &json!({"user_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": "   "}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -119,7 +119,7 @@ async fn empty_note_stored_as_null() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": ""}),
+            &json!({"user_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": ""}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -146,7 +146,7 @@ async fn note_over_200_chars_rejected() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": long}),
+            &json!({"user_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": long}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
@@ -173,7 +173,7 @@ async fn missing_note_field_works_unchanged() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id}),
+            &json!({"user_id": card_id, "amount": 1.0, "service_id": spinning_id}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -194,7 +194,7 @@ async fn log_visit_persists_note() {
         .request(post_json(
             "/api/payments/sell-pass",
             &app.staff_token,
-            &json!({"card_id": card_id, "price": 35.0, "valid_until": valid_until}),
+            &json!({"user_id": card_id, "price": 35.0, "valid_until": valid_until}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK, "sell-pass must succeed");
@@ -206,7 +206,7 @@ async fn log_visit_persists_note() {
         .request(post_json(
             "/api/payments/log-visit",
             &app.staff_token,
-            &json!({"card_id": card_id, "service_id": spinning_id, "note": "priviedol kamarata"}),
+            &json!({"user_id": card_id, "service_id": spinning_id, "note": "priviedol kamarata"}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK, "log-visit must succeed");
@@ -236,7 +236,7 @@ async fn note_at_200_chars_accepted() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": exactly_200.clone()}),
+            &json!({"user_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": exactly_200.clone()}),
         ))
         .await;
     assert_eq!(
@@ -266,7 +266,7 @@ async fn patch_note_updates_existing_row() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": "first"}),
+            &json!({"user_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": "first"}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -300,7 +300,7 @@ async fn patch_note_clears_with_null_or_empty() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": "to clear"}),
+            &json!({"user_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": "to clear"}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -337,7 +337,7 @@ async fn patch_note_rejects_voided_409() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id}),
+            &json!({"user_id": card_id, "amount": 1.0, "service_id": spinning_id}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -375,7 +375,7 @@ async fn patch_note_rejects_over_200_chars() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id}),
+            &json!({"user_id": card_id, "amount": 1.0, "service_id": spinning_id}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -427,7 +427,7 @@ async fn patch_note_requires_staff_role() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id}),
+            &json!({"user_id": card_id, "amount": 1.0, "service_id": spinning_id}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -456,9 +456,9 @@ async fn topup_at_200_chars_accepted() {
     let exactly_200 = "x".repeat(200);
     let (status, _) = app
         .request(post_json(
-            "/api/cards/topup",
+            "/api/users/topup",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 30.0, "note": exactly_200.clone()}),
+            &json!({"user_id": card_id, "amount": 30.0, "note": exactly_200.clone()}),
         ))
         .await;
     assert_eq!(
@@ -468,7 +468,7 @@ async fn topup_at_200_chars_accepted() {
     );
 
     let note: Option<String> = sqlx::query_scalar(
-        "SELECT note FROM transactions WHERE card_id = ? ORDER BY id DESC LIMIT 1",
+        "SELECT note FROM transactions WHERE user_id = ? ORDER BY id DESC LIMIT 1",
     )
     .bind(card_id)
     .fetch_one(&app.pool)
@@ -487,9 +487,9 @@ async fn topup_over_200_chars_rejected() {
     let long = "x".repeat(201);
     let (status, resp) = app
         .request(post_json(
-            "/api/cards/topup",
+            "/api/users/topup",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 30.0, "note": long}),
+            &json!({"user_id": card_id, "amount": 30.0, "note": long}),
         ))
         .await;
     assert_eq!(
@@ -524,7 +524,7 @@ async fn sell_pass_at_200_chars_accepted() {
         .request(post_json(
             "/api/payments/sell-pass",
             &app.staff_token,
-            &json!({"card_id": card_id, "price": 35.0, "valid_until": valid_until,
+            &json!({"user_id": card_id, "price": 35.0, "valid_until": valid_until,
                     "note": exactly_200.clone()}),
         ))
         .await;
@@ -558,7 +558,7 @@ async fn sell_pass_over_200_chars_rejected() {
         .request(post_json(
             "/api/payments/sell-pass",
             &app.staff_token,
-            &json!({"card_id": card_id, "price": 35.0, "valid_until": valid_until,
+            &json!({"user_id": card_id, "price": 35.0, "valid_until": valid_until,
                     "note": long}),
         ))
         .await;
@@ -594,7 +594,7 @@ async fn log_visit_at_200_chars_accepted() {
         .request(post_json(
             "/api/payments/sell-pass",
             &app.staff_token,
-            &json!({"card_id": card_id, "price": 35.0, "valid_until": valid_until}),
+            &json!({"user_id": card_id, "price": 35.0, "valid_until": valid_until}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK, "sell-pass must succeed");
@@ -606,7 +606,7 @@ async fn log_visit_at_200_chars_accepted() {
         .request(post_json(
             "/api/payments/log-visit",
             &app.staff_token,
-            &json!({"card_id": card_id, "service_id": spinning_id, "note": exactly_200.clone()}),
+            &json!({"user_id": card_id, "service_id": spinning_id, "note": exactly_200.clone()}),
         ))
         .await;
     assert_eq!(
@@ -639,7 +639,7 @@ async fn log_visit_over_200_chars_rejected() {
         .request(post_json(
             "/api/payments/sell-pass",
             &app.staff_token,
-            &json!({"card_id": card_id, "price": 35.0, "valid_until": valid_until}),
+            &json!({"user_id": card_id, "price": 35.0, "valid_until": valid_until}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK, "sell-pass must succeed");
@@ -651,7 +651,7 @@ async fn log_visit_over_200_chars_rejected() {
         .request(post_json(
             "/api/payments/log-visit",
             &app.staff_token,
-            &json!({"card_id": card_id, "service_id": spinning_id, "note": long}),
+            &json!({"user_id": card_id, "service_id": spinning_id, "note": long}),
         ))
         .await;
     assert_eq!(
@@ -683,7 +683,7 @@ async fn patch_note_at_200_chars_accepted() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id}),
+            &json!({"user_id": card_id, "amount": 1.0, "service_id": spinning_id}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -727,7 +727,7 @@ async fn patch_note_whitespace_only_stored_as_null() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": "initial note"}),
+            &json!({"user_id": card_id, "amount": 1.0, "service_id": spinning_id, "note": "initial note"}),
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);

@@ -10,7 +10,7 @@ use serde_json::json;
 #[tokio::test]
 async fn charge_rejects_null_service_id_with_400() {
     let app = TestApp::new().await;
-    let card_id = app
+    let user_id = app
         .seed_card("CHARGE-NULL-SVC", 50.0, None, None, None, None)
         .await;
 
@@ -18,7 +18,7 @@ async fn charge_rejects_null_service_id_with_400() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 1.50}),
+            &json!({"user_id": user_id, "amount": 1.50}),
         ))
         .await;
 
@@ -33,7 +33,7 @@ async fn charge_rejects_null_service_id_with_400() {
 #[tokio::test]
 async fn charge_with_valid_service_id_still_succeeds() {
     let app = TestApp::new().await;
-    let card_id = app
+    let user_id = app
         .seed_card("CHARGE-VALID-SVC", 50.0, None, None, None, None)
         .await;
 
@@ -48,7 +48,7 @@ async fn charge_with_valid_service_id_still_succeeds() {
         .request(post_json(
             "/api/payments/charge",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 5.00, "service_id": fitness_id}),
+            &json!({"user_id": user_id, "amount": 5.00, "service_id": fitness_id}),
         ))
         .await;
 
@@ -59,15 +59,15 @@ async fn charge_with_valid_service_id_still_succeeds() {
 async fn topup_still_accepts_null_service_id() {
     // Top-up is service-independent — the new charge rule must NOT leak into top-up.
     let app = TestApp::new().await;
-    let card_id = app
+    let user_id = app
         .seed_card("TOPUP-NULL-SVC", 0.0, None, None, None, None)
         .await;
 
     let (status, _) = app
         .request(post_json(
-            "/api/cards/topup",
+            "/api/users/topup",
             &app.staff_token,
-            &json!({"card_id": card_id, "amount": 30.0}),
+            &json!({"user_id": user_id, "amount": 30.0}),
         ))
         .await;
 

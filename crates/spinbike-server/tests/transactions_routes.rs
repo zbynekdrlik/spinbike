@@ -6,7 +6,7 @@ use helpers::{TestApp, delete, get, patch_json};
 
 async fn seed_topup(app: &TestApp, amount: f64) -> i64 {
     sqlx::query_scalar::<_, i64>(
-        "INSERT INTO transactions (card_id, amount, action) VALUES (?, ?, 'topup') RETURNING id",
+        "INSERT INTO transactions (user_id, amount, action) VALUES (?, ?, 'topup') RETURNING id",
     )
     .bind(app.customer_card_id)
     .bind(amount)
@@ -41,9 +41,9 @@ async fn delete_missing_transaction_returns_404() {
 async fn delete_topup_reverses_credit_and_soft_deletes() {
     let app = TestApp::new().await;
 
-    // Simulate "topup already applied" state by manually putting 10.0 on the card
+    // Simulate "topup already applied" state by manually putting 10.0 on the user
     // AND inserting a +10 topup row (what the topup handler would have written).
-    sqlx::query("UPDATE cards SET credit = 10.0 WHERE id = ?")
+    sqlx::query("UPDATE users SET credit = 10.0 WHERE id = ?")
         .bind(app.customer_card_id)
         .execute(&app.pool)
         .await
@@ -58,7 +58,7 @@ async fn delete_topup_reverses_credit_and_soft_deletes() {
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let credit: f64 = sqlx::query_scalar("SELECT credit FROM cards WHERE id = ?")
+    let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
         .bind(app.customer_card_id)
         .fetch_one(&app.pool)
         .await
@@ -82,13 +82,13 @@ async fn delete_charge_refunds_credit() {
     // Charges are stored with NEGATIVE amount. Voiding a charge of -7
     // must add 7 back to credit.
     let app = TestApp::new().await;
-    sqlx::query("UPDATE cards SET credit = 3.0 WHERE id = ?")
+    sqlx::query("UPDATE users SET credit = 3.0 WHERE id = ?")
         .bind(app.customer_card_id)
         .execute(&app.pool)
         .await
         .unwrap();
     let tx_id = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO transactions (card_id, amount, action) VALUES (?, -7.0, 'charge') RETURNING id",
+        "INSERT INTO transactions (user_id, amount, action) VALUES (?, -7.0, 'charge') RETURNING id",
     )
     .bind(app.customer_card_id)
     .fetch_one(&app.pool)
@@ -103,7 +103,7 @@ async fn delete_charge_refunds_credit() {
         .await;
     assert_eq!(status, StatusCode::NO_CONTENT);
 
-    let credit: f64 = sqlx::query_scalar("SELECT credit FROM cards WHERE id = ?")
+    let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
         .bind(app.customer_card_id)
         .fetch_one(&app.pool)
         .await
@@ -118,7 +118,7 @@ async fn delete_charge_refunds_credit() {
 async fn patch_valid_until_updates_pass_end_date() {
     let app = TestApp::new().await;
     let tx_id = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO transactions (card_id, amount, action, valid_until)
+        "INSERT INTO transactions (user_id, amount, action, valid_until)
          VALUES (?, -35.0, 'charge', '2026-05-01') RETURNING id",
     )
     .bind(app.customer_card_id)
@@ -165,7 +165,7 @@ async fn patch_valid_until_rejects_non_pass_transaction() {
 async fn patch_valid_until_forbidden_for_customer() {
     let app = TestApp::new().await;
     let tx_id = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO transactions (card_id, amount, action, valid_until)
+        "INSERT INTO transactions (user_id, amount, action, valid_until)
          VALUES (?, -35.0, 'charge', '2026-05-01') RETURNING id",
     )
     .bind(app.customer_card_id)
