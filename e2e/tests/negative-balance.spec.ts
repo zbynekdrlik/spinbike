@@ -105,13 +105,20 @@ test('negative-balance list + search highlight', async ({ page }) => {
     const results = page.locator('[data-testid="search-result"]');
     await expect(results).toHaveCount(3, { timeout: 5000 });
 
-    // Charlie (positive) — no negative class.
-    const charlieRow = results.filter({ hasText: `Charlie${RUN_TAG}` });
+    // The search-dropdown row only shows `…<last 4 barcode chars>` + name +
+    // company; our seeded cards share the same last-4 (the RUN_TAG tail) and
+    // have no name/company, so we can't filter by barcode/name. Each card has
+    // a unique credit value rendered as e.g. "-3.50 €" — that string IS in
+    // the row text and is unique within our 3-card scope.
+    const charlieRow = results.filter({ hasText: '5.00 €' });
+    await expect(charlieRow).toHaveCount(1);
     await expect(charlieRow).not.toHaveClass(/search-result--negative/);
 
-    // Alpha & Bravo (negative) — must have the modifier class.
-    const alphaRowSearch = results.filter({ hasText: `Alpha${RUN_TAG}` });
-    const bravoRowSearch = results.filter({ hasText: `Bravo${RUN_TAG}` });
+    // Alpha (-3.50) & Bravo (-10.00) — must have the modifier class.
+    const alphaRowSearch = results.filter({ hasText: '-3.50 €' });
+    const bravoRowSearch = results.filter({ hasText: '-10.00 €' });
+    await expect(alphaRowSearch).toHaveCount(1);
+    await expect(bravoRowSearch).toHaveCount(1);
     await expect(alphaRowSearch).toHaveClass(/search-result--negative/);
     await expect(bravoRowSearch).toHaveClass(/search-result--negative/);
 
