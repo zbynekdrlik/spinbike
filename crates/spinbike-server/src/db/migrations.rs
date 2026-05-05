@@ -1247,12 +1247,13 @@ mod tests {
             .unwrap();
         }
 
-        // Force V12 to re-run.
-        sqlx::query("DELETE FROM schema_version WHERE version = 12")
-            .execute(&pool)
-            .await
-            .unwrap();
-        run_migrations(&pool).await.unwrap();
+        // Force V12 to re-run by executing the SQL directly. (run_migrations
+        // tracks applied migrations by MAX(version); after V13 is applied,
+        // simply deleting V12's schema_version row no longer triggers a re-run.)
+        let v12_sql = MIGRATIONS.iter().find(|(v, _, _)| *v == 12).unwrap().2;
+        for stmt in v12_sql.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+            sqlx::query(stmt).execute(&pool).await.unwrap();
+        }
 
         let rows: Vec<(i64, String, f64)> = sqlx::query_as(
             "SELECT id, action, amount FROM transactions
@@ -1313,12 +1314,12 @@ mod tests {
         .await
         .unwrap();
 
-        // First run: mutate.
-        sqlx::query("DELETE FROM schema_version WHERE version = 12")
-            .execute(&pool)
-            .await
-            .unwrap();
-        run_migrations(&pool).await.unwrap();
+        // First run: mutate. Execute V12 SQL directly (see comment in
+        // v12_normalizes_every_legacy_pattern).
+        let v12_sql = MIGRATIONS.iter().find(|(v, _, _)| *v == 12).unwrap().2;
+        for stmt in v12_sql.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+            sqlx::query(stmt).execute(&pool).await.unwrap();
+        }
 
         let after_first: Vec<(i64, String, f64)> = sqlx::query_as(
             "SELECT id, action, amount FROM transactions
@@ -1329,11 +1330,9 @@ mod tests {
         .unwrap();
 
         // Second run: no-op (no rows match the legacy guards anymore).
-        sqlx::query("DELETE FROM schema_version WHERE version = 12")
-            .execute(&pool)
-            .await
-            .unwrap();
-        run_migrations(&pool).await.unwrap();
+        for stmt in v12_sql.split(';').map(str::trim).filter(|s| !s.is_empty()) {
+            sqlx::query(stmt).execute(&pool).await.unwrap();
+        }
 
         let after_second: Vec<(i64, String, f64)> = sqlx::query_as(
             "SELECT id, action, amount FROM transactions
