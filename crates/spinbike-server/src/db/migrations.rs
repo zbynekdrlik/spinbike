@@ -377,7 +377,8 @@ UPDATE transactions SET action='topup'
 //   4. Backfill cards.user_id for the freshly-created users.
 //   5. Backfill transactions.user_id from cards.
 //   6. Recreate transactions (drop card_id, user_id NOT NULL).
-//   7. Recreate bookings (drop card_id).
+//   7. Recreate bookings (drop card_id) + restore indexes.
+//   7b. Migrate persistent_bookings card_id → user_id (cards still exists here).
 //   8. Drop cards.
 const V13_USERS_REPLACE_CARDS: &str = r#"
 PRAGMA foreign_keys = OFF;
@@ -482,7 +483,7 @@ CREATE TABLE bookings_new (
     date                  TEXT    NOT NULL,
     user_id               INTEGER NOT NULL REFERENCES users(id),
     created_by            INTEGER REFERENCES users(id),
-    source                TEXT,
+    source                TEXT    NOT NULL DEFAULT 'manual',
     charged_at            TEXT,
     charge_transaction_id INTEGER REFERENCES transactions(id),
     created_at            TEXT    NOT NULL DEFAULT (datetime('now')),
@@ -502,6 +503,32 @@ ALTER TABLE bookings_new RENAME TO bookings;
 CREATE UNIQUE INDEX idx_bookings_active
     ON bookings(template_id, date, user_id)
     WHERE cancelled_at IS NULL;
+
+CREATE INDEX idx_bookings_uncharged_future
+    ON bookings(date, charged_at)
+    WHERE cancelled_at IS NULL AND charged_at IS NULL;
+
+-- 7b. Migrate persistent_bookings: swap card_id → user_id (via cards join)
+--     Must happen BEFORE step 8 (DROP TABLE cards) while cards still exists.
+CREATE TABLE persistent_bookings_new (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    template_id INTEGER NOT NULL REFERENCES class_templates(id) ON DELETE CASCADE,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    ended_at    TEXT
+);
+
+INSERT INTO persistent_bookings_new (id, user_id, template_id, created_at, ended_at)
+SELECT pb.id, c.user_id, pb.template_id, pb.created_at, pb.ended_at
+FROM persistent_bookings pb
+JOIN cards c ON c.id = pb.card_id;
+
+DROP TABLE persistent_bookings;
+ALTER TABLE persistent_bookings_new RENAME TO persistent_bookings;
+
+CREATE UNIQUE INDEX idx_persistent_bookings_user_id_template_id_active
+    ON persistent_bookings(user_id, template_id)
+    WHERE ended_at IS NULL;
 
 -- 8. Drop cards
 DROP TABLE cards;
@@ -567,17 +594,23 @@ mod tests {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
 
-        // bookings gained card_id, source, charged_at, charge_transaction_id
+        // After V5+V13: bookings retains source, charged_at, charge_transaction_id
+        // but card_id is removed by V13. Check the surviving columns.
         let cols: Vec<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('bookings')")
             .fetch_all(&pool)
             .await
             .unwrap();
         let names: Vec<&str> = cols.iter().map(|(n,)| n.as_str()).collect();
-        for c in ["card_id", "source", "charged_at", "charge_transaction_id"] {
+        for c in ["source", "charged_at", "charge_transaction_id"] {
             assert!(names.contains(&c), "bookings missing column {c}");
         }
+        // V13 drops card_id from bookings.
+        assert!(
+            !names.contains(&"card_id"),
+            "bookings.card_id must be removed by V13; found: {names:?}"
+        );
 
-        // persistent_bookings exists with the right unique index
+        // persistent_bookings exists with the right unique index (user_id keyed after V13).
         let tbl: Option<(String,)> = sqlx::query_as(
             "SELECT name FROM sqlite_master WHERE type='table' AND name='persistent_bookings'",
         )
@@ -593,8 +626,8 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            idx.iter().any(|(n,)| n.contains("card_id_template_id")),
-            "unique index on (card_id,template_id) missing"
+            idx.iter().any(|(n,)| n.contains("user_id_template_id")),
+            "unique index on (user_id,template_id) missing; found: {idx:?}"
         );
     }
 
@@ -1443,6 +1476,17 @@ mod tests {
         .await
         .unwrap();
 
+        // Seed a persistent_booking for Bob's card (CODE2). V6 seeded
+        // class_templates with weekday=0 at '18:00' as template_id=1.
+        sqlx::query(
+            "INSERT INTO persistent_bookings(card_id, template_id)
+             VALUES(?, 1)",
+        )
+        .bind(bob_card_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
         // Apply V13.
         let v13_sql = MIGRATIONS.iter().find(|(v, _, _)| *v == 13).unwrap().2;
         apply_sql_block(&pool, v13_sql).await;
@@ -1491,11 +1535,13 @@ mod tests {
                 .unwrap();
         assert_eq!(nameless_name, "(no name)");
 
-        // Bob's transaction now has user_id (not card_id).
+        // Bob's user_id (used for both transaction and persistent_booking assertions).
         let bob_user: i64 = sqlx::query_scalar("SELECT id FROM users WHERE card_code='CODE2'")
             .fetch_one(&pool)
             .await
             .unwrap();
+
+        // Bob's transaction now has user_id (not card_id).
         let txn_user: i64 = sqlx::query_scalar("SELECT user_id FROM transactions LIMIT 1")
             .fetch_one(&pool)
             .await
@@ -1534,6 +1580,80 @@ mod tests {
         assert!(
             !bcols.contains(&"card_id".to_string()),
             "bookings.card_id must be dropped; found cols: {bcols:?}"
+        );
+
+        // persistent_bookings table still exists.
+        let pb_table: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='persistent_bookings'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(
+            pb_table.is_some(),
+            "persistent_bookings table must survive V13"
+        );
+
+        // persistent_bookings has no card_id column.
+        let pb_cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('persistent_bookings')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            !pb_cols.contains(&"card_id".to_string()),
+            "persistent_bookings.card_id must be dropped after V13; found: {pb_cols:?}"
+        );
+        assert!(
+            pb_cols.contains(&"user_id".to_string()),
+            "persistent_bookings must have user_id column after V13; found: {pb_cols:?}"
+        );
+
+        // Bob's seeded persistent_booking migrated to his new user_id.
+        let pb_user: i64 = sqlx::query_scalar("SELECT user_id FROM persistent_bookings LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            pb_user, bob_user,
+            "persistent_bookings.user_id must point to Bob's new user row"
+        );
+
+        // idx_persistent_bookings_user_id_template_id_active exists.
+        let pb_idx: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type='index'
+             AND name='idx_persistent_bookings_user_id_template_id_active'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(
+            pb_idx.is_some(),
+            "idx_persistent_bookings_user_id_template_id_active must exist after V13"
+        );
+
+        // idx_bookings_uncharged_future exists.
+        let bu_idx: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type='index'
+             AND name='idx_bookings_uncharged_future'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(
+            bu_idx.is_some(),
+            "idx_bookings_uncharged_future must be recreated after V13 bookings rebuild"
+        );
+
+        // PRAGMA foreign_key_check must return no rows (no broken FKs).
+        let fk_violations: Vec<(String, i64, String, i64)> =
+            sqlx::query_as("PRAGMA foreign_key_check")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            fk_violations.is_empty(),
+            "PRAGMA foreign_key_check must return no rows after V13; violations: {fk_violations:?}"
         );
 
         // PRAGMA integrity_check.
