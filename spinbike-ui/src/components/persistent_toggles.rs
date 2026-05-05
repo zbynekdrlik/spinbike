@@ -18,7 +18,7 @@ struct PersistentRow {
     #[allow(dead_code)]
     id: i64,
     #[allow(dead_code)]
-    card_id: i64,
+    user_id: i64,
     template_id: i64,
 }
 
