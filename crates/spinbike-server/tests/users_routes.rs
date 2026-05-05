@@ -480,7 +480,7 @@ async fn create_user_blocked_field_round_trip() {
     let user_id = resp["id"].as_i64().unwrap();
 
     // Initially unblocked.
-    assert_eq!(resp["blocked"].as_bool().unwrap(), false);
+    assert!(!resp["blocked"].as_bool().unwrap());
 
     // Block via endpoint.
     let block_body = serde_json::json!({ "user_id": user_id, "blocked": true });
@@ -488,7 +488,7 @@ async fn create_user_blocked_field_round_trip() {
         .request(post_json("/api/users/block", &app.staff_token, &block_body))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
-    assert_eq!(resp["blocked"].as_bool().unwrap(), true);
+    assert!(resp["blocked"].as_bool().unwrap());
 
     // Fetch the user's transactions list (any staff GET that reads the user)
     // and confirm blocked is still true.
