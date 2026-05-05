@@ -149,6 +149,43 @@ async fn search_respects_explicit_limit() {
 }
 
 #[tokio::test]
+async fn negative_balance_endpoint_returns_only_negatives_sorted() {
+    let app = TestApp::new().await;
+    app.seed_card("NEG-A", -10.0, Some("Alpha"), None, None, None)
+        .await;
+    app.seed_card("NEG-B", -3.5, Some("Bravo"), None, None, None)
+        .await;
+    app.seed_card("POS-A", 5.0, Some("Charlie"), None, None, None)
+        .await;
+
+    let (status, resp) = app
+        .request(get("/api/cards/negative-balance", &app.staff_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let arr = resp.as_array().unwrap();
+    let ours: Vec<_> = arr
+        .iter()
+        .filter(|r| {
+            let b = r["barcode"].as_str().unwrap_or("");
+            b == "NEG-A" || b == "NEG-B" || b == "POS-A"
+        })
+        .collect();
+    assert_eq!(ours.len(), 2, "positive card must be excluded");
+    assert_eq!(ours[0]["barcode"], "NEG-A", "most-negative first");
+    assert_eq!(ours[1]["barcode"], "NEG-B");
+}
+
+#[tokio::test]
+async fn negative_balance_endpoint_forbidden_for_customer() {
+    let app = TestApp::new().await;
+    app.seed_card("NEG-X", -1.0, None, None, None, None).await;
+    let (status, _) = app
+        .request(get("/api/cards/negative-balance", &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn activate_duplicate_barcode_returns_conflict() {
     let app = TestApp::new().await;
     app.seed_card("DUP", 0.0, None, None, None, None).await;

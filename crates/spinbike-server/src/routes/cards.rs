@@ -104,6 +104,19 @@ pub struct CardResponse {
 }
 
 #[derive(Serialize)]
+pub struct NegativeBalanceCardResponse {
+    pub id: i64,
+    pub barcode: String,
+    pub credit: f64,
+    pub blocked: bool,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub company: Option<String>,
+    pub last_visit_at: Option<String>,
+    pub last_payment_at: Option<String>,
+}
+
+#[derive(Serialize)]
 pub struct BalanceResponse {
     pub cards: Vec<CardResponse>,
     pub transactions: Vec<TransactionResponse>,
@@ -179,6 +192,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/cards/activate", post(activate_card))
         .route("/api/cards/topup", post(topup_card))
         .route("/api/cards/block", post(block_card))
+        .route("/api/cards/negative-balance", get(negative_balance))
         .route("/api/cards/{id}", put(update_card))
         .route("/api/cards/{id}/transactions", get(card_transactions))
         .route("/api/cards/{id}/stats", get(card_stats))
@@ -205,6 +219,36 @@ async fn search_cards(
     let out = rows
         .into_iter()
         .map(|(c, pass, last_visit)| card_response_from_row_with_pass(&c, pass, last_visit))
+        .collect();
+    Ok(Json(out))
+}
+
+async fn negative_balance(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<Vec<NegativeBalanceCardResponse>>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_manage_cards() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Staff only"})),
+        ));
+    }
+    let rows = db::list_negative_balance(&state.pool)
+        .await
+        .map_err(internal_error)?;
+    let out = rows
+        .into_iter()
+        .map(|r| NegativeBalanceCardResponse {
+            id: r.id,
+            barcode: r.barcode,
+            credit: r.credit,
+            blocked: r.blocked != 0,
+            first_name: r.first_name,
+            last_name: r.last_name,
+            company: r.company,
+            last_visit_at: r.last_visit_at,
+            last_payment_at: r.last_payment_at,
+        })
         .collect();
     Ok(Json(out))
 }

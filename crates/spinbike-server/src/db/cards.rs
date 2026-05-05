@@ -433,6 +433,45 @@ pub async fn get_card_pass_valid_until(
     Ok(row.and_then(|(d,)| d))
 }
 
+#[derive(Debug, sqlx::FromRow)]
+pub struct NegativeBalanceRow {
+    pub id: i64,
+    pub barcode: String,
+    pub credit: f64,
+    pub blocked: i64,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub company: Option<String>,
+    pub last_visit_at: Option<String>,
+    pub last_payment_at: Option<String>,
+}
+
+/// Cards with `credit < 0`, sorted most-negative-first. Includes blocked
+/// cards (still owe money). The two subqueries piggyback on the existing
+/// `(card_id, created_at)` index on `transactions`.
+pub async fn list_negative_balance(pool: &SqlitePool) -> anyhow::Result<Vec<NegativeBalanceRow>> {
+    let rows = sqlx::query_as::<_, NegativeBalanceRow>(
+        "SELECT
+             c.id, c.barcode, c.credit, c.blocked,
+             c.first_name, c.last_name, c.company,
+             (SELECT MAX(t.created_at) FROM transactions t
+                  WHERE t.card_id = c.id
+                    AND t.action = 'visit'
+                    AND t.deleted_at IS NULL) AS last_visit_at,
+             (SELECT MAX(t.created_at) FROM transactions t
+                  WHERE t.card_id = c.id
+                    AND t.action = 'topup'
+                    AND t.amount > 0
+                    AND t.deleted_at IS NULL) AS last_payment_at
+         FROM cards c
+         WHERE c.credit < 0
+         ORDER BY c.credit ASC",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
+
 /// Return the latest non-voided pass transaction as (id, valid_until), or None.
 pub async fn get_card_pass_tx(
     pool: &SqlitePool,
@@ -953,5 +992,52 @@ mod tests {
             None,
             "soft-deleted pass sale must not count as active pass"
         );
+    }
+
+    #[tokio::test]
+    async fn list_negative_balance_returns_only_negatives_sorted() {
+        let pool = setup().await;
+
+        let pos = create_card(&pool, "POS-1").await.unwrap();
+        let mid = create_card(&pool, "MID-1").await.unwrap();
+        let deep = create_card(&pool, "DEEP-1").await.unwrap();
+
+        update_credit(&pool, pos, 5.0).await.unwrap();
+        update_credit(&pool, mid, -3.5).await.unwrap();
+        update_credit(&pool, deep, -10.0).await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO transactions (card_id, amount, action, created_at)
+             VALUES (?, 0.0, 'visit', '2026-04-22 12:00:00')",
+        )
+        .bind(mid)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO transactions (card_id, amount, action, created_at)
+             VALUES (?, 5.0, 'topup', '2026-03-05 09:00:00')",
+        )
+        .bind(deep)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let rows = list_negative_balance(&pool).await.unwrap();
+        assert_eq!(rows.len(), 2, "positive card must be excluded");
+        assert_eq!(rows[0].id, deep);
+        assert!((rows[0].credit - (-10.0)).abs() < f64::EPSILON);
+        assert_eq!(rows[0].last_visit_at, None);
+        assert_eq!(
+            rows[0].last_payment_at.as_deref(),
+            Some("2026-03-05 09:00:00"),
+        );
+        assert_eq!(rows[1].id, mid);
+        assert!((rows[1].credit - (-3.5)).abs() < f64::EPSILON);
+        assert_eq!(
+            rows[1].last_visit_at.as_deref(),
+            Some("2026-04-22 12:00:00"),
+        );
+        assert_eq!(rows[1].last_payment_at, None);
     }
 }

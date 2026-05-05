@@ -6,6 +6,12 @@ use crate::auth::AuthUser;
 use crate::db::cards;
 
 #[derive(Deserialize)]
+pub struct SeedCreditRequest {
+    pub barcode: String,
+    pub credit: f64,
+}
+
+#[derive(Deserialize)]
 pub struct SeedExpiredPassRequest {
     pub barcode: String,
     pub valid_until: chrono::NaiveDate,
@@ -40,6 +46,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/test/seed-expired-pass", post(seed_expired_pass))
         .route("/api/test/seed-transactions", post(seed_transactions))
+        .route("/api/test/seed-credit", post(seed_credit))
 }
 
 async fn seed_expired_pass(
@@ -129,4 +136,32 @@ async fn seed_transactions(
     Ok(Json(
         serde_json::json!({ "card_id": card_id, "count": count }),
     ))
+}
+
+async fn seed_credit(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Json(body): Json<SeedCreditRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    if !claims.role.can_process_payments() {
+        return Err((StatusCode::FORBIDDEN, "Staff required".into()));
+    }
+    let existing: Option<i64> = sqlx::query_scalar("SELECT id FROM cards WHERE barcode = ?")
+        .bind(&body.barcode)
+        .fetch_optional(&state.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    let card_id = match existing {
+        Some(id) => id,
+        None => cards::create_card(&state.pool, &body.barcode)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+    };
+    sqlx::query("UPDATE cards SET credit = ROUND(?, 2) WHERE id = ?")
+        .bind(body.credit)
+        .bind(card_id)
+        .execute(&state.pool)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "card_id": card_id })))
 }
