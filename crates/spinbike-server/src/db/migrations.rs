@@ -48,6 +48,7 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "transactions: normalize legacy actions to new convention",
         V12_NORMALIZE_LEGACY_ACTIONS,
     ),
+    (13, "users replace cards", V13_USERS_REPLACE_CARDS),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -359,6 +360,153 @@ UPDATE transactions SET action='topup'
 -- maps action='storno' to EventKind::Other regardless of amount sign, so the
 -- ~64 historical refund rows render as Other instead of TopUp without losing
 -- the void semantic. See spinbike_core::reports::classify.
+"#;
+
+// Drop `cards` as a first-class entity; promote its data into `users`.
+//
+// The migration runner (db::run_migrations) already toggles
+// `PRAGMA foreign_keys = OFF` before BEGIN and `ON` after COMMIT.
+// The PRAGMA lines inside this SQL block are belt-and-suspenders: the runner
+// splits on `;` and executes each statement individually, so they are harmless
+// no-ops when foreign_keys is already OFF at the connection level.
+//
+// Step order matters:
+//   1. Recreate users (email nullable, new columns).
+//   2. Promote linked-card data into existing user rows.
+//   3. Insert unlinked legacy cards as new users (email=NULL).
+//   4. Backfill cards.user_id for the freshly-created users.
+//   5. Backfill transactions.user_id from cards.
+//   6. Recreate transactions (drop card_id, user_id NOT NULL).
+//   7. Recreate bookings (drop card_id).
+//   8. Drop cards.
+const V13_USERS_REPLACE_CARDS: &str = r#"
+PRAGMA foreign_keys = OFF;
+
+-- 1. Recreate users with email nullable + new columns
+CREATE TABLE users_new (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    email           TEXT    UNIQUE,
+    name            TEXT    NOT NULL DEFAULT '(no name)',
+    password_hash   TEXT,
+    phone           TEXT,
+    company         TEXT,
+    role            TEXT    NOT NULL DEFAULT 'customer',
+    oauth_provider  TEXT,
+    oauth_id        TEXT,
+    credit          REAL    NOT NULL DEFAULT 0.0,
+    card_code       TEXT,
+    blocked         INTEGER NOT NULL DEFAULT 0,
+    allow_debit     INTEGER NOT NULL DEFAULT 0,
+    search_text     TEXT,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT INTO users_new (id, email, name, password_hash, phone, role,
+                       oauth_provider, oauth_id, created_at)
+SELECT id, email, COALESCE(NULLIF(TRIM(name),''), '(no name)'),
+       password_hash, phone, role, oauth_provider, oauth_id, created_at
+  FROM users;
+
+DROP TABLE users;
+ALTER TABLE users_new RENAME TO users;
+
+CREATE UNIQUE INDEX idx_users_card_code ON users(card_code) WHERE card_code IS NOT NULL;
+CREATE INDEX        idx_users_search_text ON users(search_text);
+
+-- 2. Promote linked cards into existing users rows
+UPDATE users SET
+    credit      = (SELECT credit      FROM cards WHERE cards.user_id = users.id),
+    card_code   = (SELECT barcode     FROM cards WHERE cards.user_id = users.id),
+    blocked     = (SELECT blocked     FROM cards WHERE cards.user_id = users.id),
+    allow_debit = (SELECT allow_debit FROM cards WHERE cards.user_id = users.id),
+    company     = (SELECT company     FROM cards WHERE cards.user_id = users.id),
+    search_text = (SELECT search_text FROM cards WHERE cards.user_id = users.id),
+    name        = COALESCE(
+                    NULLIF(TRIM((SELECT TRIM(COALESCE(first_name,'') || ' ' || COALESCE(last_name,''))
+                                  FROM cards WHERE cards.user_id = users.id)), ''),
+                    users.name),
+    phone       = COALESCE(users.phone,
+                           (SELECT phone FROM cards WHERE cards.user_id = users.id))
+ WHERE EXISTS (SELECT 1 FROM cards WHERE cards.user_id = users.id);
+
+-- 3. Insert one users row per unlinked legacy card (email=NULL, name placeholder if blank)
+INSERT INTO users (email, name, phone, role, credit, card_code,
+                   blocked, allow_debit, company, search_text, created_at)
+SELECT
+    NULL,
+    COALESCE(NULLIF(TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')), ''),
+             '(no name)'),
+    c.phone, 'customer', c.credit, c.barcode, c.blocked,
+    c.allow_debit, c.company, c.search_text, c.created_at
+FROM cards c WHERE c.user_id IS NULL;
+
+-- 4. Backfill cards.user_id for the freshly-created users (so step 5 maps cleanly)
+UPDATE cards SET user_id = (SELECT id FROM users WHERE users.card_code = cards.barcode)
+ WHERE user_id IS NULL;
+
+-- 5. Backfill transactions.user_id where missing
+UPDATE transactions
+   SET user_id = (SELECT user_id FROM cards WHERE cards.id = transactions.card_id)
+ WHERE user_id IS NULL AND card_id IS NOT NULL;
+
+-- 6. Recreate transactions without card_id (and user_id NOT NULL)
+--    Preserves all columns from V11 (valid_until, deleted_at, legacy_backfilled, note).
+CREATE TABLE transactions_new (
+    id                INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id           INTEGER NOT NULL REFERENCES users(id),
+    staff_id          INTEGER REFERENCES users(id),
+    service_id        INTEGER REFERENCES services(id),
+    amount            REAL    NOT NULL,
+    action            TEXT    NOT NULL,
+    valid_until       TEXT,
+    deleted_at        TEXT,
+    legacy_backfilled INTEGER NOT NULL DEFAULT 0,
+    note              TEXT CHECK (note IS NULL OR length(note) <= 200),
+    created_at        TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT INTO transactions_new
+       (id, user_id, staff_id, service_id, amount, action,
+        valid_until, deleted_at, legacy_backfilled, note, created_at)
+SELECT id, user_id, staff_id, service_id, amount, action,
+       valid_until, deleted_at, legacy_backfilled, note, created_at
+  FROM transactions;
+
+DROP TABLE transactions;
+ALTER TABLE transactions_new RENAME TO transactions;
+
+-- 7. Recreate bookings without card_id (preserve all other columns)
+CREATE TABLE bookings_new (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    template_id           INTEGER NOT NULL REFERENCES class_templates(id),
+    date                  TEXT    NOT NULL,
+    user_id               INTEGER NOT NULL REFERENCES users(id),
+    created_by            INTEGER REFERENCES users(id),
+    source                TEXT,
+    charged_at            TEXT,
+    charge_transaction_id INTEGER REFERENCES transactions(id),
+    created_at            TEXT    NOT NULL DEFAULT (datetime('now')),
+    cancelled_at          TEXT
+);
+
+INSERT INTO bookings_new
+       (id, template_id, date, user_id, created_by, source,
+        charged_at, charge_transaction_id, created_at, cancelled_at)
+SELECT id, template_id, date, user_id, created_by, source,
+       charged_at, charge_transaction_id, created_at, cancelled_at
+  FROM bookings;
+
+DROP TABLE bookings;
+ALTER TABLE bookings_new RENAME TO bookings;
+
+CREATE UNIQUE INDEX idx_bookings_active
+    ON bookings(template_id, date, user_id)
+    WHERE cancelled_at IS NULL;
+
+-- 8. Drop cards
+DROP TABLE cards;
+
+PRAGMA foreign_keys = ON;
 "#;
 
 #[cfg(test)]
@@ -1150,5 +1298,249 @@ mod tests {
         assert!((after_first[0].2 - (-3.0)).abs() < 1e-9);
         assert_eq!(after_first[1].1, "topup");
         assert!((after_first[1].2 - 5.0).abs() < 1e-9);
+    }
+
+    // V13 — users replace cards ----------------------------------------
+
+    /// Helper: execute a multi-statement SQL block the same way run_migrations
+    /// does (split on ';', skip blanks, run each statement individually).
+    /// Also toggles PRAGMA foreign_keys OFF/ON around the transaction so that
+    /// DROP TABLE on a parent table with FK children succeeds.
+    async fn apply_sql_block(pool: &sqlx::SqlitePool, sql: &str) {
+        let mut conn = pool.acquire().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+        let mut tx = conn.begin().await.unwrap();
+        for stmt in sql.split(';') {
+            let trimmed = stmt.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            sqlx::query(trimmed)
+                .execute(&mut *tx)
+                .await
+                .unwrap_or_else(|e| panic!("SQL statement failed: {e}\n  stmt: {trimmed}"));
+        }
+        tx.commit().await.unwrap();
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&mut *conn)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn migration_13_users_replace_cards_full_round_trip() {
+        // Apply migrations 1..=12 using run_migrations, then seed data, then
+        // apply V13 manually so we can assert the before→after shape.
+        //
+        // We can't use run_migrations for V13 after seeding because run_migrations
+        // applies ALL pending migrations in one pass; here we need:
+        //   1. run_migrations (applies 1..=12)
+        //   2. seed legacy data
+        //   3. apply V13 only
+        //
+        // Approach: use a pool with only migrations 1-12 in MIGRATIONS known to
+        // the runner — achieved by running run_migrations (which applies up to
+        // the current MIGRATIONS slice = 1..=13), then seeding, then deleting
+        // schema_version for 13 and re-running.
+        //
+        // Simpler: use create_memory_pool + run_migrations to apply 1..=12,
+        // seed data that requires cards table, then apply the V13 SQL directly
+        // via apply_sql_block, then assert.
+        //
+        // create_memory_pool().await applies run_migrations immediately.
+        // So we need a raw pool without migrations, apply 1..=12, seed, apply 13.
+
+        use sqlx::sqlite::SqlitePoolOptions;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        // Bootstrap schema_version (run_migrations expects this table).
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Apply migrations 1..=12 only.
+        for &(v, _desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 12) {
+            apply_sql_block(&pool, sql).await;
+            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
+                .bind(v)
+                .bind(_desc)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        // Seed: 1 staff user, 1 linked card (alice), 1 unlinked named card (bob),
+        //       1 unlinked nameless card.
+        let staff_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users(email,name,role) VALUES('staff@x','Staff','staff') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let alice_user: i64 = sqlx::query_scalar(
+            "INSERT INTO users(email,name,role) VALUES('alice@x','Alice Old','customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO cards(barcode,user_id,blocked,credit,allow_debit,
+                              first_name,last_name,company,phone,search_text)
+             VALUES('CODE1', ?, 0, 12.50, 0, 'Alice', 'Linked', 'Acme', '111', 'alice linked acme')",
+        )
+        .bind(alice_user)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO cards(barcode,user_id,blocked,credit,allow_debit,
+                              first_name,last_name,company,phone,search_text)
+             VALUES('CODE2', NULL, 0, -3.00, 1, 'Bob', 'Lonely', NULL, '222', 'bob lonely')",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO cards(barcode,user_id,blocked,credit,allow_debit,
+                              first_name,last_name,company,phone,search_text)
+             VALUES('CODE3', NULL, 1, 0.0, 0, NULL, NULL, NULL, NULL, NULL)",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Insert a transaction tied to bob's card (no user_id yet — legacy shape).
+        let bob_card_id: i64 = sqlx::query_scalar("SELECT id FROM cards WHERE barcode='CODE2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "INSERT INTO transactions(card_id, staff_id, amount, action)
+             VALUES(?, ?, -1.50, 'charge')",
+        )
+        .bind(bob_card_id)
+        .bind(staff_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Apply V13.
+        let v13_sql = MIGRATIONS.iter().find(|(v, _, _)| *v == 13).unwrap().2;
+        apply_sql_block(&pool, v13_sql).await;
+
+        // ── Assertions ──────────────────────────────────────────────────
+
+        // Total users: staff + alice + bob + nameless = 4.
+        let users_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(users_total, 4, "staff + alice + bob + nameless");
+
+        // Alice: credit and card_code promoted from linked card.
+        let alice_credit: f64 =
+            sqlx::query_scalar("SELECT credit FROM users WHERE email='alice@x'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!((alice_credit - 12.50).abs() < 1e-9, "alice credit mismatch");
+
+        let alice_card: String =
+            sqlx::query_scalar("SELECT card_code FROM users WHERE email='alice@x'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(alice_card, "CODE1");
+
+        // Bob: email NULL, credit preserved, blocked=0, name assembled from first+last.
+        let bob: (Option<String>, f64, i64, String) = sqlx::query_as(
+            "SELECT email, credit, blocked, name FROM users WHERE card_code='CODE2'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(bob.0.is_none(), "bob has no email");
+        assert!((bob.1 - (-3.00)).abs() < 1e-9, "bob credit mismatch");
+        assert_eq!(bob.2, 0, "bob blocked mismatch");
+        assert_eq!(bob.3, "Bob Lonely", "bob name mismatch");
+
+        // Nameless card: name falls back to '(no name)'.
+        let nameless_name: String =
+            sqlx::query_scalar("SELECT name FROM users WHERE card_code='CODE3'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(nameless_name, "(no name)");
+
+        // Bob's transaction now has user_id (not card_id).
+        let bob_user: i64 = sqlx::query_scalar("SELECT id FROM users WHERE card_code='CODE2'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let txn_user: i64 = sqlx::query_scalar("SELECT user_id FROM transactions LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            txn_user, bob_user,
+            "transaction.user_id must point to bob's new user row"
+        );
+
+        // cards table is gone.
+        let cards_table: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='cards'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(cards_table.is_none(), "cards table must be dropped");
+
+        // transactions has no card_id column.
+        let cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('transactions')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            !cols.contains(&"card_id".to_string()),
+            "transactions.card_id must be dropped; found cols: {cols:?}"
+        );
+
+        // bookings has no card_id column.
+        let bcols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('bookings')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            !bcols.contains(&"card_id".to_string()),
+            "bookings.card_id must be dropped; found cols: {bcols:?}"
+        );
+
+        // PRAGMA integrity_check.
+        let integrity: String = sqlx::query_scalar("PRAGMA integrity_check")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(integrity, "ok", "integrity_check must pass after V13");
     }
 }
