@@ -452,14 +452,22 @@ pub struct NegativeBalanceRow {
 /// rare negatives) this is sub-millisecond. Add a `(card_id, action,
 /// created_at)` index if the row count grows.
 pub async fn list_negative_balance(pool: &SqlitePool) -> anyhow::Result<Vec<NegativeBalanceRow>> {
+    // `last_visit_at` covers BOTH `action='visit'` (free entries logged via
+    // the visit button) AND `action='charge'` rows whose `service_id` points
+    // at a class-entry service (Fitness/Spinning paid from credit). Mirrors
+    // the canonical pattern used by `search_cards_with_pass` (#57): join via
+    // `service_id IN (SELECT id FROM services WHERE name_en IN ('Fitness',
+    // 'Spinning'))` so any future class additions are picked up by extending
+    // CLASS_VISIT_NAMES_EN, not by editing every visit query.
     let rows = sqlx::query_as::<_, NegativeBalanceRow>(
         "SELECT
              c.id, c.barcode, c.credit, c.blocked,
              c.first_name, c.last_name, c.company,
              (SELECT MAX(t.created_at) FROM transactions t
                   WHERE t.card_id = c.id
-                    AND t.action = 'visit'
-                    AND t.deleted_at IS NULL) AS last_visit_at,
+                    AND t.deleted_at IS NULL
+                    AND t.service_id IN (SELECT id FROM services WHERE name_en IN (?, ?))
+             ) AS last_visit_at,
              (SELECT MAX(t.created_at) FROM transactions t
                   WHERE t.card_id = c.id
                     AND t.action = 'topup'
@@ -469,6 +477,8 @@ pub async fn list_negative_balance(pool: &SqlitePool) -> anyhow::Result<Vec<Nega
          WHERE c.credit < 0
          ORDER BY c.credit ASC",
     )
+    .bind(CLASS_VISIT_NAMES_EN[0])
+    .bind(CLASS_VISIT_NAMES_EN[1])
     .fetch_all(pool)
     .await
     .context("Failed to list cards with negative balance")?;
@@ -1009,14 +1019,40 @@ mod tests {
         update_credit(&pool, mid, -3.5).await.unwrap();
         update_credit(&pool, deep, -10.0).await.unwrap();
 
+        // Look up the Fitness/Spinning service ids — both are seeded by V8.
+        let fitness_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name_en = ?")
+            .bind(CLASS_VISIT_NAMES_EN[0])
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let spinning_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name_en = ?")
+            .bind(CLASS_VISIT_NAMES_EN[1])
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        // `mid` got a free `action='visit'` for Fitness on 2026-04-22.
         sqlx::query(
-            "INSERT INTO transactions (card_id, amount, action, created_at)
-             VALUES (?, 0.0, 'visit', '2026-04-22 12:00:00')",
+            "INSERT INTO transactions (card_id, service_id, amount, action, created_at)
+             VALUES (?, ?, 0.0, 'visit', '2026-04-22 12:00:00')",
         )
         .bind(mid)
+        .bind(fitness_id)
         .execute(&pool)
         .await
         .unwrap();
+        // `mid` later paid for a Spinning entry from credit on 2026-04-25 —
+        // this `charge` row IS a visit (see services.rs / reports.rs).
+        sqlx::query(
+            "INSERT INTO transactions (card_id, service_id, amount, action, created_at)
+             VALUES (?, ?, -3.30, 'charge', '2026-04-25 18:00:00')",
+        )
+        .bind(mid)
+        .bind(spinning_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // `deep` topped up €5 on 2026-03-05 (last payment). No visits.
         sqlx::query(
             "INSERT INTO transactions (card_id, amount, action, created_at)
              VALUES (?, 5.0, 'topup', '2026-03-05 09:00:00')",
@@ -1037,9 +1073,11 @@ mod tests {
         );
         assert_eq!(rows[1].id, mid);
         assert!((rows[1].credit - (-3.5)).abs() < f64::EPSILON);
+        // The later 'charge' row counts as a visit, so last_visit_at is the
+        // Spinning charge timestamp, NOT the earlier 'visit' row.
         assert_eq!(
             rows[1].last_visit_at.as_deref(),
-            Some("2026-04-22 12:00:00"),
+            Some("2026-04-25 18:00:00"),
         );
         assert_eq!(rows[1].last_payment_at, None);
     }
