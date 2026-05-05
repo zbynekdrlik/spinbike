@@ -672,6 +672,9 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     // starts at days=61 where N is always >=2. Kept for symmetry with the
     // `_few` forms in case a future bucket adjustment makes them reachable.
     m.insert("last_visit_label", ("Posledna navsteva", "Last visit"));
+    m.insert("negative_balance_heading", ("Karty s dlhom", "Cards with negative balance"));
+    m.insert("last_payment_label", ("Posledna platba", "Last payment"));
+    m.insert("never_label", ("nikdy", "never"));
     m.insert("rel_today", ("dnes", "today"));
     m.insert("rel_yesterday", ("vcera", "yesterday"));
     m.insert("rel_days_one", ("pred 1 dnom", "1 day ago"));
@@ -842,5 +845,43 @@ mod format_key_tests {
             tf(Lang::En, "visit_added_format", &["Fitness"]),
             "Visit added: Fitness"
         );
+    }
+}
+
+#[cfg(test)]
+mod neg_balance_i18n_tests {
+    use super::{t, Lang};
+    use wasm_bindgen_test::*;
+
+    // No wasm_bindgen_test_configure! — CI uses wasm-pack test --node (not browser).
+
+    #[wasm_bindgen_test]
+    fn negative_balance_heading_slovak() {
+        assert_eq!(t(Lang::Sk, "negative_balance_heading"), "Karty s dlhom");
+    }
+
+    #[wasm_bindgen_test]
+    fn negative_balance_heading_english() {
+        assert_eq!(t(Lang::En, "negative_balance_heading"), "Cards with negative balance");
+    }
+
+    #[wasm_bindgen_test]
+    fn last_payment_label_slovak() {
+        assert_eq!(t(Lang::Sk, "last_payment_label"), "Posledna platba");
+    }
+
+    #[wasm_bindgen_test]
+    fn last_payment_label_english() {
+        assert_eq!(t(Lang::En, "last_payment_label"), "Last payment");
+    }
+
+    #[wasm_bindgen_test]
+    fn never_label_slovak() {
+        assert_eq!(t(Lang::Sk, "never_label"), "nikdy");
+    }
+
+    #[wasm_bindgen_test]
+    fn never_label_english() {
+        assert_eq!(t(Lang::En, "never_label"), "never");
     }
 }
