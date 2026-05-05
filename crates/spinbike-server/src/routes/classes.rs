@@ -40,7 +40,6 @@ pub struct BookingRequest {
     pub template_id: i64,
     pub date: String,
     pub user_id: Option<i64>,
-    pub card_id: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -199,8 +198,7 @@ async fn create_booking(
 ) -> Result<(StatusCode, Json<BookingResponse>), (StatusCode, Json<serde_json::Value>)> {
     // Determine who the booking is for. Precedence:
     //   1. explicit body.user_id
-    //   2. cards.user_id when body.card_id is present (card-centric staff flow)
-    //   3. fall back to the caller (customer self-booking)
+    //   2. fall back to the caller (customer self-booking)
     let booking_user_id = if let Some(target_id) = body.user_id {
         if target_id != claims.sub && !claims.role.can_book_for_others() {
             return Err((
@@ -209,23 +207,6 @@ async fn create_booking(
             ));
         }
         target_id
-    } else if let Some(card_id) = body.card_id {
-        let uid: Option<i64> = sqlx::query_scalar("SELECT user_id FROM cards WHERE id = ?")
-            .bind(card_id)
-            .fetch_optional(&state.pool)
-            .await
-            .map_err(internal_error)?
-            .flatten();
-        let Some(uid) = uid else {
-            return Err(super::bad_request("Card has no linked user"));
-        };
-        if uid != claims.sub && !claims.role.can_book_for_others() {
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Only staff can book for other users"})),
-            ));
-        }
-        uid
     } else {
         claims.sub
     };
@@ -242,23 +223,11 @@ async fn create_booking(
         ));
     }
 
-    // Stamp `created_by` whenever the booking's user_id differs from the
-    // caller — covers both the explicit-user_id flow and the card-centric
-    // flow where user_id is resolved from the card.
+    // Stamp `created_by` whenever the booking's user_id differs from the caller.
     let created_by = if booking_user_id != claims.sub {
         Some(claims.sub)
     } else {
         None
-    };
-
-    let card_id: Option<i64> = if let Some(c) = body.card_id {
-        Some(c)
-    } else {
-        sqlx::query_scalar::<_, i64>("SELECT id FROM cards WHERE user_id = ? LIMIT 1")
-            .bind(booking_user_id)
-            .fetch_optional(&state.pool)
-            .await
-            .map_err(internal_error)?
     };
 
     let booking_id = db::create_booking(
@@ -266,7 +235,6 @@ async fn create_booking(
         body.template_id,
         &body.date,
         booking_user_id,
-        card_id,
         created_by,
         "manual",
     )
