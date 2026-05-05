@@ -8,6 +8,7 @@ pub mod block_button;
 pub mod card_panel;
 pub mod edit_info_form;
 pub mod helpers;
+pub mod negative_balance_list;
 pub mod overview_tab;
 pub mod pass_banner;
 pub mod sheets;
@@ -172,6 +173,11 @@ pub fn DashboardPage() -> impl IntoView {
     // suggestion" — so typing + Enter picks the top match without a click.
     let (highlighted_idx, set_highlighted_idx) = signal(0usize);
 
+    // Incremented whenever a transaction completes (via clear_selection after
+    // the card panel closes). The negative-balance list subscribes to this so
+    // it refetches after every top-up / charge / visit.
+    let txn_refresh = RwSignal::new(0u32);
+
     // Explicit ref so we can restore focus after pick_card and after the
     // action panel closes. HTML `autofocus` only runs once on mount.
     let search_input_ref = NodeRef::<leptos::html::Input>::new();
@@ -294,6 +300,9 @@ pub fn DashboardPage() -> impl IntoView {
     let clear_selection = move |_| {
         set_selected.set(None);
         set_msg.set(String::new());
+        // Refresh the negative-balance list so any credit changes from the
+        // just-closed action panel are reflected immediately.
+        txn_refresh.update(|n| *n += 1);
         if let Some(el) = search_input_ref.get() {
             let _ = el.focus();
         }
@@ -446,6 +455,21 @@ pub fn DashboardPage() -> impl IntoView {
             if !m.is_empty() {
                 view! { <div class="alert alert-success">{m}</div> }.into_any()
             } else { view! { <span></span> }.into_any() }
+        }}
+
+        // Idle-state proactive list: only when no card selected AND search is empty.
+        {move || {
+            if selected.get().is_none() && query.get().is_empty() {
+                view! {
+                    <negative_balance_list::NegativeBalanceList
+                        txn_refresh=txn_refresh.read_only()
+                        lang=lang
+                        on_pick=Callback::new(move |c: CardInfo| pick_card(c))
+                    />
+                }.into_any()
+            } else {
+                view! { <span></span> }.into_any()
+            }
         }}
 
         {move || match selected.get() {

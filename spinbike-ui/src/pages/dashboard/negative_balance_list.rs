@@ -1,0 +1,157 @@
+//! Empty-state list of cards with `credit < 0`, rendered on the Desk under
+//! the search box when no card is selected and the search box is empty.
+//!
+//! Source of truth: `GET /api/cards/negative-balance`. Refetches whenever
+//! the parent's `txn_refresh` signal increments.
+
+use chrono::NaiveDate;
+use leptos::prelude::*;
+use serde::Deserialize;
+
+use crate::api;
+use crate::i18n::{self, Lang};
+use crate::pages::dashboard::CardInfo;
+use crate::relative_date::format_last_visit;
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct NegativeBalanceCard {
+    pub id: i64,
+    pub barcode: String,
+    pub credit: f64,
+    pub blocked: bool,
+    pub first_name: Option<String>,
+    pub last_name: Option<String>,
+    pub company: Option<String>,
+    pub last_visit_at: Option<String>,
+    pub last_payment_at: Option<String>,
+}
+
+#[component]
+pub fn NegativeBalanceList(
+    txn_refresh: ReadSignal<u32>,
+    lang: ReadSignal<Lang>,
+    on_pick: Callback<CardInfo>,
+) -> impl IntoView {
+    // Refetch whenever txn_refresh increments. The fetcher swallows errors
+    // into an empty list — there is no useful UI for "the alert list itself
+    // failed to load", and an empty Suspense fallback is fine.
+    let resource = Resource::new(
+        move || txn_refresh.get(),
+        |_| async {
+            api::get::<Vec<NegativeBalanceCard>>("/api/cards/negative-balance")
+                .await
+                .unwrap_or_default()
+        },
+    );
+
+    view! {
+        <Suspense fallback=move || view! { <span></span> }>
+            {move || {
+                let rows = resource.get().unwrap_or_default();
+                if rows.is_empty() {
+                    return view! { <span></span> }.into_any();
+                }
+                let lang_now = lang.get();
+                let heading = i18n::t(lang_now, "negative_balance_heading").to_string();
+                let last_visit_label = i18n::t(lang_now, "last_visit_label").to_string();
+                let last_payment_label = i18n::t(lang_now, "last_payment_label").to_string();
+                let never_label = i18n::t(lang_now, "never_label").to_string();
+                let today = today_local();
+
+                let items = rows.into_iter().map(|r| {
+                    let name = card_full_name(&r);
+                    let credit = format!("{:.2} €", r.credit);
+                    let last_visit = format_optional_date(&r.last_visit_at, today, lang_now, &never_label);
+                    let last_payment = format_optional_date(&r.last_payment_at, today, lang_now, &never_label);
+                    let lv = last_visit_label.clone();
+                    let lp = last_payment_label.clone();
+                    let card_for_pick = neg_to_card_info(&r);
+                    view! {
+                        <div
+                            class="negative-balance-row"
+                            data-testid="negative-balance-row"
+                            on:click={
+                                let card = card_for_pick.clone();
+                                move |_| on_pick.run(card.clone())
+                            }
+                        >
+                            <div class="negative-balance-row__main">
+                                <div class="negative-balance-row__name">{name}</div>
+                                <div class="negative-balance-row__meta">
+                                    {format!("{lv}: {last_visit}")}
+                                    {" · "}
+                                    {format!("{lp}: {last_payment}")}
+                                </div>
+                            </div>
+                            <div class="negative-balance-row__credit credit-negative">{credit}</div>
+                        </div>
+                    }
+                }).collect_view();
+
+                view! {
+                    <div class="card mb-2 negative-balance-list" data-testid="negative-balance-list">
+                        <div class="card__body">
+                            <h3 class="negative-balance-list__heading">{heading}</h3>
+                            {items}
+                        </div>
+                    </div>
+                }.into_any()
+            }}
+        </Suspense>
+    }
+}
+
+fn card_full_name(c: &NegativeBalanceCard) -> String {
+    let f = c.first_name.clone().unwrap_or_default();
+    let l = c.last_name.clone().unwrap_or_default();
+    let combined = format!("{f} {l}").trim().to_string();
+    if combined.is_empty() {
+        c.company.clone().unwrap_or_else(|| c.barcode.clone())
+    } else {
+        combined
+    }
+}
+
+fn format_optional_date(
+    raw: &Option<String>,
+    today: NaiveDate,
+    lang: Lang,
+    never_label: &str,
+) -> String {
+    match raw {
+        None => never_label.to_string(),
+        Some(s) => {
+            // SQLite literal: "YYYY-MM-DD HH:MM:SS". Parse only the date portion.
+            let date_str = if s.len() >= 10 { &s[..10] } else { s.as_str() };
+            match NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+                Ok(d) => format_last_visit(d, today, lang),
+                Err(_) => never_label.to_string(),
+            }
+        }
+    }
+}
+
+fn today_local() -> NaiveDate {
+    chrono::Local::now().date_naive()
+}
+
+/// Promote a `NegativeBalanceCard` into the parent `CardInfo` so clicking a
+/// row opens the full action panel. The action panel refetches the rest on
+/// mount, so we only need to populate the identity fields.
+fn neg_to_card_info(c: &NegativeBalanceCard) -> CardInfo {
+    CardInfo {
+        id: c.id,
+        barcode: c.barcode.clone(),
+        blocked: c.blocked,
+        credit: c.credit,
+        first_name: c.first_name.clone(),
+        last_name: c.last_name.clone(),
+        company: c.company.clone(),
+        // Fields not returned by the negative-balance endpoint — neutral defaults.
+        user_id: None,
+        allow_debit: false,
+        phone: None,
+        pass: None,
+        last_visit_at: c.last_visit_at.clone(),
+    }
+}

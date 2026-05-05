@@ -1203,6 +1203,37 @@ table tbody tr:last-child td,
 .search-hint          { font-size: var(--fs-sm); color: var(--text-muted); }
 .badge--inline        { margin-left: var(--s-2); }
 
+/* ─────────── Negative-balance idle list ─────────── */
+.negative-balance-list__heading {
+    font-size: 0.95rem;
+    margin: 0 0 0.5rem 0;
+    color: var(--text-muted);
+}
+.negative-balance-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3, 12px);
+    padding: var(--s-2, 8px) var(--s-1, 4px);
+    cursor: pointer;
+    border-bottom: 1px solid var(--border, #e0e0e0);
+}
+.negative-balance-row:last-child { border-bottom: none; }
+.negative-balance-row:hover { background: var(--surface-hover, rgba(0, 0, 0, 0.03)); }
+.negative-balance-row__main { min-width: 0; }
+.negative-balance-row__name { font-weight: 600; }
+.negative-balance-row__meta {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.negative-balance-row__credit {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
+
 /* ═════════════════════════════════════════════════════════════
    Staff/CEO redesign (v0.10.0)
    ───────────────────────────────────────────────────────────── */
