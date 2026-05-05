@@ -118,44 +118,41 @@ async function globalSetup(_config: FullConfig) {
         });
     }
 
-    // Create named test cards so search-by-name / company / phone can find them.
-    const testCards = [
+    // Create named test users so search-by-name / company / phone / card_code can find them.
+    const testUsers = [
         {
-            barcode: '70701001',
+            name: 'Jana Testova',
+            card_code: '70701001',
             initial_credit: 50.0,
-            first_name: 'Jana',
-            last_name: 'Testova',
             company: 'TestCorp',
             phone: '+421900111222',
         },
         {
-            barcode: '70702002',
+            name: 'Petr Vzorny',
+            card_code: '70702002',
             initial_credit: 25.0,
-            first_name: 'Petr',
-            last_name: 'Vzorny',
             company: 'TestCorp',
             phone: '+421900333444',
         },
         {
-            barcode: '70703003',
+            name: 'Eva Novotna',
+            card_code: '70703003',
             initial_credit: 10.0,
-            first_name: 'Eva',
-            last_name: 'Novotna',
             company: 'OtherCo',
             phone: '+421900555666',
         },
     ];
-    for (const card of testCards) {
-        await fetch(`${API}/api/cards/activate`, {
+    for (const user of testUsers) {
+        await fetch(`${API}/api/users`, {
             method: 'POST',
             headers: authHeaders,
-            body: JSON.stringify(card),
+            body: JSON.stringify(user),
         });
     }
 
-    // Link Jana's card to the customer user so card-centric booking flows
-    // (which write bookings referencing the card's user_id) work in E2E.
-    execSync(`sqlite3 "${DB_PATH}" "UPDATE cards SET user_id = (SELECT id FROM users WHERE email='customer@test.com') WHERE barcode='70701001'"`);
+    // Post-V13 (#55): cards table is gone. Each card_code is now an attribute
+    // on a `users` row. The customer (customer@test.com) does not own a card
+    // code by default; tests that need a code-keyed customer create their own.
 
     // Create a service for payment tests
     await fetch(`${API}/api/admin/services`, {
