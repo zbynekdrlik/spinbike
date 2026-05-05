@@ -46,11 +46,14 @@ impl TestApp {
         let hash = hash_password("password").unwrap();
         let admin_id = users::create_user(
             &pool,
-            "admin@test.com",
+            Some("admin@test.com"),
             Some(&hash),
             "Admin",
             None,
+            None,
+            None,
             "admin",
+            None,
             None,
             None,
         )
@@ -58,11 +61,14 @@ impl TestApp {
         .unwrap();
         let staff_id = users::create_user(
             &pool,
-            "staff@test.com",
+            Some("staff@test.com"),
             Some(&hash),
             "Staff",
             None,
+            None,
+            None,
             "staff",
+            None,
             None,
             None,
         )
@@ -70,11 +76,14 @@ impl TestApp {
         .unwrap();
         let customer_id = users::create_user(
             &pool,
-            "user@test.com",
+            Some("user@test.com"),
             Some(&hash),
             "User",
             None,
+            None,
+            None,
             "customer",
+            None,
             None,
             None,
         )
