@@ -188,6 +188,52 @@ async fn negative_balance_endpoint_forbidden_for_customer() {
 }
 
 #[tokio::test]
+async fn negative_balance_endpoint_round_trips_blocked_field() {
+    // Kills the `r.blocked != 0` → `r.blocked == 0` mutation: a blocked card
+    // must serialise with `"blocked": true`, an unblocked one with `false`.
+    let app = TestApp::new().await;
+    let neg_blocked = app.seed_card("NEG-BLK", -2.0, None, None, None, None).await;
+    spinbike_server::db::cards::set_blocked(&app.pool, neg_blocked, true)
+        .await
+        .unwrap();
+    app.seed_card("NEG-OPEN", -1.0, None, None, None, None)
+        .await;
+
+    let (status, resp) = app
+        .request(get("/api/cards/negative-balance", &app.staff_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let arr = resp.as_array().unwrap();
+    let blk = arr
+        .iter()
+        .find(|r| r["barcode"] == "NEG-BLK")
+        .expect("blocked card must appear in negative-balance list");
+    let opn = arr
+        .iter()
+        .find(|r| r["barcode"] == "NEG-OPEN")
+        .expect("unblocked card must appear in negative-balance list");
+    assert_eq!(blk["blocked"], true, "blocked card must report true");
+    assert_eq!(opn["blocked"], false, "unblocked card must report false");
+}
+
+#[tokio::test]
+async fn seed_credit_fixture_forbidden_for_customer() {
+    // Kills the `delete !` mutation in the `if !claims.role.can_process_payments()`
+    // gate on POST /api/test/seed-credit: a customer token must NOT be able
+    // to mutate `cards.credit` via the test fixture.
+    let app = TestApp::new().await;
+    let body = serde_json::json!({ "barcode": "SC-FORBID", "credit": -5.0 });
+    let (status, _) = app
+        .request(post_json(
+            "/api/test/seed-credit",
+            &app.customer_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
 async fn activate_duplicate_barcode_returns_conflict() {
     let app = TestApp::new().await;
     app.seed_card("DUP", 0.0, None, None, None, None).await;
