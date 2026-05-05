@@ -98,6 +98,7 @@ test('negative-balance list + search highlight', async ({ page }) => {
 
     // ---- Surface 2: search highlight ---------------------------------------------
     const search = page.locator('input[type="search"]').first();
+    await search.waitFor();
     await search.fill(RUN_TAG);
     await expect(list).toBeHidden(); // search active hides idle list
 
