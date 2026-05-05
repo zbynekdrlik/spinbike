@@ -440,14 +440,24 @@ FROM cards c WHERE c.user_id IS NULL;
 UPDATE cards SET user_id = (SELECT id FROM users WHERE users.card_code = cards.barcode)
  WHERE user_id IS NULL;
 
--- 5. Backfill transactions.user_id where missing.
---    INVARIANT: every transactions row must have user_id OR card_id (one of them non-null);
---    rows with both NULL would fail step 6's NOT NULL constraint with a cryptic error,
---    but no production data has that shape (V11 left both columns nullable but the app
---    has always written one of them).
+-- 5. Backfill transactions.user_id where missing — first via card join, then via orphan fallback.
+--    Production data contains some transaction rows whose user_id IS NULL AND
+--    card_id either IS NULL OR points to a card row whose user_id remained NULL
+--    after step 4 (e.g. legacy import + later card-row deletion). Step 6 needs
+--    a non-null user_id for every row, so we insert a synthetic '(deleted)'
+--    user and assign every still-NULL row to it. This preserves history rather
+--    than dropping rows.
 UPDATE transactions
    SET user_id = (SELECT user_id FROM cards WHERE cards.id = transactions.card_id)
  WHERE user_id IS NULL AND card_id IS NOT NULL;
+
+INSERT INTO users (email, name, role)
+SELECT NULL, '(deleted)', 'customer'
+ WHERE EXISTS (SELECT 1 FROM transactions WHERE user_id IS NULL);
+
+UPDATE transactions
+   SET user_id = (SELECT id FROM users WHERE name = '(deleted)' ORDER BY id DESC LIMIT 1)
+ WHERE user_id IS NULL;
 
 -- 6. Recreate transactions without card_id (and user_id NOT NULL)
 --    Preserves all columns from V11 (valid_until, deleted_at, legacy_backfilled, note).
