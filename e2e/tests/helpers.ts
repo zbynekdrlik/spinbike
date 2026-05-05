@@ -18,6 +18,12 @@ export function setupConsoleCheck(page: Page): string[] {
                 text.includes('integrity') ||
                 text.includes('subresource integrity') ||
                 text.includes('crbug.com') ||
+                // Trunk bootstrap calls wasm-bindgen init with the legacy
+                // positional arg form; wasm-bindgen 0.2.x emits a deprecation
+                // warning until Trunk migrates to the single-object form.
+                // Not our code's bug; filter until upstream upgrade.
+                text.includes('using deprecated parameters for the initialization function') ||
+                text.includes('using deprecated parameters for `initSync()`') ||
                 /the server responded with a status of 4\d\d/.test(text)
             ) {
                 return;
