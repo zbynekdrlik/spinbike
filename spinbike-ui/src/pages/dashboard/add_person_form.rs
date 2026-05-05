@@ -101,7 +101,7 @@ pub fn AddPersonForm(
                 {move || i18n::t(lang.get(), "name")}
                 <input
                     type="text"
-                    required
+                    data-testid="add-person-name"
                     prop:value=move || name.get()
                     on:input=move |ev| set_name.set(event_target_value(&ev))
                 />

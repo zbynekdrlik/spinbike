@@ -425,6 +425,7 @@ pub fn DashboardPage() -> impl IntoView {
                     view! {
                         <div class="text-center mt-2">
                             <p class="text-muted">{i18n::t(lang.get(), "no_matches")}</p>
+                            <AddPersonForm set_selected=set_selected set_msg=set_msg set_show=set_show_add_person />
                         </div>
                     }.into_any()
                 } else {

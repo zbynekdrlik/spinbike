@@ -39,7 +39,7 @@ struct ServiceRow {
 #[derive(Debug, Clone, serde::Deserialize)]
 struct UserRow {
     id: i64,
-    email: String,
+    email: Option<String>,
     name: String,
     role: String,
     created_at: String,
@@ -684,7 +684,7 @@ fn UsersTab() -> impl IntoView {
             let list = items.get();
             let rows: Vec<_> = list.iter().map(|u| {
                 let uid = u.id;
-                let email = u.email.clone();
+                let email = u.email.clone().unwrap_or_default();
                 let name = u.name.clone();
                 let current_role = u.role.clone();
                 let created_raw = u.created_at.clone();

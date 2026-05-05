@@ -44,7 +44,7 @@ pub fn PersistentToggles(card_id: i64, #[prop(into)] on_changed: Callback<()>) -
             // Derive the list of templates from upcoming-classes (first 7 days),
             // so we show exactly the templates this card could subscribe to.
             match api::get::<Vec<UpcomingRow>>(&format!(
-                "/api/cards/{card_id}/upcoming-classes?days=7"
+                "/api/users/{card_id}/upcoming-classes?days=7"
             ))
             .await
             {
@@ -71,7 +71,7 @@ pub fn PersistentToggles(card_id: i64, #[prop(into)] on_changed: Callback<()>) -
             }
 
             match api::get::<Vec<PersistentRow>>(&format!(
-                "/api/cards/{card_id}/persistent-bookings"
+                "/api/users/{card_id}/persistent-bookings"
             ))
             .await
             {
@@ -118,7 +118,7 @@ pub fn PersistentToggles(card_id: i64, #[prop(into)] on_changed: Callback<()>) -
                                             spawn_local(async move {
                                                 let res = if currently_on {
                                                     api::delete(&format!(
-                                                        "/api/cards/{card_id}/persistent-bookings/{tid}"
+                                                        "/api/users/{card_id}/persistent-bookings/{tid}"
                                                     )).await
                                                 } else {
                                                     #[derive(serde::Serialize)]
@@ -130,7 +130,7 @@ pub fn PersistentToggles(card_id: i64, #[prop(into)] on_changed: Callback<()>) -
                                                     }
                                                     api::post::<Req, Resp>(
                                                         &format!(
-                                                            "/api/cards/{card_id}/persistent-bookings"
+                                                            "/api/users/{card_id}/persistent-bookings"
                                                         ),
                                                         &Req { template_id: tid },
                                                     ).await.map(|_| ())
