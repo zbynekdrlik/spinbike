@@ -1194,8 +1194,8 @@ table tbody tr:last-child td,
     gap: var(--s-2);
 }
 .search-result--negative {
-    border-left: 3px solid var(--danger, #dc3545);
-    background: rgba(220, 53, 69, 0.04);
+    border-left: 3px solid var(--danger);
+    background: var(--danger-soft);
 }
 .search-result-name   { font-weight: 600; }
 .search-result-meta   { font-size: var(--fs-sm); color: var(--text-muted); }
