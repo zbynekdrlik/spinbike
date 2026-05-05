@@ -1193,6 +1193,10 @@ table tbody tr:last-child td,
     cursor: pointer;
     gap: var(--s-2);
 }
+.search-result--negative {
+    border-left: 3px solid var(--danger, #dc3545);
+    background: rgba(220, 53, 69, 0.04);
+}
 .search-result-name   { font-weight: 600; }
 .search-result-meta   { font-size: var(--fs-sm); color: var(--text-muted); }
 .search-result-credit { font-weight: 600; white-space: nowrap; }

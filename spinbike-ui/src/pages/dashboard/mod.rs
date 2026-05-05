@@ -380,11 +380,13 @@ pub fn DashboardPage() -> impl IntoView {
                     let is_blocked = c.blocked;
                     view! {
                         <div
-                            class=move || {
-                                if highlighted_idx.get() == idx {
-                                    "search-result-row search-result-active"
-                                } else {
-                                    "search-result-row"
+                            class={
+                                let credit_val = credit_val;
+                                move || {
+                                    helpers::result_row_class(
+                                        highlighted_idx.get() == idx,
+                                        credit_val,
+                                    )
                                 }
                             }
                             data-testid="search-result"

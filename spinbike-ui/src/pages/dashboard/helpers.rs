@@ -45,3 +45,55 @@ pub fn event_target_value(ev: &web_sys::Event) -> String {
         .unwrap_or_default()
 }
 
+/// Class string for a search-result row, combining keyboard-highlight state
+/// with negative-credit highlight. Pure function — kept here so wasm-bindgen
+/// tests can pin all four branches without having to drive the Leptos view.
+pub fn result_row_class(highlighted: bool, credit: f64) -> &'static str {
+    match (highlighted, credit < 0.0) {
+        (false, false) => "search-result-row",
+        (true, false) => "search-result-row search-result-active",
+        (false, true) => "search-result-row search-result--negative",
+        (true, true) => "search-result-row search-result-active search-result--negative",
+    }
+}
+
+#[cfg(test)]
+mod result_row_class_tests {
+    use super::result_row_class;
+    use wasm_bindgen_test::*;
+
+    #[wasm_bindgen_test]
+    fn default_row() {
+        assert_eq!(result_row_class(false, 1.0), "search-result-row");
+    }
+
+    #[wasm_bindgen_test]
+    fn highlighted_row() {
+        assert_eq!(
+            result_row_class(true, 1.0),
+            "search-result-row search-result-active",
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn negative_row() {
+        assert_eq!(
+            result_row_class(false, -0.01),
+            "search-result-row search-result--negative",
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn highlighted_negative_row() {
+        assert_eq!(
+            result_row_class(true, -0.01),
+            "search-result-row search-result-active search-result--negative",
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn zero_credit_is_not_negative() {
+        // Boundary: 0.0 stays in the default class (kills `<= 0.0` mutant).
+        assert_eq!(result_row_class(false, 0.0), "search-result-row");
+    }
+}
