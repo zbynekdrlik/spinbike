@@ -1193,11 +1193,46 @@ table tbody tr:last-child td,
     cursor: pointer;
     gap: var(--s-2);
 }
+.search-result--negative {
+    border-left: 3px solid var(--danger);
+    background: var(--danger-soft);
+}
 .search-result-name   { font-weight: 600; }
 .search-result-meta   { font-size: var(--fs-sm); color: var(--text-muted); }
 .search-result-credit { font-weight: 600; white-space: nowrap; }
 .search-hint          { font-size: var(--fs-sm); color: var(--text-muted); }
 .badge--inline        { margin-left: var(--s-2); }
+
+/* ─────────── Negative-balance idle list ─────────── */
+.negative-balance-list__heading {
+    font-size: 0.95rem;
+    margin: 0 0 0.5rem 0;
+    color: var(--text-muted);
+}
+.negative-balance-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+    padding: var(--s-2) var(--s-1);
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+}
+.negative-balance-row:last-child { border-bottom: none; }
+.negative-balance-row:hover { background: var(--surface-2); }
+.negative-balance-row__main { min-width: 0; }
+.negative-balance-row__name { font-weight: 600; }
+.negative-balance-row__meta {
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.negative-balance-row__credit {
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+}
 
 /* ═════════════════════════════════════════════════════════════
    Staff/CEO redesign (v0.10.0)

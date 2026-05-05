@@ -18,6 +18,27 @@ pub fn full_name(c: &super::CardInfo) -> String {
     }
 }
 
+/// Display name with a richer fallback chain than `full_name`: prefers
+/// "first last", then company, then barcode. Useful for list rows where
+/// "—" would be uninformative (e.g. a corporate card with no person name).
+pub fn full_name_or_fallback(
+    first_name: Option<&str>,
+    last_name: Option<&str>,
+    company: Option<&str>,
+    barcode: &str,
+) -> String {
+    let f = first_name.unwrap_or_default();
+    let l = last_name.unwrap_or_default();
+    let combined = format!("{f} {l}").trim().to_string();
+    if !combined.is_empty() {
+        combined
+    } else if let Some(c) = company.filter(|s| !s.is_empty()) {
+        c.to_string()
+    } else {
+        barcode.to_string()
+    }
+}
+
 // tiny percent-encoder for the search query (avoids pulling urlencoding crate
 // just for this — we only need to escape a handful of chars).
 pub fn urlencoding_light(s: &str) -> String {
@@ -45,3 +66,55 @@ pub fn event_target_value(ev: &web_sys::Event) -> String {
         .unwrap_or_default()
 }
 
+/// Class string for a search-result row, combining keyboard-highlight state
+/// with negative-credit highlight. Pure function — kept here so wasm-bindgen
+/// tests can pin all four branches without having to drive the Leptos view.
+pub fn result_row_class(highlighted: bool, credit: f64) -> &'static str {
+    match (highlighted, credit < 0.0) {
+        (false, false) => "search-result-row",
+        (true, false) => "search-result-row search-result-active",
+        (false, true) => "search-result-row search-result--negative",
+        (true, true) => "search-result-row search-result-active search-result--negative",
+    }
+}
+
+#[cfg(test)]
+mod result_row_class_tests {
+    use super::result_row_class;
+    use wasm_bindgen_test::*;
+
+    #[wasm_bindgen_test]
+    fn default_row() {
+        assert_eq!(result_row_class(false, 1.0), "search-result-row");
+    }
+
+    #[wasm_bindgen_test]
+    fn highlighted_row() {
+        assert_eq!(
+            result_row_class(true, 1.0),
+            "search-result-row search-result-active",
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn negative_row() {
+        assert_eq!(
+            result_row_class(false, -0.01),
+            "search-result-row search-result--negative",
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn highlighted_negative_row() {
+        assert_eq!(
+            result_row_class(true, -0.01),
+            "search-result-row search-result-active search-result--negative",
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn zero_credit_is_not_negative() {
+        // Boundary: 0.0 stays in the default class (kills `<= 0.0` mutant).
+        assert_eq!(result_row_class(false, 0.0), "search-result-row");
+    }
+}
