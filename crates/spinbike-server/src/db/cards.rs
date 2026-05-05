@@ -444,10 +444,12 @@ pub struct NegativeBalanceRow {
     pub company: Option<String>,
     pub last_visit_at: Option<String>,
     pub last_payment_at: Option<String>,
+    pub pass_valid_until: Option<chrono::NaiveDate>,
+    pub pass_tx_id: Option<i64>,
 }
 
 /// Cards with `credit < 0`, sorted most-negative-first. Includes blocked
-/// cards (still owe money). The two scalar subqueries on `transactions`
+/// cards (still owe money). The four scalar subqueries on `transactions`
 /// run for each negative-credit card; at current data scale (~550 cards,
 /// rare negatives) this is sub-millisecond. Add a `(card_id, action,
 /// created_at)` index if the row count grows.
@@ -459,6 +461,11 @@ pub async fn list_negative_balance(pool: &SqlitePool) -> anyhow::Result<Vec<Nega
     // `service_id IN (SELECT id FROM services WHERE name_en IN ('Fitness',
     // 'Spinning'))` so any future class additions are picked up by extending
     // CLASS_VISIT_NAMES_EN, not by editing every visit query.
+    //
+    // `pass_valid_until` and `pass_tx_id` mirror the same pattern: clicking a
+    // row opens the action panel, which expects the pass on the CardInfo so
+    // the panel header renders correctly. Without these subqueries the panel
+    // would briefly show "no pass" for a card that DOES have one.
     let rows = sqlx::query_as::<_, NegativeBalanceRow>(
         "SELECT
              c.id, c.barcode, c.credit, c.blocked,
@@ -472,7 +479,14 @@ pub async fn list_negative_balance(pool: &SqlitePool) -> anyhow::Result<Vec<Nega
                   WHERE t.card_id = c.id
                     AND t.action = 'topup'
                     AND t.amount > 0
-                    AND t.deleted_at IS NULL) AS last_payment_at
+                    AND t.deleted_at IS NULL) AS last_payment_at,
+             (SELECT MAX(valid_until) FROM transactions
+                  WHERE card_id = c.id AND valid_until IS NOT NULL AND deleted_at IS NULL
+             ) AS pass_valid_until,
+             (SELECT id FROM transactions
+                  WHERE card_id = c.id AND valid_until IS NOT NULL AND deleted_at IS NULL
+                  ORDER BY valid_until DESC, id DESC LIMIT 1
+             ) AS pass_tx_id
          FROM cards c
          WHERE c.credit < 0
          ORDER BY c.credit ASC",
@@ -1062,6 +1076,20 @@ mod tests {
         .await
         .unwrap();
 
+        // `mid` also has an active monthly pass valid until 2026-12-31. The
+        // endpoint must surface it so clicking a row opens the action panel
+        // with full pass state.
+        let mid_pass_until = chrono::NaiveDate::from_ymd_opt(2026, 12, 31).unwrap();
+        let mid_pass_tx_id: i64 = sqlx::query_scalar(
+            "INSERT INTO transactions (card_id, amount, action, valid_until, created_at)
+             VALUES (?, -25.0, 'charge', ?, '2026-04-01 10:00:00') RETURNING id",
+        )
+        .bind(mid)
+        .bind(mid_pass_until)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
         let rows = list_negative_balance(&pool).await.unwrap();
         assert_eq!(rows.len(), 2, "positive card must be excluded");
         assert_eq!(rows[0].id, deep);
@@ -1071,6 +1099,8 @@ mod tests {
             rows[0].last_payment_at.as_deref(),
             Some("2026-03-05 09:00:00"),
         );
+        assert_eq!(rows[0].pass_tx_id, None, "deep has no pass");
+        assert_eq!(rows[0].pass_valid_until, None);
         assert_eq!(rows[1].id, mid);
         assert!((rows[1].credit - (-3.5)).abs() < f64::EPSILON);
         // The later 'charge' row counts as a visit, so last_visit_at is the
@@ -1080,5 +1110,7 @@ mod tests {
             Some("2026-04-25 18:00:00"),
         );
         assert_eq!(rows[1].last_payment_at, None);
+        assert_eq!(rows[1].pass_tx_id, Some(mid_pass_tx_id));
+        assert_eq!(rows[1].pass_valid_until, Some(mid_pass_until));
     }
 }

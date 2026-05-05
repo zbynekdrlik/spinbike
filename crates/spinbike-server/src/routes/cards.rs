@@ -114,6 +114,9 @@ pub struct NegativeBalanceCardResponse {
     pub company: Option<String>,
     pub last_visit_at: Option<String>,
     pub last_payment_at: Option<String>,
+    /// Active monthly pass, if any. Populated so clicking a list row opens
+    /// the action panel with the same fidelity as clicking a search result.
+    pub pass: Option<CardPass>,
 }
 
 #[derive(Serialize)]
@@ -236,18 +239,30 @@ async fn negative_balance(
     let rows = db::list_negative_balance(&state.pool)
         .await
         .map_err(internal_error)?;
+    let today = chrono::Local::now().date_naive();
     let out = rows
         .into_iter()
-        .map(|r| NegativeBalanceCardResponse {
-            id: r.id,
-            barcode: r.barcode,
-            credit: r.credit,
-            blocked: r.blocked != 0,
-            first_name: r.first_name,
-            last_name: r.last_name,
-            company: r.company,
-            last_visit_at: r.last_visit_at,
-            last_payment_at: r.last_payment_at,
+        .map(|r| {
+            let pass = match (r.pass_tx_id, r.pass_valid_until) {
+                (Some(tx_id), Some(valid_until)) => Some(CardPass {
+                    valid_until,
+                    days_remaining: (valid_until - today).num_days() as i32,
+                    transaction_id: tx_id,
+                }),
+                _ => None,
+            };
+            NegativeBalanceCardResponse {
+                id: r.id,
+                barcode: r.barcode,
+                credit: r.credit,
+                blocked: r.blocked != 0,
+                first_name: r.first_name,
+                last_name: r.last_name,
+                company: r.company,
+                last_visit_at: r.last_visit_at,
+                last_payment_at: r.last_payment_at,
+                pass,
+            }
         })
         .collect();
     Ok(Json(out))

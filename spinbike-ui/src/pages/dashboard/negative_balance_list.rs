@@ -11,7 +11,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
 use crate::i18n::{self, Lang};
-use crate::pages::dashboard::CardInfo;
+use crate::pages::dashboard::{CardInfo, CardPass};
 use crate::relative_date::format_last_visit;
 
 #[derive(Clone, Debug, Deserialize)]
@@ -25,6 +25,8 @@ pub struct NegativeBalanceCard {
     pub company: Option<String>,
     pub last_visit_at: Option<String>,
     pub last_payment_at: Option<String>,
+    #[serde(default)]
+    pub pass: Option<CardPass>,
 }
 
 #[component]
@@ -121,8 +123,11 @@ fn format_optional_date(
     match raw {
         None => never_label.to_string(),
         Some(s) => {
-            // SQLite literal: "YYYY-MM-DD HH:MM:SS". Parse only the date portion.
-            let date_str = if s.len() >= 10 { &s[..10] } else { s.as_str() };
+            // SQLite literal: "YYYY-MM-DD HH:MM:SS". Slice the leading 10
+            // characters defensively via `get(..10)` — the API only returns
+            // ASCII timestamps today, but a byte-index slice would panic on
+            // a multi-byte char boundary if that ever changes.
+            let date_str = s.get(..10).unwrap_or(s.as_str());
             match NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
                 Ok(d) => format_last_visit(d, today, lang),
                 Err(_) => never_label.to_string(),
@@ -136,8 +141,8 @@ fn today_local() -> NaiveDate {
 }
 
 /// Promote a `NegativeBalanceCard` into the parent `CardInfo` so clicking a
-/// row opens the full action panel. The action panel refetches the rest on
-/// mount, so we only need to populate the identity fields.
+/// row opens the full action panel with the same fidelity as a search-result
+/// click — including the active monthly pass when present.
 fn neg_to_card_info(c: &NegativeBalanceCard) -> CardInfo {
     CardInfo {
         id: c.id,
@@ -147,11 +152,14 @@ fn neg_to_card_info(c: &NegativeBalanceCard) -> CardInfo {
         first_name: c.first_name.clone(),
         last_name: c.last_name.clone(),
         company: c.company.clone(),
+        pass: c.pass.clone(),
+        last_visit_at: c.last_visit_at.clone(),
         // Fields not returned by the negative-balance endpoint — neutral defaults.
+        // `user_id`, `allow_debit`, and `phone` aren't read by the action
+        // panel's monthly-pass header or the visit-log button, so the
+        // defaults are safe.
         user_id: None,
         allow_debit: false,
         phone: None,
-        pass: None,
-        last_visit_at: c.last_visit_at.clone(),
     }
 }

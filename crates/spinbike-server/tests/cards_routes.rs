@@ -217,6 +217,65 @@ async fn negative_balance_endpoint_round_trips_blocked_field() {
 }
 
 #[tokio::test]
+async fn negative_balance_endpoint_round_trips_pass_field() {
+    // Clicking a row opens the action panel with the same fidelity as a
+    // search-result click — including the active monthly pass. Without the
+    // pass-fetch subqueries the panel would show "no pass" briefly for a
+    // card that has one. Asserts both the present-pass and no-pass paths.
+    let app = TestApp::new().await;
+    let with_pass = app
+        .seed_card("NEG-PASS", -2.0, None, None, None, None)
+        .await;
+    let no_pass = app
+        .seed_card("NEG-NOPASS", -1.0, None, None, None, None)
+        .await;
+
+    let valid_until = chrono::NaiveDate::from_ymd_opt(2026, 12, 31).unwrap();
+    let pass_tx_id: i64 = sqlx::query_scalar(
+        "INSERT INTO transactions (card_id, amount, action, valid_until, created_at)
+         VALUES (?, -25.0, 'charge', ?, datetime('now')) RETURNING id",
+    )
+    .bind(with_pass)
+    .bind(valid_until)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    let _ = no_pass; // explicit: this card intentionally has no pass row.
+
+    let (status, resp) = app
+        .request(get("/api/cards/negative-balance", &app.staff_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let arr = resp.as_array().unwrap();
+    let with_p = arr
+        .iter()
+        .find(|r| r["barcode"] == "NEG-PASS")
+        .expect("pass-bearing card must be in list");
+    let without_p = arr
+        .iter()
+        .find(|r| r["barcode"] == "NEG-NOPASS")
+        .expect("pass-less card must be in list");
+
+    let pass = with_p["pass"]
+        .as_object()
+        .expect("pass field must be a populated object for NEG-PASS");
+    assert_eq!(pass["transaction_id"], pass_tx_id);
+    assert_eq!(
+        pass["valid_until"],
+        valid_until.format("%Y-%m-%d").to_string()
+    );
+    assert!(
+        pass["days_remaining"].is_i64(),
+        "days_remaining must serialise as integer"
+    );
+
+    assert!(
+        without_p["pass"].is_null(),
+        "card without a pass must serialise pass=null"
+    );
+}
+
+#[tokio::test]
 async fn seed_credit_fixture_forbidden_for_customer() {
     // Kills the `delete !` mutation in the `if !claims.role.can_process_payments()`
     // gate on POST /api/test/seed-credit: a customer token must NOT be able
