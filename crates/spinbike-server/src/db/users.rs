@@ -441,7 +441,7 @@ pub async fn list_negative_balance(pool: &SqlitePool) -> Result<Vec<NegativeBala
             (SELECT MAX(t.created_at) FROM transactions t
                 WHERE t.user_id = u.id
                   AND t.deleted_at IS NULL
-                  AND t.service_id IN (SELECT id FROM services WHERE name_en IN ('Fitness','Spinning'))
+                  AND t.service_id IN (SELECT id FROM services WHERE name_en IN (?, ?))
             ) AS last_visit_at,
             (SELECT MAX(t.created_at) FROM transactions t
                 WHERE t.user_id = u.id
@@ -460,6 +460,8 @@ pub async fn list_negative_balance(pool: &SqlitePool) -> Result<Vec<NegativeBala
          WHERE u.credit < 0
          ORDER BY u.credit ASC",
     )
+    .bind(CLASS_VISIT_NAMES_EN[0])
+    .bind(CLASS_VISIT_NAMES_EN[1])
     .fetch_all(pool)
     .await
     .context("Failed to list users with negative balance")?;
@@ -475,18 +477,23 @@ pub async fn update_user_info(
     company: Option<&str>,
     card_code: Option<&str>,
 ) -> Result<()> {
-    // Look up current name so we can recompute search_text if name not provided.
-    let current_name: String = sqlx::query_scalar("SELECT name FROM users WHERE id = ?")
-        .bind(user_id)
-        .fetch_one(pool)
-        .await
-        .context("Failed to read name for user update")?;
-    let effective_name = name.unwrap_or(&current_name);
-    let search_text = compute_search_text(Some(effective_name), company, card_code);
+    // Read the current row so we can compute search_text correctly under partial updates.
+    let current = get_user_by_id(pool, user_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("User {} not found", user_id))?;
+    let effective_name = name.unwrap_or(&current.name);
+    let effective_company = company.or(current.company.as_deref());
+    let effective_code = card_code.or(current.card_code.as_deref());
+    let search_text = compute_search_text(Some(effective_name), effective_company, effective_code);
     sqlx::query(
-        "UPDATE users SET name = COALESCE(?, name), email = ?, phone = ?,
-                          company = ?, card_code = ?, search_text = ?
-         WHERE id = ?",
+        "UPDATE users
+            SET name      = COALESCE(?, name),
+                email     = COALESCE(?, email),
+                phone     = COALESCE(?, phone),
+                company   = COALESCE(?, company),
+                card_code = COALESCE(?, card_code),
+                search_text = ?
+          WHERE id = ?",
     )
     .bind(name)
     .bind(email)
@@ -782,7 +789,6 @@ mod tests {
             &pool,
             Some(user_id),
             None,
-            None,
             Some(1),
             -35.0,
             "charge",
@@ -794,7 +800,6 @@ mod tests {
         create_transaction_with_valid_until(
             &pool,
             Some(user_id),
-            None,
             None,
             Some(1),
             -35.0,
@@ -818,19 +823,10 @@ mod tests {
         use crate::db::transactions::create_transaction;
         let pool = setup().await;
         let user_id = make_user(&pool, None, "Charge Only").await;
-        create_transaction(
-            &pool,
-            Some(user_id),
-            None,
-            None,
-            Some(1),
-            -5.0,
-            "charge",
-            None,
-        )
-        .await
-        .unwrap();
-        create_transaction(&pool, Some(user_id), None, None, None, 20.0, "topup", None)
+        create_transaction(&pool, Some(user_id), None, Some(1), -5.0, "charge", None)
+            .await
+            .unwrap();
+        create_transaction(&pool, Some(user_id), None, None, 20.0, "topup", None)
             .await
             .unwrap();
         let result = get_user_pass_valid_until(&pool, user_id).await.unwrap();
@@ -850,7 +846,6 @@ mod tests {
         let tx_id = create_transaction_with_valid_until(
             &pool,
             Some(user_id),
-            None,
             None,
             Some(1),
             -35.0,
@@ -1035,5 +1030,92 @@ mod tests {
         assert_eq!(normalize_search("Drlík"), "drlik");
         assert_eq!(normalize_search("Ľuboš"), "lubos");
         assert_eq!(normalize_search("ABC"), "abc");
+    }
+
+    #[tokio::test]
+    async fn update_user_info_name_only_preserves_other_fields() {
+        let pool = setup().await;
+        let id = create_user(
+            &pool,
+            Some("a@b"),
+            None,
+            "Alice",
+            Some("111"),
+            Some("Acme"),
+            Some("CODE1"),
+            "customer",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        update_user_info(&pool, id, Some("Alice Renamed"), None, None, None, None)
+            .await
+            .unwrap();
+        let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert_eq!(u.name, "Alice Renamed");
+        assert_eq!(u.email.as_deref(), Some("a@b"));
+        assert_eq!(u.phone.as_deref(), Some("111"));
+        assert_eq!(u.company.as_deref(), Some("Acme"));
+        assert_eq!(u.card_code.as_deref(), Some("CODE1"));
+    }
+
+    #[tokio::test]
+    async fn update_user_info_email_only_preserves_other_fields() {
+        let pool = setup().await;
+        let id = create_user(
+            &pool,
+            Some("a@b"),
+            None,
+            "Alice",
+            Some("111"),
+            Some("Acme"),
+            Some("CODE1"),
+            "customer",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        update_user_info(&pool, id, None, Some("new@b"), None, None, None)
+            .await
+            .unwrap();
+        let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert_eq!(u.email.as_deref(), Some("new@b"));
+        assert_eq!(u.name, "Alice");
+        assert_eq!(u.phone.as_deref(), Some("111"));
+        assert_eq!(u.company.as_deref(), Some("Acme"));
+        assert_eq!(u.card_code.as_deref(), Some("CODE1"));
+    }
+
+    #[tokio::test]
+    async fn update_user_info_recomputes_search_text_under_partial_update() {
+        let pool = setup().await;
+        let id = create_user(
+            &pool,
+            Some("a@b"),
+            None,
+            "Alice",
+            None,
+            Some("Acme"),
+            Some("CODE1"),
+            "customer",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        update_user_info(&pool, id, Some("Alice Renamed"), None, None, None, None)
+            .await
+            .unwrap();
+        let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
+        let expected = normalize_search("Alice Renamed Acme CODE1");
+        assert_eq!(u.search_text.as_deref(), Some(expected.as_str()));
     }
 }

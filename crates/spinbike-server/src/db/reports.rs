@@ -27,12 +27,12 @@ pub async fn day_report(
     // Events — paginated with composite (created_at, id) cursor for stable
     // ordering even when multiple rows share a second-precision timestamp.
     let mut query = String::from(
-        "SELECT t.id, t.card_id, t.amount, t.action, t.created_at, t.valid_until, t.deleted_at,
-                TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')) AS card_name,
-                c.barcode,
+        "SELECT t.id, t.user_id, t.amount, t.action, t.created_at, t.valid_until, t.deleted_at,
+                u.name AS card_name,
+                u.card_code AS barcode,
                 s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.note
          FROM transactions t
-         LEFT JOIN cards c ON c.id = t.card_id
+         LEFT JOIN users u ON u.id = t.user_id
          LEFT JOIN services s ON s.id = t.service_id
          WHERE date(t.created_at) = ?
            AND t.deleted_at IS NULL",
@@ -107,7 +107,7 @@ struct DbKpiRow {
 #[derive(sqlx::FromRow)]
 struct DbEventRow {
     id: i64,
-    card_id: Option<i64>,
+    user_id: Option<i64>,
     card_name: Option<String>,
     barcode: Option<String>,
     action: String,
@@ -128,7 +128,7 @@ impl From<DbEventRow> for ReportEvent {
     fn from(r: DbEventRow) -> Self {
         ReportEvent {
             id: r.id,
-            card_id: r.card_id,
+            user_id: r.user_id,
             card_name: r.card_name.filter(|s| !s.trim().is_empty()),
             barcode: r.barcode,
             action: r.action,
@@ -160,12 +160,12 @@ pub async fn range_report(
     let before_parsed = before.as_deref().and_then(parse_before_cursor);
 
     let mut query = String::from(
-        "SELECT t.id, t.card_id, t.amount, t.action, t.created_at, t.valid_until, t.deleted_at,
-                TRIM(COALESCE(c.first_name,'') || ' ' || COALESCE(c.last_name,'')) AS card_name,
-                c.barcode,
+        "SELECT t.id, t.user_id, t.amount, t.action, t.created_at, t.valid_until, t.deleted_at,
+                u.name AS card_name,
+                u.card_code AS barcode,
                 s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.note
          FROM transactions t
-         LEFT JOIN cards c ON c.id = t.card_id
+         LEFT JOIN users u ON u.id = t.user_id
          LEFT JOIN services s ON s.id = t.service_id
          WHERE date(t.created_at) BETWEEN ? AND ?
            AND t.deleted_at IS NULL",
@@ -247,22 +247,30 @@ mod tests {
     // the test would not detect the bug. Do not change the count of
     // Refreshments rows without re-running the discriminator math.
     use crate::db::transactions::{create_transaction, create_transaction_with_valid_until};
+    use crate::db::users::create_user;
     use crate::db::{create_memory_pool, run_migrations};
     use sqlx::SqlitePool;
 
-    async fn setup_pool_with_card() -> (SqlitePool, i64) {
+    async fn setup_pool_with_user() -> (SqlitePool, i64) {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        // The standard migrations seed Spinning, Fitness, Monthly pass,
-        // Refreshments, Supplements, Card activation fee. We need a card to
-        // satisfy NOT-NULL-ish FK semantics on `transactions.card_id`.
-        let card_id: i64 = sqlx::query_scalar(
-            "INSERT INTO cards (barcode, credit, allow_debit) VALUES ('T-23', 100.0, 1) RETURNING id",
+        // Create a test user to associate transactions with.
+        let user_id = create_user(
+            &pool,
+            None,
+            None,
+            "Test User",
+            None,
+            None,
+            None,
+            "customer",
+            Some(100.0),
+            None,
+            None,
         )
-        .fetch_one(&pool)
         .await
         .unwrap();
-        (pool, card_id)
+        (pool, user_id)
     }
 
     async fn service_id_by_name_en(pool: &SqlitePool, name_en: &str) -> i64 {
@@ -275,7 +283,7 @@ mod tests {
 
     #[tokio::test]
     async fn attendance_counts_only_fitness_and_spinning_visits() {
-        let (pool, card_id) = setup_pool_with_card().await;
+        let (pool, user_id) = setup_pool_with_user().await;
 
         let fitness_id =
             service_id_by_name_en(&pool, spinbike_core::services::FITNESS_NAME_EN).await;
@@ -288,8 +296,7 @@ mod tests {
         // 4 rows that SHOULD count.
         create_transaction(
             &pool,
-            None,
-            Some(card_id),
+            Some(user_id),
             None,
             Some(fitness_id),
             -5.0,
@@ -300,8 +307,7 @@ mod tests {
         .unwrap();
         create_transaction(
             &pool,
-            None,
-            Some(card_id),
+            Some(user_id),
             None,
             Some(spinning_id),
             -5.0,
@@ -312,8 +318,7 @@ mod tests {
         .unwrap();
         create_transaction(
             &pool,
-            None,
-            Some(card_id),
+            Some(user_id),
             None,
             Some(fitness_id),
             0.0,
@@ -324,8 +329,7 @@ mod tests {
         .unwrap();
         create_transaction(
             &pool,
-            None,
-            Some(card_id),
+            Some(user_id),
             None,
             Some(spinning_id),
             0.0,
@@ -340,20 +344,7 @@ mod tests {
         // pass against the bug. See header comment.
         create_transaction(
             &pool,
-            None,
-            Some(card_id),
-            None,
-            Some(refreshments_id),
-            -2.50,
-            "charge",
-            None,
-        )
-        .await
-        .unwrap();
-        create_transaction(
-            &pool,
-            None,
-            Some(card_id),
+            Some(user_id),
             None,
             Some(refreshments_id),
             -2.50,
@@ -364,8 +355,18 @@ mod tests {
         .unwrap();
         create_transaction(
             &pool,
+            Some(user_id),
             None,
-            Some(card_id),
+            Some(refreshments_id),
+            -2.50,
+            "charge",
+            None,
+        )
+        .await
+        .unwrap();
+        create_transaction(
+            &pool,
+            Some(user_id),
             None,
             Some(card_fee_id),
             -3.0,
@@ -377,8 +378,7 @@ mod tests {
         let valid_until = chrono::NaiveDate::from_ymd_opt(2030, 1, 1).unwrap();
         create_transaction_with_valid_until(
             &pool,
-            None,
-            Some(card_id),
+            Some(user_id),
             None,
             Some(monthly_pass_id),
             -35.0,
@@ -388,7 +388,7 @@ mod tests {
         )
         .await
         .unwrap();
-        create_transaction(&pool, None, Some(card_id), None, None, 10.0, "topup", None)
+        create_transaction(&pool, Some(user_id), None, None, 10.0, "topup", None)
             .await
             .unwrap();
 

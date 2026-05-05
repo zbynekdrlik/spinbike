@@ -16,7 +16,7 @@ pub struct KpiSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReportEvent {
     pub id: i64,
-    pub card_id: Option<i64>,
+    pub user_id: Option<i64>,
     pub card_name: Option<String>,
     pub barcode: Option<String>,
     pub action: String,

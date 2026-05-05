@@ -24,7 +24,7 @@ pub fn routes() -> Router<AppState> {
 #[derive(sqlx::FromRow)]
 struct TxMini {
     amount: f64,
-    card_id: Option<i64>,
+    user_id: Option<i64>,
     deleted_at: Option<String>,
     valid_until: Option<String>,
 }
@@ -68,7 +68,7 @@ async fn void_transaction(
     let mut tx = state.pool.begin().await.map_err(internal_error)?;
 
     let row: Option<TxMini> = sqlx::query_as(
-        "SELECT amount, card_id, deleted_at, valid_until FROM transactions WHERE id = ?",
+        "SELECT amount, user_id, deleted_at, valid_until FROM transactions WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
@@ -94,15 +94,15 @@ async fn void_transaction(
         .await
         .map_err(internal_error)?;
 
-    if let Some(card_id) = row.card_id {
+    if let Some(user_id) = row.user_id {
         // Single-formula credit reversal works because amounts are SIGNED
         // in the transactions table:
         //   - charges/visits store NEGATIVE amounts → `credit - (-X)` = `credit + X` (refund)
         //   - top-ups       store POSITIVE amounts → `credit - (+X)` = `credit - X` (claw-back)
         // ROUND keeps SQLite from drifting on float math.
-        sqlx::query("UPDATE cards SET credit = ROUND(credit - ?, 2) WHERE id = ?")
+        sqlx::query("UPDATE users SET credit = ROUND(credit - ?, 2) WHERE id = ?")
             .bind(row.amount)
-            .bind(card_id)
+            .bind(user_id)
             .execute(&mut *tx)
             .await
             .map_err(internal_error)?;
@@ -126,7 +126,7 @@ async fn patch_valid_until(
     }
 
     let row: Option<TxMini> = sqlx::query_as(
-        "SELECT amount, card_id, valid_until, deleted_at FROM transactions WHERE id = ?",
+        "SELECT amount, user_id, valid_until, deleted_at FROM transactions WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&state.pool)
@@ -185,7 +185,7 @@ async fn patch_note(
     };
 
     let row: Option<TxMini> = sqlx::query_as(
-        "SELECT amount, card_id, deleted_at, valid_until FROM transactions WHERE id = ?",
+        "SELECT amount, user_id, deleted_at, valid_until FROM transactions WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&state.pool)

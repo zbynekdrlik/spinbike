@@ -535,6 +535,7 @@ DROP TABLE cards;
 
 #[cfg(test)]
 mod tests {
+    use super::MIGRATIONS;
     use crate::db::{create_memory_pool, run_migrations};
     use sqlx::Connection;
 
