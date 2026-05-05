@@ -3,13 +3,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::auth::AuthUser;
-use crate::db::cards;
 use crate::db::transactions::NOTE_MAX_CHARS;
+use crate::db::users;
 use crate::routes::internal_error;
 
 #[derive(Deserialize)]
 pub struct ChargeRequest {
-    pub card_id: i64,
+    pub user_id: i64,
     pub amount: f64,
     pub service_id: Option<i64>,
     #[serde(default)]
@@ -18,7 +18,7 @@ pub struct ChargeRequest {
 
 #[derive(Deserialize)]
 pub struct StornoRequest {
-    pub card_id: i64,
+    pub user_id: i64,
     pub amount: f64,
     pub reason: Option<String>,
 }
@@ -31,7 +31,7 @@ pub struct PaymentResponse {
 
 #[derive(Deserialize)]
 pub struct LogVisitRequest {
-    pub card_id: i64,
+    pub user_id: i64,
     pub service_id: i64,
     #[serde(default)]
     pub note: Option<String>,
@@ -44,7 +44,7 @@ pub struct LogVisitResponse {
 
 #[derive(Deserialize)]
 pub struct SellPassRequest {
-    pub card_id: i64,
+    pub user_id: i64,
     pub price: f64,
     pub valid_until: chrono::NaiveDate,
     #[serde(default)]
@@ -116,48 +116,47 @@ async fn charge(
     }
     let note_for_db = body.note.as_deref().filter(|s| !s.trim().is_empty());
 
-    let amount = cards::round_cents(body.amount);
+    let amount = users::round_cents(body.amount);
 
     // C2: Wrap entire operation in a transaction to prevent race conditions.
     let mut tx = state.pool.begin().await.map_err(internal_error)?;
 
-    // Re-read card inside the transaction.
-    let card = sqlx::query_as::<_, cards::CardRow>("SELECT * FROM cards WHERE id = ?")
-        .bind(body.card_id)
+    // Re-read user inside the transaction.
+    let user = sqlx::query_as::<_, users::UserRow>("SELECT * FROM users WHERE id = ?")
+        .bind(body.user_id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(internal_error)?
         .ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Card not found"})),
+                Json(serde_json::json!({"error": "User not found"})),
             )
         })?;
 
-    if card.blocked != 0 {
+    if user.blocked {
         return Err((
             StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "Card is blocked"})),
+            Json(serde_json::json!({"error": "User is blocked"})),
         ));
     }
 
-    // Legacy app allowed credit to go negative — any card can go into debt.
+    // Legacy app allowed credit to go negative — any user can go into debt.
 
-    // Debit the card within the transaction.
-    sqlx::query("UPDATE cards SET credit = ROUND(credit - ?, 2) WHERE id = ?")
+    // Debit the user within the transaction.
+    sqlx::query("UPDATE users SET credit = ROUND(credit - ?, 2) WHERE id = ?")
         .bind(amount)
-        .bind(body.card_id)
+        .bind(body.user_id)
         .execute(&mut *tx)
         .await
         .map_err(internal_error)?;
 
     let tx_id: i64 = sqlx::query_scalar(
-        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action, note)
-         VALUES (?, ?, ?, ?, ?, 'charge', ?)
+        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, note)
+         VALUES (?, ?, ?, ?, 'charge', ?)
          RETURNING id",
     )
-    .bind(card.user_id)
-    .bind(Some(body.card_id))
+    .bind(body.user_id)
     .bind(Some(claims.sub))
     .bind(Some(service_id))
     .bind(-amount)
@@ -168,7 +167,7 @@ async fn charge(
 
     tx.commit().await.map_err(internal_error)?;
 
-    let new_credit = cards::round_cents(card.credit - amount);
+    let new_credit = users::round_cents(user.credit - amount);
 
     Ok(Json(PaymentResponse {
         transaction_id: tx_id,
@@ -193,38 +192,37 @@ async fn storno(
         return Err(super::bad_request("Amount must be greater than zero"));
     }
 
-    let amount = cards::round_cents(body.amount);
+    let amount = users::round_cents(body.amount);
 
     // Wrap in a transaction for consistency.
     let mut tx = state.pool.begin().await.map_err(internal_error)?;
 
-    let card = sqlx::query_as::<_, cards::CardRow>("SELECT * FROM cards WHERE id = ?")
-        .bind(body.card_id)
+    let user = sqlx::query_as::<_, users::UserRow>("SELECT * FROM users WHERE id = ?")
+        .bind(body.user_id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(internal_error)?
         .ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Card not found"})),
+                Json(serde_json::json!({"error": "User not found"})),
             )
         })?;
 
-    // Credit the card (refund) within the transaction.
-    sqlx::query("UPDATE cards SET credit = ROUND(credit + ?, 2) WHERE id = ?")
+    // Credit the user (refund) within the transaction.
+    sqlx::query("UPDATE users SET credit = ROUND(credit + ?, 2) WHERE id = ?")
         .bind(amount)
-        .bind(body.card_id)
+        .bind(body.user_id)
         .execute(&mut *tx)
         .await
         .map_err(internal_error)?;
 
     let tx_id: i64 = sqlx::query_scalar(
-        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action, note)
-         VALUES (?, ?, ?, ?, ?, 'storno', NULL)
+        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, note)
+         VALUES (?, ?, ?, ?, 'storno', NULL)
          RETURNING id",
     )
-    .bind(card.user_id)
-    .bind(Some(body.card_id))
+    .bind(body.user_id)
     .bind(Some(claims.sub))
     .bind::<Option<i64>>(None)
     .bind(amount)
@@ -234,7 +232,7 @@ async fn storno(
 
     tx.commit().await.map_err(internal_error)?;
 
-    let new_credit = cards::round_cents(card.credit + amount);
+    let new_credit = users::round_cents(user.credit + amount);
 
     Ok(Json(PaymentResponse {
         transaction_id: tx_id,
@@ -267,25 +265,25 @@ async fn sell_pass(
     }
     let note_for_db = body.note.as_deref().filter(|s| !s.trim().is_empty());
 
-    let price = cards::round_cents(body.price);
+    let price = users::round_cents(body.price);
 
     let mut tx = state.pool.begin().await.map_err(internal_error)?;
 
-    let card = sqlx::query_as::<_, cards::CardRow>("SELECT * FROM cards WHERE id = ?")
-        .bind(body.card_id)
+    let user = sqlx::query_as::<_, users::UserRow>("SELECT * FROM users WHERE id = ?")
+        .bind(body.user_id)
         .fetch_optional(&mut *tx)
         .await
         .map_err(internal_error)?
         .ok_or_else(|| {
             (
                 StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "Card not found"})),
+                Json(serde_json::json!({"error": "User not found"})),
             )
         })?;
-    if card.blocked != 0 {
+    if user.blocked {
         return Err((
             StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "Card is blocked"})),
+            Json(serde_json::json!({"error": "User is blocked"})),
         ));
     }
 
@@ -295,20 +293,19 @@ async fn sell_pass(
         .await
         .map_err(internal_error)?;
 
-    sqlx::query("UPDATE cards SET credit = ROUND(credit - ?, 2) WHERE id = ?")
+    sqlx::query("UPDATE users SET credit = ROUND(credit - ?, 2) WHERE id = ?")
         .bind(price)
-        .bind(body.card_id)
+        .bind(body.user_id)
         .execute(&mut *tx)
         .await
         .map_err(internal_error)?;
 
     let tx_id: i64 = sqlx::query_scalar(
-        "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action, valid_until, note)
-         VALUES (?, ?, ?, ?, ?, 'charge', ?, ?)
+        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until, note)
+         VALUES (?, ?, ?, ?, 'charge', ?, ?)
          RETURNING id",
     )
-    .bind(card.user_id)
-    .bind(Some(body.card_id))
+    .bind(body.user_id)
     .bind(Some(claims.sub))
     .bind(Some(service_id))
     .bind(-price)
@@ -320,7 +317,7 @@ async fn sell_pass(
 
     tx.commit().await.map_err(internal_error)?;
 
-    let new_credit = cards::round_cents(card.credit - price);
+    let new_credit = users::round_cents(user.credit - price);
     let days_remaining = (body.valid_until - today).num_days() as i32;
 
     Ok(Json(SellPassResponse {
@@ -344,7 +341,7 @@ async fn log_visit(
     }
 
     let today = chrono::Local::now().date_naive();
-    let valid_until = cards::get_card_pass_valid_until(&state.pool, body.card_id)
+    let valid_until = users::get_user_pass_valid_until(&state.pool, body.user_id)
         .await
         .map_err(internal_error)?;
     match valid_until {
@@ -353,7 +350,7 @@ async fn log_visit(
             return Err((
                 StatusCode::CONFLICT,
                 Json(serde_json::json!({
-                    "error": "Card has no active monthly pass; use /api/payments/charge"
+                    "error": "User has no active monthly pass; use /api/payments/charge"
                 })),
             ));
         }
@@ -382,8 +379,7 @@ async fn log_visit(
 
     let tx_id = crate::db::transactions::create_transaction(
         &state.pool,
-        None,
-        Some(body.card_id),
+        Some(body.user_id),
         Some(claims.sub),
         Some(body.service_id),
         0.0,
