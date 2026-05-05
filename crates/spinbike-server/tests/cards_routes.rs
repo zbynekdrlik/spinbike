@@ -163,6 +163,8 @@ async fn negative_balance_endpoint_returns_only_negatives_sorted() {
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
     let arr = resp.as_array().unwrap();
+    // TestApp::new() auto-seeds a CUST1 card. Filter to ours by barcode
+    // so this test stays robust if that fixture changes.
     let ours: Vec<_> = arr
         .iter()
         .filter(|r| {

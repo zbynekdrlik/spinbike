@@ -433,7 +433,7 @@ pub async fn get_card_pass_valid_until(
     Ok(row.and_then(|(d,)| d))
 }
 
-#[derive(Debug, sqlx::FromRow)]
+#[derive(Debug, Clone, sqlx::FromRow)]
 pub struct NegativeBalanceRow {
     pub id: i64,
     pub barcode: String,
@@ -447,8 +447,10 @@ pub struct NegativeBalanceRow {
 }
 
 /// Cards with `credit < 0`, sorted most-negative-first. Includes blocked
-/// cards (still owe money). The two subqueries piggyback on the existing
-/// `(card_id, created_at)` index on `transactions`.
+/// cards (still owe money). The two scalar subqueries on `transactions`
+/// run for each negative-credit card; at current data scale (~550 cards,
+/// rare negatives) this is sub-millisecond. Add a `(card_id, action,
+/// created_at)` index if the row count grows.
 pub async fn list_negative_balance(pool: &SqlitePool) -> anyhow::Result<Vec<NegativeBalanceRow>> {
     let rows = sqlx::query_as::<_, NegativeBalanceRow>(
         "SELECT
@@ -468,7 +470,8 @@ pub async fn list_negative_balance(pool: &SqlitePool) -> anyhow::Result<Vec<Nega
          ORDER BY c.credit ASC",
     )
     .fetch_all(pool)
-    .await?;
+    .await
+    .context("Failed to list cards with negative balance")?;
     Ok(rows)
 }
 
