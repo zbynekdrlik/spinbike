@@ -364,11 +364,8 @@ UPDATE transactions SET action='topup'
 
 // Drop `cards` as a first-class entity; promote its data into `users`.
 //
-// The migration runner (db::run_migrations) already toggles
-// `PRAGMA foreign_keys = OFF` before BEGIN and `ON` after COMMIT.
-// The PRAGMA lines inside this SQL block are belt-and-suspenders: the runner
-// splits on `;` and executes each statement individually, so they are harmless
-// no-ops when foreign_keys is already OFF at the connection level.
+// The migration runner (db::run_migrations) toggles `PRAGMA foreign_keys = OFF`
+// before BEGIN and `ON` after COMMIT. No inline PRAGMA lines are needed here.
 //
 // Step order matters:
 //   1. Recreate users (email nullable, new columns).
@@ -381,8 +378,6 @@ UPDATE transactions SET action='topup'
 //   7b. Migrate persistent_bookings card_id → user_id (cards still exists here).
 //   8. Drop cards.
 const V13_USERS_REPLACE_CARDS: &str = r#"
-PRAGMA foreign_keys = OFF;
-
 -- 1. Recreate users with email nullable + new columns
 CREATE TABLE users_new (
     id              INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -412,7 +407,7 @@ DROP TABLE users;
 ALTER TABLE users_new RENAME TO users;
 
 CREATE UNIQUE INDEX idx_users_card_code ON users(card_code) WHERE card_code IS NOT NULL;
-CREATE INDEX        idx_users_search_text ON users(search_text);
+CREATE INDEX        idx_users_search_text ON users(search_text) WHERE search_text IS NOT NULL;
 
 -- 2. Promote linked cards into existing users rows
 UPDATE users SET
@@ -445,7 +440,11 @@ FROM cards c WHERE c.user_id IS NULL;
 UPDATE cards SET user_id = (SELECT id FROM users WHERE users.card_code = cards.barcode)
  WHERE user_id IS NULL;
 
--- 5. Backfill transactions.user_id where missing
+-- 5. Backfill transactions.user_id where missing.
+--    INVARIANT: every transactions row must have user_id OR card_id (one of them non-null);
+--    rows with both NULL would fail step 6's NOT NULL constraint with a cryptic error,
+--    but no production data has that shape (V11 left both columns nullable but the app
+--    has always written one of them).
 UPDATE transactions
    SET user_id = (SELECT user_id FROM cards WHERE cards.id = transactions.card_id)
  WHERE user_id IS NULL AND card_id IS NOT NULL;
@@ -532,8 +531,6 @@ CREATE UNIQUE INDEX idx_persistent_bookings_user_id_template_id_active
 
 -- 8. Drop cards
 DROP TABLE cards;
-
-PRAGMA foreign_keys = ON;
 "#;
 
 #[cfg(test)]
@@ -1406,11 +1403,11 @@ mod tests {
         .unwrap();
 
         // Apply migrations 1..=12 only.
-        for &(v, _desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 12) {
+        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 12) {
             apply_sql_block(&pool, sql).await;
             sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
                 .bind(v)
-                .bind(_desc)
+                .bind(desc)
                 .execute(&pool)
                 .await
                 .unwrap();
@@ -1460,6 +1457,24 @@ mod tests {
         .await
         .unwrap();
 
+        // 4th card: Charlie — linked user with blank first_name/last_name to
+        // exercise the COALESCE fallback that preserves users.name.
+        let charlie_user: i64 = sqlx::query_scalar(
+            "INSERT INTO users(email,name,role) VALUES('charlie@x','Charlie Original','customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO cards(barcode,user_id,blocked,credit,allow_debit,
+                              first_name,last_name,company,phone,search_text)
+             VALUES('CODE4', ?, 0, 0.0, 0, NULL, NULL, NULL, NULL, NULL)",
+        )
+        .bind(charlie_user)
+        .execute(&pool)
+        .await
+        .unwrap();
+
         // Insert a transaction tied to bob's card (no user_id yet — legacy shape).
         let bob_card_id: i64 = sqlx::query_scalar("SELECT id FROM cards WHERE barcode='CODE2'")
             .fetch_one(&pool)
@@ -1476,16 +1491,18 @@ mod tests {
         .await
         .unwrap();
 
-        // Seed a persistent_booking for Bob's card (CODE2). V6 seeded
-        // class_templates with weekday=0 at '18:00' as template_id=1.
-        sqlx::query(
-            "INSERT INTO persistent_bookings(card_id, template_id)
-             VALUES(?, 1)",
-        )
-        .bind(bob_card_id)
-        .execute(&pool)
-        .await
-        .unwrap();
+        // Seed a persistent_booking for Bob's card (CODE2). Use whatever
+        // template V6 seeded rather than assuming a specific id.
+        let template_id: i64 = sqlx::query_scalar("SELECT id FROM class_templates LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO persistent_bookings(card_id, template_id) VALUES(?, ?)")
+            .bind(bob_card_id)
+            .bind(template_id)
+            .execute(&pool)
+            .await
+            .unwrap();
 
         // Apply V13.
         let v13_sql = MIGRATIONS.iter().find(|(v, _, _)| *v == 13).unwrap().2;
@@ -1493,12 +1510,12 @@ mod tests {
 
         // ── Assertions ──────────────────────────────────────────────────
 
-        // Total users: staff + alice + bob + nameless = 4.
+        // Total users: staff + alice + bob + nameless + charlie = 5.
         let users_total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(users_total, 4, "staff + alice + bob + nameless");
+        assert_eq!(users_total, 5, "staff + alice + bob + nameless + charlie");
 
         // Alice: credit and card_code promoted from linked card.
         let alice_credit: f64 =
@@ -1515,6 +1532,40 @@ mod tests {
                 .unwrap();
         assert_eq!(alice_card, "CODE1");
 
+        // Alice: name promoted from card first+last (overrides the original users.name).
+        let alice_name: String = sqlx::query_scalar("SELECT name FROM users WHERE email='alice@x'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            alice_name, "Alice Linked",
+            "card first+last name overrides existing user.name"
+        );
+
+        // Alice: phone COALESCE — alice had NULL in users, card had '111' → result '111'.
+        let alice_phone: Option<String> =
+            sqlx::query_scalar("SELECT phone FROM users WHERE email='alice@x'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(alice_phone.as_deref(), Some("111"));
+
+        // Alice: company from card.
+        let alice_company: Option<String> =
+            sqlx::query_scalar("SELECT company FROM users WHERE email='alice@x'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(alice_company.as_deref(), Some("Acme"));
+
+        // Alice: search_text from card.
+        let alice_search: Option<String> =
+            sqlx::query_scalar("SELECT search_text FROM users WHERE email='alice@x'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(alice_search.as_deref(), Some("alice linked acme"));
+
         // Bob: email NULL, credit preserved, blocked=0, name assembled from first+last.
         let bob: (Option<String>, f64, i64, String) = sqlx::query_as(
             "SELECT email, credit, blocked, name FROM users WHERE card_code='CODE2'",
@@ -1527,6 +1578,22 @@ mod tests {
         assert_eq!(bob.2, 0, "bob blocked mismatch");
         assert_eq!(bob.3, "Bob Lonely", "bob name mismatch");
 
+        // Bob: allow_debit=1 (promoted from card).
+        let bob_allow_debit: i64 =
+            sqlx::query_scalar("SELECT allow_debit FROM users WHERE card_code='CODE2'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(bob_allow_debit, 1);
+
+        // Bob: phone='222' (promoted from card).
+        let bob_phone: Option<String> =
+            sqlx::query_scalar("SELECT phone FROM users WHERE card_code='CODE2'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(bob_phone.as_deref(), Some("222"));
+
         // Nameless card: name falls back to '(no name)'.
         let nameless_name: String =
             sqlx::query_scalar("SELECT name FROM users WHERE card_code='CODE3'")
@@ -1534,6 +1601,17 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(nameless_name, "(no name)");
+
+        // Charlie: blank card first+last → COALESCE falls back to users.name.
+        let charlie_name: String =
+            sqlx::query_scalar("SELECT name FROM users WHERE email='charlie@x'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            charlie_name, "Charlie Original",
+            "blank card first+last preserves users.name fallback"
+        );
 
         // Bob's user_id (used for both transaction and persistent_booking assertions).
         let bob_user: i64 = sqlx::query_scalar("SELECT id FROM users WHERE card_code='CODE2'")
@@ -1617,6 +1695,16 @@ mod tests {
         assert_eq!(
             pb_user, bob_user,
             "persistent_bookings.user_id must point to Bob's new user row"
+        );
+
+        // Exactly one persistent_booking row survived (no duplication, no loss).
+        let pb_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM persistent_bookings")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            pb_count, 1,
+            "persistent_bookings count must be preserved across V13"
         );
 
         // idx_persistent_bookings_user_id_template_id_active exists.
