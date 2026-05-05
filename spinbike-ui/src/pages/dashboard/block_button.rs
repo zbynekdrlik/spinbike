@@ -27,13 +27,13 @@ pub fn BlockButton(
         spawn_local(async move {
             #[derive(serde::Serialize)]
             struct Req {
-                card_id: i64,
+                user_id: i64,
                 blocked: bool,
             }
             match api::post::<Req, CardInfo>(
-                "/api/cards/block",
+                "/api/users/block",
                 &Req {
-                    card_id,
+                    user_id: card_id,
                     blocked: new_blocked,
                 },
             )

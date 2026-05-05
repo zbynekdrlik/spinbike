@@ -15,7 +15,7 @@ pub fn OverviewTab(card_id: i64) -> impl IntoView {
 
     Effect::new(move |_| {
         spawn_local(async move {
-            match api::get::<StatsResponse>(&format!("/api/cards/{card_id}/stats")).await {
+            match api::get::<StatsResponse>(&format!("/api/users/{card_id}/stats")).await {
                 Ok(s) => {
                     set_stats.set(Some(s));
                     set_loading.set(false);

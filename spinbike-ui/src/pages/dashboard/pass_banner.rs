@@ -8,7 +8,7 @@ use super::{CardInfo, CardPass};
 #[component]
 pub fn PassBanner(
     pass: Option<CardPass>,
-    barcode: String,
+    card_code: String,
     set_selected: WriteSignal<Option<CardInfo>>,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
@@ -87,7 +87,7 @@ pub fn PassBanner(
             show=show_edit_sheet
             tx_id=tx_id
             current_date=current_date
-            barcode=barcode.clone()
+            card_code=card_code.clone()
             set_selected=set_selected
         />
     }

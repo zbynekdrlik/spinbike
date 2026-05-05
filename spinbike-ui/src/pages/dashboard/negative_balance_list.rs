@@ -1,7 +1,7 @@
-//! Empty-state list of cards with `credit < 0`, rendered on the Desk under
-//! the search box when no card is selected and the search box is empty.
+//! Empty-state list of users with `credit < 0`, rendered on the Desk under
+//! the search box when no user is selected and the search box is empty.
 //!
-//! Source of truth: `GET /api/cards/negative-balance`. Refetches whenever
+//! Source of truth: `GET /api/users/negative-balance`. Refetches whenever
 //! the parent's `txn_refresh` signal increments.
 
 use chrono::NaiveDate;
@@ -15,13 +15,12 @@ use crate::pages::dashboard::{CardInfo, CardPass};
 use crate::relative_date::format_last_visit;
 
 #[derive(Clone, Debug, Deserialize)]
-pub struct NegativeBalanceCard {
+pub struct NegativeBalanceUser {
     pub id: i64,
-    pub barcode: String,
+    pub name: String,
+    pub card_code: Option<String>,
     pub credit: f64,
     pub blocked: bool,
-    pub first_name: Option<String>,
-    pub last_name: Option<String>,
     pub company: Option<String>,
     pub last_visit_at: Option<String>,
     pub last_payment_at: Option<String>,
@@ -40,14 +39,14 @@ pub fn NegativeBalanceList(
     // We avoid `Resource::new` because the JS fetch future is not `Send`
     // (it holds `Rc<RefCell<...>>` from gloo-net), and Leptos 0.7's
     // `Resource::new` requires `Send`.
-    let (rows, set_rows) = signal::<Vec<NegativeBalanceCard>>(Vec::new());
+    let (rows, set_rows) = signal::<Vec<NegativeBalanceUser>>(Vec::new());
 
     Effect::new(move |_| {
         let _ = txn_refresh.get(); // reactive dependency
         spawn_local(async move {
             // Errors are swallowed: an alert list that fails to load has no
             // useful UI fallback, and we'd rather hide it than show noise.
-            let fetched = api::get::<Vec<NegativeBalanceCard>>("/api/cards/negative-balance")
+            let fetched = api::get::<Vec<NegativeBalanceUser>>("/api/users/negative-balance")
                 .await
                 .unwrap_or_default();
             set_rows.set(fetched);
@@ -68,11 +67,10 @@ pub fn NegativeBalanceList(
             let today = today_local();
 
             let items = rows.into_iter().map(|r| {
-                let name = super::helpers::full_name_or_fallback(
-                    r.first_name.as_deref(),
-                    r.last_name.as_deref(),
+                let name = super::helpers::user_display_name(
+                    &r.name,
                     r.company.as_deref(),
-                    &r.barcode,
+                    r.card_code.as_deref(),
                 );
                 let credit = format!("{:.2} €", r.credit);
                 let last_visit = format_optional_date(&r.last_visit_at, today, lang_now, &never_label);
@@ -140,26 +138,24 @@ fn today_local() -> NaiveDate {
     chrono::Local::now().date_naive()
 }
 
-/// Promote a `NegativeBalanceCard` into the parent `CardInfo` so clicking a
+/// Promote a `NegativeBalanceUser` into the parent `CardInfo` so clicking a
 /// row opens the full action panel with the same fidelity as a search-result
 /// click — including the active monthly pass when present.
-fn neg_to_card_info(c: &NegativeBalanceCard) -> CardInfo {
+fn neg_to_card_info(c: &NegativeBalanceUser) -> CardInfo {
     CardInfo {
         id: c.id,
-        barcode: c.barcode.clone(),
+        name: c.name.clone(),
+        card_code: c.card_code.clone(),
         blocked: c.blocked,
         credit: c.credit,
-        first_name: c.first_name.clone(),
-        last_name: c.last_name.clone(),
         company: c.company.clone(),
         pass: c.pass.clone(),
         last_visit_at: c.last_visit_at.clone(),
         // Fields not returned by the negative-balance endpoint — neutral defaults.
-        // `user_id`, `allow_debit`, and `phone` aren't read by the action
-        // panel's monthly-pass header or the visit-log button, so the
-        // defaults are safe.
-        user_id: None,
+        // `allow_debit` and `phone` aren't read by the action panel's
+        // monthly-pass header or the visit-log button, so defaults are safe.
         allow_debit: false,
         phone: None,
+        email: None,
     }
 }

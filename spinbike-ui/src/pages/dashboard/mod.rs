@@ -4,6 +4,7 @@
 //! Flow: type in search → dropdown → pick result → quick top-up / charge / block / edit.
 
 pub mod action_form;
+pub mod add_person_form;
 pub mod block_button;
 pub mod card_panel;
 pub mod edit_info_form;
@@ -26,8 +27,9 @@ use web_sys::HtmlInputElement;
 use crate::api;
 use crate::i18n::{self, Lang};
 
-use crate::util::parse_money;
-use helpers::{full_name, urlencoding_light};
+use helpers::urlencoding_light;
+
+use add_person_form::AddPersonForm;
 
 fn decode_uri_component(s: &str) -> String {
     // Browser global decodeURIComponent via JsCast.
@@ -45,20 +47,17 @@ pub struct CardPass {
     pub transaction_id: i64,
 }
 
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Debug, Clone, serde::Deserialize, Default)]
 pub struct CardInfo {
     pub id: i64,
-    pub barcode: String,
-    #[allow(dead_code)]
-    pub user_id: Option<i64>,
+    pub name: String,
+    #[serde(default)]
+    pub card_code: Option<String>,
     pub blocked: bool,
     pub credit: f64,
-    #[allow(dead_code)]
     pub allow_debit: bool,
     #[serde(default)]
-    pub first_name: Option<String>,
-    #[serde(default)]
-    pub last_name: Option<String>,
+    pub email: Option<String>,
     #[serde(default)]
     pub company: Option<String>,
     #[serde(default)]
@@ -66,7 +65,7 @@ pub struct CardInfo {
     #[serde(default)]
     pub pass: Option<CardPass>,
     /// MAX(transactions.created_at) for non-soft-deleted Spinning/Fitness rows
-    /// from /api/cards/search. `None` when the card has never been used for a
+    /// from /api/users/search. `None` when the user has never been used for a
     /// class. The shape is the SQLite literal "YYYY-MM-DD HH:MM:SS"; the
     /// helper in `card_panel::parse_last_visit` extracts the date for display.
     #[serde(default)]
@@ -124,8 +123,6 @@ pub struct PaymentResp {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct TxnInfo {
     pub id: i64,
-    #[allow(dead_code)]
-    pub card_id: Option<i64>,
     pub amount: f64,
     pub action: String,
     pub created_at: String,
@@ -166,7 +163,7 @@ pub fn DashboardPage() -> impl IntoView {
     let (searching, set_searching) = signal(false);
     let (selected, set_selected) = signal(None::<CardInfo>);
     let (services, set_services) = signal(Vec::<ServiceInfo>::new());
-    let (show_activate, set_show_activate) = signal(false);
+    let (show_add_person, set_show_add_person) = signal(false);
     let (msg, set_msg) = signal(String::new());
     let (err, set_err) = signal(String::new());
     // Keyboard-driven highlight within the search dropdown. 0 means "first
@@ -190,8 +187,8 @@ pub fn DashboardPage() -> impl IntoView {
 
     // Parse query params used by the Reports → row click jump.
     //
-    // * `?card=<barcode>` — exact lookup via /api/cards/lookup/{barcode};
-    //   on success, the card panel opens directly (skips dropdown).
+    // * `?card=<card_code>` — exact lookup via /api/users/lookup/{code};
+    //   on success, the user panel opens directly (skips dropdown).
     // * `?q=<text>` — search prefill (existing behavior).
     //
     // `?card=` wins when both are present (defensive — Reports only
@@ -218,12 +215,12 @@ pub fn DashboardPage() -> impl IntoView {
         }
 
         if let Some(bc) = card_param {
-            // Direct card lookup. On 404 (card deleted since report rendered),
-            // fall back to populating the search box with the barcode so the
+            // Direct user lookup by card_code. On 404 (user not found since
+            // report rendered), fall back to populating the search box so the
             // user sees the existing search-empty UX.
             spawn_local(async move {
                 let encoded = urlencoding_light(&bc);
-                match api::get::<CardInfo>(&format!("/api/cards/lookup/{encoded}")).await {
+                match api::get::<CardInfo>(&format!("/api/users/lookup/{encoded}")).await {
                     Ok(card) => {
                         set_selected.set(Some(card));
                         set_query.set(String::new());
@@ -272,7 +269,7 @@ pub fn DashboardPage() -> impl IntoView {
                 return;
             }
             let encoded = urlencoding_light(&q_at_start);
-            match api::get::<Vec<CardInfo>>(&format!("/api/cards/search?q={encoded}&limit=10"))
+            match api::get::<Vec<CardInfo>>(&format!("/api/users/search?q={encoded}&limit=10"))
                 .await
             {
                 Ok(list) => {
@@ -377,10 +374,10 @@ pub fn DashboardPage() -> impl IntoView {
                 }
                 let items: Vec<_> = list.into_iter().enumerate().map(|(idx, c)| {
                     let card_for_pick = c.clone();
-                    let name = full_name(&c);
-                    let barcode = c.barcode.clone();
-                    let tail_len = barcode.len().min(4);
-                    let tail = &barcode[barcode.len() - tail_len..];
+                    let name = helpers::user_display_name(&c.name, c.company.as_deref(), c.card_code.as_deref());
+                    let code = c.card_code.clone().unwrap_or_default();
+                    let tail_len = code.len().min(4);
+                    let tail = &code[code.len() - tail_len..];
                     let tail_str = tail.to_string();
                     let company = c.company.clone().unwrap_or_default();
                     let credit_val = c.credit;
@@ -425,16 +422,9 @@ pub fn DashboardPage() -> impl IntoView {
             {move || {
                 let q = query.get();
                 if !q.trim().is_empty() && !searching.get() && results.get().is_empty() {
-                    let on_activate = move |_| {
-                        set_show_activate.set(true);
-                        set_selected.set(None);
-                    };
                     view! {
                         <div class="text-center mt-2">
                             <p class="text-muted">{i18n::t(lang.get(), "no_matches")}</p>
-                            <button class="btn btn--primary btn--compact" on:click=on_activate>
-                                {i18n::t(lang.get(), "activate_new_card")}
-                            </button>
                         </div>
                     }.into_any()
                 } else {
@@ -489,114 +479,21 @@ pub fn DashboardPage() -> impl IntoView {
         <div class="mt-2">
             <button
                 class="btn btn--ghost btn--compact"
-                on:click=move |_| set_show_activate.update(|v| *v = !*v)
+                on:click=move |_| set_show_add_person.update(|v| *v = !*v)
             >
-                {move || if show_activate.get() {
-                    i18n::t(lang.get(), "hide_activate")
+                {move || if show_add_person.get() {
+                    i18n::t(lang.get(), "hide_add_person")
                 } else {
-                    i18n::t(lang.get(), "activate_new_card")
+                    i18n::t(lang.get(), "add_person")
                 }}
             </button>
         </div>
 
         {move || {
-            if show_activate.get() {
-                view! { <ActivateCardForm set_selected=set_selected set_msg=set_msg set_show_activate=set_show_activate /> }.into_any()
+            if show_add_person.get() {
+                view! { <AddPersonForm set_selected=set_selected set_msg=set_msg set_show=set_show_add_person /> }.into_any()
             } else { view! { <span></span> }.into_any() }
         }}
-    }
-}
-
-#[component]
-fn ActivateCardForm(
-    set_selected: WriteSignal<Option<CardInfo>>,
-    set_msg: WriteSignal<String>,
-    set_show_activate: WriteSignal<bool>,
-) -> impl IntoView {
-    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
-    let barcode_ref = NodeRef::<leptos::html::Input>::new();
-    let first_ref = NodeRef::<leptos::html::Input>::new();
-    let last_ref = NodeRef::<leptos::html::Input>::new();
-    let company_ref = NodeRef::<leptos::html::Input>::new();
-    let phone_ref = NodeRef::<leptos::html::Input>::new();
-    let credit_ref = NodeRef::<leptos::html::Input>::new();
-    let (loading, set_loading) = signal(false);
-
-    let on_submit = move |ev: web_sys::SubmitEvent| {
-        ev.prevent_default();
-        let read = |n: &NodeRef<leptos::html::Input>| {
-            n.get()
-                .map(|el| {
-                    let el: &HtmlInputElement = &el;
-                    el.value()
-                })
-                .unwrap_or_default()
-        };
-        let barcode = read(&barcode_ref);
-        let first = read(&first_ref);
-        let last = read(&last_ref);
-        let company = read(&company_ref);
-        let phone = read(&phone_ref);
-        let credit: f64 = parse_money(&read(&credit_ref)).unwrap_or(0.0);
-
-        if barcode.is_empty() {
-            return;
-        }
-        set_loading.set(true);
-        spawn_local(async move {
-            #[derive(serde::Serialize)]
-            struct Req {
-                barcode: String,
-                initial_credit: f64,
-                first_name: Option<String>,
-                last_name: Option<String>,
-                company: Option<String>,
-                phone: Option<String>,
-            }
-            let req = Req {
-                barcode,
-                initial_credit: credit,
-                first_name: if first.is_empty() { None } else { Some(first) },
-                last_name: if last.is_empty() { None } else { Some(last) },
-                company: if company.is_empty() {
-                    None
-                } else {
-                    Some(company)
-                },
-                phone: if phone.is_empty() { None } else { Some(phone) },
-            };
-            match api::post::<Req, CardInfo>("/api/cards/activate", &req).await {
-                Ok(c) => {
-                    set_msg.set(i18n::t(lang.get_untracked(), "activate_ok").to_string());
-                    set_selected.set(Some(c));
-                    set_show_activate.set(false);
-                }
-                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
-            }
-            set_loading.set(false);
-        });
-    };
-
-    view! {
-        <div class="card mt-2">
-            <form on:submit=on_submit>
-                <div class="form-group"><label>{move || i18n::t(lang.get(), "barcode")}</label>
-                    <input type="text" class="form-control" node_ref=barcode_ref placeholder=move || i18n::t(lang.get(), "new_card_barcode") required /></div>
-                <div class="form-group"><label>{move || i18n::t(lang.get(), "first_name")}</label>
-                    <input type="text" class="form-control" node_ref=first_ref /></div>
-                <div class="form-group"><label>{move || i18n::t(lang.get(), "last_name")}</label>
-                    <input type="text" class="form-control" node_ref=last_ref /></div>
-                <div class="form-group"><label>{move || i18n::t(lang.get(), "company")}</label>
-                    <input type="text" class="form-control" node_ref=company_ref /></div>
-                <div class="form-group"><label>{move || i18n::t(lang.get(), "phone")}</label>
-                    <input type="text" class="form-control" node_ref=phone_ref /></div>
-                <div class="form-group"><label>{move || i18n::t(lang.get(), "initial_credit")}</label>
-                    <input type="text" inputmode="decimal" autocomplete="off" class="form-control" node_ref=credit_ref value="0" /></div>
-                <button type="submit" class="btn btn--primary btn--compact" disabled=move || loading.get()>
-                    {move || i18n::t(lang.get(), "activate")}
-                </button>
-            </form>
-        </div>
     }
 }
 

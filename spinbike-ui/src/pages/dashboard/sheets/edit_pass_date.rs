@@ -15,13 +15,13 @@ pub fn EditPassDateSheet(
     tx_id: i64,
     /// Current valid_until date (pre-fills the date input).
     current_date: chrono::NaiveDate,
-    /// Card barcode used to refresh the card after a successful save.
-    barcode: String,
+    /// Card code used to refresh the user after a successful save.
+    card_code: String,
     /// Update the parent's selected card after save.
     set_selected: WriteSignal<Option<CardInfo>>,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
-    let barcode = StoredValue::new(barcode);
+    let card_code = StoredValue::new(card_code);
 
     view! {
         {move || {
@@ -36,7 +36,7 @@ pub fn EditPassDateSheet(
 
             let on_save = move |_| {
                 let vu = draft.get();
-                let bc = barcode.get_value();
+                let code = card_code.get_value();
                 set_err.set(String::new());
                 set_saving.set(true);
                 spawn_local(async move {
@@ -51,7 +51,7 @@ pub fn EditPassDateSheet(
                     .await
                     {
                         Ok(_) => {
-                            match api::get::<CardInfo>(&format!("/api/cards/lookup/{bc}")).await {
+                            match api::get::<CardInfo>(&format!("/api/users/lookup/{code}")).await {
                                 Ok(c) => {
                                     set_selected.set(Some(c));
                                     show.set(false);
