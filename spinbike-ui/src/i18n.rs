@@ -672,6 +672,8 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     // starts at days=61 where N is always >=2. Kept for symmetry with the
     // `_few` forms in case a future bucket adjustment makes them reachable.
     m.insert("last_visit_label", ("Posledna navsteva", "Last visit"));
+
+    // Negative-balance list (#49)
     m.insert("negative_balance_heading", ("Karty s dlhom", "Cards with negative balance"));
     m.insert("last_payment_label", ("Posledna platba", "Last payment"));
     m.insert("never_label", ("nikdy", "never"));
@@ -849,7 +851,7 @@ mod format_key_tests {
 }
 
 #[cfg(test)]
-mod neg_balance_i18n_tests {
+mod neg_balance_tests {
     use super::{t, Lang};
     use wasm_bindgen_test::*;
 
