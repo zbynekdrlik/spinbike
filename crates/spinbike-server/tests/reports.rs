@@ -177,11 +177,19 @@ async fn day_report_pagination_has_more_true_when_more_than_limit() {
 #[tokio::test]
 async fn day_report_card_name_is_null_when_names_empty() {
     let app = TestApp::new().await;
-    let card_id = app.customer_card_id;
+    // Create a user with an empty name (post-V13: users.name is NOT NULL but
+    // empty strings are allowed). The report's card_name field is filtered
+    // to None when the name is empty/whitespace (db/reports.rs).
+    let nameless_user_id: i64 = sqlx::query_scalar(
+        "INSERT INTO users (email, name, role) VALUES ('nameless@x', '', 'customer') RETURNING id",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
     sqlx::query(
         "INSERT INTO transactions (user_id, amount, action, created_at) VALUES (?1, -5.0, 'charge', datetime('now'))",
     )
-    .bind(card_id)
+    .bind(nameless_user_id)
     .execute(&app.pool)
     .await
     .unwrap();
@@ -196,7 +204,17 @@ async fn day_report_card_name_is_null_when_names_empty() {
         ))
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(body["events"][0]["card_name"].is_null());
+    // Find the nameless user's event in the report (others may exist).
+    let events = body["events"].as_array().unwrap();
+    let nameless_event = events
+        .iter()
+        .find(|e| e["amount"].as_f64() == Some(-5.0))
+        .expect("nameless user's charge event must be present");
+    assert!(
+        nameless_event["card_name"].is_null(),
+        "card_name should be null for empty-name user, got: {:?}",
+        nameless_event["card_name"]
+    );
 }
 
 // Composite cursor pagination: many transactions sharing an identical
