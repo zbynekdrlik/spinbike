@@ -846,8 +846,8 @@ mod tests {
         run_migrations(&pool).await.unwrap();
 
         // Seed a transaction with a real services(id) FK ref.
-        let card_id: i64 = sqlx::query_scalar(
-            "INSERT INTO cards (barcode, allow_debit) VALUES ('FK-TEST', 1) RETURNING id",
+        let user_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('fk-test@x', 'FK Test', 'customer') RETURNING id",
         )
         .fetch_one(&pool)
         .await
@@ -857,10 +857,10 @@ mod tests {
             .await
             .unwrap();
         sqlx::query(
-            "INSERT INTO transactions (card_id, service_id, amount, action, created_at)
+            "INSERT INTO transactions (user_id, service_id, amount, action, created_at)
              VALUES (?, ?, -35.0, 'debit', '2026-01-01 12:00:00')",
         )
-        .bind(card_id)
+        .bind(user_id)
         .bind(svc_id)
         .execute(&pool)
         .await
@@ -918,10 +918,10 @@ mod tests {
             "SELECT EXISTS(
                 SELECT 1 FROM transactions t
                 JOIN services s ON s.id = t.service_id
-                WHERE t.card_id = ?
+                WHERE t.user_id = ?
             )",
         )
-        .bind(card_id)
+        .bind(user_id)
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -971,21 +971,22 @@ mod tests {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         // Inserting a row without a note column read should yield NULL.
-        let card_id: i64 =
-            sqlx::query_scalar("INSERT INTO cards (barcode) VALUES ('NOTE-TEST') RETURNING id")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        sqlx::query("INSERT INTO transactions (card_id, amount, action) VALUES (?, ?, ?)")
-            .bind(card_id)
+        let user_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('note-test@x', 'Note Test', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("INSERT INTO transactions (user_id, amount, action) VALUES (?, ?, ?)")
+            .bind(user_id)
             .bind(1.0_f64)
             .bind("topup")
             .execute(&pool)
             .await
             .unwrap();
         let note: Option<String> =
-            sqlx::query_scalar("SELECT note FROM transactions WHERE card_id = ?")
-                .bind(card_id)
+            sqlx::query_scalar("SELECT note FROM transactions WHERE user_id = ?")
+                .bind(user_id)
                 .fetch_one(&pool)
                 .await
                 .unwrap();
@@ -999,23 +1000,24 @@ mod tests {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
 
-        // Seed a card so the transactions.card_id FK is satisfied (per V8/V10
+        // Seed a user so the transactions.user_id FK is satisfied (per V8/V10
         // test convention). Migrations re-enable foreign_keys at the end.
-        let card_id: i64 =
-            sqlx::query_scalar("INSERT INTO cards (barcode) VALUES ('V11-OK-200') RETURNING id")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let user_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v11-ok-200@x', 'V11 OK 200', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
         // Insert a transaction with a 200-char note (exactly at the bound).
         // Use a Slovak diacritic so the byte count > 200 but char count = 200,
         // matching the server-side validator (uses chars().count(), not len()).
         let note: String = "á".repeat(200);
         sqlx::query(
-            "INSERT INTO transactions (card_id, amount, action, note)
+            "INSERT INTO transactions (user_id, amount, action, note)
              VALUES (?, ?, 'charge', ?)",
         )
-        .bind(card_id)
+        .bind(user_id)
         .bind(5.0_f64)
         .bind(&note)
         .execute(&pool)
@@ -1028,8 +1030,8 @@ mod tests {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
 
-        let card_id: i64 = sqlx::query_scalar(
-            "INSERT INTO cards (barcode) VALUES ('V11-REJECT-201') RETURNING id",
+        let user_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v11-reject-201@x', 'V11 Reject 201', 'customer') RETURNING id",
         )
         .fetch_one(&pool)
         .await
@@ -1037,10 +1039,10 @@ mod tests {
 
         let note: String = "á".repeat(201);
         let res = sqlx::query(
-            "INSERT INTO transactions (card_id, amount, action, note)
+            "INSERT INTO transactions (user_id, amount, action, note)
              VALUES (?, ?, 'charge', ?)",
         )
-        .bind(card_id)
+        .bind(user_id)
         .bind(5.0_f64)
         .bind(&note)
         .execute(&pool)
@@ -1079,14 +1081,9 @@ mod tests {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
 
-        let card_id: i64 =
-            sqlx::query_scalar("INSERT INTO cards (barcode) VALUES ('V11-PRESERVE') RETURNING id")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
         let user_id: i64 = sqlx::query_scalar(
-            "INSERT INTO users (email, name, password_hash, role)
-             VALUES ('preserve@test.local', 'Preserver', 'x', 'admin')
+            "INSERT INTO users (email, name, role)
+             VALUES ('preserve@test.local', 'Preserver', 'customer')
              RETURNING id",
         )
         .fetch_one(&pool)
@@ -1097,10 +1094,10 @@ mod tests {
         // different transaction.
         for i in 0..5 {
             let tx_id: i64 = sqlx::query_scalar(
-                "INSERT INTO transactions (card_id, amount, action)
+                "INSERT INTO transactions (user_id, amount, action)
                  VALUES (?, ?, 'charge') RETURNING id",
             )
-            .bind(card_id)
+            .bind(user_id)
             .bind(1.0_f64 + i as f64)
             .fetch_one(&pool)
             .await
@@ -1154,16 +1151,17 @@ mod tests {
         // Seed: a transaction + a booking that references it via charge_transaction_id.
         // After V11 recreates `transactions`, the FK on bookings.charge_transaction_id
         // must continue to resolve (V8 precedent — FK reattaches by table name on RENAME).
-        let card_id: i64 =
-            sqlx::query_scalar("INSERT INTO cards (barcode) VALUES ('V11-FK') RETURNING id")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
+        let tx_user_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v11-fk-tx@x', 'V11 FK TX', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         let tx_id: i64 = sqlx::query_scalar(
-            "INSERT INTO transactions (card_id, amount, action)
+            "INSERT INTO transactions (user_id, amount, action)
              VALUES (?, 5.0, 'charge') RETURNING id",
         )
-        .bind(card_id)
+        .bind(tx_user_id)
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -1212,26 +1210,42 @@ mod tests {
         // Seed one row of every pattern from the spec mutation table.
         // Insert raw legacy-shape rows post-migration, then force V12 to
         // re-run by clearing its schema_version entry.
-        sqlx::query(
-            "INSERT INTO transactions (id, action, amount, valid_until) VALUES
-               (1001, 'debit',      3.0,  NULL),
-               (1002, 'debit',      0.0,  NULL),
-               (1003, 'debit',      0.0,  '2026-12-31'),
-               (1004, 'credit',     2.0,  NULL),
-               (1005, 'credit',     0.0,  NULL),
-               (1006, 'credit',    -30.0, NULL),
-               (1007, 'activation', 30.0, NULL),
-               (1008, 'storno',     2.5,  NULL),
-               (1009, 'storno',     0.0,  NULL),
-               -- New-convention rows: V12 must leave these unchanged
-               -- (no guard matches their action labels).
-               (1010, 'charge',    -5.0,  NULL),
-               (1011, 'topup',      7.5,  NULL),
-               (1012, 'visit',      0.0,  NULL)",
+        // Post-V13 transactions requires user_id NOT NULL — seed a user first.
+        let v12_user_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v12-norm@x', 'V12 Norm', 'customer') RETURNING id",
         )
-        .execute(&pool)
+        .fetch_one(&pool)
         .await
         .unwrap();
+        // Each row needs user_id; use individual inserts to avoid repeated-bind complexity.
+        for (id, action, amount, valid_until) in [
+            (1001i64, "debit", 3.0f64, None::<String>),
+            (1002, "debit", 0.0, None),
+            (1003, "debit", 0.0, Some("2026-12-31".to_string())),
+            (1004, "credit", 2.0, None),
+            (1005, "credit", 0.0, None),
+            (1006, "credit", -30.0, None),
+            (1007, "activation", 30.0, None),
+            (1008, "storno", 2.5, None),
+            (1009, "storno", 0.0, None),
+            // New-convention rows: V12 must leave these unchanged.
+            (1010, "charge", -5.0, None),
+            (1011, "topup", 7.5, None),
+            (1012, "visit", 0.0, None),
+        ] {
+            sqlx::query(
+                "INSERT INTO transactions (id, user_id, action, amount, valid_until)
+                 VALUES (?, ?, ?, ?, ?)",
+            )
+            .bind(id)
+            .bind(v12_user_id)
+            .bind(action)
+            .bind(amount)
+            .bind(valid_until)
+            .execute(&pool)
+            .await
+            .unwrap();
+        }
 
         // Force V12 to re-run.
         sqlx::query("DELETE FROM schema_version WHERE version = 12")
@@ -1281,11 +1295,20 @@ mod tests {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
 
-        sqlx::query(
-            "INSERT INTO transactions (id, action, amount) VALUES
-               (2001, 'debit',  3.0),
-               (2002, 'credit', 5.0)",
+        // Post-V13 transactions requires user_id NOT NULL — seed a user first.
+        let v12i_user_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v12-idem@x', 'V12 Idem', 'customer') RETURNING id",
         )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO transactions (id, user_id, action, amount) VALUES
+               (2001, ?, 'debit',  3.0),
+               (2002, ?, 'credit', 5.0)",
+        )
+        .bind(v12i_user_id)
+        .bind(v12i_user_id)
         .execute(&pool)
         .await
         .unwrap();
@@ -1452,7 +1475,7 @@ mod tests {
         sqlx::query(
             "INSERT INTO cards(barcode,user_id,blocked,credit,allow_debit,
                               first_name,last_name,company,phone,search_text)
-             VALUES('CODE3', NULL, 1, 0.0, 0, NULL, NULL, NULL, NULL, NULL)",
+             VALUES('CODE3', NULL, 1, 0.0, 0, NULL, NULL, NULL, NULL, '')",
         )
         .execute(&pool)
         .await
@@ -1469,7 +1492,7 @@ mod tests {
         sqlx::query(
             "INSERT INTO cards(barcode,user_id,blocked,credit,allow_debit,
                               first_name,last_name,company,phone,search_text)
-             VALUES('CODE4', ?, 0, 0.0, 0, NULL, NULL, NULL, NULL, NULL)",
+             VALUES('CODE4', ?, 0, 0.0, 0, NULL, NULL, NULL, NULL, '')",
         )
         .bind(charlie_user)
         .execute(&pool)
