@@ -250,7 +250,21 @@ async fn create_user(
         return Err(super::bad_request("Name must not be empty"));
     }
 
-    if let Some(ref email) = body.email {
+    // Normalise blank optional strings to None so the partial unique index
+    // on card_code (WHERE card_code IS NOT NULL) does not collide on "" + ""
+    // and so empty email strings don't become collision candidates.
+    let body_email = body
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let body_card_code = body
+        .card_code
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    if let Some(email) = body_email {
         if !email.contains('@') || !email.contains('.') {
             return Err(super::bad_request("Invalid email address"));
         }
@@ -266,7 +280,7 @@ async fn create_user(
         }
     }
 
-    if let Some(ref code) = body.card_code
+    if let Some(code) = body_card_code
         && db::get_user_by_card_code(&state.pool, code)
             .await
             .map_err(internal_error)?
@@ -278,14 +292,25 @@ async fn create_user(
         ));
     }
 
+    let body_phone = body
+        .phone
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+    let body_company = body
+        .company
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
     let user_id = db::create_user(
         &state.pool,
-        body.email.as_deref(),
+        body_email,
         None,
         &name,
-        body.phone.as_deref(),
-        body.company.as_deref(),
-        body.card_code.as_deref(),
+        body_phone,
+        body_company,
+        body_card_code,
         "customer",
         body.initial_credit,
         None,

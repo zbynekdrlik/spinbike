@@ -1,4 +1,4 @@
-//! Shared types for GET /api/cards/{id}/stats.
+//! Shared types for GET /api/users/{id}/stats.
 //!
 //! Both the server (which serializes them) and the WASM client (which
 //! deserializes them) depend on this module. Keep WASM-safe — no tokio,
@@ -31,7 +31,7 @@ pub struct MonthlyBucket {
     pub topped_up_eur: f64,
 }
 
-/// Response from GET /api/cards/{id}/stats.
+/// Response from GET /api/users/{id}/stats.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StatsResponse {
     pub totals: PeriodTotals,
