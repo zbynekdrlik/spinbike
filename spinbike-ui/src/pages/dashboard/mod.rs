@@ -175,6 +175,10 @@ pub fn DashboardPage() -> impl IntoView {
     // it refetches after every top-up / charge / visit.
     let txn_refresh = RwSignal::new(0u32);
 
+    // Explicit ref so we can restore focus after pick_card and after the
+    // action panel closes. HTML `autofocus` only runs once on mount.
+    let search_input_ref = NodeRef::<leptos::html::Input>::new();
+
     // Desk-reset signal: AdaptiveNav / brand link increment on click. Even
     // when already on /staff (same URL, no router event), this lets the
     // dashboard return to the idle state — clear selected card, search query,
@@ -196,10 +200,6 @@ pub fn DashboardPage() -> impl IntoView {
         }
         cur
     });
-
-    // Explicit ref so we can restore focus after pick_card and after the
-    // action panel closes. HTML `autofocus` only runs once on mount.
-    let search_input_ref = NodeRef::<leptos::html::Input>::new();
 
     Effect::new(move |_| {
         if let Some(el) = search_input_ref.get() {
