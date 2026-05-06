@@ -8,7 +8,7 @@ async fn upcoming_classes_staff_only() {
     let (status, _) = app
         .request(get(
             &format!(
-                "/api/cards/{}/upcoming-classes?days=14",
+                "/api/users/{}/upcoming-classes?days=14",
                 app.customer_card_id
             ),
             &app.customer_token,
@@ -23,7 +23,7 @@ async fn upcoming_classes_returns_states() {
     let card_id = app.customer_card_id;
     let (status, resp) = app
         .request(get(
-            &format!("/api/cards/{card_id}/upcoming-classes?days=14"),
+            &format!("/api/users/{card_id}/upcoming-classes?days=14"),
             &app.staff_token,
         ))
         .await;
@@ -56,7 +56,7 @@ async fn upcoming_classes_state_flips_free_to_booked_after_booking() {
     let next_mon = today + Duration::days(if m == 0 { 7 } else { m });
     let date = next_mon.to_string();
 
-    let uri = format!("/api/cards/{card_id}/upcoming-classes?days=14");
+    let uri = format!("/api/users/{card_id}/upcoming-classes?days=14");
     let (_, resp) = app.request(get(&uri, &app.staff_token)).await;
     let before = resp
         .as_array()
@@ -67,7 +67,7 @@ async fn upcoming_classes_state_flips_free_to_booked_after_booking() {
     assert_eq!(before["state"].as_str(), Some("free"));
 
     // Book the class via the real route (exercises create_booking).
-    let body = serde_json::json!({ "template_id": tid, "date": date, "card_id": card_id });
+    let body = serde_json::json!({ "template_id": tid, "date": date, "user_id": app.customer_id });
     let (status, _) = app
         .request(helpers::post_json("/api/bookings", &app.staff_token, &body))
         .await;
@@ -94,7 +94,7 @@ async fn upcoming_classes_range_extends_forward() {
     let (status, resp) = app
         .request(get(
             &format!(
-                "/api/cards/{}/upcoming-classes?days=7",
+                "/api/users/{}/upcoming-classes?days=7",
                 app.customer_card_id
             ),
             &app.staff_token,

@@ -15,7 +15,7 @@ use serde_json::Value;
 use spinbike_core::auth::Role;
 use spinbike_server::AppState;
 use spinbike_server::auth::{create_token, hash_password};
-use spinbike_server::db::{self, cards as db_cards, users};
+use spinbike_server::db::{self, users};
 use spinbike_server::routes;
 use sqlx::SqlitePool;
 use tokio::sync::broadcast;
@@ -32,6 +32,9 @@ pub struct TestApp {
     pub admin_id: i64,
     pub staff_id: i64,
     pub customer_id: i64,
+    /// The user_id of the pre-seeded customer (formerly customer_card_id).
+    /// This field retains its old name so existing tests continue to compile
+    /// without mechanical renaming — semantically it is the customer's user_id.
     pub customer_card_id: i64,
 }
 
@@ -43,11 +46,14 @@ impl TestApp {
         let hash = hash_password("password").unwrap();
         let admin_id = users::create_user(
             &pool,
-            "admin@test.com",
+            Some("admin@test.com"),
             Some(&hash),
             "Admin",
             None,
+            None,
+            None,
             "admin",
+            None,
             None,
             None,
         )
@@ -55,11 +61,14 @@ impl TestApp {
         .unwrap();
         let staff_id = users::create_user(
             &pool,
-            "staff@test.com",
+            Some("staff@test.com"),
             Some(&hash),
             "Staff",
             None,
+            None,
+            None,
             "staff",
+            None,
             None,
             None,
         )
@@ -67,11 +76,14 @@ impl TestApp {
         .unwrap();
         let customer_id = users::create_user(
             &pool,
-            "user@test.com",
+            Some("user@test.com"),
             Some(&hash),
             "User",
             None,
+            None,
+            None,
             "customer",
+            None,
             None,
             None,
         )
@@ -85,13 +97,10 @@ impl TestApp {
         let customer_token =
             create_token(JWT_SECRET, customer_id, "user@test.com", &Role::Customer).unwrap();
 
-        let customer_card_id: i64 = sqlx::query_scalar(
-            "INSERT INTO cards (barcode, user_id, credit) VALUES ('CUST1', ?, 0) RETURNING id",
-        )
-        .bind(customer_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        // customer_card_id now stores the customer's user_id (cards table was
+        // dropped in V13). The field name is kept for source-compat with tests
+        // that use it as a user identifier for transaction/booking seeds.
+        let customer_card_id = customer_id;
 
         let (event_tx, _) = broadcast::channel(16);
         let state = AppState {
@@ -127,7 +136,11 @@ impl TestApp {
             .unwrap()
     }
 
-    /// Seed a card with credit and optional metadata. Returns the card id.
+    /// Seed a user with credit and optional metadata. Returns the user_id.
+    ///
+    /// Named `seed_card` for backwards-compat with all existing test callers.
+    /// The `barcode` parameter maps to `card_code`; `first_name`/`last_name`
+    /// are concatenated into `name`.
     #[allow(clippy::too_many_arguments)]
     pub async fn seed_card(
         &self,
@@ -138,8 +151,43 @@ impl TestApp {
         company: Option<&str>,
         phone: Option<&str>,
     ) -> i64 {
-        db_cards::create_card_with_info(
-            &self.pool, barcode, credit, first_name, last_name, company, phone,
+        let name = match (first_name, last_name) {
+            (Some(f), Some(l)) => format!("{f} {l}"),
+            (Some(f), None) => f.to_string(),
+            (None, Some(l)) => l.to_string(),
+            (None, None) => barcode.to_string(),
+        };
+        let initial_credit = if credit != 0.0 { Some(credit) } else { None };
+        users::create_user(
+            &self.pool,
+            None, // email
+            None, // password_hash
+            &name,
+            phone,
+            company,
+            Some(barcode), // card_code
+            "customer",
+            initial_credit,
+            None, // oauth_provider
+            None, // oauth_id
+        )
+        .await
+        .unwrap()
+    }
+
+    /// Seed a user with the new user-keyed API. Returns the user_id.
+    pub async fn seed_user(
+        &self,
+        name: &str,
+        email: Option<&str>,
+        credit: Option<f64>,
+        card_code: Option<&str>,
+    ) -> i64 {
+        users::create_user(
+            &self.pool, email, None, // password_hash
+            name, None, // phone
+            None, // company
+            card_code, "customer", credit, None, None,
         )
         .await
         .unwrap()

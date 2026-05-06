@@ -14,7 +14,7 @@ async fn create_and_list_persistent_booking() {
 
     let (status, _) = app
         .request(post_json(
-            &format!("/api/cards/{card_id}/persistent-bookings"),
+            &format!("/api/users/{card_id}/persistent-bookings"),
             &app.staff_token,
             &serde_json::json!({"template_id": tid}),
         ))
@@ -23,7 +23,7 @@ async fn create_and_list_persistent_booking() {
 
     let (status, _) = app
         .request(get(
-            &format!("/api/cards/{card_id}/persistent-bookings"),
+            &format!("/api/users/{card_id}/persistent-bookings"),
             &app.customer_token,
         ))
         .await;
@@ -31,7 +31,7 @@ async fn create_and_list_persistent_booking() {
 
     let (status, resp) = app
         .request(get(
-            &format!("/api/cards/{card_id}/persistent-bookings"),
+            &format!("/api/users/{card_id}/persistent-bookings"),
             &app.staff_token,
         ))
         .await;
@@ -51,7 +51,7 @@ async fn delete_persistent_ends_it_and_removes_future_uncharged() {
             .unwrap();
 
     app.request(post_json(
-        &format!("/api/cards/{card_id}/persistent-bookings"),
+        &format!("/api/users/{card_id}/persistent-bookings"),
         &app.staff_token,
         &serde_json::json!({"template_id": tid}),
     ))
@@ -63,7 +63,7 @@ async fn delete_persistent_ends_it_and_removes_future_uncharged() {
     // (today's seeded 18:00 class is already past).
     let future_count_sql = "SELECT COUNT(*) FROM bookings b \
          JOIN class_templates t ON t.id = b.template_id \
-         WHERE b.card_id=? AND b.source='persistent' \
+         WHERE b.user_id=? AND b.source='persistent' \
            AND b.cancelled_at IS NULL AND b.charged_at IS NULL \
            AND datetime(b.date || ' ' || t.start_time) > datetime('now')";
     let before: i64 = sqlx::query_scalar(future_count_sql)
@@ -78,7 +78,7 @@ async fn delete_persistent_ends_it_and_removes_future_uncharged() {
 
     let (status, _) = app
         .request(delete(
-            &format!("/api/cards/{card_id}/persistent-bookings/{tid}"),
+            &format!("/api/users/{card_id}/persistent-bookings/{tid}"),
             &app.staff_token,
         ))
         .await;
@@ -92,7 +92,7 @@ async fn delete_persistent_ends_it_and_removes_future_uncharged() {
     assert_eq!(after, 0, "all future persistent bookings must be cancelled");
 
     let ended: Option<String> = sqlx::query_scalar(
-        "SELECT ended_at FROM persistent_bookings WHERE card_id=? AND template_id=?",
+        "SELECT ended_at FROM persistent_bookings WHERE user_id=? AND template_id=?",
     )
     .bind(card_id)
     .bind(tid)

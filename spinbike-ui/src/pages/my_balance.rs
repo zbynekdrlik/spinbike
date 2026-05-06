@@ -6,26 +6,9 @@ use crate::i18n::{self, Lang};
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct BalanceResp {
-    cards: Vec<CardInfo>,
-    transactions: Vec<TxInfo>,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[allow(dead_code)]
-struct CardInfo {
-    id: i64,
-    barcode: String,
+    user_id: i64,
     credit: f64,
-    blocked: bool,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[allow(dead_code)]
-struct TxInfo {
-    id: i64,
-    amount: f64,
-    action: String,
-    created_at: String,
+    card_code: Option<String>,
 }
 
 #[component]
@@ -64,79 +47,28 @@ pub fn MyBalancePage() -> impl IntoView {
             match data.get() {
                 None => view! { <div class="empty-state">{i18n::t(lang.get(), "unable_to_load")}</div> }.into_any(),
                 Some(balance) => {
-                    if balance.cards.is_empty() {
-                        view! {
-                            <div class="group">
-                                <div class="list-row">
-                                    <div class="list-row__main">
-                                        <p class="text-muted">{move || i18n::t(lang.get(), "no_card_linked")}</p>
+                    let credit_val = format!("{:.2}", balance.credit);
+                    let card_label = balance.card_code.clone().unwrap_or_else(|| "—".to_string());
+                    view! {
+                        <div class="group mb-2">
+                            <div class="list-row">
+                                <div class="list-row__main">
+                                    <div class="list-row__title">
+                                        {move || i18n::t(lang.get(), "card_code")}
+                                        {": "}
+                                        {card_label.clone()}
                                     </div>
-                                    <div class="list-row__end">
-                                        <a href="/link-card" class="btn btn--primary btn--compact">{move || i18n::t(lang.get(), "link_a_card")}</a>
+                                    <div class="list-row__sub">
+                                        {move || i18n::t(lang.get(), "balance")}
                                     </div>
+                                </div>
+                                <div class="card-balance">
+                                    <span class="card-balance__num">{credit_val}</span>
+                                    <span class="card-balance__unit">"\u{20ac}"</span>
                                 </div>
                             </div>
-                        }.into_any()
-                    } else {
-                        let card_views: Vec<_> = balance.cards.iter().map(|c| {
-                            let barcode = c.barcode.clone();
-                            let credit_val = format!("{:.2}", c.credit);
-                            let is_blocked = c.blocked;
-                            view! {
-                                <div class="group mb-2">
-                                    <div class="list-row">
-                                        <div class="list-row__main">
-                                            <div class="list-row__title">{format!("Card: {barcode}")}</div>
-                                            <div class="list-row__sub">{move || if is_blocked { i18n::t(lang.get(), "blocked") } else { i18n::t(lang.get(), "active") }}</div>
-                                        </div>
-                                        <div class="card-balance">
-                                            <span class="card-balance__num">{credit_val}</span>
-                                            <span class="card-balance__unit">"\u{20ac}"</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            }
-                        }).collect();
-
-                        let tx_view = if balance.transactions.is_empty() {
-                            view! { <p class="text-muted mt-2">{i18n::t(lang.get(), "no_transactions")}</p> }.into_any()
-                        } else {
-                            let tx_rows: Vec<_> = balance.transactions.iter().map(|tx| {
-                                let date = i18n::fmt_datetime_str(&tx.created_at, lang.get());
-                                let action = tx.action.clone();
-                                let amount = format!("{:.2} \u{20ac}", tx.amount);
-                                view! {
-                                    <div class="list-row">
-                                        <div class="list-row__main">
-                                            <div class="list-row__title">{action}</div>
-                                            <div class="list-row__sub">{date}</div>
-                                        </div>
-                                        <div class="list-row__amount">{amount}</div>
-                                    </div>
-                                }
-                            }).collect();
-                            view! {
-                                <div class="group">
-                                    <div class="group__head">{i18n::t(lang.get(), "transactions")}</div>
-                                    {tx_rows}
-                                    <div class="list-row">
-                                        <div class="list-row__end">
-                                            <button class="btn btn--compact btn--ghost" data-testid="show-older">
-                                                {i18n::t(lang.get(), "show_older")}
-                                            </button>
-                                        </div>
-                                    </div>
-                                </div>
-                            }.into_any()
-                        };
-
-                        view! {
-                            <div>
-                                {card_views}
-                                {tx_view}
-                            </div>
-                        }.into_any()
-                    }
+                        </div>
+                    }.into_any()
                 }
             }
         }}

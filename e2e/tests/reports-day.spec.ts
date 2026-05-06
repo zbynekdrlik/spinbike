@@ -9,26 +9,32 @@ test('day report KPI cards reflect seeded transactions', async ({ page }) => {
     const consoleMessages = setupConsoleCheck(page);
     const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
 
-    // Activate a fresh card with €50 starting credit (one top-up event implicit
-    // in activation flow may add to cash_in — we don't assert exact amounts,
+    // Create a fresh user with €50 starting credit (one top-up event implicit
+    // in creation flow may add to cash_in — we don't assert exact amounts,
     // only "non-zero and rendered").
     const suffix = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
-    const card = await fetch(`${BASE_URL}/api/cards/activate`, {
+    const user = await fetch(`${BASE_URL}/api/users`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-            barcode: `RPT-${suffix}`,
+            name: `Rep T${suffix}`,
             initial_credit: 50,
-            first_name: 'Rep',
-            last_name: `T${suffix}`,
+            card_code: `RPT-${suffix}`,
         }),
     }).then((r) => r.json());
 
+    // Look up Spinning service id.
+    const services: { id: number; name_en: string }[] = await fetch(`${BASE_URL}/api/admin/services`, {
+        headers: { Authorization: `Bearer ${token}` },
+    }).then((r) => r.json());
+    const spinning = services.find((s) => s.name_en === 'Spinning');
+    if (!spinning) throw new Error('Spinning service not found');
+
     // One charge.
-    await fetch(`${BASE_URL}/api/cards/${card.id}/charge`, {
+    await fetch(`${BASE_URL}/api/payments/charge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ amount: 5, service_name: 'Spinning' }),
+        body: JSON.stringify({ user_id: user.id, amount: 5, service_id: spinning.id }),
     });
 
     await page.goto('/reports');

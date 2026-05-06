@@ -51,26 +51,19 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
                 continue;
             }
 
-            // Skip if a booking already exists for this card (manual or persistent).
+            // Skip if a booking already exists for this user (manual or persistent).
             let existing: Option<i64> = sqlx::query_scalar(
                 "SELECT id FROM bookings
-                 WHERE template_id = ? AND date = ? AND card_id = ? AND cancelled_at IS NULL",
+                 WHERE template_id = ? AND date = ? AND user_id = ? AND cancelled_at IS NULL",
             )
             .bind(tpl.id)
             .bind(&date_s)
-            .bind(p.card_id)
+            .bind(p.user_id)
             .fetch_optional(pool)
             .await?;
             if existing.is_some() {
                 continue;
             }
-
-            // Lookup the user_id linked to the card (legacy cards may have NULL).
-            let user_id: Option<i64> = sqlx::query_scalar("SELECT user_id FROM cards WHERE id = ?")
-                .bind(p.card_id)
-                .fetch_one(pool)
-                .await?;
-            let Some(uid) = user_id else { continue };
 
             // Check capacity up front so we don't rely on string-matching the
             // create_booking error to detect a full class.
@@ -90,8 +83,7 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
                 pool,
                 tpl.id,
                 &date_s,
-                uid,
-                Some(p.card_id),
+                p.user_id,
                 None,
                 "persistent",
             )
@@ -113,13 +105,6 @@ mod tests {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        let cid: i64 = sqlx::query_scalar(
-            "INSERT INTO cards (barcode, user_id, credit) VALUES ('B', ?, 0) RETURNING id",
-        )
-        .bind(uid)
-        .fetch_one(pool)
-        .await
-        .unwrap();
         let tid: i64 = sqlx::query_scalar(
             "SELECT id FROM class_templates WHERE weekday = ? AND start_time='18:00'",
         )
@@ -127,15 +112,15 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
-        (cid, tid)
+        (uid, tid)
     }
 
     #[tokio::test]
     async fn sweep_materialises_future_bookings() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let (cid, tid) = seed(&pool, 0).await;
-        crate::db::persistent_bookings::create(&pool, cid, tid)
+        let (uid, tid) = seed(&pool, 0).await;
+        crate::db::persistent_bookings::create(&pool, uid, tid)
             .await
             .unwrap();
 
@@ -143,8 +128,8 @@ mod tests {
         assert!(made >= 1, "at least one Monday in next 14 days");
 
         let sources: Vec<(String,)> =
-            sqlx::query_as("SELECT source FROM bookings WHERE card_id = ?")
-                .bind(cid)
+            sqlx::query_as("SELECT source FROM bookings WHERE user_id = ?")
+                .bind(uid)
                 .fetch_all(&pool)
                 .await
                 .unwrap();
@@ -155,8 +140,8 @@ mod tests {
     async fn sweep_is_idempotent() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let (cid, tid) = seed(&pool, 0).await;
-        crate::db::persistent_bookings::create(&pool, cid, tid)
+        let (uid, tid) = seed(&pool, 0).await;
+        crate::db::persistent_bookings::create(&pool, uid, tid)
             .await
             .unwrap();
 
@@ -192,28 +177,20 @@ mod tests {
                     .fetch_one(&pool)
                     .await
                     .unwrap();
-            let cid: i64 = sqlx::query_scalar(
-                "INSERT INTO cards (barcode, user_id, credit) VALUES (?, ?, 0) RETURNING id",
-            )
-            .bind(format!("B{n}"))
-            .bind(uid)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-            crate::db::classes::create_booking(&pool, tid, &date_s, uid, Some(cid), None, "manual")
+            crate::db::classes::create_booking(&pool, tid, &date_s, uid, None, "manual")
                 .await
                 .unwrap();
         }
 
-        let (cid, _) = seed(&pool, 0).await;
-        crate::db::persistent_bookings::create(&pool, cid, tid)
+        let (uid, _) = seed(&pool, 0).await;
+        crate::db::persistent_bookings::create(&pool, uid, tid)
             .await
             .unwrap();
 
         let _ = sweep(&pool).await.unwrap();
         let got: Option<i64> =
-            sqlx::query_scalar("SELECT id FROM bookings WHERE card_id=? AND date=?")
-                .bind(cid)
+            sqlx::query_scalar("SELECT id FROM bookings WHERE user_id=? AND date=?")
+                .bind(uid)
                 .bind(&date_s)
                 .fetch_optional(&pool)
                 .await

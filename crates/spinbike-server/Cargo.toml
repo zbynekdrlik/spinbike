@@ -23,20 +23,12 @@ mime_guess = "2"
 jsonwebtoken = "9"
 argon2 = "0.5"
 rand = "0.8"
-csv = "1"
 unicode-normalization = "0.1"
-# `#[mutants::skip]` annotation; tiny no-op attribute crate used by
-# cargo-mutants to mark functions that can't be unit-tested without
-# external infrastructure (mdb-export binary + a real .mdb fixture).
-mutants = { version = "0.0.3", default-features = false }
 
 [[bin]]
 name = "spinbike-server"
 path = "src/bin/server.rs"
 
-[[bin]]
-name = "migrate-legacy"
-path = "src/bin/migrate_legacy.rs"
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

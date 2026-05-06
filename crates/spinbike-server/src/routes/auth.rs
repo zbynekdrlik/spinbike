@@ -80,11 +80,14 @@ async fn register(
 
     let user_id = users::create_user(
         &state.pool,
-        &body.email,
+        Some(&body.email),
         Some(&password_hash),
         name,
         body.phone.as_deref(),
+        None,
+        None,
         "customer",
+        None,
         None,
         None,
     )
@@ -138,14 +141,15 @@ async fn login(
     }
 
     let role = parse_role(&user.role);
-    let token = auth::create_token(&state.jwt_secret, user.id, &user.email, &role)
-        .map_err(internal_error)?;
+    let email_str = user.email.as_deref().unwrap_or("");
+    let token =
+        auth::create_token(&state.jwt_secret, user.id, email_str, &role).map_err(internal_error)?;
 
     Ok(Json(AuthResponse {
         token,
         user: UserInfo {
             id: user.id,
-            email: user.email,
+            email: user.email.unwrap_or_default(),
             name: user.name,
             role: user.role,
         },

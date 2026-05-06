@@ -30,10 +30,10 @@ async fn main() -> Result<()> {
     let pool = db::create_pool(&PathBuf::from(&db_path)).await?;
     db::run_migrations(&pool).await?;
 
-    // Populate search_text for any cards that pre-date the V3 migration.
-    let backfilled = db::cards::backfill_search_text(&pool).await?;
+    // Populate search_text for any users that pre-date the migration.
+    let backfilled = db::users::backfill_search_text(&pool).await?;
     if backfilled > 0 {
-        tracing::info!("backfilled search_text for {backfilled} cards");
+        tracing::info!("backfilled search_text for {backfilled} users");
     }
 
     // Run persistent-booking materialiser once at startup so the DB reflects

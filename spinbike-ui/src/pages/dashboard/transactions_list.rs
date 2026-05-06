@@ -24,7 +24,7 @@ pub fn TransactionsList(
         let l = limit.get();
         spawn_local(async move {
             match api::get::<Vec<TxnInfo>>(&format!(
-                "/api/cards/{card_id}/transactions?limit={l}"
+                "/api/users/{card_id}/transactions?limit={l}"
             ))
             .await
             {

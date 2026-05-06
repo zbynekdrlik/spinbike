@@ -34,54 +34,53 @@ async function fetchServiceIds(token: string): Promise<ServiceLookup> {
     };
 }
 
-async function activateCard(token: string, suffix: string, credit: number): Promise<number> {
-    const resp = await fetch(`${BASE_URL}/api/cards/activate`, {
+async function createUser(token: string, suffix: string, credit: number): Promise<number> {
+    const resp = await fetch(`${BASE_URL}/api/users`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-            barcode: `RA-${suffix}`,
+            name: `RA Reports${suffix}`,
             initial_credit: credit,
-            first_name: 'RA',
-            last_name: `Reports${suffix}`,
+            card_code: `RA-${suffix}`,
         }),
     });
-    if (!resp.ok) throw new Error(`activate failed: ${resp.status} ${await resp.text()}`);
-    const card = await resp.json();
-    return card.id;
+    if (!resp.ok) throw new Error(`createUser failed: ${resp.status} ${await resp.text()}`);
+    const user = await resp.json();
+    return user.id;
 }
 
-async function postCharge(token: string, cardId: number, serviceId: number, amount: number) {
+async function postCharge(token: string, userId: number, serviceId: number, amount: number) {
     const resp = await fetch(`${BASE_URL}/api/payments/charge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ card_id: cardId, amount, service_id: serviceId }),
+        body: JSON.stringify({ user_id: userId, amount, service_id: serviceId }),
     });
     if (!resp.ok) throw new Error(`charge failed: ${resp.status} ${await resp.text()}`);
 }
 
-async function postSellPass(token: string, cardId: number, serviceId: number, price: number, validUntil: string) {
+async function postSellPass(token: string, userId: number, serviceId: number, price: number, validUntil: string) {
     const resp = await fetch(`${BASE_URL}/api/payments/sell-pass`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ card_id: cardId, service_id: serviceId, price, valid_until: validUntil }),
+        body: JSON.stringify({ user_id: userId, service_id: serviceId, price, valid_until: validUntil }),
     });
     if (!resp.ok) throw new Error(`sell-pass failed: ${resp.status} ${await resp.text()}`);
 }
 
-async function postLogVisit(token: string, cardId: number, serviceId: number) {
+async function postLogVisit(token: string, userId: number, serviceId: number) {
     const resp = await fetch(`${BASE_URL}/api/payments/log-visit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ card_id: cardId, service_id: serviceId }),
+        body: JSON.stringify({ user_id: userId, service_id: serviceId }),
     });
     if (!resp.ok) throw new Error(`log-visit failed: ${resp.status} ${await resp.text()}`);
 }
 
-async function postTopup(token: string, cardId: number, amount: number) {
-    const resp = await fetch(`${BASE_URL}/api/payments/topup`, {
+async function postTopup(token: string, userId: number, amount: number) {
+    const resp = await fetch(`${BASE_URL}/api/users/topup`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ card_id: cardId, amount }),
+        body: JSON.stringify({ user_id: userId, amount }),
     });
     if (!resp.ok) throw new Error(`topup failed: ${resp.status} ${await resp.text()}`);
 }
@@ -98,7 +97,7 @@ test.describe('Reports — NAVSTEVY/ATTENDANCE KPI counts class visits only (#23
 
         // Card with enough credit to cover all the charges below (5+5+2.50+2.50+3+35 = 53)
         // plus a 35 € pass sale; 100 keeps the math comfortably positive.
-        const cardId = await activateCard(token, suffix, 100.0);
+        const cardId = await createUser(token, suffix, 100.0);
 
         // Capture the before-count so the test is robust against pre-existing
         // class-visit transactions in the shared E2E DB. We assert that our

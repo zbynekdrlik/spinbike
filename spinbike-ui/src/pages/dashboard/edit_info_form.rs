@@ -24,8 +24,8 @@ pub fn EditInfoForm(
 
     // Stash non-Copy locals so the reactive mount closure (Fn) can clone them
     // cheaply per render rather than moving them once.
-    let fv = StoredValue::new(card.first_name.clone().unwrap_or_default());
-    let lv = StoredValue::new(card.last_name.clone().unwrap_or_default());
+    let nv = StoredValue::new(card.name.clone());
+    let ev = StoredValue::new(card.email.clone().unwrap_or_default());
     let cv = StoredValue::new(card.company.clone().unwrap_or_default());
     let pv = StoredValue::new(card.phone.clone().unwrap_or_default());
 
@@ -35,8 +35,8 @@ pub fn EditInfoForm(
                 return ().into_any();
             }
 
-            let first_ref = NodeRef::<leptos::html::Input>::new();
-            let last_ref = NodeRef::<leptos::html::Input>::new();
+            let name_ref = NodeRef::<leptos::html::Input>::new();
+            let email_ref = NodeRef::<leptos::html::Input>::new();
             let company_ref = NodeRef::<leptos::html::Input>::new();
             let phone_ref = NodeRef::<leptos::html::Input>::new();
             let (loading, set_loading) = signal(false);
@@ -55,8 +55,8 @@ pub fn EditInfoForm(
                         })
                         .unwrap_or_default()
                 };
-                let first = read(&first_ref);
-                let last = read(&last_ref);
+                let name = read(&name_ref);
+                let email = read(&email_ref);
                 let company = read(&company_ref);
                 let phone = read(&phone_ref);
 
@@ -65,18 +65,18 @@ pub fn EditInfoForm(
                 spawn_local(async move {
                     #[derive(serde::Serialize)]
                     struct Req {
-                        first_name: Option<String>,
-                        last_name: Option<String>,
+                        name: Option<String>,
+                        email: Option<String>,
                         company: Option<String>,
                         phone: Option<String>,
                     }
                     let req = Req {
-                        first_name: if first.is_empty() { None } else { Some(first) },
-                        last_name: if last.is_empty() { None } else { Some(last) },
+                        name: if name.trim().is_empty() { None } else { Some(name) },
+                        email: if email.trim().is_empty() { None } else { Some(email) },
                         company: if company.is_empty() { None } else { Some(company) },
                         phone: if phone.is_empty() { None } else { Some(phone) },
                     };
-                    match api::put_json::<Req, CardInfo>(&format!("/api/cards/{card_id}"), &req).await {
+                    match api::put_json::<Req, CardInfo>(&format!("/api/users/{card_id}"), &req).await {
                         Ok(c) => {
                             set_selected.set(Some(c));
                             set_msg.set(i18n::t(lang.get_untracked(), "saved").to_string());
@@ -100,12 +100,12 @@ pub fn EditInfoForm(
                 >
                     <form on:submit=on_submit>
                         <div class="form-group">
-                            <label>{i18n::t(lang.get(), "first_name")}</label>
-                            <input type="text" class="form-control" node_ref=first_ref value=fv.get_value() />
+                            <label>{i18n::t(lang.get(), "name")}</label>
+                            <input type="text" class="form-control" node_ref=name_ref value=nv.get_value() />
                         </div>
                         <div class="form-group">
-                            <label>{i18n::t(lang.get(), "last_name")}</label>
-                            <input type="text" class="form-control" node_ref=last_ref value=lv.get_value() />
+                            <label>{i18n::t(lang.get(), "email")}</label>
+                            <input type="email" class="form-control" node_ref=email_ref value=ev.get_value() />
                         </div>
                         <div class="form-group">
                             <label>{i18n::t(lang.get(), "company")}</label>

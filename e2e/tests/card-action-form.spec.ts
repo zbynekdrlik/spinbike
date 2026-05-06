@@ -77,7 +77,7 @@ test.describe('Card action form — unified Charge / Top-up / Sell pass', () => 
 
         const req = await sellPassReq;
         const body = JSON.parse(req.postData() ?? '{}');
-        expect(typeof body.card_id).toBe('number');
+        expect(typeof body.user_id).toBe('number');
         expect(body.price).toBe(35.0);
         expect(body.valid_until).toMatch(/^\d{4}-\d{2}-\d{2}$/);
 
@@ -153,7 +153,7 @@ test.describe('Card action form — unified Charge / Top-up / Sell pass', () => 
         assertCleanConsole(msgs);
     });
 
-    test('Top up: posts to /api/cards/topup regardless of selected service', async ({ page }) => {
+    test('Top up: posts to /api/users/topup regardless of selected service', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
         const { lastName } = await activateUniqueCard(token, 50.0);
@@ -161,7 +161,7 @@ test.describe('Card action form — unified Charge / Top-up / Sell pass', () => 
         await openCardByLastName(page, lastName);
 
         const topupReq = page.waitForRequest(req =>
-            req.url().endsWith('/api/cards/topup') && req.method() === 'POST'
+            req.url().endsWith('/api/users/topup') && req.method() === 'POST'
         );
 
         // Even if a service is selected (including Monthly pass), Top up must ignore it.

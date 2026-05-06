@@ -35,6 +35,10 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
         set_lang.set(new_lang);
     };
 
+    let desk_reset = use_context::<crate::router::DeskReset>()
+        .expect("DeskReset context")
+        .0;
+
     view! {
         <nav class="navbar">
             <a
@@ -47,6 +51,7 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
                 }
                 class="navbar-brand"
                 data-testid="brand-link"
+                on:click=move |_| desk_reset.update(|n| *n += 1)
             >"SpinBike"</a>
             <div class="navbar-links">
                 {move || {

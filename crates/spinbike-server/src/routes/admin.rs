@@ -103,7 +103,7 @@ pub struct UpdateRoleRequest {
 #[derive(Serialize)]
 pub struct UserResponse {
     pub id: i64,
-    pub email: String,
+    pub email: Option<String>,
     pub name: String,
     pub phone: Option<String>,
     pub role: String,

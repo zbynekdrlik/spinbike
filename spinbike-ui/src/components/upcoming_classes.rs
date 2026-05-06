@@ -40,7 +40,7 @@ pub fn UpcomingClasses(
         let _ = refresh_tick.get();
         spawn_local(async move {
             match api::get::<Vec<UpcomingRow>>(&format!(
-                "/api/cards/{card_id}/upcoming-classes?days=14"
+                "/api/users/{card_id}/upcoming-classes?days=14"
             ))
             .await
             {
@@ -77,13 +77,13 @@ pub fn UpcomingClasses(
                                                 struct Req {
                                                     template_id: i64,
                                                     date: String,
-                                                    card_id: i64,
+                                                    user_id: i64,
                                                 }
                                                 #[derive(serde::Deserialize)]
                                                 struct Resp { #[allow(dead_code)] id: i64 }
                                                 match api::post::<Req, Resp>(
                                                     "/api/bookings",
-                                                    &Req { template_id: tid, date: d, card_id },
+                                                    &Req { template_id: tid, date: d, user_id: card_id },
                                                 ).await {
                                                     Ok(_) => on_changed.run(()),
                                                     Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),

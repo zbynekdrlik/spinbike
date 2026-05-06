@@ -8,35 +8,33 @@ pub fn pass_is_active(card: &super::CardInfo) -> bool {
 }
 
 pub fn full_name(c: &super::CardInfo) -> String {
-    let f = c.first_name.clone().unwrap_or_default();
-    let l = c.last_name.clone().unwrap_or_default();
-    let combined = format!("{f} {l}").trim().to_string();
-    if combined.is_empty() {
+    let n = c.name.trim();
+    if n.is_empty() || n == "(no name)" {
         "—".into()
     } else {
-        combined
+        n.to_string()
     }
 }
 
-/// Display name with a richer fallback chain than `full_name`: prefers
-/// "first last", then company, then barcode. Useful for list rows where
-/// "—" would be uninformative (e.g. a corporate card with no person name).
-pub fn full_name_or_fallback(
-    first_name: Option<&str>,
-    last_name: Option<&str>,
+/// Display name with a richer fallback chain: prefers `name`, then company,
+/// then card_code in brackets. Useful for list rows where "—" would be
+/// uninformative (e.g. a corporate card with no person name).
+pub fn user_display_name(
+    name: &str,
     company: Option<&str>,
-    barcode: &str,
+    card_code: Option<&str>,
 ) -> String {
-    let f = first_name.unwrap_or_default();
-    let l = last_name.unwrap_or_default();
-    let combined = format!("{f} {l}").trim().to_string();
-    if !combined.is_empty() {
-        combined
-    } else if let Some(c) = company.filter(|s| !s.is_empty()) {
-        c.to_string()
-    } else {
-        barcode.to_string()
+    let trimmed = name.trim();
+    if !trimmed.is_empty() && trimmed != "(no name)" {
+        return trimmed.to_string();
     }
+    if let Some(c) = company.filter(|s| !s.trim().is_empty()) {
+        return c.trim().to_string();
+    }
+    if let Some(code) = card_code.filter(|s| !s.trim().is_empty()) {
+        return format!("[{}]", code.trim());
+    }
+    "(no name)".to_string()
 }
 
 // tiny percent-encoder for the search query (avoids pulling urlencoding crate

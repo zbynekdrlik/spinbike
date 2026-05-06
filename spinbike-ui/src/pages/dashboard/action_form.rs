@@ -22,7 +22,7 @@ pub fn ActionForm(
     set_txn_refresh: WriteSignal<u32>,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
-    let card_id = card.id;
+    let user_id = card.id;
     let pass_active = pass_is_active(&card);
 
     let service_ref = NodeRef::<leptos::html::Select>::new();
@@ -106,11 +106,11 @@ pub fn ActionForm(
         spawn_local(async move {
             #[derive(serde::Serialize)]
             struct Req {
-                card_id: i64,
+                user_id: i64,
                 amount: f64,
                 note: Option<String>,
             }
-            match api::post::<Req, CardInfo>("/api/cards/topup", &Req { card_id, amount, note }).await {
+            match api::post::<Req, CardInfo>("/api/users/topup", &Req { user_id, amount, note }).await {
                 Ok(c) => {
                     let credit = c.credit;
                     set_selected.set(Some(c));
@@ -152,7 +152,7 @@ pub fn ActionForm(
             spawn_local(async move {
                 #[derive(serde::Serialize)]
                 struct Req {
-                    card_id: i64,
+                    user_id: i64,
                     price: f64,
                     valid_until: chrono::NaiveDate,
                     note: Option<String>,
@@ -167,7 +167,7 @@ pub fn ActionForm(
                 match api::post::<Req, Resp>(
                     "/api/payments/sell-pass",
                     &Req {
-                        card_id,
+                        user_id,
                         price: amount,
                         valid_until: vu,
                         note,
@@ -202,7 +202,7 @@ pub fn ActionForm(
             spawn_local(async move {
                 #[derive(serde::Serialize)]
                 struct Req {
-                    card_id: i64,
+                    user_id: i64,
                     amount: f64,
                     service_id: Option<i64>,
                     note: Option<String>,
@@ -210,7 +210,7 @@ pub fn ActionForm(
                 match api::post::<Req, PaymentResp>(
                     "/api/payments/charge",
                     &Req {
-                        card_id,
+                        user_id,
                         amount,
                         service_id,
                         note,
@@ -256,7 +256,7 @@ pub fn ActionForm(
             spawn_local(async move {
                 #[derive(serde::Serialize)]
                 struct Req {
-                    card_id: i64,
+                    user_id: i64,
                     service_id: i64,
                     note: Option<String>,
                 }
@@ -268,7 +268,7 @@ pub fn ActionForm(
                 match api::post::<Req, Resp>(
                     "/api/payments/log-visit",
                     &Req {
-                        card_id,
+                        user_id,
                         service_id,
                         note,
                     },
@@ -355,7 +355,7 @@ pub fn ActionForm(
                 spawn_local(async move {
                     #[derive(serde::Serialize)]
                     struct Req {
-                        card_id: i64,
+                        user_id: i64,
                         amount: f64,
                         service_id: Option<i64>,
                         note: Option<String>,
@@ -366,7 +366,7 @@ pub fn ActionForm(
                     match api::post::<Req, PaymentResp>(
                         "/api/payments/charge",
                         &Req {
-                            card_id,
+                            user_id,
                             amount: price,
                             service_id: Some(svc_id),
                             note: None,

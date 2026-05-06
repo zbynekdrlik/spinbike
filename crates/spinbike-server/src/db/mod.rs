@@ -1,5 +1,3 @@
-pub mod backfill;
-pub mod cards;
 pub mod classes;
 pub mod migrations;
 pub mod persistent_bookings;
@@ -174,9 +172,9 @@ mod tests {
         .await
         .unwrap();
 
+        // V13 dropped the `cards` table and promoted its columns into `users`.
         let expected = vec![
             "bookings",
-            "cards",
             "class_cancellations",
             "class_templates",
             "instructors",
@@ -217,7 +215,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(version, 12);
+        assert_eq!(version, 13);
     }
 
     /// Pins the after_connect PRAGMA — both the integer (30000) and the

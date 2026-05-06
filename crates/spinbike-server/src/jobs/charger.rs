@@ -16,14 +16,13 @@ pub async fn tick(pool: &SqlitePool) -> Result<usize> {
 }
 
 pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
-    // Find bookings whose start_time <= now + 4h, not cancelled, not charged, and linked to a card.
+    // Find bookings whose start_time <= now + 4h, not cancelled, not charged.
     let rows: Vec<(i64, i64, String, String, i64)> = sqlx::query_as(
-        "SELECT b.id, b.template_id, b.date, t.start_time, b.card_id
+        "SELECT b.id, b.template_id, b.date, t.start_time, b.user_id
          FROM bookings b
          JOIN class_templates t ON t.id = b.template_id
          WHERE b.cancelled_at IS NULL
            AND b.charged_at IS NULL
-           AND b.card_id IS NOT NULL
            AND datetime(b.date || ' ' || t.start_time, '-4 hours') <= datetime(?)",
     )
     .bind(now_s)
@@ -37,7 +36,7 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
             .await?;
 
     let mut charged = 0usize;
-    for (booking_id, _template_id, date, _start, card_id) in rows {
+    for (booking_id, _template_id, date, _start, user_id) in rows {
         let mut tx = pool.begin().await?;
 
         // Double-check nothing else charged it in between.
@@ -52,20 +51,19 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
             continue;
         }
 
-        // Load card state and latest pass valid_until (may be NULL).
+        // Load user state and latest pass valid_until (may be NULL).
         // `date(valid_until)` coerces legacy datetime strings to YYYY-MM-DD so
         // the lexicographic string comparison below stays correct even if an
         // importer ever stores a time component.
-        let (user_id, _credit, pass_valid_until): (Option<i64>, f64, Option<String>) =
-            sqlx::query_as(
-                "SELECT c.user_id, c.credit,
+        let (_credit, pass_valid_until): (f64, Option<String>) = sqlx::query_as(
+            "SELECT u.credit,
                     (SELECT MAX(date(valid_until)) FROM transactions
-                     WHERE card_id = c.id AND valid_until IS NOT NULL)
-             FROM cards c WHERE c.id = ?",
-            )
-            .bind(card_id)
-            .fetch_one(&mut *tx)
-            .await?;
+                     WHERE user_id = u.id AND valid_until IS NOT NULL)
+             FROM users u WHERE u.id = ?",
+        )
+        .bind(user_id)
+        .fetch_one(&mut *tx)
+        .await?;
 
         let has_pass = match &pass_valid_until {
             Some(s) => s.as_str() >= date.as_str(),
@@ -74,20 +72,19 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
         let amount = if has_pass { 0.0 } else { -price };
 
         let txn_id: i64 = sqlx::query_scalar(
-            "INSERT INTO transactions (user_id, card_id, staff_id, service_id, amount, action)
-             VALUES (?, ?, NULL, ?, ?, 'visit') RETURNING id",
+            "INSERT INTO transactions (user_id, staff_id, service_id, amount, action)
+             VALUES (?, NULL, ?, ?, 'visit') RETURNING id",
         )
         .bind(user_id)
-        .bind(card_id)
         .bind(service_id)
         .bind(amount)
         .fetch_one(&mut *tx)
         .await?;
 
         if !has_pass {
-            sqlx::query("UPDATE cards SET credit = ROUND(credit - ?, 2) WHERE id = ?")
+            sqlx::query("UPDATE users SET credit = ROUND(credit - ?, 2) WHERE id = ?")
                 .bind(price)
-                .bind(card_id)
+                .bind(user_id)
                 .execute(&mut *tx)
                 .await?;
         }
@@ -112,19 +109,13 @@ mod tests {
     use crate::db::{create_memory_pool, run_migrations};
     use chrono::{Datelike, Duration, Local};
 
-    /// Returns (card_id, booking_id) for a card booked for the nearest Monday
+    /// Returns (user_id, booking_id) for a user booked for the nearest Monday
     /// at 18:00 (V6-seeded template). If `pass` is true, a pass transaction is
     /// inserted with valid_until 30 days in the future.
     async fn seed_booking(pool: &SqlitePool, pass: bool, credit: f64) -> (i64, i64) {
-        let uid: i64 =
-            sqlx::query_scalar("INSERT INTO users (email, name) VALUES ('u@x','u') RETURNING id")
-                .fetch_one(pool)
-                .await
-                .unwrap();
-        let cid: i64 = sqlx::query_scalar(
-            "INSERT INTO cards (barcode, user_id, credit) VALUES ('B', ?, ?) RETURNING id",
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, credit) VALUES ('u@x','u',?) RETURNING id",
         )
-        .bind(uid)
         .bind(credit)
         .fetch_one(pool)
         .await
@@ -135,11 +126,10 @@ mod tests {
                 .await
                 .unwrap();
             sqlx::query(
-                "INSERT INTO transactions (user_id, card_id, service_id, amount, action, valid_until)
-                 VALUES (?, ?, ?, -35.0, 'charge', date('now','+30 days'))",
+                "INSERT INTO transactions (user_id, service_id, amount, action, valid_until)
+                 VALUES (?, ?, -35.0, 'charge', date('now','+30 days'))",
             )
             .bind(uid)
-            .bind(cid)
             .bind(svc)
             .execute(pool)
             .await
@@ -156,18 +146,11 @@ mod tests {
         let days_to_mon = (7 - today.weekday().num_days_from_monday() as i64) % 7;
         let mon = today + Duration::days(days_to_mon);
 
-        let bid = crate::db::classes::create_booking(
-            pool,
-            tid,
-            &mon.to_string(),
-            uid,
-            Some(cid),
-            None,
-            "manual",
-        )
-        .await
-        .unwrap();
-        (cid, bid)
+        let bid =
+            crate::db::classes::create_booking(pool, tid, &mon.to_string(), uid, None, "manual")
+                .await
+                .unwrap();
+        (uid, bid)
     }
 
     /// Fake "now" of Monday 14:00 (= class_start - 4h, boundary inclusive).
@@ -182,7 +165,7 @@ mod tests {
     async fn charger_free_when_pass_active() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let (cid, bid) = seed_booking(&pool, true, 0.0).await;
+        let (uid, bid) = seed_booking(&pool, true, 0.0).await;
         let n = tick_as_of(&pool, &now_at_14()).await.unwrap();
         assert_eq!(n, 1);
         let (charged_at, txn_id): (Option<String>, Option<i64>) =
@@ -198,8 +181,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(amount, 0.0);
-        let credit: f64 = sqlx::query_scalar("SELECT credit FROM cards WHERE id = ?")
-            .bind(cid)
+        let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+            .bind(uid)
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -210,10 +193,10 @@ mod tests {
     async fn charger_debits_credit_without_pass() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let (cid, bid) = seed_booking(&pool, false, 10.0).await;
+        let (uid, bid) = seed_booking(&pool, false, 10.0).await;
         tick_as_of(&pool, &now_at_14()).await.unwrap();
-        let credit: f64 = sqlx::query_scalar("SELECT credit FROM cards WHERE id = ?")
-            .bind(cid)
+        let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+            .bind(uid)
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -238,10 +221,10 @@ mod tests {
     async fn charger_allows_negative_credit() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let (cid, _) = seed_booking(&pool, false, 2.0).await;
+        let (uid, _) = seed_booking(&pool, false, 2.0).await;
         tick_as_of(&pool, &now_at_14()).await.unwrap();
-        let credit: f64 = sqlx::query_scalar("SELECT credit FROM cards WHERE id = ?")
-            .bind(cid)
+        let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+            .bind(uid)
             .fetch_one(&pool)
             .await
             .unwrap();
@@ -267,24 +250,24 @@ mod tests {
         // transactions table must contain exactly one charge row.
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let (cid, _bid) = seed_booking(&pool, false, 10.0).await;
+        let (uid, _bid) = seed_booking(&pool, false, 10.0).await;
 
         let a = tick_as_of(&pool, &now_at_14()).await.unwrap();
         let b = tick_as_of(&pool, &now_at_14()).await.unwrap();
         assert_eq!(a, 1);
         assert_eq!(b, 0);
 
-        let credit: f64 = sqlx::query_scalar("SELECT credit FROM cards WHERE id = ?")
-            .bind(cid)
+        let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+            .bind(uid)
             .fetch_one(&pool)
             .await
             .unwrap();
         assert_eq!(credit, 5.0, "credit must be debited only once (10 -> 5)");
 
         let visit_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM transactions WHERE card_id = ? AND action = 'visit'",
+            "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND action = 'visit'",
         )
-        .bind(cid)
+        .bind(uid)
         .fetch_one(&pool)
         .await
         .unwrap();
@@ -328,31 +311,16 @@ mod tests {
             .unwrap();
 
         for i in 0..2 {
-            let uid: i64 =
-                sqlx::query_scalar("INSERT INTO users (email, name) VALUES (?, 'u') RETURNING id")
-                    .bind(format!("u{i}@x"))
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap();
-            let cid: i64 = sqlx::query_scalar(
-                "INSERT INTO cards (barcode, user_id, credit) VALUES (?, ?, 10.0) RETURNING id",
+            let uid: i64 = sqlx::query_scalar(
+                "INSERT INTO users (email, name, credit) VALUES (?, 'u', 10.0) RETURNING id",
             )
-            .bind(format!("B{i}"))
-            .bind(uid)
+            .bind(format!("u{i}@x"))
             .fetch_one(&pool)
             .await
             .unwrap();
-            crate::db::classes::create_booking(
-                &pool,
-                tid,
-                &today.to_string(),
-                uid,
-                Some(cid),
-                None,
-                "manual",
-            )
-            .await
-            .unwrap();
+            crate::db::classes::create_booking(&pool, tid, &today.to_string(), uid, None, "manual")
+                .await
+                .unwrap();
         }
 
         let n = tick(&pool).await.unwrap();

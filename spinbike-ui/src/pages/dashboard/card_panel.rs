@@ -41,7 +41,7 @@ pub fn CardActionPanel(
     let (tab, set_tab) = signal("history".to_string());
 
     let card_id = card.id;
-    let barcode = card.barcode.clone();
+    let card_code = card.card_code.clone().unwrap_or_default();
     let name = full_name(&card);
     let credit = card.credit;
     let is_blocked = card.blocked;
@@ -67,7 +67,7 @@ pub fn CardActionPanel(
                     <div class="card-title">
                         <span class="card-title__name">{name}</span>
                         " "
-                        <code class="card-title__barcode">{barcode.clone()}</code>
+                        <code class="card-title__barcode">{card_code.clone()}</code>
                     </div>
                     {move || {
                         match parse_last_visit(&last_visit_at) {
@@ -128,7 +128,7 @@ pub fn CardActionPanel(
                 }
             }
 
-            <PassBanner pass=card_pass barcode=barcode.clone() set_selected=set_selected />
+            <PassBanner pass=card_pass card_code=card_code.clone() set_selected=set_selected />
 
             <div
                 class=if credit < 0.0 { "card-balance card-balance--negative" } else { "card-balance" }

@@ -1,7 +1,7 @@
 import { test, expect } from '@playwright/test';
 import {
     loginViaAPI,
-    activateUniqueCard,
+    createUniqueUser,
     setupConsoleCheck,
     assertCleanConsole,
 } from './helpers';
@@ -15,11 +15,13 @@ test.describe('Reports row → card panel direct jump', () => {
         // Log in admin and grab the token for seed API calls.
         const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
 
-        // Seed a card with a unique barcode and initial credit > 0 so that the
-        // activation creates a topup transaction, which lands in today's report
-        // feed. activateUniqueCard returns { barcode, lastName } where lastName
-        // = prefix + suffix (8 random lowercase letters).
-        const { barcode, lastName } = await activateUniqueCard(token, 12.34, 'JUMP');
+        // Seed a user with a unique card_code and initial credit > 0 so that the
+        // creation creates a topup transaction, which lands in today's report
+        // feed. createUniqueUser returns { user_id, name, card_code }.
+        const { name, card_code } = await createUniqueUser(token, 12.34, 'JUMP');
+        // Extract the searchable part: name = "JUMP JUMP${suffix}", lastName is "JUMP${suffix}"
+        const lastName = name.split(' ').slice(1).join('');
+        const barcode = card_code;
 
         // Navigate to /reports — the today (day) view is the default.
         await page.goto(`${BASE_URL}/reports`);

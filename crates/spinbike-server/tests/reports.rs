@@ -11,7 +11,7 @@ async fn day_report_aggregates_charges_topups_passes_and_excludes_voided() {
 
     // One charge of 5 EUR (amount = -5)
     sqlx::query(
-        "INSERT INTO transactions (card_id, amount, action, service_id, created_at) \
+        "INSERT INTO transactions (user_id, amount, action, service_id, created_at) \
                  SELECT ?1, -5.0, 'charge', id, datetime('now') FROM services WHERE name_en = ?2 LIMIT 1",
     )
     .bind(card_id)
@@ -22,7 +22,7 @@ async fn day_report_aggregates_charges_topups_passes_and_excludes_voided() {
 
     // One top-up of 20 EUR
     sqlx::query(
-        "INSERT INTO transactions (card_id, amount, action, created_at) VALUES (?1, 20.0, 'topup', datetime('now'))",
+        "INSERT INTO transactions (user_id, amount, action, created_at) VALUES (?1, 20.0, 'topup', datetime('now'))",
     )
     .bind(card_id)
     .execute(&app.pool)
@@ -31,7 +31,7 @@ async fn day_report_aggregates_charges_topups_passes_and_excludes_voided() {
 
     // One pass sale with valid_until
     sqlx::query(
-        "INSERT INTO transactions (card_id, amount, action, valid_until, created_at) VALUES (?1, -35.0, 'charge', date('now','+30 days'), datetime('now'))",
+        "INSERT INTO transactions (user_id, amount, action, valid_until, created_at) VALUES (?1, -35.0, 'charge', date('now','+30 days'), datetime('now'))",
     )
     .bind(card_id)
     .execute(&app.pool)
@@ -40,7 +40,7 @@ async fn day_report_aggregates_charges_topups_passes_and_excludes_voided() {
 
     // One voided charge (should be excluded)
     sqlx::query(
-        "INSERT INTO transactions (card_id, amount, action, created_at, deleted_at) VALUES (?1, -5.0, 'charge', datetime('now'), datetime('now'))",
+        "INSERT INTO transactions (user_id, amount, action, created_at, deleted_at) VALUES (?1, -5.0, 'charge', datetime('now'), datetime('now'))",
     )
     .bind(card_id)
     .execute(&app.pool)
@@ -95,7 +95,7 @@ async fn range_report_aggregates_across_days_and_rejects_over_93_days() {
         .await
         .unwrap();
     sqlx::query(
-        "INSERT INTO transactions (card_id, service_id, amount, action, created_at) VALUES \
+        "INSERT INTO transactions (user_id, service_id, amount, action, created_at) VALUES \
                  (?1, ?2, -5.0, 'charge', datetime('now','-3 days')), \
                  (?1, ?2, -5.0, 'charge', datetime('now','-2 days')), \
                  (?1, NULL, 20.0, 'topup', datetime('now','-1 days'))",
@@ -141,7 +141,7 @@ async fn day_report_pagination_has_more_true_when_more_than_limit() {
     let card_id = app.customer_card_id;
     for _ in 0..3 {
         sqlx::query(
-            "INSERT INTO transactions (card_id, amount, action, created_at) VALUES (?1, -5.0, 'charge', datetime('now'))",
+            "INSERT INTO transactions (user_id, amount, action, created_at) VALUES (?1, -5.0, 'charge', datetime('now'))",
         )
         .bind(card_id)
         .execute(&app.pool)
@@ -177,11 +177,19 @@ async fn day_report_pagination_has_more_true_when_more_than_limit() {
 #[tokio::test]
 async fn day_report_card_name_is_null_when_names_empty() {
     let app = TestApp::new().await;
-    let card_id = app.customer_card_id;
-    sqlx::query(
-        "INSERT INTO transactions (card_id, amount, action, created_at) VALUES (?1, -5.0, 'charge', datetime('now'))",
+    // Create a user with an empty name (post-V13: users.name is NOT NULL but
+    // empty strings are allowed). The report's card_name field is filtered
+    // to None when the name is empty/whitespace (db/reports.rs).
+    let nameless_user_id: i64 = sqlx::query_scalar(
+        "INSERT INTO users (email, name, role) VALUES ('nameless@x', '', 'customer') RETURNING id",
     )
-    .bind(card_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO transactions (user_id, amount, action, created_at) VALUES (?1, -5.0, 'charge', datetime('now'))",
+    )
+    .bind(nameless_user_id)
     .execute(&app.pool)
     .await
     .unwrap();
@@ -196,7 +204,17 @@ async fn day_report_card_name_is_null_when_names_empty() {
         ))
         .await;
     assert_eq!(status, StatusCode::OK);
-    assert!(body["events"][0]["card_name"].is_null());
+    // Find the nameless user's event in the report (others may exist).
+    let events = body["events"].as_array().unwrap();
+    let nameless_event = events
+        .iter()
+        .find(|e| e["amount"].as_f64() == Some(-5.0))
+        .expect("nameless user's charge event must be present");
+    assert!(
+        nameless_event["card_name"].is_null(),
+        "card_name should be null for empty-name user, got: {:?}",
+        nameless_event["card_name"]
+    );
 }
 
 // Composite cursor pagination: many transactions sharing an identical
@@ -208,7 +226,7 @@ async fn day_report_pagination_does_not_drop_rows_with_duplicate_timestamps() {
     let card_id = app.customer_card_id;
     // Seed 5 charges all at the same datetime('now').
     sqlx::query(
-        "INSERT INTO transactions (card_id, amount, action, created_at) VALUES \
+        "INSERT INTO transactions (user_id, amount, action, created_at) VALUES \
          (?1, -5.0, 'charge', datetime('now')), \
          (?1, -5.0, 'charge', datetime('now')), \
          (?1, -5.0, 'charge', datetime('now')), \
@@ -283,7 +301,7 @@ async fn range_report_pagination_has_more_true_when_more_than_limit() {
     let card_id = app.customer_card_id;
     for d in 1..=3 {
         sqlx::query(&format!(
-            "INSERT INTO transactions (card_id, amount, action, created_at) VALUES (?1, -5.0, 'charge', datetime('now','-{d} days'))"
+            "INSERT INTO transactions (user_id, amount, action, created_at) VALUES (?1, -5.0, 'charge', datetime('now','-{d} days'))"
         ))
         .bind(card_id)
         .execute(&app.pool)

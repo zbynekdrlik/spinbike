@@ -3,20 +3,20 @@ import { setupConsoleCheck, assertCleanConsole, loginViaAPI, selectMonthlyPass }
 
 const BASE_URL = 'http://localhost:8099';
 
-async function activateUniqueCard(
+async function createUniqueUser(
     token: string,
     initialCredit: number,
-): Promise<{ barcode: string; lastName: string }> {
+): Promise<{ card_code: string; lastName: string }> {
     const suffix = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
-    const barcode = `PASS-${suffix}`;
+    const cardCode = `PASS-${suffix}`;
     const lastName = `Passtest${suffix}`;
-    const resp = await fetch(`${BASE_URL}/api/cards/activate`, {
+    const resp = await fetch(`${BASE_URL}/api/users`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ barcode, initial_credit: initialCredit, first_name: 'SellPass', last_name: lastName }),
+        body: JSON.stringify({ name: `SellPass ${lastName}`, initial_credit: initialCredit, card_code: cardCode }),
     });
-    if (!resp.ok) throw new Error(`activate failed: ${resp.status} ${await resp.text()}`);
-    return { barcode, lastName };
+    if (!resp.ok) throw new Error(`createUniqueUser failed: ${resp.status} ${await resp.text()}`);
+    return { card_code: cardCode, lastName };
 }
 
 async function openCardByLastName(page: Page, lastName: string) {
@@ -32,7 +32,7 @@ test.describe('Sell pass — unified form price input', () => {
     test('typing a custom price char-by-char survives and is charged', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 80.0);
+        const { lastName } = await createUniqueUser(token, 80.0);
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
@@ -60,7 +60,7 @@ test.describe('Sell pass — unified form price input', () => {
     test('empty amount → inline error and no pass is sold', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 80.0);
+        const { lastName } = await createUniqueUser(token, 80.0);
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
@@ -85,7 +85,7 @@ test.describe('Sell pass — unified form price input', () => {
     test('comma decimal separator is accepted', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const { lastName } = await activateUniqueCard(token, 50.0);
+        const { lastName } = await createUniqueUser(token, 50.0);
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 

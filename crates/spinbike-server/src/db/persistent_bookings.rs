@@ -4,20 +4,20 @@ use sqlx::SqlitePool;
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
 pub struct PersistentBookingRow {
     pub id: i64,
-    pub card_id: i64,
+    pub user_id: i64,
     pub template_id: i64,
     pub created_at: String,
     pub ended_at: Option<String>,
 }
 
 /// Create a persistent booking subscription, or return the existing active
-/// subscription's id if one already exists for (card, template).
-pub async fn create(pool: &SqlitePool, card_id: i64, template_id: i64) -> Result<i64> {
+/// subscription's id if one already exists for (user, template).
+pub async fn create(pool: &SqlitePool, user_id: i64, template_id: i64) -> Result<i64> {
     if let Some(id) = sqlx::query_scalar::<_, i64>(
         "SELECT id FROM persistent_bookings
-         WHERE card_id = ? AND template_id = ? AND ended_at IS NULL",
+         WHERE user_id = ? AND template_id = ? AND ended_at IS NULL",
     )
-    .bind(card_id)
+    .bind(user_id)
     .bind(template_id)
     .fetch_optional(pool)
     .await?
@@ -25,35 +25,35 @@ pub async fn create(pool: &SqlitePool, card_id: i64, template_id: i64) -> Result
         return Ok(id);
     }
     let id: i64 = sqlx::query_scalar(
-        "INSERT INTO persistent_bookings (card_id, template_id) VALUES (?, ?) RETURNING id",
+        "INSERT INTO persistent_bookings (user_id, template_id) VALUES (?, ?) RETURNING id",
     )
-    .bind(card_id)
+    .bind(user_id)
     .bind(template_id)
     .fetch_one(pool)
     .await?;
     Ok(id)
 }
 
-/// End the active subscription for (card, template). Returns rows affected.
-pub async fn end(pool: &SqlitePool, card_id: i64, template_id: i64) -> Result<u64> {
+/// End the active subscription for (user, template). Returns rows affected.
+pub async fn end(pool: &SqlitePool, user_id: i64, template_id: i64) -> Result<u64> {
     let res = sqlx::query(
         "UPDATE persistent_bookings SET ended_at = datetime('now')
-         WHERE card_id = ? AND template_id = ? AND ended_at IS NULL",
+         WHERE user_id = ? AND template_id = ? AND ended_at IS NULL",
     )
-    .bind(card_id)
+    .bind(user_id)
     .bind(template_id)
     .execute(pool)
     .await?;
     Ok(res.rows_affected())
 }
 
-pub async fn list_for_card(pool: &SqlitePool, card_id: i64) -> Result<Vec<PersistentBookingRow>> {
+pub async fn list_for_user(pool: &SqlitePool, user_id: i64) -> Result<Vec<PersistentBookingRow>> {
     let rows = sqlx::query_as::<_, PersistentBookingRow>(
-        "SELECT id, card_id, template_id, created_at, ended_at
-         FROM persistent_bookings WHERE card_id = ? AND ended_at IS NULL
+        "SELECT id, user_id, template_id, created_at, ended_at
+         FROM persistent_bookings WHERE user_id = ? AND ended_at IS NULL
          ORDER BY template_id",
     )
-    .bind(card_id)
+    .bind(user_id)
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -61,7 +61,7 @@ pub async fn list_for_card(pool: &SqlitePool, card_id: i64) -> Result<Vec<Persis
 
 pub async fn list_active_all(pool: &SqlitePool) -> Result<Vec<PersistentBookingRow>> {
     let rows = sqlx::query_as::<_, PersistentBookingRow>(
-        "SELECT id, card_id, template_id, created_at, ended_at
+        "SELECT id, user_id, template_id, created_at, ended_at
          FROM persistent_bookings WHERE ended_at IS NULL",
     )
     .fetch_all(pool)
@@ -80,13 +80,6 @@ mod tests {
                 .fetch_one(pool)
                 .await
                 .unwrap();
-        let cid: i64 = sqlx::query_scalar(
-            "INSERT INTO cards (barcode, user_id, credit) VALUES ('B', ?, 0) RETURNING id",
-        )
-        .bind(uid)
-        .fetch_one(pool)
-        .await
-        .unwrap();
         // V6 already seeded Mon 18:00 — reuse that template.
         let tid: i64 = sqlx::query_scalar(
             "SELECT id FROM class_templates WHERE weekday=0 AND start_time='18:00'",
@@ -94,16 +87,16 @@ mod tests {
         .fetch_one(pool)
         .await
         .unwrap();
-        (cid, tid)
+        (uid, tid)
     }
 
     #[tokio::test]
     async fn create_then_list_returns_row() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let (cid, tid) = seed(&pool).await;
-        let _ = create(&pool, cid, tid).await.unwrap();
-        let rows = list_for_card(&pool, cid).await.unwrap();
+        let (uid, tid) = seed(&pool).await;
+        let _ = create(&pool, uid, tid).await.unwrap();
+        let rows = list_for_user(&pool, uid).await.unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].template_id, tid);
     }
@@ -112,11 +105,11 @@ mod tests {
     async fn end_marks_row_and_removes_from_active_list() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let (cid, tid) = seed(&pool).await;
-        let _ = create(&pool, cid, tid).await.unwrap();
-        let affected = end(&pool, cid, tid).await.unwrap();
+        let (uid, tid) = seed(&pool).await;
+        let _ = create(&pool, uid, tid).await.unwrap();
+        let affected = end(&pool, uid, tid).await.unwrap();
         assert_eq!(affected, 1);
-        let rows = list_for_card(&pool, cid).await.unwrap();
+        let rows = list_for_user(&pool, uid).await.unwrap();
         assert!(rows.is_empty());
     }
 
@@ -124,13 +117,13 @@ mod tests {
     async fn create_is_idempotent_when_active_row_exists() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let (cid, tid) = seed(&pool).await;
-        let first = create(&pool, cid, tid).await.unwrap();
-        let second = create(&pool, cid, tid).await.unwrap();
+        let (uid, tid) = seed(&pool).await;
+        let first = create(&pool, uid, tid).await.unwrap();
+        let second = create(&pool, uid, tid).await.unwrap();
         assert_eq!(first, second, "second call must return the same id");
         let count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM persistent_bookings WHERE card_id=? AND template_id=? AND ended_at IS NULL"
-        ).bind(cid).bind(tid).fetch_one(&pool).await.unwrap();
+            "SELECT COUNT(*) FROM persistent_bookings WHERE user_id=? AND template_id=? AND ended_at IS NULL"
+        ).bind(uid).bind(tid).fetch_one(&pool).await.unwrap();
         assert_eq!(count, 1);
     }
 
@@ -138,8 +131,8 @@ mod tests {
     async fn list_active_all_returns_everything_unended() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
-        let (cid, tid) = seed(&pool).await;
-        let _ = create(&pool, cid, tid).await.unwrap();
+        let (uid, tid) = seed(&pool).await;
+        let _ = create(&pool, uid, tid).await.unwrap();
         let all = list_active_all(&pool).await.unwrap();
         assert_eq!(all.len(), 1);
     }

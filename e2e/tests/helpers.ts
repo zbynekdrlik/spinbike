@@ -18,6 +18,12 @@ export function setupConsoleCheck(page: Page): string[] {
                 text.includes('integrity') ||
                 text.includes('subresource integrity') ||
                 text.includes('crbug.com') ||
+                // Trunk bootstrap calls wasm-bindgen init with the legacy
+                // positional arg form; wasm-bindgen 0.2.x emits a deprecation
+                // warning until Trunk migrates to the single-object form.
+                // Not our code's bug; filter until upstream upgrade.
+                text.includes('using deprecated parameters for the initialization function') ||
+                text.includes('using deprecated parameters for `initSync()`') ||
                 /the server responded with a status of 4\d\d/.test(text)
             ) {
                 return;
@@ -110,39 +116,52 @@ export async function loginViaAPI(page: Page, baseURL: string, email: string, pa
 }
 
 /**
- * Activate a card with a unique letters-only barcode suffix so it cannot
- * substring-collide with seeded numeric barcodes (#39).
+ * Create a user with a unique name/card_code so it cannot
+ * substring-collide with seeded numeric card codes (#39).
  *
  * The 8-char a-z suffix has 26^8 ≈ 2 × 10^11 distinct values — collision
  * with another concurrent test in the same Playwright run is statistically
  * impossible.
  */
-export async function activateUniqueCard(
+export async function createUniqueUser(
     token: string,
     initialCredit: number,
     prefix: string = 'AF',
-): Promise<{ barcode: string; lastName: string }> {
+): Promise<{ user_id: number; name: string; card_code: string }> {
     const BASE_URL = 'http://localhost:8099';
     const suffix = Array.from({ length: 8 }, () =>
         String.fromCharCode(97 + Math.floor(Math.random() * 26)),
     ).join('');
-    const barcode = `${prefix}-${suffix}`;
-    const lastName = `${prefix}${suffix}`;
-    const resp = await fetch(`${BASE_URL}/api/cards/activate`, {
+    const cardCode = `${prefix}-${suffix}`;
+    const name = `${prefix} ${prefix}${suffix}`;
+    const resp = await fetch(`${BASE_URL}/api/users`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-            barcode,
+            name,
             initial_credit: initialCredit,
-            first_name: prefix,
-            last_name: lastName,
+            card_code: cardCode,
         }),
     });
     if (!resp.ok) {
-        throw new Error(`activate failed: ${resp.status} ${await resp.text()}`);
+        throw new Error(`createUniqueUser failed: ${resp.status} ${await resp.text()}`);
     }
-    return { barcode, lastName };
+    const json = await resp.json();
+    return { user_id: json.id as number, name, card_code: cardCode };
+}
+
+/**
+ * @deprecated Use createUniqueUser instead.
+ * Kept as a thin wrapper for any remaining callers during the migration.
+ */
+export async function activateUniqueCard(
+    token: string,
+    initialCredit: number,
+    prefix: string = 'AF',
+): Promise<{ barcode: string; lastName: string }> {
+    const result = await createUniqueUser(token, initialCredit, prefix);
+    return { barcode: result.card_code, lastName: result.name.split(' ').slice(1).join('') };
 }

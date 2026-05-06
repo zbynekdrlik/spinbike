@@ -176,7 +176,7 @@ async fn cancel_missing_booking_is_404() {
 #[tokio::test]
 async fn list_classes_returns_persistent_source_for_customer_auto_booking() {
     let app = TestApp::new().await;
-    let card_id = app.customer_card_id;
+    let user_id = app.customer_id;
 
     // V6 seeds a Monday 18:00 template.
     let tid: i64 =
@@ -186,7 +186,7 @@ async fn list_classes_returns_persistent_source_for_customer_auto_booking() {
             .unwrap();
 
     // Create a persistent subscription and run the materialiser directly.
-    spinbike_server::db::persistent_bookings::create(&app.pool, card_id, tid)
+    spinbike_server::db::persistent_bookings::create(&app.pool, user_id, tid)
         .await
         .unwrap();
     spinbike_server::jobs::materialiser::sweep(&app.pool)
@@ -212,28 +212,25 @@ async fn list_classes_returns_persistent_source_for_customer_auto_booking() {
 }
 
 #[tokio::test]
-async fn post_bookings_with_card_id_resolves_booking_user_from_card() {
-    // Regression: the Upcoming-Classes panel on the staff card page sends only
-    // { template_id, date, card_id } (no explicit user_id). The server must
-    // derive user_id from cards.user_id so the booking attaches to the
-    // card-holder, not the staff caller.
+async fn post_bookings_with_user_id_books_for_target_user() {
+    // Staff books for a specific user via explicit user_id.
+    // The booking must attach to the target user, not the staff caller.
     let app = TestApp::new().await;
     let (tid, date) = seed_monday_template(&app).await;
 
     let body = serde_json::json!({
         "template_id": tid,
         "date": date,
-        "card_id": app.customer_card_id, // customer_card_id is owned by customer_id
+        "user_id": app.customer_id,
     });
     let (status, _resp) = app
         .request(post_json("/api/bookings", &app.staff_token, &body))
         .await;
     assert_eq!(status, axum::http::StatusCode::CREATED);
 
-    // Verify the booking's user_id points at the card's user, not the staff
-    // caller.
-    let (booking_user_id, booking_card_id): (i64, Option<i64>) = sqlx::query_as(
-        "SELECT user_id, card_id FROM bookings
+    // Verify the booking's user_id points at the target user, not the staff caller.
+    let booking_user_id: i64 = sqlx::query_scalar(
+        "SELECT user_id FROM bookings
          WHERE template_id = ? AND date = ? AND cancelled_at IS NULL",
     )
     .bind(tid)
@@ -243,12 +240,10 @@ async fn post_bookings_with_card_id_resolves_booking_user_from_card() {
     .unwrap();
     assert_eq!(
         booking_user_id, app.customer_id,
-        "user_id must match card owner"
+        "user_id must match the target user"
     );
-    assert_eq!(booking_card_id, Some(app.customer_card_id));
 
-    // And the class participants list shows the card owner's name, not the
-    // staff member's.
+    // And the class participants list shows the target user's name.
     let uri = format!("/api/classes/{tid}/{date}/participants");
     let (status, resp) = app.request(get(&uri, &app.staff_token)).await;
     assert_eq!(status, axum::http::StatusCode::OK);
@@ -258,17 +253,17 @@ async fn post_bookings_with_card_id_resolves_booking_user_from_card() {
 }
 
 #[tokio::test]
-async fn staff_card_flow_booking_records_created_by() {
-    // Audit regression: when staff books for another user via card_id (no
-    // explicit user_id), the booking row must record `created_by = staff_id`
-    // so the audit trail distinguishes card-flow staff bookings from self-book.
+async fn staff_booking_for_other_user_records_created_by() {
+    // Audit regression: when staff books for another user via user_id,
+    // the booking row must record `created_by = staff_id`
+    // so the audit trail distinguishes staff bookings from self-book.
     let app = TestApp::new().await;
     let (tid, date) = seed_monday_template(&app).await;
 
     let body = serde_json::json!({
         "template_id": tid,
         "date": date,
-        "card_id": app.customer_card_id, // owned by customer_id
+        "user_id": app.customer_id,
     });
     let (status, _resp) = app
         .request(post_json("/api/bookings", &app.staff_token, &body))
@@ -287,14 +282,14 @@ async fn staff_card_flow_booking_records_created_by() {
     assert_eq!(
         created_by,
         Some(app.staff_id),
-        "card-flow staff booking must stamp created_by with the staff id"
+        "staff booking for another user must stamp created_by with the staff id"
     );
 }
 
 #[tokio::test]
-async fn customer_can_book_own_card_via_card_id() {
+async fn customer_can_book_for_self_via_user_id() {
     // Kills classes.rs create_booking mutation `uid != claims.sub` -> `==`.
-    // With the mutant, a customer booking their own card would be rejected
+    // With the mutant, a customer booking via their own user_id would be rejected
     // with 403 because `uid == claims.sub && !can_book_for_others()` holds.
     let app = TestApp::new().await;
     let (tid, date) = seed_monday_template(&app).await;
@@ -302,7 +297,7 @@ async fn customer_can_book_own_card_via_card_id() {
     let body = serde_json::json!({
         "template_id": tid,
         "date": date,
-        "card_id": app.customer_card_id,
+        "user_id": app.customer_id,
     });
     let (status, _) = app
         .request(post_json("/api/bookings", &app.customer_token, &body))
@@ -311,33 +306,25 @@ async fn customer_can_book_own_card_via_card_id() {
 }
 
 #[tokio::test]
-async fn post_bookings_with_card_id_for_unlinked_card_fails() {
+async fn post_bookings_with_nonexistent_user_id_fails() {
+    // After V13 there is no cards table; booking for a nonexistent user_id
+    // must fail (FK violation or 404-style error from the route).
     let app = TestApp::new().await;
     let (tid, date) = seed_monday_template(&app).await;
-
-    // Seed a card with NO user_id.
-    let orphan_card_id: i64 = sqlx::query_scalar(
-        "INSERT INTO cards (barcode, user_id, credit) VALUES ('ORPH', NULL, 0) RETURNING id",
-    )
-    .fetch_one(&app.pool)
-    .await
-    .unwrap();
 
     let body = serde_json::json!({
         "template_id": tid,
         "date": date,
-        "card_id": orphan_card_id,
+        "user_id": 999_999,
     });
-    let (status, resp) = app
+    let (status, _resp) = app
         .request(post_json("/api/bookings", &app.staff_token, &body))
         .await;
-    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
-    assert!(
-        resp["error"]
-            .as_str()
-            .map(|s| s.to_lowercase().contains("linked user"))
-            .unwrap_or(false),
-        "expected 'no linked user' error, got {resp:?}"
+    // FK failure on users(id) → 500 internal error or 422; anything but 201 is correct.
+    assert_ne!(
+        status,
+        axum::http::StatusCode::CREATED,
+        "booking for nonexistent user must not succeed"
     );
 }
 

@@ -3,21 +3,20 @@ import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
-async function activateUniqueCard(token: string, suffix: string): Promise<string> {
-    const barcode = `LNG-${suffix}`;
-    const lastName = `Lang${suffix}`;
-    const resp = await fetch(`${BASE_URL}/api/cards/activate`, {
+async function createUniqueUserLocal(token: string, suffix: string): Promise<string> {
+    const cardCode = `LNG-${suffix}`;
+    const name = `L Lang${suffix}`;
+    const resp = await fetch(`${BASE_URL}/api/users`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({
-            barcode,
+            name,
             initial_credit: 50,
-            first_name: 'L',
-            last_name: lastName,
+            card_code: cardCode,
         }),
     });
-    if (!resp.ok) throw new Error(`activate failed: ${resp.status} ${await resp.text()}`);
-    return lastName;
+    if (!resp.ok) throw new Error(`createUniqueUser failed: ${resp.status} ${await resp.text()}`);
+    return `Lang${suffix}`;
 }
 
 async function openCardByLastName(page: Page, lastName: string) {
@@ -34,7 +33,7 @@ test.describe('Card action form — service dropdown is language-aware', () => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
         const suffix = `${Date.now()}`;
-        const lastName = await activateUniqueCard(token, suffix);
+        const lastName = await createUniqueUserLocal(token, suffix);
 
         // Default in tests is English (loginViaAPI -> setEnglishLanguage).
         await page.goto('/staff');

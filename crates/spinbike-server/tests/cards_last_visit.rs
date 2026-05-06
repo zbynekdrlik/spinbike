@@ -1,24 +1,24 @@
-//! Integration tests for the `last_visit_at` field on /api/cards/search.
+//! Integration tests for the `last_visit_at` field on /api/users/search.
 
 mod helpers;
 
 use helpers::{TestApp, get};
 
 /// Local DTO mirroring just the fields these tests assert on. The server's
-/// `CardResponse` derives only `Serialize`, so this test file defines its own
+/// `UserResponse` derives only `Serialize`, so this test file defines its own
 /// `Deserialize` shape; serde_json ignores extra fields by default, so the
 /// wire response's other fields (credit, blocked, etc.) are silently skipped.
 #[derive(serde::Deserialize, Debug)]
-struct CardResponse {
+struct UserResponse {
     pub id: i64,
-    pub barcode: String,
+    pub card_code: String,
     pub last_visit_at: Option<String>,
 }
 
 /// Insert a transaction at a chosen timestamp, optionally tied to a service.
 async fn seed_txn(
     pool: &sqlx::SqlitePool,
-    card_id: i64,
+    user_id: i64,
     service_name_en: Option<&str>,
     amount: f64,
     action: &str,
@@ -36,10 +36,10 @@ async fn seed_txn(
         None
     };
     let result = sqlx::query(
-        "INSERT INTO transactions (card_id, service_id, amount, action, created_at)
+        "INSERT INTO transactions (user_id, service_id, amount, action, created_at)
          VALUES (?, ?, ?, ?, ?)",
     )
-    .bind(card_id)
+    .bind(user_id)
     .bind(service_id)
     .bind(amount)
     .bind(action)
@@ -50,9 +50,9 @@ async fn seed_txn(
     result.last_insert_rowid()
 }
 
-async fn search(app: &TestApp, q: &str) -> (axum::http::StatusCode, Vec<CardResponse>) {
-    app.request_typed::<Vec<CardResponse>>(get(
-        &format!("/api/cards/search?q={q}&limit=50"),
+async fn search(app: &TestApp, q: &str) -> (axum::http::StatusCode, Vec<UserResponse>) {
+    app.request_typed::<Vec<UserResponse>>(get(
+        &format!("/api/users/search?q={q}&limit=50"),
         &app.staff_token,
     ))
     .await
@@ -225,7 +225,7 @@ async fn last_visit_at_populated_correctly_for_each_seed_shape() {
     assert_eq!(status, axum::http::StatusCode::OK);
     assert_eq!(results.len(), 7, "expected 7 LVTEST cards in results");
 
-    let by_id: std::collections::HashMap<i64, &CardResponse> =
+    let by_id: std::collections::HashMap<i64, &UserResponse> =
         results.iter().map(|r| (r.id, r)).collect();
 
     let a = by_id[&card_a];
@@ -371,7 +371,7 @@ async fn search_results_sort_by_last_visit_desc() {
 
     let ids: Vec<i64> = results
         .iter()
-        .filter(|r| r.barcode.starts_with(prefix))
+        .filter(|r| r.card_code.starts_with(prefix))
         .map(|r| r.id)
         .collect();
 
@@ -423,7 +423,7 @@ async fn barcode_prefix_match_overrides_last_visit_sort() {
 
     let lv_results: Vec<i64> = results
         .iter()
-        .filter(|r| r.barcode.contains("LVPFX"))
+        .filter(|r| r.card_code.contains("LVPFX"))
         .map(|r| r.id)
         .collect();
 
@@ -441,7 +441,7 @@ async fn customer_role_forbidden() {
     let _ = app.seed_card("LVAUTH1", 0.0, None, None, None, None).await;
 
     let (status, _) = app
-        .request(get("/api/cards/search?q=LVAUTH", &app.customer_token))
+        .request(get("/api/users/search?q=LVAUTH", &app.customer_token))
         .await;
     assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
 }

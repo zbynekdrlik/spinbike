@@ -16,7 +16,7 @@ pub struct KpiSummary {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReportEvent {
     pub id: i64,
-    pub card_id: Option<i64>,
+    pub user_id: Option<i64>,
     pub card_name: Option<String>,
     pub barcode: Option<String>,
     pub action: String,
@@ -97,7 +97,7 @@ mod tests {
     fn ev(amount: f64, valid_until: Option<chrono::NaiveDate>) -> ReportEvent {
         ReportEvent {
             id: 1,
-            card_id: None,
+            user_id: None,
             card_name: None,
             barcode: None,
             // Deliberately "x" (non-action) — tests using ev() exercise paths
@@ -121,7 +121,7 @@ mod tests {
     ) -> ReportEvent {
         ReportEvent {
             id: 1,
-            card_id: None,
+            user_id: None,
             card_name: None,
             barcode: None,
             action: action.to_string(),
