@@ -551,7 +551,8 @@ DROP TABLE cards;
 const V14_RENAME_MONTHLY_PASS_LABEL: &str = r#"
 -- Issue #50: 'preplatok' means overpayment, not pass. Correct Slovak word
 -- for a gym pass is 'permanentka' (feminine), so the adjective also flips:
--- 'Mesačná' not 'Mesačný'. Idempotent: re-runs match zero rows.
+-- 'Mesačná' not 'Mesačný'. Idempotent on already-migrated DBs: any subsequent run matches zero rows
+-- (V8 seeds the old label; V14 renames it; the second invocation finds nothing).
 UPDATE services
 SET name_sk = 'Mesačná permanentka'
 WHERE name_sk = 'Mesačný preplatok';
@@ -789,6 +790,7 @@ mod tests {
         let pass = by_kind
             .get("monthly_pass")
             .expect("monthly_pass row missing");
+        // V14 renames this label; see `v14_renames_monthly_pass_label`.
         assert_eq!(pass.2, "Mesačná permanentka");
         assert_eq!(pass.3, "Monthly pass");
 
