@@ -215,7 +215,7 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(version, 13);
+        assert_eq!(version, 14);
     }
 
     /// Pins the after_connect PRAGMA — both the integer (30000) and the
