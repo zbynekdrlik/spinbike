@@ -32,7 +32,7 @@ test('visit button shows loading + success banner + auto-clears', async ({ page 
             entries: [{
                 amount: -35.00,
                 action: 'charge',
-                service_name_sk: 'Mesačný preplatok',
+                service_name_sk: 'Mesačná permanentka',
                 valid_until: validUntilIso,
             }],
         }),
@@ -96,7 +96,7 @@ test('visit button re-entry guard: rapid double-click fires only one POST', asyn
             entries: [{
                 amount: -35.00,
                 action: 'charge',
-                service_name_sk: 'Mesačný preplatok',
+                service_name_sk: 'Mesačná permanentka',
                 valid_until: validUntilIso,
             }],
         }),

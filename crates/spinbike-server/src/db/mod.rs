@@ -115,21 +115,17 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
             .await
             .context("Failed to disable foreign_keys for migration")?;
 
-        // Execute the migration SQL (may contain multiple statements).
-        // SQLite does not support transactional DDL well with multiple statements
-        // via sqlx::query, so we execute each statement individually inside a tx.
+        // Execute the migration SQL block. sqlx::raw_sql lets SQLite parse
+        // multi-statement SQL itself, so '--' line comments and ';' inside
+        // comments / string literals don't trip up a hand-rolled splitter.
+        // Issue #73: a previous naive split-on-';' broke V14 because a
+        // comment line contained two semicolons.
         let mut tx = conn.begin().await?;
 
-        for statement in sql.split(';') {
-            let trimmed = statement.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
-            sqlx::query(trimmed)
-                .execute(&mut *tx)
-                .await
-                .with_context(|| format!("Migration v{version} failed on: {trimmed}"))?;
-        }
+        sqlx::raw_sql(sql)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("Migration v{version} failed"))?;
 
         sqlx::query("INSERT INTO schema_version (version, description) VALUES (?, ?)")
             .bind(version)
@@ -215,7 +211,10 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(version, 13);
+        // Pin against the registered MIGRATIONS array rather than a magic number
+        // so future migrations don't require touching this assertion.
+        let expected = MIGRATIONS.last().expect("at least one migration").0;
+        assert_eq!(version, expected);
     }
 
     /// Pins the after_connect PRAGMA — both the integer (30000) and the
@@ -234,5 +233,33 @@ mod tests {
             .unwrap();
 
         assert_eq!(timeout, 30000, "busy_timeout should be 30000 ms (30 s)");
+    }
+
+    /// Issue #73 regression: the migration runner used to do `sql.split(';')`
+    /// which treated semicolons inside `--` comments as statement terminators
+    /// and broke any migration whose comments mentioned `;`. After switching
+    /// to `sqlx::raw_sql`, SQLite parses statement boundaries itself and
+    /// comments are correctly ignored.
+    #[tokio::test]
+    async fn raw_sql_block_tolerates_semicolons_inside_comments() {
+        // create_memory_pool uses max_connections=1, so all calls go through
+        // the same connection (and the same in-memory database).
+        let pool = create_memory_pool().await.unwrap();
+
+        let sql = r#"
+            -- First sentence; second sentence; third sentence.
+            -- Another line with one ; semicolon inside.
+            CREATE TABLE issue_73 (id INTEGER PRIMARY KEY);
+            INSERT INTO issue_73 (id) VALUES (1);
+            INSERT INTO issue_73 (id) VALUES (2);
+        "#;
+
+        sqlx::raw_sql(sql).execute(&pool).await.unwrap();
+
+        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM issue_73")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(count, 2);
     }
 }

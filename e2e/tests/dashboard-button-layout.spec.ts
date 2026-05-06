@@ -31,7 +31,7 @@ async function openCardByLastName(page: Page, lastName: string) {
 async function sellMonthlyPass(page: Page) {
     const mpOption = page
         .locator('[data-testid="charge-service"] option')
-        .filter({ hasText: /Monthly pass|Mesačný preplatok/ })
+        .filter({ hasText: /Monthly pass|Mesačná permanentka/ })
         .first();
     await expect(mpOption).toBeAttached();
     const mpValue = await mpOption.getAttribute('value');

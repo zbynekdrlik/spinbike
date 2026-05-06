@@ -57,11 +57,11 @@ test.describe('Admin services — dual-language CRUD', () => {
         expect(resp.status).toBe(200);
         const rows = await resp.json();
 
-        // V8 seeds at least: Spinning, Fitness, Mesačný preplatok (monthly_pass),
+        // V8 seeds at least: Spinning, Fitness, Mesačná permanentka (monthly_pass),
         // Občerstvenie, Doplnky výživy, Aktivácia karty.
         const byKind = rows.filter((r: { kind: string }) => r.kind === 'monthly_pass');
         expect(byKind.length).toBe(1);
-        expect(byKind[0].name_sk).toBe('Mesačný preplatok');
+        expect(byKind[0].name_sk).toBe('Mesačná permanentka');
         expect(byKind[0].name_en).toBe('Monthly pass');
 
         const skNames = rows.map((r: { name_sk: string }) => r.name_sk);

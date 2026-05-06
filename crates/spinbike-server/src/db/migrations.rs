@@ -49,6 +49,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         V12_NORMALIZE_LEGACY_ACTIONS,
     ),
     (13, "users replace cards", V13_USERS_REPLACE_CARDS),
+    (
+        14,
+        "rename monthly_pass label: Mesačný preplatok → Mesačná permanentka",
+        V14_RENAME_MONTHLY_PASS_LABEL,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -543,6 +548,16 @@ CREATE UNIQUE INDEX idx_persistent_bookings_user_id_template_id_active
 DROP TABLE cards;
 "#;
 
+const V14_RENAME_MONTHLY_PASS_LABEL: &str = r#"
+-- Issue #50: 'preplatok' means overpayment, not pass. Correct Slovak word
+-- for a gym pass is 'permanentka' (feminine), so the adjective also flips:
+-- 'Mesačná' not 'Mesačný'. Idempotent on already-migrated DBs: any subsequent run matches zero rows
+-- (V8 seeds the old label; V14 renames it; the second invocation finds nothing).
+UPDATE services
+SET name_sk = 'Mesačná permanentka'
+WHERE name_sk = 'Mesačný preplatok';
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::MIGRATIONS;
@@ -775,7 +790,8 @@ mod tests {
         let pass = by_kind
             .get("monthly_pass")
             .expect("monthly_pass row missing");
-        assert_eq!(pass.2, "Mesačný preplatok");
+        // V14 renames this label; see `v14_renames_monthly_pass_label`.
+        assert_eq!(pass.2, "Mesačná permanentka");
         assert_eq!(pass.3, "Monthly pass");
 
         // Three new generic rows seeded
@@ -1783,5 +1799,54 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(integrity, "ok", "integrity_check must pass after V13");
+    }
+
+    #[tokio::test]
+    async fn v14_renames_monthly_pass_label() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // The monthly_pass row now reads the corrected Slovak label.
+        let pass_name: String =
+            sqlx::query_scalar("SELECT name_sk FROM services WHERE kind = 'monthly_pass'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(pass_name, "Mesačná permanentka");
+
+        // Other service rows are NOT touched by V14 — kills mutants that
+        // broaden the WHERE clause (e.g. `LIKE '%preplatok%'`).
+        for n_sk in [
+            "Spinning",
+            "Fitness",
+            "Občerstvenie",
+            "Doplnky výživy",
+            "Aktivácia karty",
+        ] {
+            let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE name_sk = ?")
+                .bind(n_sk)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+            assert_eq!(count, 1, "service '{n_sk}' must be unchanged after V14");
+        }
+
+        // No row still carries the old Slovak label.
+        let stale: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE name_sk = 'Mesačný preplatok'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(stale, 0, "no services row should still carry the old label");
+
+        // Idempotency: running the chain a second time must not error and
+        // must not re-mutate the row.
+        run_migrations(&pool).await.unwrap();
+        let pass_name_again: String =
+            sqlx::query_scalar("SELECT name_sk FROM services WHERE kind = 'monthly_pass'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(pass_name_again, "Mesačná permanentka");
     }
 }

@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
+import { setupConsoleCheck, assertCleanConsole, loginViaAPI, selectMonthlyPass } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -38,14 +38,8 @@ test.describe('Monthly pass — sell via dropdown, banner, log-visit', () => {
         await openCardByLastName(page, lastName);
         await expect(page.locator('[data-testid="card-credit"]')).toContainText('80.00');
 
-        // Select Monthly pass from the unified service dropdown.
-        const mpValue = await page
-            .locator('[data-testid="charge-service"] option')
-            .filter({ hasText: 'Monthly pass' })
-            .first()
-            .getAttribute('value');
-        if (!mpValue) throw new Error('Monthly pass option not found');
-        await page.locator('[data-testid="charge-service"]').selectOption(mpValue);
+        // Select Monthly pass via data-kind handle (language-independent).
+        await selectMonthlyPass(page);
         // Post-#17: staff types the price every time. 35.00 keeps the
         // downstream `80 - 35 = 45` card-credit assertion intact.
         await page.locator('[data-testid="charge-amount"]').fill('35.00');
