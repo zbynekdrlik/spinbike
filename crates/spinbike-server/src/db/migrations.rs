@@ -1563,12 +1563,15 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        sqlx::query("INSERT INTO persistent_bookings(card_id, template_id) VALUES(?, ?)")
-            .bind(bob_card_id)
-            .bind(template_id)
-            .execute(&pool)
-            .await
-            .unwrap();
+        let bob_pb_id: i64 = sqlx::query_scalar(
+            "INSERT INTO persistent_bookings(card_id, template_id)
+             VALUES(?, ?) RETURNING id",
+        )
+        .bind(bob_card_id)
+        .bind(template_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
         // Issue #70: orphan persistent_booking (card_id points to non-existent
         // cards row 999) must resolve to the synthetic '(deleted)' user via
@@ -1577,6 +1580,20 @@ mod tests {
         let orphan_pb_id: i64 = sqlx::query_scalar(
             "INSERT INTO persistent_bookings(card_id, template_id)
              VALUES(999, ?) RETURNING id",
+        )
+        .bind(template_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Issue #70 (additional branch): persistent_booking with card_id=NULL
+        // also resolves to '(deleted)'. The step-5 OR-EXISTS predicate
+        // catches this via LEFT JOIN null-propagation (no matching cards row
+        // → c.user_id IS NULL → EXISTS fires). Distinct from the dangling
+        // card_id=999 case above.
+        let null_cardid_pb_id: i64 = sqlx::query_scalar(
+            "INSERT INTO persistent_bookings(card_id, template_id)
+             VALUES(NULL, ?) RETURNING id",
         )
         .bind(template_id)
         .fetch_one(&pool)
@@ -1769,20 +1786,17 @@ mod tests {
             "persistent_bookings must have user_id column after V13; found: {pb_cols:?}"
         );
 
-        // Bob's PB (the one seeded with valid card_id) — captured before V13.
-        // It carries the same id across V13 because step 7b preserves pb.id.
-        let bob_pb_user: i64 = sqlx::query_scalar(
-            "SELECT user_id FROM persistent_bookings
-             WHERE template_id = ? AND user_id = ?",
-        )
-        .bind(template_id)
-        .bind(bob_user)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        // Bob's PB carries the same id across V13 because step 7b preserves pb.id.
+        // Filtering by id (not user_id) makes the assertion non-tautological.
+        let bob_pb_user: i64 =
+            sqlx::query_scalar("SELECT user_id FROM persistent_bookings WHERE id = ?")
+                .bind(bob_pb_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         assert_eq!(
             bob_pb_user, bob_user,
-            "persistent_bookings.user_id must point to Bob's new user row"
+            "persistent_bookings.user_id for Bob's PB must point to Bob's new user row"
         );
 
         // Exactly one persistent_booking row survived (no duplication, no loss).
@@ -1791,12 +1805,21 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            pb_count, 2,
-            "Bob's PB + orphan PB must both survive V13 (no INNER JOIN drop)"
+            pb_count, 3,
+            "Bob's PB + orphan-999 PB + NULL-cardid PB must all survive V13"
         );
 
         // ── Orphan-fallback assertions (#69, #70) ──────────────────────────
         // The synthetic '(deleted)' user exists.
+        // Exactly one '(deleted)' user must exist (single conditional INSERT
+        // in step 5; the LIMIT 1 on the next query mirrors prod SQL idiom).
+        let deleted_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE name = '(deleted)'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(deleted_count, 1, "exactly one '(deleted)' user expected");
+
         let deleted_user_id: i64 = sqlx::query_scalar(
             "SELECT id FROM users WHERE name = '(deleted)' ORDER BY id DESC LIMIT 1",
         )
@@ -1826,6 +1849,18 @@ mod tests {
         assert_eq!(
             orphan_pb_user, deleted_user_id,
             "orphan persistent_booking (card_id=999) must map to '(deleted)' user via step-7b LEFT JOIN + COALESCE"
+        );
+
+        // Issue #70 (additional branch): the NULL-cardid PB also maps to deleted user.
+        let null_cardid_pb_user: i64 =
+            sqlx::query_scalar("SELECT user_id FROM persistent_bookings WHERE id = ?")
+                .bind(null_cardid_pb_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            null_cardid_pb_user, deleted_user_id,
+            "NULL-cardid PB must map to '(deleted)' user via step-7b LEFT JOIN + COALESCE"
         );
 
         // idx_persistent_bookings_user_id_template_id_active exists.
