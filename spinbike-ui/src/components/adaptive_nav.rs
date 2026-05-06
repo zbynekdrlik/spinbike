@@ -45,7 +45,9 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
             // subscribes and clears any open card / search query — this is
             // the only way to "go home" when already on /staff (same URL,
             // no router event).
-            let desk_reset = use_context::<RwSignal<u32>>().expect("DeskReset context");
+            let desk_reset = use_context::<crate::router::DeskReset>()
+                .expect("DeskReset context")
+                .0;
 
             view! {
                 <nav class="adaptive-nav" data-testid="adaptive-nav">

@@ -183,7 +183,9 @@ pub fn DashboardPage() -> impl IntoView {
     // when already on /staff (same URL, no router event), this lets the
     // dashboard return to the idle state — clear selected card, search query,
     // and any visible message — so the negative-balance list takes over.
-    let desk_reset = use_context::<RwSignal<u32>>().expect("DeskReset context");
+    let desk_reset = use_context::<crate::router::DeskReset>()
+        .expect("DeskReset context")
+        .0;
     Effect::new(move |prev: Option<u32>| {
         let cur = desk_reset.get();
         // On the first run prev is None — don't clear anything (initial mount).

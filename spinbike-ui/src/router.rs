@@ -3,6 +3,12 @@ use leptos_router::components::{Route, Router, Routes};
 use leptos_router::hooks::use_navigate;
 use leptos_router::path;
 
+/// Newtype for the desk-reset signal so the context key is purpose-typed
+/// (rather than a bare `RwSignal<u32>` shape that any future counter would
+/// collide with).
+#[derive(Copy, Clone)]
+pub struct DeskReset(pub RwSignal<u32>);
+
 /// Imperative redirect — runs once on mount, navigates to `to`.
 #[component]
 fn RedirectTo(#[prop(into)] to: String) -> impl IntoView {
@@ -91,8 +97,10 @@ pub fn App() -> impl IntoView {
     // Desk-reset signal: AdaptiveNav increments on Desk-link click so the
     // dashboard clears its selected card / search query and returns to the
     // idle list (negative balance), even when already on /staff (same URL,
-    // no router event fires).
-    let desk_reset = RwSignal::new(0u32);
+    // no router event fires). Wrapped in a newtype so the context key isn't
+    // a bare RwSignal<u32> (which would collide with any future signal of
+    // the same shape).
+    let desk_reset = DeskReset(RwSignal::new(0u32));
     provide_context(desk_reset);
 
     let lang_signal = lang;
