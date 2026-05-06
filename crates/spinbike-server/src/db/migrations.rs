@@ -458,7 +458,10 @@ UPDATE transactions
 
 INSERT INTO users (email, name, role)
 SELECT NULL, '(deleted)', 'customer'
- WHERE EXISTS (SELECT 1 FROM transactions WHERE user_id IS NULL);
+ WHERE EXISTS (SELECT 1 FROM transactions WHERE user_id IS NULL)
+    OR EXISTS (SELECT 1 FROM persistent_bookings pb
+                LEFT JOIN cards c ON c.id = pb.card_id
+                WHERE c.user_id IS NULL);
 
 UPDATE transactions
    SET user_id = (SELECT id FROM users WHERE name = '(deleted)' ORDER BY id DESC LIMIT 1)
@@ -533,9 +536,12 @@ CREATE TABLE persistent_bookings_new (
 );
 
 INSERT INTO persistent_bookings_new (id, user_id, template_id, created_at, ended_at)
-SELECT pb.id, c.user_id, pb.template_id, pb.created_at, pb.ended_at
-FROM persistent_bookings pb
-JOIN cards c ON c.id = pb.card_id;
+SELECT pb.id,
+       COALESCE(c.user_id,
+                (SELECT id FROM users WHERE name = '(deleted)' ORDER BY id DESC LIMIT 1)),
+       pb.template_id, pb.created_at, pb.ended_at
+  FROM persistent_bookings pb
+  LEFT JOIN cards c ON c.id = pb.card_id;
 
 DROP TABLE persistent_bookings;
 ALTER TABLE persistent_bookings_new RENAME TO persistent_bookings;
@@ -1540,6 +1546,17 @@ mod tests {
         .await
         .unwrap();
 
+        // Issue #69: orphan transaction (card_id NULL, user_id NULL) must
+        // resolve to the synthetic '(deleted)' user via the step-5 fallback.
+        let orphan_txn_id: i64 = sqlx::query_scalar(
+            "INSERT INTO transactions(card_id, user_id, staff_id, amount, action)
+             VALUES(NULL, NULL, ?, -5.00, 'charge') RETURNING id",
+        )
+        .bind(staff_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
         // Seed a persistent_booking for Bob's card (CODE2). Use whatever
         // template V6 seeded rather than assuming a specific id.
         let template_id: i64 = sqlx::query_scalar("SELECT id FROM class_templates LIMIT 1")
@@ -1553,6 +1570,19 @@ mod tests {
             .await
             .unwrap();
 
+        // Issue #70: orphan persistent_booking (card_id points to non-existent
+        // cards row 999) must resolve to the synthetic '(deleted)' user via
+        // the step-7b LEFT JOIN + COALESCE fallback. 999 is chosen because
+        // CODE1..CODE4 occupy ids 1..4; 999 is guaranteed unused.
+        let orphan_pb_id: i64 = sqlx::query_scalar(
+            "INSERT INTO persistent_bookings(card_id, template_id)
+             VALUES(999, ?) RETURNING id",
+        )
+        .bind(template_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
         // Apply V13.
         let v13_sql = MIGRATIONS.iter().find(|(v, _, _)| *v == 13).unwrap().2;
         apply_sql_block(&pool, v13_sql).await;
@@ -1564,7 +1594,10 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(users_total, 5, "staff + alice + bob + nameless + charlie");
+        assert_eq!(
+            users_total, 6,
+            "staff + alice + bob + nameless + charlie + (deleted)"
+        );
 
         // Alice: credit and card_code promoted from linked card.
         let alice_credit: f64 =
@@ -1736,13 +1769,19 @@ mod tests {
             "persistent_bookings must have user_id column after V13; found: {pb_cols:?}"
         );
 
-        // Bob's seeded persistent_booking migrated to his new user_id.
-        let pb_user: i64 = sqlx::query_scalar("SELECT user_id FROM persistent_bookings LIMIT 1")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        // Bob's PB (the one seeded with valid card_id) — captured before V13.
+        // It carries the same id across V13 because step 7b preserves pb.id.
+        let bob_pb_user: i64 = sqlx::query_scalar(
+            "SELECT user_id FROM persistent_bookings
+             WHERE template_id = ? AND user_id = ?",
+        )
+        .bind(template_id)
+        .bind(bob_user)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
         assert_eq!(
-            pb_user, bob_user,
+            bob_pb_user, bob_user,
             "persistent_bookings.user_id must point to Bob's new user row"
         );
 
@@ -1752,8 +1791,41 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            pb_count, 1,
-            "persistent_bookings count must be preserved across V13"
+            pb_count, 2,
+            "Bob's PB + orphan PB must both survive V13 (no INNER JOIN drop)"
+        );
+
+        // ── Orphan-fallback assertions (#69, #70) ──────────────────────────
+        // The synthetic '(deleted)' user exists.
+        let deleted_user_id: i64 = sqlx::query_scalar(
+            "SELECT id FROM users WHERE name = '(deleted)' ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Issue #69: the orphan transaction maps to the deleted user.
+        let orphan_txn_user: i64 =
+            sqlx::query_scalar("SELECT user_id FROM transactions WHERE id = ?")
+                .bind(orphan_txn_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            orphan_txn_user, deleted_user_id,
+            "orphan transaction (card_id=NULL) must map to '(deleted)' user via step-5 fallback"
+        );
+
+        // Issue #70: the orphan persistent_booking maps to the deleted user.
+        let orphan_pb_user: i64 =
+            sqlx::query_scalar("SELECT user_id FROM persistent_bookings WHERE id = ?")
+                .bind(orphan_pb_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            orphan_pb_user, deleted_user_id,
+            "orphan persistent_booking (card_id=999) must map to '(deleted)' user via step-7b LEFT JOIN + COALESCE"
         );
 
         // idx_persistent_bookings_user_id_template_id_active exists.
