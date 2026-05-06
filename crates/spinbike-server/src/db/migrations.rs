@@ -552,7 +552,7 @@ const V14_RENAME_MONTHLY_PASS_LABEL: &str = r#"
 -- Issue #50: 'preplatok' means overpayment, not pass. Correct Slovak word
 -- for a gym pass is 'permanentka' (feminine), so the adjective also flips:
 -- 'Mesačná' not 'Mesačný'. Idempotent on already-migrated DBs: any subsequent run matches zero rows
--- (V8 seeds the old label, V14 renames it, the second invocation finds nothing).
+-- (V8 seeds the old label; V14 renames it; the second invocation finds nothing).
 UPDATE services
 SET name_sk = 'Mesačná permanentka'
 WHERE name_sk = 'Mesačný preplatok';
