@@ -242,8 +242,9 @@ mod tests {
     /// comments are correctly ignored.
     #[tokio::test]
     async fn raw_sql_block_tolerates_semicolons_inside_comments() {
+        // create_memory_pool uses max_connections=1, so all calls go through
+        // the same connection (and the same in-memory database).
         let pool = create_memory_pool().await.unwrap();
-        let mut conn = pool.acquire().await.unwrap();
 
         let sql = r#"
             -- First sentence; second sentence; third sentence.
@@ -253,7 +254,7 @@ mod tests {
             INSERT INTO issue_73 (id) VALUES (2);
         "#;
 
-        sqlx::raw_sql(sql).execute(&mut *conn).await.unwrap();
+        sqlx::raw_sql(sql).execute(&pool).await.unwrap();
 
         let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM issue_73")
             .fetch_one(&pool)
