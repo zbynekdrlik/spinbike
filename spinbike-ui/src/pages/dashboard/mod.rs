@@ -175,6 +175,28 @@ pub fn DashboardPage() -> impl IntoView {
     // it refetches after every top-up / charge / visit.
     let txn_refresh = RwSignal::new(0u32);
 
+    // Desk-reset signal: AdaptiveNav / brand link increment on click. Even
+    // when already on /staff (same URL, no router event), this lets the
+    // dashboard return to the idle state — clear selected card, search query,
+    // and any visible message — so the negative-balance list takes over.
+    let desk_reset = use_context::<RwSignal<u32>>().expect("DeskReset context");
+    Effect::new(move |prev: Option<u32>| {
+        let cur = desk_reset.get();
+        // On the first run prev is None — don't clear anything (initial mount).
+        if prev.is_some() && prev != Some(cur) {
+            set_selected.set(None);
+            set_query.set(String::new());
+            set_results.set(Vec::new());
+            set_show_add_person.set(false);
+            set_msg.set(String::new());
+            set_err.set(String::new());
+            if let Some(el) = search_input_ref.get_untracked() {
+                let _ = el.focus();
+            }
+        }
+        cur
+    });
+
     // Explicit ref so we can restore focus after pick_card and after the
     // action panel closes. HTML `autofocus` only runs once on mount.
     let search_input_ref = NodeRef::<leptos::html::Input>::new();

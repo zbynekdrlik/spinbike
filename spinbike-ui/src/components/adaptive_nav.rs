@@ -41,11 +41,17 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
             let (more_open, set_more_open) = signal(false);
             let user_name = u.name.clone();
             let set_lang = use_context::<WriteSignal<Lang>>().expect("SetLang context");
+            // Increment desk_reset on Desk-link click. The DashboardPage
+            // subscribes and clears any open card / search query — this is
+            // the only way to "go home" when already on /staff (same URL,
+            // no router event).
+            let desk_reset = use_context::<RwSignal<u32>>().expect("DeskReset context");
 
             view! {
                 <nav class="adaptive-nav" data-testid="adaptive-nav">
                     <a href="/staff" class="adaptive-nav__item"
                        data-testid="nav-desk"
+                       on:click=move |_| desk_reset.update(|n| *n += 1)
                        aria-current=if desk_active { "page" } else { "false" }>
                         <span class="adaptive-nav__icon" inner_html=ICON_DESK></span>
                         <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_desk")}</span>

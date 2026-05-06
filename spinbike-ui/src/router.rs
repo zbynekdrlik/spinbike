@@ -88,6 +88,13 @@ pub fn App() -> impl IntoView {
     provide_context(lang);
     provide_context(set_lang);
 
+    // Desk-reset signal: AdaptiveNav increments on Desk-link click so the
+    // dashboard clears its selected card / search query and returns to the
+    // idle list (negative balance), even when already on /staff (same URL,
+    // no router event fires).
+    let desk_reset = RwSignal::new(0u32);
+    provide_context(desk_reset);
+
     let lang_signal = lang;
     view! {
         <Router>
