@@ -727,6 +727,89 @@ async fn create_user_with_negative_initial_credit_writes_no_transaction() {
     }
 }
 
+// ─── create_user blank-string normalisation (trim+empty→None) ─────────────────
+//
+// Kills the `!s.is_empty()` → `s.is_empty()` mutants in the body_phone /
+// body_company filter chains. Without normalisation, an empty-string phone
+// or company would be stored verbatim. With the mutation flipped, ONLY empty
+// strings would be stored (non-empty → None). Both regimes leak into the DB
+// row, so we assert the post-create row has the field stored as NULL.
+
+#[tokio::test]
+async fn create_user_normalises_empty_phone_to_null() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({
+        "name": "EmptyPhone",
+        "email": "ep@x.com",
+        "phone": "   ",
+    });
+    let (status, resp) = app
+        .request(post_json("/api/users", &app.staff_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+    let user_id = resp["id"].as_i64().unwrap();
+    let phone: Option<String> = sqlx::query_scalar("SELECT phone FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert!(
+        phone.is_none(),
+        "whitespace-only phone must be stored as NULL, got: {phone:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_user_normalises_empty_company_to_null() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({
+        "name": "EmptyCompany",
+        "email": "ec@x.com",
+        "company": "",
+    });
+    let (status, resp) = app
+        .request(post_json("/api/users", &app.staff_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+    let user_id = resp["id"].as_i64().unwrap();
+    let company: Option<String> = sqlx::query_scalar("SELECT company FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert!(
+        company.is_none(),
+        "empty company must be stored as NULL, got: {company:?}"
+    );
+}
+
+#[tokio::test]
+async fn create_user_preserves_non_empty_phone_and_company() {
+    // Counterpart to the empty-string tests: real values must round-trip.
+    // Killed together with the empty-string tests, this also catches a
+    // mutation that filters out everything (would store NULL for non-empty too).
+    let app = TestApp::new().await;
+    let body = serde_json::json!({
+        "name": "RealValues",
+        "email": "rv@x.com",
+        "phone": "+421900111222",
+        "company": "TestCorp",
+    });
+    let (status, resp) = app
+        .request(post_json("/api/users", &app.staff_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+    let user_id = resp["id"].as_i64().unwrap();
+    let row: (Option<String>, Option<String>) =
+        sqlx::query_as("SELECT phone, company FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(row.0.as_deref(), Some("+421900111222"));
+    assert_eq!(row.1.as_deref(), Some("TestCorp"));
+}
+
 // ─── update_user email format checks (mutants #8-10) ─────────────────────────
 
 #[tokio::test]
