@@ -1577,6 +1577,16 @@ mod tests {
         // cards row 999) must resolve to the synthetic '(deleted)' user via
         // the step-7b LEFT JOIN + COALESCE fallback. 999 is chosen because
         // CODE1..CODE4 occupy ids 1..4; 999 is guaranteed unused.
+        //
+        // V12 schema declares persistent_bookings.card_id NOT NULL REFERENCES
+        // cards(id), so under normal FK enforcement this insert would fail.
+        // We disable FK temporarily to mimic the dangling-card_id scenario the
+        // production fix is defensive against (e.g. legacy mdbtools import or
+        // external SQLite edit that bypassed FK enforcement).
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&pool)
+            .await
+            .unwrap();
         let orphan_pb_id: i64 = sqlx::query_scalar(
             "INSERT INTO persistent_bookings(card_id, template_id)
              VALUES(999, ?) RETURNING id",
@@ -1585,20 +1595,10 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-
-        // Issue #70 (additional branch): persistent_booking with card_id=NULL
-        // also resolves to '(deleted)'. The step-5 OR-EXISTS predicate
-        // catches this via LEFT JOIN null-propagation (no matching cards row
-        // → c.user_id IS NULL → EXISTS fires). Distinct from the dangling
-        // card_id=999 case above.
-        let null_cardid_pb_id: i64 = sqlx::query_scalar(
-            "INSERT INTO persistent_bookings(card_id, template_id)
-             VALUES(NULL, ?) RETURNING id",
-        )
-        .bind(template_id)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         // Apply V13.
         let v13_sql = MIGRATIONS.iter().find(|(v, _, _)| *v == 13).unwrap().2;
@@ -1805,8 +1805,8 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(
-            pb_count, 3,
-            "Bob's PB + orphan-999 PB + NULL-cardid PB must all survive V13"
+            pb_count, 2,
+            "Bob's PB + orphan-999 PB must both survive V13 (no INNER JOIN drop)"
         );
 
         // ── Orphan-fallback assertions (#69, #70) ──────────────────────────
@@ -1849,18 +1849,6 @@ mod tests {
         assert_eq!(
             orphan_pb_user, deleted_user_id,
             "orphan persistent_booking (card_id=999) must map to '(deleted)' user via step-7b LEFT JOIN + COALESCE"
-        );
-
-        // Issue #70 (additional branch): the NULL-cardid PB also maps to deleted user.
-        let null_cardid_pb_user: i64 =
-            sqlx::query_scalar("SELECT user_id FROM persistent_bookings WHERE id = ?")
-                .bind(null_cardid_pb_id)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        assert_eq!(
-            null_cardid_pb_user, deleted_user_id,
-            "NULL-cardid PB must map to '(deleted)' user via step-7b LEFT JOIN + COALESCE"
         );
 
         // idx_persistent_bookings_user_id_template_id_active exists.
