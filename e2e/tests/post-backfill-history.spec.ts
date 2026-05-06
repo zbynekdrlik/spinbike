@@ -25,7 +25,7 @@ test('per-card history renders charge / topup / visit / pass-sale labels', async
                 // Visit: zero amount, action=visit
                 { amount: 0.0, action: 'visit', service_name_sk: 'Spinning' },
                 // PassSale: any amount with valid_until set wins precedence
-                { amount: -35.0, action: 'charge', service_name_sk: 'Mesačný preplatok', valid_until: '2099-12-31' },
+                { amount: -35.0, action: 'charge', service_name_sk: 'Mesačná permanentka', valid_until: '2099-12-31' },
             ],
         }),
     });
