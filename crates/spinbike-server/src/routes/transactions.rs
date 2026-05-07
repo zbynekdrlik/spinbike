@@ -19,6 +19,7 @@ pub fn routes() -> Router<AppState> {
             patch(patch_valid_until),
         )
         .route("/api/transactions/{id}/note", patch(patch_note))
+        .route("/api/transactions/{id}/created-at", patch(patch_created_at))
 }
 
 #[derive(sqlx::FromRow)]
@@ -27,6 +28,7 @@ struct TxMini {
     user_id: Option<i64>,
     deleted_at: Option<String>,
     valid_until: Option<String>,
+    created_at: String,
 }
 
 #[derive(Deserialize)]
@@ -53,6 +55,17 @@ struct PatchNoteResp {
     note: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct PatchCreatedAtReq {
+    created_at_date: chrono::NaiveDate,
+}
+
+#[derive(serde::Serialize)]
+struct PatchCreatedAtResp {
+    id: i64,
+    created_at_date: chrono::NaiveDate,
+}
+
 async fn void_transaction(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
@@ -68,7 +81,7 @@ async fn void_transaction(
     let mut tx = state.pool.begin().await.map_err(internal_error)?;
 
     let row: Option<TxMini> = sqlx::query_as(
-        "SELECT amount, user_id, deleted_at, valid_until FROM transactions WHERE id = ?",
+        "SELECT amount, user_id, deleted_at, valid_until, created_at FROM transactions WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
@@ -126,7 +139,7 @@ async fn patch_valid_until(
     }
 
     let row: Option<TxMini> = sqlx::query_as(
-        "SELECT amount, user_id, valid_until, deleted_at FROM transactions WHERE id = ?",
+        "SELECT amount, user_id, valid_until, deleted_at, created_at FROM transactions WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&state.pool)
@@ -185,7 +198,7 @@ async fn patch_note(
     };
 
     let row: Option<TxMini> = sqlx::query_as(
-        "SELECT amount, user_id, deleted_at, valid_until FROM transactions WHERE id = ?",
+        "SELECT amount, user_id, deleted_at, valid_until, created_at FROM transactions WHERE id = ?",
     )
     .bind(id)
     .fetch_optional(&state.pool)
@@ -215,5 +228,97 @@ async fn patch_note(
     Ok(Json(PatchNoteResp {
         id,
         note: normalized,
+    }))
+}
+
+async fn patch_created_at(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<i64>,
+    Json(body): Json<PatchCreatedAtReq>,
+) -> Result<Json<PatchCreatedAtResp>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_manage_cards() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Staff access required"})),
+        ));
+    }
+
+    let row: Option<TxMini> = sqlx::query_as(
+        "SELECT amount, user_id, deleted_at, valid_until, created_at FROM transactions WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(internal_error)?;
+
+    let Some(row) = row else {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "Transaction not found"})),
+        ));
+    };
+    if row.deleted_at.is_some() {
+        return Err((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "Cannot edit date on a voided transaction"})),
+        ));
+    }
+
+    // 30-day window check (inclusive). Future dates are also rejected — same
+    // single error message covers both branches per spec.
+    let today = chrono::Local::now().date_naive();
+    let earliest = today - chrono::Duration::days(30);
+    if body.created_at_date < earliest || body.created_at_date > today {
+        return Err(super::bad_request("Date must be within last 30 days"));
+    }
+
+    // The stored created_at is UTC text (SQLite's datetime('now') is UTC).
+    // The user picks dates in Bratislava local time. To preserve the user's
+    // intent, convert UTC → Bratislava, swap the local date, then convert
+    // back to UTC for storage.
+    use chrono::TimeZone;
+    let bratislava = chrono_tz::Europe::Bratislava;
+    let existing_utc =
+        chrono::NaiveDateTime::parse_from_str(row.created_at.trim(), "%Y-%m-%d %H:%M:%S")
+            .ok()
+            .or_else(|| {
+                chrono::NaiveDateTime::parse_from_str(row.created_at.trim(), "%Y-%m-%dT%H:%M:%S")
+                    .ok()
+            });
+    let new_utc = match existing_utc {
+        Some(utc_dt) => {
+            let local_dt = bratislava.from_utc_datetime(&utc_dt);
+            let local_time = local_dt.time();
+            let new_local_naive = chrono::NaiveDateTime::new(body.created_at_date, local_time);
+            // Pick .earliest() on DST-ambiguous local datetimes; treat
+            // gap (LocalResult::None) the same way via .single() fallback.
+            bratislava
+                .from_local_datetime(&new_local_naive)
+                .earliest()
+                .map(|dt| dt.naive_utc())
+                .unwrap_or_else(|| new_local_naive)
+        }
+        None => {
+            // Existing value didn't parse — fall back to noon UTC on the
+            // chosen local date. This branch shouldn't fire on real data.
+            chrono::NaiveDateTime::new(
+                body.created_at_date,
+                chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap(),
+            )
+        }
+    };
+    let new_value = new_utc.format("%Y-%m-%d %H:%M:%S").to_string();
+
+    sqlx::query("UPDATE transactions SET created_at = ? WHERE id = ?")
+        .bind(&new_value)
+        .bind(id)
+        .execute(&state.pool)
+        .await
+        .map_err(internal_error)?;
+
+    Ok(Json(PatchCreatedAtResp {
+        id,
+        created_at_date: body.created_at_date,
     }))
 }
