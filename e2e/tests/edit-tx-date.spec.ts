@@ -15,17 +15,18 @@ test.describe('Edit transaction date (#76)', () => {
         const { user_id, card_code } = await createUniqueUser(token, 0.0, 'TXD');
 
         // Look up the Spinning service so we can post a charge.
-        const svcResp = await fetch(`${BASE_URL}/api/services`, {
+        // /api/admin/services requires staff/admin; loginViaAPI uses admin@test.com so this works.
+        // No separate public /api/services endpoint exists.
+        const svcResp = await fetch(`${BASE_URL}/api/admin/services`, {
             headers: { Authorization: `Bearer ${token}` },
         });
-        if (!svcResp.ok) throw new Error(`services GET failed: ${svcResp.status}`);
+        if (!svcResp.ok) throw new Error(`/api/admin/services failed: ${svcResp.status} ${await svcResp.text()}`);
         const services = (await svcResp.json()) as Array<{
             id: number;
-            kind: string;
-            active: boolean;
+            name_en: string;
         }>;
-        const spinning = services.find((s) => s.kind === 'spinning' && s.active);
-        if (!spinning) throw new Error('No active spinning service found');
+        const spinning = services.find((s) => s.name_en === 'Spinning');
+        if (!spinning) throw new Error('Spinning service not found in /api/admin/services response');
 
         // Create a charge so there is a row in the txn list.
         const chargeResp = await fetch(`${BASE_URL}/api/payments/charge`, {
