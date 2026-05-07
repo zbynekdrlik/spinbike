@@ -5,8 +5,10 @@
 //! N=1 and instrumental plural `_few` for N>=2 — these specific words
 //! collapse the 2-4 / 5+ distinction to one form).
 //!
-//! Public API is `format_last_visit(visited, today, lang)` which returns the
-//! combined string `"<DD.MM.YYYY> (<relative>)"`.
+//! Public API: `format_last_visit` returns the combined string
+//! `"<DD.MM.YYYY> (<relative>)"`; `relative` returns just the relative bucket
+//! word (e.g. "yesterday" / "vcera") for callers that don't need the date
+//! prefix.
 
 use crate::i18n::{self, Lang};
 use chrono::{Datelike, NaiveDate};
