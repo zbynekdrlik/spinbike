@@ -134,6 +134,16 @@ fn format_optional_date(
     }
 }
 
+/// Heading suffix for the negative-balance list: `"  ·  {count}  ·  {sum} €"`.
+/// Separator is U+00B7 with two spaces on each side. Sum uses ASCII hyphen
+/// (matches the per-row credit formatting). Caller short-circuits the empty
+/// case before this is ever invoked.
+fn summary_suffix(rows: &[NegativeBalanceUser]) -> String {
+    let count = rows.len();
+    let sum: f64 = rows.iter().map(|r| r.credit).sum();
+    format!("  ·  {count}  ·  {sum:.2} €")
+}
+
 fn today_local() -> NaiveDate {
     chrono::Local::now().date_naive()
 }
@@ -157,5 +167,37 @@ fn neg_to_card_info(c: &NegativeBalanceUser) -> CardInfo {
         allow_debit: false,
         phone: None,
         email: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasm_bindgen_test::wasm_bindgen_test;
+
+    fn neg_user(credit: f64) -> NegativeBalanceUser {
+        NegativeBalanceUser {
+            id: 0,
+            name: String::new(),
+            card_code: None,
+            credit,
+            blocked: false,
+            company: None,
+            last_visit_at: None,
+            last_payment_at: None,
+            pass: None,
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn summary_suffix_three_users() {
+        let rows = vec![neg_user(-1.50), neg_user(-3.10), neg_user(-7.80)];
+        assert_eq!(summary_suffix(&rows), "  ·  3  ·  -12.40 €");
+    }
+
+    #[wasm_bindgen_test]
+    fn summary_suffix_single_user() {
+        let rows = vec![neg_user(-0.50)];
+        assert_eq!(summary_suffix(&rows), "  ·  1  ·  -0.50 €");
     }
 }
