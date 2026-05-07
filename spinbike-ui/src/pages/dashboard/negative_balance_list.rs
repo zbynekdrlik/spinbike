@@ -104,7 +104,7 @@ pub fn NegativeBalanceList(
             view! {
                 <div class="card mb-2 negative-balance-list" data-testid="negative-balance-list">
                     <div class="card__body">
-                        <h3 class="negative-balance-list__heading">{format!("{heading}{suffix}")}</h3>
+                        <h3 class="negative-balance-list__heading">{heading}{suffix}</h3>
                         {items}
                     </div>
                 </div>
