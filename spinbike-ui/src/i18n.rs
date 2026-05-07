@@ -483,6 +483,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         ("Predat mesacny listok", "Sell monthly pass"),
     );
     m.insert("modal_price", ("Cena (EUR)", "Price (EUR)"));
+    m.insert("modal_date", ("Datum", "Date"));
     m.insert("modal_valid_until", ("Platny do", "Valid until"));
     m.insert("modal_confirm", ("Potvrdit", "OK"));
     m.insert("modal_cancel", ("Zrusit", "Cancel"));
@@ -558,6 +559,15 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("days_short", ("dni", "days"));
     m.insert("days_ago_short", ("pred {} d", "{}d ago"));
     m.insert("edit_pass_date", ("Upravit datum", "Edit date"));
+    m.insert("edit_tx_date", ("Zmenit datum zaznamu", "Change entry date"));
+    m.insert("tx_date_edit_tooltip", ("Zmenit datum", "Change date"));
+    m.insert(
+        "tx_date_window_error",
+        (
+            "Datum musi byt v poslednych 30 dnoch",
+            "Date must be within last 30 days",
+        ),
+    );
 
     // --- Staff/CEO redesign (v0.10.0) ---
 
