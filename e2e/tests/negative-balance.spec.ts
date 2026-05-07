@@ -90,6 +90,13 @@ test('negative-balance list + search highlight', async ({ page }) => {
     await expect(list.getByText(`Bravo${RUN_TAG}`, { exact: false })).toBeVisible();
     await expect(list.getByText(`Charlie${RUN_TAG}`, { exact: false })).toHaveCount(0);
 
+    // Issue #78: single-line row layout — name + " (Posledna navsteva: ...)" + credit.
+    // Drops last-payment from the row entirely.
+    const alphaRowFull = rows.filter({ hasText: `Alpha${RUN_TAG}` }).first();
+    const alphaText = (await alphaRowFull.textContent()) ?? '';
+    expect(alphaText).toContain('(Posledna navsteva: ');
+    expect(alphaText).not.toContain('Posledna platba');
+
     // Bravo (-10.00) must appear BEFORE Alpha (-3.50) in DOM order (most-negative-first sort).
     const bravoIdx = await rows.evaluateAll(
         (els, tag: string) => els.findIndex((e) => (e.textContent ?? '').includes(`Bravo${tag}`)),

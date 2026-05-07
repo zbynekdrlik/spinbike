@@ -1220,14 +1220,19 @@ table tbody tr:last-child td,
 }
 .negative-balance-row:last-child { border-bottom: none; }
 .negative-balance-row:hover { background: var(--surface-2); }
-.negative-balance-row__main { min-width: 0; }
-.negative-balance-row__name { font-weight: 600; }
-.negative-balance-row__meta {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
+.negative-balance-row__label {
+    min-width: 0;
+    flex: 1 1 auto;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    font-weight: 600;
+}
+.negative-balance-row__meta-inline {
+    margin-left: 0;
+    font-weight: 400;
+    font-size: var(--fs-sm);
+    color: var(--text-muted);
 }
 .negative-balance-row__credit {
     font-variant-numeric: tabular-nums;
