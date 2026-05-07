@@ -71,7 +71,8 @@ test.describe('Edit transaction date (#76)', () => {
         // English DateInput formats as YYYY-MM-DD; Slovak as DD.MM.YYYY. setEnglishLanguage()
         // is called inside loginViaAPI, so we type the ISO form.
         const isoTarget = `${yyyy}-${mm}-${dd}`;
-        const input = page.locator('[data-testid="tx-date-input"]');
+        // <DateInput> places the wrapper testid on a <div> and the input testid is suffixed with -input
+        const input = page.locator('[data-testid="tx-date-input-input"]');
         await input.fill(isoTarget);
         await input.blur();
 
