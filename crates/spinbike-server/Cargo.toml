@@ -18,6 +18,7 @@ tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
+chrono-tz = { version = "0.10", default-features = false }
 rust-embed = { version = "8", features = ["include-exclude"] }
 mime_guess = "2"
 jsonwebtoken = "9"

@@ -23,16 +23,22 @@ async fn seed_charge(app: &TestApp, code: &str) -> i64 {
 
 #[tokio::test]
 async fn patch_created_at_happy_path_preserves_time() {
+    use chrono::TimeZone;
+    let bratislava = chrono_tz::Europe::Bratislava;
+
     let app = TestApp::new().await;
     let tx_id = seed_charge(&app, "DATE-OK").await;
 
-    // Fetch the original time portion so we can assert it survived.
+    // Fetch the original stored UTC value and convert to Bratislava local
+    // to determine the original local time-of-day.
     let original: String = sqlx::query_scalar("SELECT created_at FROM transactions WHERE id = ?")
         .bind(tx_id)
         .fetch_one(&app.pool)
         .await
         .unwrap();
-    let original_time = original.split_once(' ').unwrap().1.to_string();
+    let original_utc =
+        chrono::NaiveDateTime::parse_from_str(&original, "%Y-%m-%d %H:%M:%S").unwrap();
+    let original_local_time = bratislava.from_utc_datetime(&original_utc).time();
 
     let target = chrono::Local::now().date_naive() - chrono::Duration::days(3);
     let target_str = target.format("%Y-%m-%d").to_string();
@@ -55,11 +61,20 @@ async fn patch_created_at_happy_path_preserves_time() {
         .fetch_one(&app.pool)
         .await
         .unwrap();
-    let (date_part, time_part) = stored.split_once(' ').unwrap();
-    assert_eq!(date_part, target_str);
+    let stored_utc = chrono::NaiveDateTime::parse_from_str(&stored, "%Y-%m-%d %H:%M:%S").unwrap();
+    let stored_local = bratislava.from_utc_datetime(&stored_utc);
+
+    // The stored value, when converted back to Bratislava local, must show the
+    // user-picked date and the same local time-of-day as the original entry.
     assert_eq!(
-        time_part, original_time,
-        "time portion of created_at must be preserved across edit"
+        stored_local.date_naive(),
+        target,
+        "stored UTC must round-trip to user-picked LOCAL date"
+    );
+    assert_eq!(
+        stored_local.time(),
+        original_local_time,
+        "local time-of-day must be preserved across edit"
     );
 }
 
@@ -211,5 +226,98 @@ async fn patch_created_at_today_accepted() {
     assert_eq!(
         resp.get("created_at_date").unwrap().as_str(),
         Some(target_str.as_str())
+    );
+}
+
+#[tokio::test]
+async fn patch_created_at_preserves_local_time_across_utc_date_boundary() {
+    // Pin: a tx whose UTC date and Bratislava-local date differ by 1
+    // (entry made at 23:00 UTC = 01:00 CEST / 00:00 CET next day) must be
+    // backdated by LOCAL-date semantics, not by raw UTC date swap.
+    //
+    // Setup (relative dates keep the target inside the 30-day window at any
+    // point in the future):
+    //   forced_utc = (today_local - 3 days) 23:00:00
+    //     → local displayed date = today_local - 2 days (either UTC+1 or UTC+2)
+    //   target = today_local - 5 days  (within window; different from displayed)
+    //
+    // Correct stored result:
+    //   local time-of-day is preserved; local date = target
+    //   → stored UTC = (target - 1 day) 23:00:00  (valid for both CET and CEST)
+    use chrono::TimeZone;
+    let bratislava = chrono_tz::Europe::Bratislava;
+
+    let app = TestApp::new().await;
+    let tx_id = seed_charge(&app, "DATE-TZ").await;
+
+    let today_local = chrono::Local::now().date_naive();
+    let forced_utc_date = today_local - chrono::Duration::days(3);
+    let forced_utc_str = format!("{} 23:00:00", forced_utc_date.format("%Y-%m-%d"));
+
+    // Force the existing row to a UTC datetime that crosses the local-date
+    // boundary: 23:00 UTC is 01:00 CEST (UTC+2) or 00:00 CET (UTC+1) the
+    // NEXT calendar day in Bratislava — either way a different local date.
+    sqlx::query("UPDATE transactions SET created_at = ? WHERE id = ?")
+        .bind(&forced_utc_str)
+        .bind(tx_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    // Confirm the forced UTC and local dates differ (i.e. the boundary really
+    // crosses) — this is guaranteed by 23:00 UTC with any Bratislava offset
+    // (UTC+1 or UTC+2), but assert it explicitly to make the test self-documenting.
+    let forced_naive =
+        chrono::NaiveDateTime::parse_from_str(&forced_utc_str, "%Y-%m-%d %H:%M:%S").unwrap();
+    let forced_local = bratislava.from_utc_datetime(&forced_naive);
+    assert_ne!(
+        forced_local.date_naive(),
+        forced_naive.date(),
+        "precondition: forced UTC and Bratislava-local dates must differ"
+    );
+
+    // The user, looking at the dashboard, sees the row dated as the LOCAL date.
+    // They want to change it to a DIFFERENT local date: today - 5 days.
+    let target = today_local - chrono::Duration::days(5);
+    let target_str = target.format("%Y-%m-%d").to_string();
+
+    let (status, resp) = app
+        .request(patch_json(
+            &format!("/api/transactions/{tx_id}/created-at"),
+            &app.staff_token,
+            &json!({"created_at_date": target_str}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        resp.get("created_at_date").unwrap().as_str(),
+        Some(target_str.as_str())
+    );
+
+    let stored: String = sqlx::query_scalar("SELECT created_at FROM transactions WHERE id = ?")
+        .bind(tx_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+
+    // Round-trip: stored UTC → Bratislava-local must give the user-picked date.
+    let stored_utc = chrono::NaiveDateTime::parse_from_str(&stored, "%Y-%m-%d %H:%M:%S")
+        .expect("stored value must parse as UTC datetime");
+    let stored_local = bratislava.from_utc_datetime(&stored_utc);
+    assert_eq!(
+        stored_local.date_naive(),
+        target,
+        "stored UTC must round-trip to user-picked LOCAL date {}",
+        target_str
+    );
+
+    // Local time-of-day must be preserved across the edit.
+    let original_local_time = forced_local.time();
+    assert_eq!(
+        stored_local.time(),
+        original_local_time,
+        "local time-of-day must be preserved: expected {}, got {}",
+        original_local_time.format("%H:%M:%S"),
+        stored_local.time().format("%H:%M:%S")
     );
 }

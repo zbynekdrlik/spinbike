@@ -273,14 +273,42 @@ async fn patch_created_at(
         return Err(super::bad_request("Date must be within last 30 days"));
     }
 
-    // Preserve the existing time-of-day. SQLite's default is "YYYY-MM-DD HH:MM:SS".
-    // Paranoia: if there's no space, fall back to noon.
-    let time_part = row
-        .created_at
-        .split_once(' ')
-        .map(|(_, t)| t.to_string())
-        .unwrap_or_else(|| "12:00:00".to_string());
-    let new_value = format!("{} {}", body.created_at_date, time_part);
+    // The stored created_at is UTC text (SQLite's datetime('now') is UTC).
+    // The user picks dates in Bratislava local time. To preserve the user's
+    // intent, convert UTC → Bratislava, swap the local date, then convert
+    // back to UTC for storage.
+    use chrono::TimeZone;
+    let bratislava = chrono_tz::Europe::Bratislava;
+    let existing_utc =
+        chrono::NaiveDateTime::parse_from_str(row.created_at.trim(), "%Y-%m-%d %H:%M:%S")
+            .ok()
+            .or_else(|| {
+                chrono::NaiveDateTime::parse_from_str(row.created_at.trim(), "%Y-%m-%dT%H:%M:%S")
+                    .ok()
+            });
+    let new_utc = match existing_utc {
+        Some(utc_dt) => {
+            let local_dt = bratislava.from_utc_datetime(&utc_dt);
+            let local_time = local_dt.time();
+            let new_local_naive = chrono::NaiveDateTime::new(body.created_at_date, local_time);
+            // Pick .earliest() on DST-ambiguous local datetimes; treat
+            // gap (LocalResult::None) the same way via .single() fallback.
+            bratislava
+                .from_local_datetime(&new_local_naive)
+                .earliest()
+                .map(|dt| dt.naive_utc())
+                .unwrap_or_else(|| new_local_naive)
+        }
+        None => {
+            // Existing value didn't parse — fall back to noon UTC on the
+            // chosen local date. This branch shouldn't fire on real data.
+            chrono::NaiveDateTime::new(
+                body.created_at_date,
+                chrono::NaiveTime::from_hms_opt(12, 0, 0).unwrap(),
+            )
+        }
+    };
+    let new_value = new_utc.format("%Y-%m-%d %H:%M:%S").to_string();
 
     sqlx::query("UPDATE transactions SET created_at = ? WHERE id = ?")
         .bind(&new_value)
