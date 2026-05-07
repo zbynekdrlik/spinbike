@@ -31,7 +31,7 @@ fn format_date(d: NaiveDate) -> String {
 }
 
 /// Relative-time bucket. See module docs for the exact thresholds.
-fn relative(visited: NaiveDate, today: NaiveDate, lang: Lang) -> String {
+pub fn relative(visited: NaiveDate, today: NaiveDate, lang: Lang) -> String {
     let days = (today - visited).num_days().max(0);
     if days == 0 {
         return i18n::t(lang, "rel_today").to_string();

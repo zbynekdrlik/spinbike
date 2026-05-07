@@ -12,7 +12,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::api;
 use crate::i18n::{self, Lang};
 use crate::pages::dashboard::{CardInfo, CardPass};
-use crate::relative_date::format_last_visit;
+use crate::relative_date::relative;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct NegativeBalanceUser {
@@ -121,7 +121,7 @@ fn format_optional_date(
             // a multi-byte char boundary if that ever changes.
             let date_str = s.get(..10).unwrap_or(s.as_str());
             match NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-                Ok(d) => format_last_visit(d, today, lang),
+                Ok(d) => relative(d, today, lang),
                 Err(_) => never_label.to_string(),
             }
         }
