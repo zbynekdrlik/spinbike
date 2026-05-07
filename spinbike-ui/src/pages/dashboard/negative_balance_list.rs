@@ -132,7 +132,7 @@ fn format_optional_date(
 /// Format: " ({label}: {value})" — leading space, parens, colon. Caller passes
 /// the localized label (e.g. "Posledna navsteva") and pre-formatted value
 /// (e.g. "vcera", "2 dni", "nikdy").
-pub(super) fn meta_inline(label: &str, value: &str) -> String {
+fn meta_inline(label: &str, value: &str) -> String {
     format!(" ({label}: {value})")
 }
 
