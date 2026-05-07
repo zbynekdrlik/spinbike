@@ -165,3 +165,51 @@ async fn patch_created_at_non_staff_returns_403() {
         .await;
     assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
 }
+
+#[tokio::test]
+async fn patch_created_at_exactly_30_days_back_accepted() {
+    // Boundary kill: window check is `< earliest`; mutating to `<=` would
+    // reject today-30d. This test asserts today-30d IS accepted.
+    let app = TestApp::new().await;
+    let tx_id = seed_charge(&app, "DATE-30").await;
+
+    let target = chrono::Local::now().date_naive() - chrono::Duration::days(30);
+    let target_str = target.format("%Y-%m-%d").to_string();
+
+    let (status, resp) = app
+        .request(patch_json(
+            &format!("/api/transactions/{tx_id}/created-at"),
+            &app.staff_token,
+            &json!({"created_at_date": target_str}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        resp.get("created_at_date").unwrap().as_str(),
+        Some(target_str.as_str())
+    );
+}
+
+#[tokio::test]
+async fn patch_created_at_today_accepted() {
+    // Boundary kill: window check is `> today`; mutating to `>=` would
+    // reject today. This test asserts today IS accepted.
+    let app = TestApp::new().await;
+    let tx_id = seed_charge(&app, "DATE-TODAY").await;
+
+    let target = chrono::Local::now().date_naive();
+    let target_str = target.format("%Y-%m-%d").to_string();
+
+    let (status, resp) = app
+        .request(patch_json(
+            &format!("/api/transactions/{tx_id}/created-at"),
+            &app.staff_token,
+            &json!({"created_at_date": target_str}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        resp.get("created_at_date").unwrap().as_str(),
+        Some(target_str.as_str())
+    );
+}
