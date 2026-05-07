@@ -12,7 +12,7 @@ test.describe('Edit transaction date (#76)', () => {
     test('staff can backdate a charge by 3 days via row pencil', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
-        const { user_id, card_code } = await createUniqueUser(token, 50.0, 'TXD');
+        const { user_id, card_code } = await createUniqueUser(token, 0.0, 'TXD');
 
         // Look up the Spinning service so we can post a charge.
         const svcResp = await fetch(`${BASE_URL}/api/services`, {
@@ -82,8 +82,8 @@ test.describe('Edit transaction date (#76)', () => {
         const updatedRow = list.locator('[data-testid="transaction-row"]').first();
         // Date is rendered via i18n::fmt_datetime_str on tx.created_at, which
         // shows the full datetime. Asserting the date portion is enough.
-        const ddSk = `${dd}.${mm}.${yyyy}`;
-        await expect(updatedRow).toContainText(new RegExp(`${ddSk}|${isoTarget}`));
+        const ddSkEscaped = `${dd}\\.${mm}\\.${yyyy}`;
+        await expect(updatedRow).toContainText(new RegExp(`${ddSkEscaped}|${isoTarget}`));
 
         assertCleanConsole(msgs);
     });
