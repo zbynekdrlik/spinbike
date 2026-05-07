@@ -65,6 +65,7 @@ pub fn NegativeBalanceList(
             let last_payment_label = i18n::t(lang_now, "last_payment_label").to_string();
             let never_label = i18n::t(lang_now, "never_label").to_string();
             let today = today_local();
+            let suffix = summary_suffix(&rows);
 
             let items = rows.into_iter().map(|r| {
                 let name = super::helpers::user_display_name(
@@ -103,7 +104,7 @@ pub fn NegativeBalanceList(
             view! {
                 <div class="card mb-2 negative-balance-list" data-testid="negative-balance-list">
                     <div class="card__body">
-                        <h3 class="negative-balance-list__heading">{heading}</h3>
+                        <h3 class="negative-balance-list__heading">{format!("{heading}{suffix}")}</h3>
                         {items}
                     </div>
                 </div>
