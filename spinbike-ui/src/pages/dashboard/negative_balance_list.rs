@@ -62,7 +62,6 @@ pub fn NegativeBalanceList(
             let lang_now = lang.get();
             let heading = i18n::t(lang_now, "negative_balance_heading").to_string();
             let last_visit_label = i18n::t(lang_now, "last_visit_label").to_string();
-            let last_payment_label = i18n::t(lang_now, "last_payment_label").to_string();
             let never_label = i18n::t(lang_now, "never_label").to_string();
             let today = today_local();
             let suffix = summary_suffix(&rows);
@@ -75,9 +74,7 @@ pub fn NegativeBalanceList(
                 );
                 let credit = format!("{:.2} €", r.credit);
                 let last_visit = format_optional_date(&r.last_visit_at, today, lang_now, &never_label);
-                let last_payment = format_optional_date(&r.last_payment_at, today, lang_now, &never_label);
-                let lv = last_visit_label.clone();
-                let lp = last_payment_label.clone();
+                let meta = meta_inline(&last_visit_label, &last_visit);
                 let card_for_pick = neg_to_card_info(&r);
                 view! {
                     <div
@@ -88,13 +85,9 @@ pub fn NegativeBalanceList(
                             move |_| on_pick.run(card.clone())
                         }
                     >
-                        <div class="negative-balance-row__main">
-                            <div class="negative-balance-row__name">{name}</div>
-                            <div class="negative-balance-row__meta">
-                                {format!("{lv}: {last_visit}")}
-                                {" · "}
-                                {format!("{lp}: {last_payment}")}
-                            </div>
+                        <div class="negative-balance-row__label">
+                            {name}
+                            <span class="negative-balance-row__meta-inline">{meta}</span>
                         </div>
                         <div class="negative-balance-row__credit credit-negative">{credit}</div>
                     </div>
@@ -133,6 +126,14 @@ fn format_optional_date(
             }
         }
     }
+}
+
+/// Inline meta suffix appended after the user's name in a negative-balance row.
+/// Format: " ({label}: {value})" — leading space, parens, colon. Caller passes
+/// the localized label (e.g. "Posledna navsteva") and pre-formatted value
+/// (e.g. "vcera", "2 dni", "nikdy").
+pub(super) fn meta_inline(label: &str, value: &str) -> String {
+    format!(" ({label}: {value})")
 }
 
 /// Heading suffix for the negative-balance list: `"  ·  {count}  ·  {sum} €"`.
@@ -202,5 +203,15 @@ mod tests {
     fn summary_suffix_single_user() {
         let rows = vec![neg_user(-0.50)];
         assert_eq!(summary_suffix(&rows), "  ·  1  ·  -0.50 €");
+    }
+
+    #[wasm_bindgen_test]
+    fn meta_inline_typical() {
+        assert_eq!(meta_inline("Posledna navsteva", "vcera"), " (Posledna navsteva: vcera)");
+    }
+
+    #[wasm_bindgen_test]
+    fn meta_inline_never_label() {
+        assert_eq!(meta_inline("Last visit", "never"), " (Last visit: never)");
     }
 }
