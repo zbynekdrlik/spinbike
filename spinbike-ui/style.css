@@ -1229,7 +1229,6 @@ table tbody tr:last-child td,
     font-weight: 600;
 }
 .negative-balance-row__meta-inline {
-    margin-left: 0;
     font-weight: 400;
     font-size: var(--fs-sm);
     color: var(--text-muted);
