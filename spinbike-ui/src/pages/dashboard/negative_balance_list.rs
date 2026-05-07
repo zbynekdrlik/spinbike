@@ -176,6 +176,8 @@ mod tests {
     use super::*;
     use wasm_bindgen_test::*;
 
+    // No wasm_bindgen_test_configure! — CI uses wasm-pack test --node (not browser).
+
     fn neg_user(credit: f64) -> NegativeBalanceUser {
         NegativeBalanceUser {
             id: 0,
