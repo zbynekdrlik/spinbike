@@ -64,6 +64,23 @@ test('negative-balance list + search highlight', async ({ page }) => {
     const list = page.locator('[data-testid="negative-balance-list"]');
     await expect(list).toBeVisible({ timeout: 5000 });
 
+    // ---- Surface 1a: heading carries count + sum (Issue #72) ---------------------
+    // Heading format: "{HEADING}  ·  {count}  ·  {-DD.DD €}".
+    // Dev DB is prod-synced — the count is whatever-is-already-there + our 2
+    // negatives. We assert structural shape (regex), not exact values, with a
+    // floor of >= 2 from our seeded rows.
+    const heading = list.locator('.negative-balance-list__heading');
+    await expect(heading).toBeVisible();
+    const headingText = (await heading.textContent())?.trim() ?? '';
+    const headingMatch = headingText.match(
+        /^(Klienti v minuse|Customers with negative balance)\s+·\s+(\d+)\s+·\s+(-?\d+\.\d{2})\s+€$/,
+    );
+    expect(headingMatch, `heading text "${headingText}" did not match expected pattern`).not.toBeNull();
+    const negCount = Number(headingMatch![2]);
+    const negSum = Number(headingMatch![3]);
+    expect(negCount).toBeGreaterThanOrEqual(2);
+    expect(negSum).toBeLessThanOrEqual(-13.5); // Alpha (-3.50) + Bravo (-10.00) + any prior negatives
+
     const rows = list.locator('[data-testid="negative-balance-row"]');
 
     // The list shows ALL cards with credit<0 — prod-synced dev DB already has many.
