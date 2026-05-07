@@ -1536,13 +1536,13 @@ mod tests {
             .await
             .unwrap();
 
-        sqlx::query(
+        let bob_txn_id: i64 = sqlx::query_scalar(
             "INSERT INTO transactions(card_id, staff_id, amount, action)
-             VALUES(?, ?, -1.50, 'charge')",
+             VALUES(?, ?, -1.50, 'charge') RETURNING id",
         )
         .bind(bob_card_id)
         .bind(staff_id)
-        .execute(&pool)
+        .fetch_one(&pool)
         .await
         .unwrap();
 
@@ -1718,8 +1718,11 @@ mod tests {
             .await
             .unwrap();
 
-        // Bob's transaction now has user_id (not card_id).
-        let txn_user: i64 = sqlx::query_scalar("SELECT user_id FROM transactions LIMIT 1")
+        // Bob's transaction now has user_id (not card_id). Filter by captured
+        // bob_txn_id rather than LIMIT 1 — with the orphan transaction also
+        // seeded, LIMIT 1 would be physical-row-order dependent.
+        let txn_user: i64 = sqlx::query_scalar("SELECT user_id FROM transactions WHERE id = ?")
+            .bind(bob_txn_id)
             .fetch_one(&pool)
             .await
             .unwrap();
