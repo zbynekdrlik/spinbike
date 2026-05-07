@@ -173,7 +173,7 @@ fn neg_to_card_info(c: &NegativeBalanceUser) -> CardInfo {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wasm_bindgen_test::wasm_bindgen_test;
+    use wasm_bindgen_test::*;
 
     fn neg_user(credit: f64) -> NegativeBalanceUser {
         NegativeBalanceUser {
