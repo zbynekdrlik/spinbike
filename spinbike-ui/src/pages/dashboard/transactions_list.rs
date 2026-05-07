@@ -4,6 +4,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
 use crate::i18n::{self, Lang};
+use crate::pages::dashboard::sheets::EditTxDateSheet;
 
 use super::TxnInfo;
 
@@ -99,6 +100,14 @@ pub fn TransactionsList(
                 // Per-row signal so the editor opens independently for each row.
                 let (editing, set_editing) = signal(false);
                 let (note_value, set_note_value) = signal(note_initial.clone());
+                let editing_date = RwSignal::new(false);
+                let current_date = tx
+                    .created_at
+                    .split_once(' ')
+                    .map(|(d, _)| d)
+                    .unwrap_or(&tx.created_at);
+                let current_date = chrono::NaiveDate::parse_from_str(current_date, "%Y-%m-%d")
+                    .unwrap_or_else(|_| chrono::Local::now().date_naive());
 
                 let on_edit = move |_| set_editing.set(true);
 
@@ -115,6 +124,8 @@ pub fn TransactionsList(
                         }
                     });
                 };
+
+                let on_saved = Callback::new(move |()| txn_refresh.update(|n| *n += 1));
 
                 view! {
                     <div class=row_class data-testid="transaction-row">
@@ -207,6 +218,12 @@ pub fn TransactionsList(
                                     >"\u{270e}"</button>
                                     <button
                                         class="btn btn--compact btn--ghost"
+                                        data-testid="txn-date-edit"
+                                        title=move || i18n::t(lang.get(), "tx_date_edit_tooltip")
+                                        on:click=move |_| editing_date.set(true)
+                                    >"\u{1F4C5}"</button>
+                                    <button
+                                        class="btn btn--compact btn--ghost"
                                         data-testid="txn-void"
                                         title=move || i18n::t(lang.get(), "void")
                                         on:click=on_void
@@ -217,6 +234,12 @@ pub fn TransactionsList(
                             view! { <div></div> }.into_any()
                         }}
                     </div>
+                    <EditTxDateSheet
+                        show=editing_date
+                        tx_id=tx_id
+                        current_date=current_date
+                        on_saved=on_saved
+                    />
                 }
             }).collect();
 
