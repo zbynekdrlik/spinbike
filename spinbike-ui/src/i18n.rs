@@ -639,7 +639,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("last_visit_label", ("Posledna navsteva", "Last visit"));
 
     // Negative-balance list (#49)
-    m.insert("negative_balance_heading", ("Karty s dlhom", "Cards with negative balance"));
+    m.insert("negative_balance_heading", ("Klienti v minuse", "Customers with negative balance"));
     m.insert("last_payment_label", ("Posledna platba", "Last payment"));
     m.insert("never_label", ("nikdy", "never"));
     m.insert("rel_today", ("dnes", "today"));
@@ -832,12 +832,12 @@ mod neg_balance_tests {
 
     #[wasm_bindgen_test]
     fn negative_balance_heading_slovak() {
-        assert_eq!(t(Lang::Sk, "negative_balance_heading"), "Karty s dlhom");
+        assert_eq!(t(Lang::Sk, "negative_balance_heading"), "Klienti v minuse");
     }
 
     #[wasm_bindgen_test]
     fn negative_balance_heading_english() {
-        assert_eq!(t(Lang::En, "negative_balance_heading"), "Cards with negative balance");
+        assert_eq!(t(Lang::En, "negative_balance_heading"), "Customers with negative balance");
     }
 
     #[wasm_bindgen_test]
