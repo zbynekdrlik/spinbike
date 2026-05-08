@@ -544,7 +544,7 @@ pub async fn users_by_last_movement(
           ORDER BY last_movement_at IS NULL DESC,
                    last_movement_at ASC,
                    u.id ASC
-          LIMIT ?1 OFFSET ?2",
+          LIMIT ? OFFSET ?",
     )
     .bind(limit)
     .bind(offset)
@@ -565,29 +565,38 @@ pub enum DeleteUserOutcome {
 /// returns `AlreadyDeleted` if the user already has `deleted_at`. Transactions
 /// for that user are NOT touched.
 pub async fn delete_user(pool: &SqlitePool, id: i64) -> Result<DeleteUserOutcome> {
-    let row: Option<(Option<String>,)> =
-        sqlx::query_as("SELECT deleted_at FROM users WHERE id = ?")
+    // Atomic: only one concurrent caller can flip NULL → datetime('now').
+    let updated = sqlx::query(
+        "UPDATE users SET deleted_at = datetime('now')
+         WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .context("Failed to soft-delete user")?;
+
+    if updated.rows_affected() == 0 {
+        // No rows flipped — disambiguate not-found vs already-deleted.
+        let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE id = ?")
             .bind(id)
             .fetch_optional(pool)
             .await
-            .context("Failed to fetch user before delete")?;
-    let Some((existing,)) = row else {
-        return Ok(DeleteUserOutcome::NotFound);
-    };
-    if existing.is_some() {
-        return Ok(DeleteUserOutcome::AlreadyDeleted);
+            .context("Failed to check user existence after no-op delete")?;
+        return Ok(if exists.is_none() {
+            DeleteUserOutcome::NotFound
+        } else {
+            DeleteUserOutcome::AlreadyDeleted
+        });
     }
-    let now: (String,) = sqlx::query_as("SELECT datetime('now')")
+
+    // Read back the timestamp we just wrote.
+    let row: (Option<String>,) = sqlx::query_as("SELECT deleted_at FROM users WHERE id = ?")
+        .bind(id)
         .fetch_one(pool)
         .await
-        .context("Failed to read current time from sqlite")?;
-    sqlx::query("UPDATE users SET deleted_at = ? WHERE id = ?")
-        .bind(&now.0)
-        .bind(id)
-        .execute(pool)
-        .await
-        .context("Failed to soft-delete user")?;
-    Ok(DeleteUserOutcome::Deleted { deleted_at: now.0 })
+        .context("Failed to read deleted_at after soft-delete")?;
+    let deleted_at = row.0.unwrap_or_default();
+    Ok(DeleteUserOutcome::Deleted { deleted_at })
 }
 
 #[cfg(test)]
