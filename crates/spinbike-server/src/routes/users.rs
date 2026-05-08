@@ -423,6 +423,13 @@ async fn topup_user(
             )
         })?;
 
+    if user.deleted_at.is_some() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "User not found"})),
+        ));
+    }
+
     if user.blocked {
         return Err((
             StatusCode::FORBIDDEN,
@@ -467,6 +474,24 @@ async fn block_user(
         return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "Staff access required"})),
+        ));
+    }
+
+    // Verify user is active before mutating — soft-deleted users are
+    // invariant-frozen (#56).
+    let existing = db::get_user_by_id(&state.pool, body.user_id)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "User not found"})),
+            )
+        })?;
+    if existing.deleted_at.is_some() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "User not found"})),
         ));
     }
 
@@ -543,6 +568,23 @@ async fn update_user(
         return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "Staff access required"})),
+        ));
+    }
+
+    // Soft-deleted users are invariant-frozen (#56) — reject mutation upfront.
+    let target = db::get_user_by_id(&state.pool, id)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "User not found"})),
+            )
+        })?;
+    if target.deleted_at.is_some() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "User not found"})),
         ));
     }
 

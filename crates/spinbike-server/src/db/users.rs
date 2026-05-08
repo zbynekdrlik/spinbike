@@ -21,6 +21,7 @@ pub struct UserRow {
     pub allow_debit: bool,           // added in migration #13
     pub search_text: Option<String>, // added in migration #13
     pub created_at: String,
+    pub deleted_at: Option<String>, // added in migration #15
 }
 
 /// Fold a string to a diacritic-free, lowercase representation used for
@@ -191,6 +192,7 @@ pub struct UserRowWithPass {
     pub allow_debit: bool,
     pub search_text: Option<String>,
     pub created_at: String,
+    pub deleted_at: Option<String>,
     pub pass_valid_until: Option<chrono::NaiveDate>,
     pub pass_tx_id: Option<i64>,
     pub last_visit_at: Option<String>,
@@ -221,6 +223,7 @@ impl UserRowWithPass {
                 allow_debit: self.allow_debit,
                 search_text: self.search_text,
                 created_at: self.created_at,
+                deleted_at: self.deleted_at,
             },
             pass,
             last_visit_at,
@@ -237,7 +240,7 @@ pub async fn list_all_users_with_pass(
     let rows: Vec<UserRowWithPass> = sqlx::query_as::<_, UserRowWithPass>(
         "SELECT u.id, u.email, u.name, u.password_hash, u.phone, u.company,
                 u.role, u.oauth_provider, u.oauth_id, u.credit, u.card_code,
-                u.blocked, u.allow_debit, u.search_text, u.created_at,
+                u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at,
                 (SELECT MAX(valid_until) FROM transactions
                  WHERE user_id = u.id AND valid_until IS NOT NULL AND deleted_at IS NULL
                 ) AS pass_valid_until,
@@ -278,7 +281,7 @@ pub async fn search_users_with_pass(
     let rows: Vec<UserRowWithPass> = sqlx::query_as::<_, UserRowWithPass>(
         "SELECT u.id, u.email, u.name, u.password_hash, u.phone, u.company,
                 u.role, u.oauth_provider, u.oauth_id, u.credit, u.card_code,
-                u.blocked, u.allow_debit, u.search_text, u.created_at,
+                u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at,
                 (SELECT MAX(valid_until) FROM transactions
                  WHERE user_id = u.id AND valid_until IS NOT NULL AND deleted_at IS NULL
                 ) AS pass_valid_until,
