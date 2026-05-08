@@ -520,6 +520,7 @@ pub async fn update_user_info(
 pub struct UserByMovementRow {
     pub id: i64,
     pub name: String,
+    pub card_code: Option<String>,
     pub last_movement_at: Option<String>,
 }
 
@@ -535,6 +536,7 @@ pub async fn users_by_last_movement(
         "SELECT
             u.id,
             u.name,
+            u.card_code,
             MAX(t.created_at) AS last_movement_at
            FROM users u
            LEFT JOIN transactions t
