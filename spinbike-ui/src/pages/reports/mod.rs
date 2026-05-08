@@ -175,7 +175,7 @@ pub fn ReportsPage() -> impl IntoView {
                     </div>
 
                     {move || if !error.get().is_empty() {
-                        view! { <div class="alert alert--error" data-testid="reports-error">{move || error.get()}</div> }.into_any()
+                        view! { <div class="alert alert-error" data-testid="reports-error">{move || error.get()}</div> }.into_any()
                     } else { ().into_any() }}
 
                     <KpiCards kpi=kpi />

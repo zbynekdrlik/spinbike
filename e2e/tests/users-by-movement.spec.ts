@@ -59,7 +59,7 @@ test.describe('Users by last movement (#56)', () => {
         if (!patchResp.ok) throw new Error(`backdate failed: ${patchResp.status}`);
 
         // Navigate to Reports → Users tab.
-        await page.goto('/staff/reports');
+        await page.goto('/reports');
         await page.click('[data-testid="reports-tab-users"]');
         await expect(page.locator('[data-testid="users-by-movement"]')).toBeVisible();
 
@@ -98,7 +98,7 @@ test.describe('Users by last movement (#56)', () => {
         await expect(page.locator('[data-testid="action-panel"]')).toBeHidden();
 
         // Navigate back to Reports → Users tab; B must be gone.
-        await page.goto('/staff/reports');
+        await page.goto('/reports');
         await page.click('[data-testid="reports-tab-users"]');
         await expect(page.locator('[data-testid="users-by-movement"]')).toBeVisible();
         await expect(page.locator(`[data-testid="user-row"]:has-text("${b.name}")`)).toHaveCount(0);
