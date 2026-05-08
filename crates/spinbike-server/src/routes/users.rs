@@ -2,7 +2,7 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
 };
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
@@ -185,7 +185,11 @@ pub fn routes() -> Router<AppState> {
         .route("/api/users/topup", post(topup_user))
         .route("/api/users/block", post(block_user))
         .route("/api/users/negative-balance", get(negative_balance))
-        .route("/api/users/{id}", put(update_user))
+        .route("/api/users/by-last-movement", get(by_last_movement))
+        .route(
+            "/api/users/{id}",
+            put(update_user).delete(delete_user_route),
+        )
         .route("/api/users/{id}/transactions", get(user_transactions))
         .route("/api/users/{id}/stats", get(user_stats))
         .route("/api/my/balance", get(my_balance))
@@ -765,6 +769,72 @@ async fn user_stats(
         },
         monthly,
     }))
+}
+
+#[derive(serde::Deserialize)]
+struct ByMovementQuery {
+    #[serde(default = "default_limit")]
+    limit: i64,
+    #[serde(default)]
+    offset: i64,
+}
+fn default_limit() -> i64 {
+    50
+}
+
+async fn by_last_movement(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Query(q): Query<ByMovementQuery>,
+) -> Result<Json<Vec<db::UserByMovementRow>>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_manage_cards() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Staff access required"})),
+        ));
+    }
+    if !(1..=200).contains(&q.limit) || q.offset < 0 {
+        return Err(super::bad_request("limit must be 1..=200, offset >= 0"));
+    }
+    let rows = db::users_by_last_movement(&state.pool, q.limit, q.offset)
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(rows))
+}
+
+#[derive(serde::Serialize)]
+struct DeleteUserResp {
+    id: i64,
+    deleted_at: String,
+}
+
+async fn delete_user_route(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<i64>,
+) -> Result<Json<DeleteUserResp>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_manage_cards() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Staff access required"})),
+        ));
+    }
+    match db::delete_user(&state.pool, id)
+        .await
+        .map_err(internal_error)?
+    {
+        db::DeleteUserOutcome::Deleted { deleted_at } => {
+            Ok(Json(DeleteUserResp { id, deleted_at }))
+        }
+        db::DeleteUserOutcome::NotFound => Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "User not found"})),
+        )),
+        db::DeleteUserOutcome::AlreadyDeleted => Err((
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({"error": "User already deleted"})),
+        )),
+    }
 }
 
 async fn my_balance(
