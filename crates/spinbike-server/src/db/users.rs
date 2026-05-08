@@ -119,11 +119,12 @@ pub async fn create_user(
 }
 
 pub async fn get_user_by_email(pool: &SqlitePool, email: &str) -> Result<Option<UserRow>> {
-    let user = sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE email = ?")
-        .bind(email)
-        .fetch_optional(pool)
-        .await
-        .context("Failed to get user by email")?;
+    let user =
+        sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE email = ? AND deleted_at IS NULL")
+            .bind(email)
+            .fetch_optional(pool)
+            .await
+            .context("Failed to get user by email")?;
     Ok(user)
 }
 
@@ -142,7 +143,7 @@ pub async fn get_user_by_oauth(
     oauth_id: &str,
 ) -> Result<Option<UserRow>> {
     let user = sqlx::query_as::<_, UserRow>(
-        "SELECT * FROM users WHERE oauth_provider = ? AND oauth_id = ?",
+        "SELECT * FROM users WHERE oauth_provider = ? AND oauth_id = ? AND deleted_at IS NULL",
     )
     .bind(provider)
     .bind(oauth_id)
@@ -153,10 +154,11 @@ pub async fn get_user_by_oauth(
 }
 
 pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserRow>> {
-    let users = sqlx::query_as::<_, UserRow>("SELECT * FROM users ORDER BY id")
-        .fetch_all(pool)
-        .await
-        .context("Failed to list users")?;
+    let users =
+        sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE deleted_at IS NULL ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .context("Failed to list users")?;
     Ok(users)
 }
 
@@ -249,6 +251,7 @@ pub async fn list_all_users_with_pass(
                    AND service_id IN (SELECT id FROM services WHERE name_en IN (?, ?))
                 ) AS last_visit_at
          FROM users u
+         WHERE u.deleted_at IS NULL
          ORDER BY u.name",
     )
     .bind(CLASS_VISIT_NAMES_EN[0])
@@ -290,6 +293,7 @@ pub async fn search_users_with_pass(
                 ) AS last_visit_at
          FROM users u
          WHERE u.search_text LIKE ?
+           AND u.deleted_at IS NULL
          ORDER BY
            CASE WHEN u.card_code LIKE ? THEN 0 ELSE 1 END,
            last_visit_at IS NULL,
@@ -324,7 +328,7 @@ pub async fn search_users(pool: &SqlitePool, query: &str, limit: i64) -> Result<
     let prefix = format!("{q}%");
     let users = sqlx::query_as::<_, UserRow>(
         "SELECT * FROM users
-         WHERE search_text LIKE ?
+         WHERE deleted_at IS NULL AND search_text LIKE ?
          ORDER BY
            CASE WHEN card_code LIKE ? THEN 0 ELSE 1 END,
            name IS NULL, name ASC,
@@ -341,11 +345,13 @@ pub async fn search_users(pool: &SqlitePool, query: &str, limit: i64) -> Result<
 }
 
 pub async fn get_user_by_card_code(pool: &SqlitePool, code: &str) -> Result<Option<UserRow>> {
-    let user = sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE card_code = ?")
-        .bind(code)
-        .fetch_optional(pool)
-        .await
-        .context("Failed to get user by card_code")?;
+    let user = sqlx::query_as::<_, UserRow>(
+        "SELECT * FROM users WHERE card_code = ? AND deleted_at IS NULL",
+    )
+    .bind(code)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to get user by card_code")?;
     Ok(user)
 }
 
@@ -458,6 +464,7 @@ pub async fn list_negative_balance(pool: &SqlitePool) -> Result<Vec<NegativeBala
             ) AS pass_tx_id
          FROM users u
          WHERE u.credit < 0
+           AND u.deleted_at IS NULL
          ORDER BY u.credit ASC",
     )
     .bind(CLASS_VISIT_NAMES_EN[0])
@@ -506,6 +513,81 @@ pub async fn update_user_info(
     .await
     .context("Failed to update user info")?;
     Ok(())
+}
+
+/// Row returned by `users_by_last_movement`.
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
+pub struct UserByMovementRow {
+    pub id: i64,
+    pub name: String,
+    pub last_movement_at: Option<String>,
+}
+
+/// List users (excluding soft-deleted) with their most recent non-voided
+/// transaction's created_at, sorted oldest-movement-first. Users with no
+/// transactions appear first (last_movement_at IS NULL).
+pub async fn users_by_last_movement(
+    pool: &SqlitePool,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<UserByMovementRow>> {
+    let rows = sqlx::query_as::<_, UserByMovementRow>(
+        "SELECT
+            u.id,
+            u.name,
+            MAX(t.created_at) AS last_movement_at
+           FROM users u
+           LEFT JOIN transactions t
+             ON t.user_id = u.id AND t.deleted_at IS NULL
+          WHERE u.deleted_at IS NULL
+          GROUP BY u.id
+          ORDER BY last_movement_at IS NULL DESC,
+                   last_movement_at ASC,
+                   u.id ASC
+          LIMIT ?1 OFFSET ?2",
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+    .context("Failed to list users by last movement")?;
+    Ok(rows)
+}
+
+/// Outcome of a soft-delete attempt.
+pub enum DeleteUserOutcome {
+    Deleted { deleted_at: String },
+    NotFound,
+    AlreadyDeleted,
+}
+
+/// Soft-delete a user by setting `deleted_at` to now. Idempotent semantics:
+/// returns `AlreadyDeleted` if the user already has `deleted_at`. Transactions
+/// for that user are NOT touched.
+pub async fn delete_user(pool: &SqlitePool, id: i64) -> Result<DeleteUserOutcome> {
+    let row: Option<(Option<String>,)> =
+        sqlx::query_as("SELECT deleted_at FROM users WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .context("Failed to fetch user before delete")?;
+    let Some((existing,)) = row else {
+        return Ok(DeleteUserOutcome::NotFound);
+    };
+    if existing.is_some() {
+        return Ok(DeleteUserOutcome::AlreadyDeleted);
+    }
+    let now: (String,) = sqlx::query_as("SELECT datetime('now')")
+        .fetch_one(pool)
+        .await
+        .context("Failed to read current time from sqlite")?;
+    sqlx::query("UPDATE users SET deleted_at = ? WHERE id = ?")
+        .bind(&now.0)
+        .bind(id)
+        .execute(pool)
+        .await
+        .context("Failed to soft-delete user")?;
+    Ok(DeleteUserOutcome::Deleted { deleted_at: now.0 })
 }
 
 #[cfg(test)]

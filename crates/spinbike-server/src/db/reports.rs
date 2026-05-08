@@ -32,7 +32,7 @@ pub async fn day_report(
                 u.card_code AS barcode,
                 s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.note
          FROM transactions t
-         LEFT JOIN users u ON u.id = t.user_id
+         LEFT JOIN users u ON u.id = t.user_id  -- no deleted_at filter: historical txns for soft-deleted users still display (name/code shows blank)
          LEFT JOIN services s ON s.id = t.service_id
          WHERE date(t.created_at) = ?
            AND t.deleted_at IS NULL",
@@ -165,7 +165,7 @@ pub async fn range_report(
                 u.card_code AS barcode,
                 s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.note
          FROM transactions t
-         LEFT JOIN users u ON u.id = t.user_id
+         LEFT JOIN users u ON u.id = t.user_id  -- no deleted_at filter: historical txns for soft-deleted users still display (name/code shows blank)
          LEFT JOIN services s ON s.id = t.service_id
          WHERE date(t.created_at) BETWEEN ? AND ?
            AND t.deleted_at IS NULL",

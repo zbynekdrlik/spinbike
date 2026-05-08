@@ -170,7 +170,7 @@ async fn list_participants(
     let rows = sqlx::query_as::<_, Row>(
         "SELECT b.id AS booking_id, u.name AS user_name, u.email AS user_email
          FROM bookings b
-         JOIN users u ON u.id = b.user_id
+         JOIN users u ON u.id = b.user_id  -- no deleted_at filter: booking history for soft-deleted users remains part of class records
          WHERE b.template_id = ? AND b.date = ? AND b.cancelled_at IS NULL
          ORDER BY b.created_at",
     )
