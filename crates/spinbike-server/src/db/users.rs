@@ -1242,4 +1242,38 @@ mod tests {
         let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
         assert!(!u.allow_debit, "set_allow_debit(false) must persist");
     }
+
+    /// get_user_by_oauth must return Some for an active user and None after
+    /// soft-delete (kills mutant: replace return with Ok(None)).
+    #[tokio::test]
+    async fn get_user_by_oauth_respects_soft_delete() {
+        let pool = setup().await;
+        // Seed a user with oauth fields directly — create_user doesn't accept
+        // oauth params, so insert via SQL.
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO users(email, name, role, oauth_provider, oauth_id)
+             VALUES('oa@x.com', 'OAuth User', 'customer', 'google', 'sub-123')
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let found = get_user_by_oauth(&pool, "google", "sub-123")
+            .await
+            .unwrap();
+        assert!(found.is_some(), "active oauth user must be returned");
+        assert_eq!(found.unwrap().id, id);
+
+        // Soft-delete and confirm the lookup now returns None.
+        sqlx::query("UPDATE users SET deleted_at = datetime('now') WHERE id = ?")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let after = get_user_by_oauth(&pool, "google", "sub-123")
+            .await
+            .unwrap();
+        assert!(after.is_none(), "soft-deleted oauth user must be hidden");
+    }
 }

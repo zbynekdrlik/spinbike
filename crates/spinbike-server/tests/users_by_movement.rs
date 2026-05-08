@@ -194,3 +194,27 @@ async fn list_rejects_bad_limit() {
         .await;
     assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
 }
+
+/// When the client omits `?limit=`, `default_limit()` returns 50 — the request
+/// must succeed AND return more than 1 row (kills `default_limit -> 0` and
+/// `default_limit -> 1` mutants).
+#[tokio::test]
+async fn list_default_limit_returns_multiple_rows() {
+    let app = TestApp::new().await;
+    // Seed 5 fresh users so the default-limit response contains plenty of rows
+    // even on a clean test DB (TestApp seeds admin/staff/customer at minimum).
+    for i in 0..5 {
+        app.seed_card(&format!("DEF-{i}"), 0.0, None, None, Some(&format!("D{i}")), None)
+            .await;
+    }
+    let (status, body) = app
+        .request(get("/api/users/by-last-movement", &app.staff_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let arr = body.as_array().unwrap();
+    assert!(
+        arr.len() > 1,
+        "default_limit must allow more than 1 row; got {}",
+        arr.len()
+    );
+}
