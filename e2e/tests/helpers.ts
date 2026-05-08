@@ -14,7 +14,6 @@ export function setupConsoleCheck(page: Page): string[] {
             // 5xx errors are NOT filtered — those indicate real server bugs
             if (
                 text.includes('SharedArrayBuffer') ||
-                text.includes('wasm') ||
                 text.includes('integrity') ||
                 text.includes('subresource integrity') ||
                 text.includes('crbug.com') ||
