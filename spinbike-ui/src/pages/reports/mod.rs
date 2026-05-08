@@ -9,11 +9,18 @@ mod activity_feed;
 mod filters_bar;
 mod kpi_cards;
 mod sheets;
+mod users_by_movement;
 
 pub use activity_feed::ActivityFeed;
 pub use filters_bar::{FiltersBar, FiltersState};
 pub use kpi_cards::KpiCards;
 use sheets::calendar_picker::CalendarPickerSheet;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsersTab {
+    DailyActivity,
+    Users,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RangeMode {
@@ -25,6 +32,8 @@ pub enum RangeMode {
 #[component]
 pub fn ReportsPage() -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
+
+    let (tab, set_tab) = signal(UsersTab::DailyActivity);
 
     let (anchor, set_anchor) = signal(chrono::Local::now().date_naive());
     let (mode, set_mode) = signal(RangeMode::Day);
@@ -83,92 +92,115 @@ pub fn ReportsPage() -> impl IntoView {
     view! {
         <div class="reports-page" data-testid="reports-page">
 
-            <div class="reports-date-strip">
-                // Quick toggles — Yesterday / Today / Week / Month
-                <div class="seg" role="tablist">
-                    <button class="seg__item" data-testid="quick-yesterday"
-                            aria-selected=move || {
-                                let y = chrono::Local::now().date_naive() - chrono::Duration::days(1);
-                                (mode.get() == RangeMode::Day && anchor.get() == y).to_string()
-                            }
-                            on:click=move |_| {
-                                set_mode.set(RangeMode::Day);
-                                set_anchor.set(chrono::Local::now().date_naive() - chrono::Duration::days(1));
-                            }>
-                        {move || i18n::t(lang.get(), "reports_yesterday")}
-                    </button>
-                    <button class="seg__item" data-testid="quick-today"
-                            aria-selected=move || {
-                                let t = chrono::Local::now().date_naive();
-                                (mode.get() == RangeMode::Day && anchor.get() == t).to_string()
-                            }
-                            on:click=move |_| {
-                                set_mode.set(RangeMode::Day);
-                                set_anchor.set(chrono::Local::now().date_naive());
-                            }>
-                        {move || i18n::t(lang.get(), "reports_today")}
-                    </button>
-                    <button class="seg__item" data-testid="range-week"
-                            aria-selected=move || (mode.get() == RangeMode::Week).to_string()
-                            on:click=move |_| {
-                                set_mode.set(RangeMode::Week);
-                                set_anchor.set(chrono::Local::now().date_naive());
-                            }>
-                        {move || i18n::t(lang.get(), "reports_week")}
-                    </button>
-                    <button class="seg__item" data-testid="range-month"
-                            aria-selected=move || (mode.get() == RangeMode::Month).to_string()
-                            on:click=move |_| {
-                                set_mode.set(RangeMode::Month);
-                                set_anchor.set(chrono::Local::now().date_naive());
-                            }>
-                        {move || i18n::t(lang.get(), "reports_month")}
-                    </button>
-                </div>
-
-                // Fine-grained day picker for any specific date
-                <div class="seg" role="tablist">
-                    <button class="seg__item" data-testid="date-prev"
-                            on:click=move |_| {
-                                set_mode.set(RangeMode::Day);
-                                set_anchor.update(|d| *d = *d - chrono::Duration::days(1));
-                            }>
-                        "‹"
-                    </button>
-                    <button class="seg__item" data-testid="date-label"
-                            on:click=move |_| set_show_picker.set(true)>
-                        {move || i18n::fmt_date(anchor.get(), lang.get())}
-                    </button>
-                    <button class="seg__item" data-testid="date-next"
-                            on:click=move |_| {
-                                set_mode.set(RangeMode::Day);
-                                set_anchor.update(|d| *d = *d + chrono::Duration::days(1));
-                            }>
-                        "›"
-                    </button>
-                </div>
+            <div class="seg" role="tablist" data-testid="reports-tabs">
+                <button class="seg__item" data-testid="reports-tab-daily"
+                        aria-selected=move || (tab.get() == UsersTab::DailyActivity).to_string()
+                        on:click=move |_| set_tab.set(UsersTab::DailyActivity)>
+                    {move || i18n::t(lang.get(), "reports_tab_daily")}
+                </button>
+                <button class="seg__item" data-testid="reports-tab-users"
+                        aria-selected=move || (tab.get() == UsersTab::Users).to_string()
+                        on:click=move |_| set_tab.set(UsersTab::Users)>
+                    {move || i18n::t(lang.get(), "reports_tab_users")}
+                </button>
             </div>
 
-            {move || if !error.get().is_empty() {
-                view! { <div class="alert alert--error" data-testid="reports-error">{move || error.get()}</div> }.into_any()
-            } else { ().into_any() }}
-
-            <KpiCards kpi=kpi />
-            <FiltersBar filters=filters set_filters=set_filters />
-            <ActivityFeed events=events loading=loading has_more=has_more filters=filters anchor=anchor mode=mode set_events=set_events set_has_more=set_has_more />
-
-            {move || if show_picker.get() {
+            {move || if tab.get() == UsersTab::DailyActivity {
                 view! {
-                    <CalendarPickerSheet
-                        current=anchor
-                        on_close=Callback::new(move |_| set_show_picker.set(false))
-                        on_pick=Callback::new(move |d: chrono::NaiveDate| {
-                            set_anchor.set(d);
-                            set_show_picker.set(false);
-                        })
-                    />
+                    <>
+                    <div class="reports-date-strip">
+                        // Quick toggles — Yesterday / Today / Week / Month
+                        <div class="seg" role="tablist">
+                            <button class="seg__item" data-testid="quick-yesterday"
+                                    aria-selected=move || {
+                                        let y = chrono::Local::now().date_naive() - chrono::Duration::days(1);
+                                        (mode.get() == RangeMode::Day && anchor.get() == y).to_string()
+                                    }
+                                    on:click=move |_| {
+                                        set_mode.set(RangeMode::Day);
+                                        set_anchor.set(chrono::Local::now().date_naive() - chrono::Duration::days(1));
+                                    }>
+                                {move || i18n::t(lang.get(), "reports_yesterday")}
+                            </button>
+                            <button class="seg__item" data-testid="quick-today"
+                                    aria-selected=move || {
+                                        let t = chrono::Local::now().date_naive();
+                                        (mode.get() == RangeMode::Day && anchor.get() == t).to_string()
+                                    }
+                                    on:click=move |_| {
+                                        set_mode.set(RangeMode::Day);
+                                        set_anchor.set(chrono::Local::now().date_naive());
+                                    }>
+                                {move || i18n::t(lang.get(), "reports_today")}
+                            </button>
+                            <button class="seg__item" data-testid="range-week"
+                                    aria-selected=move || (mode.get() == RangeMode::Week).to_string()
+                                    on:click=move |_| {
+                                        set_mode.set(RangeMode::Week);
+                                        set_anchor.set(chrono::Local::now().date_naive());
+                                    }>
+                                {move || i18n::t(lang.get(), "reports_week")}
+                            </button>
+                            <button class="seg__item" data-testid="range-month"
+                                    aria-selected=move || (mode.get() == RangeMode::Month).to_string()
+                                    on:click=move |_| {
+                                        set_mode.set(RangeMode::Month);
+                                        set_anchor.set(chrono::Local::now().date_naive());
+                                    }>
+                                {move || i18n::t(lang.get(), "reports_month")}
+                            </button>
+                        </div>
+
+                        // Fine-grained day picker for any specific date
+                        <div class="seg" role="tablist">
+                            <button class="seg__item" data-testid="date-prev"
+                                    on:click=move |_| {
+                                        set_mode.set(RangeMode::Day);
+                                        set_anchor.update(|d| *d = *d - chrono::Duration::days(1));
+                                    }>
+                                "‹"
+                            </button>
+                            <button class="seg__item" data-testid="date-label"
+                                    on:click=move |_| set_show_picker.set(true)>
+                                {move || i18n::fmt_date(anchor.get(), lang.get())}
+                            </button>
+                            <button class="seg__item" data-testid="date-next"
+                                    on:click=move |_| {
+                                        set_mode.set(RangeMode::Day);
+                                        set_anchor.update(|d| *d = *d + chrono::Duration::days(1));
+                                    }>
+                                "›"
+                            </button>
+                        </div>
+                    </div>
+
+                    {move || if !error.get().is_empty() {
+                        view! { <div class="alert alert-error" data-testid="reports-error">{move || error.get()}</div> }.into_any()
+                    } else { ().into_any() }}
+
+                    <KpiCards kpi=kpi />
+                    <FiltersBar filters=filters set_filters=set_filters />
+                    <ActivityFeed events=events loading=loading has_more=has_more filters=filters anchor=anchor mode=mode set_events=set_events set_has_more=set_has_more />
+
+                    {move || if show_picker.get() {
+                        view! {
+                            <CalendarPickerSheet
+                                current=anchor
+                                on_close=Callback::new(move |_| set_show_picker.set(false))
+                                on_pick=Callback::new(move |d: chrono::NaiveDate| {
+                                    set_anchor.set(d);
+                                    set_show_picker.set(false);
+                                })
+                            />
+                        }.into_any()
+                    } else { ().into_any() }}
+                    </>
                 }.into_any()
-            } else { ().into_any() }}
+            } else {
+                view! {
+                    <users_by_movement::UsersByMovement />
+                }.into_any()
+            }}
         </div>
     }
 }

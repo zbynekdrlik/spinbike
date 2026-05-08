@@ -11,6 +11,7 @@ use super::edit_info_form::EditInfoForm;
 use super::helpers::full_name;
 use super::overview_tab::OverviewTab;
 use super::pass_banner::PassBanner;
+use super::sheets::DeleteUserSheet;
 use super::transactions_list::TransactionsList;
 use super::{CardInfo, ServiceInfo};
 
@@ -52,11 +53,29 @@ pub fn CardActionPanel(
     let card_for_edit = card.clone();
     let card_for_form = card.clone();
 
+    let editing_delete = RwSignal::new(false);
+    let delete_user_id = card_id;
+    let delete_user_name = card.name.clone();
+    let delete_user_balance = credit;
+    let delete_user_pass_end = card.pass.as_ref().map(|p| p.valid_until);
+
     let tab_items = vec![
-        ("history".to_string(), i18n::t(lang.get_untracked(), "tab_history").to_string()),
-        ("upcoming".to_string(), i18n::t(lang.get_untracked(), "tab_upcoming").to_string()),
-        ("persistent".to_string(), i18n::t(lang.get_untracked(), "tab_persistent").to_string()),
-        ("overview".to_string(), i18n::t(lang.get_untracked(), "tab_overview").to_string()),
+        (
+            "history".to_string(),
+            i18n::t(lang.get_untracked(), "tab_history").to_string(),
+        ),
+        (
+            "upcoming".to_string(),
+            i18n::t(lang.get_untracked(), "tab_upcoming").to_string(),
+        ),
+        (
+            "persistent".to_string(),
+            i18n::t(lang.get_untracked(), "tab_persistent").to_string(),
+        ),
+        (
+            "overview".to_string(),
+            i18n::t(lang.get_untracked(), "tab_overview").to_string(),
+        ),
     ];
 
     view! {
@@ -165,6 +184,13 @@ pub fn CardActionPanel(
                     {move || i18n::t(lang.get(), "edit_info")}
                 </button>
                 <BlockButton card_id=card_id blocked=is_blocked set_selected=set_selected set_msg=set_msg />
+                <button
+                    class="btn btn--danger"
+                    data-testid="delete-user-button"
+                    on:click=move |_| editing_delete.set(true)
+                >
+                    {move || i18n::t(lang.get(), "delete_user")}
+                </button>
             </div>
 
             <div class="stack-16">
@@ -214,6 +240,16 @@ pub fn CardActionPanel(
             set_msg=set_msg
             show=Signal::derive(move || show_edit.get())
             on_close=Callback::new(move |()| set_show_edit.set(false))
+        />
+        <DeleteUserSheet
+            show=editing_delete
+            user_id=delete_user_id
+            name=delete_user_name
+            balance=delete_user_balance
+            active_pass_end=delete_user_pass_end
+            on_saved=Callback::new(move |()| {
+                set_selected.set(None);
+            })
         />
         </>
     }

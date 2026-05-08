@@ -21,6 +21,7 @@ pub struct UserRow {
     pub allow_debit: bool,           // added in migration #13
     pub search_text: Option<String>, // added in migration #13
     pub created_at: String,
+    pub deleted_at: Option<String>, // added in migration #15
 }
 
 /// Fold a string to a diacritic-free, lowercase representation used for
@@ -119,11 +120,12 @@ pub async fn create_user(
 }
 
 pub async fn get_user_by_email(pool: &SqlitePool, email: &str) -> Result<Option<UserRow>> {
-    let user = sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE email = ?")
-        .bind(email)
-        .fetch_optional(pool)
-        .await
-        .context("Failed to get user by email")?;
+    let user =
+        sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE email = ? AND deleted_at IS NULL")
+            .bind(email)
+            .fetch_optional(pool)
+            .await
+            .context("Failed to get user by email")?;
     Ok(user)
 }
 
@@ -142,7 +144,7 @@ pub async fn get_user_by_oauth(
     oauth_id: &str,
 ) -> Result<Option<UserRow>> {
     let user = sqlx::query_as::<_, UserRow>(
-        "SELECT * FROM users WHERE oauth_provider = ? AND oauth_id = ?",
+        "SELECT * FROM users WHERE oauth_provider = ? AND oauth_id = ? AND deleted_at IS NULL",
     )
     .bind(provider)
     .bind(oauth_id)
@@ -153,10 +155,11 @@ pub async fn get_user_by_oauth(
 }
 
 pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserRow>> {
-    let users = sqlx::query_as::<_, UserRow>("SELECT * FROM users ORDER BY id")
-        .fetch_all(pool)
-        .await
-        .context("Failed to list users")?;
+    let users =
+        sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE deleted_at IS NULL ORDER BY id")
+            .fetch_all(pool)
+            .await
+            .context("Failed to list users")?;
     Ok(users)
 }
 
@@ -189,6 +192,7 @@ pub struct UserRowWithPass {
     pub allow_debit: bool,
     pub search_text: Option<String>,
     pub created_at: String,
+    pub deleted_at: Option<String>,
     pub pass_valid_until: Option<chrono::NaiveDate>,
     pub pass_tx_id: Option<i64>,
     pub last_visit_at: Option<String>,
@@ -219,6 +223,7 @@ impl UserRowWithPass {
                 allow_debit: self.allow_debit,
                 search_text: self.search_text,
                 created_at: self.created_at,
+                deleted_at: self.deleted_at,
             },
             pass,
             last_visit_at,
@@ -235,7 +240,7 @@ pub async fn list_all_users_with_pass(
     let rows: Vec<UserRowWithPass> = sqlx::query_as::<_, UserRowWithPass>(
         "SELECT u.id, u.email, u.name, u.password_hash, u.phone, u.company,
                 u.role, u.oauth_provider, u.oauth_id, u.credit, u.card_code,
-                u.blocked, u.allow_debit, u.search_text, u.created_at,
+                u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at,
                 (SELECT MAX(valid_until) FROM transactions
                  WHERE user_id = u.id AND valid_until IS NOT NULL AND deleted_at IS NULL
                 ) AS pass_valid_until,
@@ -249,6 +254,7 @@ pub async fn list_all_users_with_pass(
                    AND service_id IN (SELECT id FROM services WHERE name_en IN (?, ?))
                 ) AS last_visit_at
          FROM users u
+         WHERE u.deleted_at IS NULL
          ORDER BY u.name",
     )
     .bind(CLASS_VISIT_NAMES_EN[0])
@@ -275,7 +281,7 @@ pub async fn search_users_with_pass(
     let rows: Vec<UserRowWithPass> = sqlx::query_as::<_, UserRowWithPass>(
         "SELECT u.id, u.email, u.name, u.password_hash, u.phone, u.company,
                 u.role, u.oauth_provider, u.oauth_id, u.credit, u.card_code,
-                u.blocked, u.allow_debit, u.search_text, u.created_at,
+                u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at,
                 (SELECT MAX(valid_until) FROM transactions
                  WHERE user_id = u.id AND valid_until IS NOT NULL AND deleted_at IS NULL
                 ) AS pass_valid_until,
@@ -290,6 +296,7 @@ pub async fn search_users_with_pass(
                 ) AS last_visit_at
          FROM users u
          WHERE u.search_text LIKE ?
+           AND u.deleted_at IS NULL
          ORDER BY
            CASE WHEN u.card_code LIKE ? THEN 0 ELSE 1 END,
            last_visit_at IS NULL,
@@ -324,7 +331,7 @@ pub async fn search_users(pool: &SqlitePool, query: &str, limit: i64) -> Result<
     let prefix = format!("{q}%");
     let users = sqlx::query_as::<_, UserRow>(
         "SELECT * FROM users
-         WHERE search_text LIKE ?
+         WHERE deleted_at IS NULL AND search_text LIKE ?
          ORDER BY
            CASE WHEN card_code LIKE ? THEN 0 ELSE 1 END,
            name IS NULL, name ASC,
@@ -341,11 +348,13 @@ pub async fn search_users(pool: &SqlitePool, query: &str, limit: i64) -> Result<
 }
 
 pub async fn get_user_by_card_code(pool: &SqlitePool, code: &str) -> Result<Option<UserRow>> {
-    let user = sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE card_code = ?")
-        .bind(code)
-        .fetch_optional(pool)
-        .await
-        .context("Failed to get user by card_code")?;
+    let user = sqlx::query_as::<_, UserRow>(
+        "SELECT * FROM users WHERE card_code = ? AND deleted_at IS NULL",
+    )
+    .bind(code)
+    .fetch_optional(pool)
+    .await
+    .context("Failed to get user by card_code")?;
     Ok(user)
 }
 
@@ -458,6 +467,7 @@ pub async fn list_negative_balance(pool: &SqlitePool) -> Result<Vec<NegativeBala
             ) AS pass_tx_id
          FROM users u
          WHERE u.credit < 0
+           AND u.deleted_at IS NULL
          ORDER BY u.credit ASC",
     )
     .bind(CLASS_VISIT_NAMES_EN[0])
@@ -506,6 +516,92 @@ pub async fn update_user_info(
     .await
     .context("Failed to update user info")?;
     Ok(())
+}
+
+/// Row returned by `users_by_last_movement`.
+#[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]
+pub struct UserByMovementRow {
+    pub id: i64,
+    pub name: String,
+    pub card_code: Option<String>,
+    pub last_movement_at: Option<String>,
+}
+
+/// List users (excluding soft-deleted) with their most recent non-voided
+/// transaction's created_at, sorted oldest-movement-first. Users with no
+/// transactions appear first (last_movement_at IS NULL).
+pub async fn users_by_last_movement(
+    pool: &SqlitePool,
+    limit: i64,
+    offset: i64,
+) -> Result<Vec<UserByMovementRow>> {
+    let rows = sqlx::query_as::<_, UserByMovementRow>(
+        "SELECT
+            u.id,
+            u.name,
+            u.card_code,
+            MAX(t.created_at) AS last_movement_at
+           FROM users u
+           LEFT JOIN transactions t
+             ON t.user_id = u.id AND t.deleted_at IS NULL
+          WHERE u.deleted_at IS NULL
+          GROUP BY u.id
+          ORDER BY last_movement_at IS NULL DESC,
+                   last_movement_at ASC,
+                   u.id ASC
+          LIMIT ? OFFSET ?",
+    )
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+    .context("Failed to list users by last movement")?;
+    Ok(rows)
+}
+
+/// Outcome of a soft-delete attempt.
+pub enum DeleteUserOutcome {
+    Deleted { deleted_at: String },
+    NotFound,
+    AlreadyDeleted,
+}
+
+/// Soft-delete a user by setting `deleted_at` to now. Idempotent semantics:
+/// returns `AlreadyDeleted` if the user already has `deleted_at`. Transactions
+/// for that user are NOT touched.
+pub async fn delete_user(pool: &SqlitePool, id: i64) -> Result<DeleteUserOutcome> {
+    // Atomic: only one concurrent caller can flip NULL → datetime('now').
+    let updated = sqlx::query(
+        "UPDATE users SET deleted_at = datetime('now')
+         WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(id)
+    .execute(pool)
+    .await
+    .context("Failed to soft-delete user")?;
+
+    if updated.rows_affected() == 0 {
+        // No rows flipped — disambiguate not-found vs already-deleted.
+        let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE id = ?")
+            .bind(id)
+            .fetch_optional(pool)
+            .await
+            .context("Failed to check user existence after no-op delete")?;
+        return Ok(if exists.is_none() {
+            DeleteUserOutcome::NotFound
+        } else {
+            DeleteUserOutcome::AlreadyDeleted
+        });
+    }
+
+    // Read back the timestamp we just wrote.
+    let row: (Option<String>,) = sqlx::query_as("SELECT deleted_at FROM users WHERE id = ?")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .context("Failed to read deleted_at after soft-delete")?;
+    let deleted_at = row.0.unwrap_or_default();
+    Ok(DeleteUserOutcome::Deleted { deleted_at })
 }
 
 #[cfg(test)]
@@ -1148,5 +1244,35 @@ mod tests {
         set_allow_debit(&pool, id, false).await.unwrap();
         let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
         assert!(!u.allow_debit, "set_allow_debit(false) must persist");
+    }
+
+    /// get_user_by_oauth must return Some for an active user and None after
+    /// soft-delete (kills mutant: replace return with Ok(None)).
+    #[tokio::test]
+    async fn get_user_by_oauth_respects_soft_delete() {
+        let pool = setup().await;
+        // Seed a user with oauth fields directly — create_user doesn't accept
+        // oauth params, so insert via SQL.
+        let id: i64 = sqlx::query_scalar(
+            "INSERT INTO users(email, name, role, oauth_provider, oauth_id)
+             VALUES('oa@x.com', 'OAuth User', 'customer', 'google', 'sub-123')
+             RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let found = get_user_by_oauth(&pool, "google", "sub-123").await.unwrap();
+        assert!(found.is_some(), "active oauth user must be returned");
+        assert_eq!(found.unwrap().id, id);
+
+        // Soft-delete and confirm the lookup now returns None.
+        sqlx::query("UPDATE users SET deleted_at = datetime('now') WHERE id = ?")
+            .bind(id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let after = get_user_by_oauth(&pool, "google", "sub-123").await.unwrap();
+        assert!(after.is_none(), "soft-deleted oauth user must be hidden");
     }
 }

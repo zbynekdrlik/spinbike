@@ -54,6 +54,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "rename monthly_pass label: Mesačný preplatok → Mesačná permanentka",
         V14_RENAME_MONTHLY_PASS_LABEL,
     ),
+    (
+        15,
+        "users: soft-delete column + retire V13 (deleted) synthetic",
+        V15_USERS_SOFT_DELETE,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -562,6 +567,23 @@ const V14_RENAME_MONTHLY_PASS_LABEL: &str = r#"
 UPDATE services
 SET name_sk = 'Mesačná permanentka'
 WHERE name_sk = 'Mesačný preplatok';
+"#;
+
+const V15_USERS_SOFT_DELETE: &str = r#"
+-- Issue #56: soft-delete column on users + retire V13 (deleted) placeholder.
+-- Adds users.deleted_at; every existing user-listing query in db/users.rs
+-- gains `WHERE u.deleted_at IS NULL` in Task 4 of this plan. Per-user-history
+-- endpoints intentionally do NOT add the filter so a deep link still renders
+-- the row's history.
+--
+-- Side effect (closes #68): V13 inserted a synthetic '(deleted)' customer to
+-- keep orphan transactions referenceable. Set its deleted_at so it stops
+-- surfacing in search/dropdowns/reports. Transactions stay attached.
+ALTER TABLE users ADD COLUMN deleted_at TEXT;
+
+UPDATE users
+   SET deleted_at = datetime('now')
+ WHERE name = '(deleted)' AND deleted_at IS NULL;
 "#;
 
 #[cfg(test)]
@@ -1392,13 +1414,24 @@ mod tests {
     /// Also toggles PRAGMA foreign_keys OFF/ON around the transaction so that
     /// DROP TABLE on a parent table with FK children succeeds.
     async fn apply_sql_block(pool: &sqlx::SqlitePool, sql: &str) {
+        // Strip `-- line comments` before splitting on `;` — V14's comment text
+        // contains semicolons (`(V8 seeds the old label; V14 renames it; ...)`),
+        // and the naive splitter would otherwise treat those as statements.
+        let stripped: String = sql
+            .lines()
+            .map(|line| match line.find("--") {
+                Some(idx) => &line[..idx],
+                None => line,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         let mut conn = pool.acquire().await.unwrap();
         sqlx::query("PRAGMA foreign_keys = OFF")
             .execute(&mut *conn)
             .await
             .unwrap();
         let mut tx = conn.begin().await.unwrap();
-        for stmt in sql.split(';') {
+        for stmt in stripped.split(';') {
             let trimmed = stmt.trim();
             if trimmed.is_empty() {
                 continue;
@@ -1946,5 +1979,147 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(pass_name_again, "Mesačná permanentka");
+    }
+
+    #[tokio::test]
+    async fn v15_adds_users_deleted_at_column() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let cols: Vec<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('users')")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        let names: Vec<&str> = cols.iter().map(|(n,)| n.as_str()).collect();
+        assert!(
+            names.contains(&"deleted_at"),
+            "users.deleted_at column missing; found columns: {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v15_retires_synthetic_deleted_user() {
+        // V13 inserts the synthetic '(deleted)' user ONLY when orphan transactions
+        // exist (user_id IS NULL). We must seed an orphan before V13 runs, or the
+        // '(deleted)' row is never created and V15's UPDATE never fires — making
+        // any assertion vacuously true.
+        //
+        // Strategy (mirrors migration_13_users_replace_cards_full_round_trip):
+        //   1. Raw pool — no auto-migrations.
+        //   2. Bootstrap schema_version.
+        //   3. Apply migrations 1..=12 (cards table still exists).
+        //   4. Seed a staff user + an orphan transaction (card_id=NULL, user_id=NULL).
+        //   5. Apply V13 → synthetic '(deleted)' user created, orphan mapped to it.
+        //   6. Apply V14, V15.
+        //   7. Assert '(deleted)' user EXISTS and has deleted_at IS NOT NULL.
+        //      fetch_one (not fetch_optional) — row absence must fail the test.
+        use sqlx::sqlite::SqlitePoolOptions;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        // Bootstrap schema_version (run_migrations expects this table).
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Apply migrations 1..=12 only.
+        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 12) {
+            apply_sql_block(&pool, sql).await;
+            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
+                .bind(v)
+                .bind(desc)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        // Seed a minimal staff user (required by transactions.staff_id FK).
+        let staff_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users(email, name, role) VALUES('staff@v15', 'Staff', 'staff') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Seed an orphan transaction: card_id=NULL, user_id=NULL.
+        // This is the condition V13 detects to create the synthetic '(deleted)' user.
+        // Disable FK enforcement temporarily so the NULL card_id doesn't violate
+        // any constraint that might be strict on this column.
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO transactions(card_id, user_id, staff_id, amount, action)
+             VALUES(NULL, NULL, ?, -1.00, 'charge')",
+        )
+        .bind(staff_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Apply V13: detects orphan → inserts '(deleted)' user, maps orphan to it.
+        let v13_sql = MIGRATIONS.iter().find(|(v, _, _)| *v == 13).unwrap().2;
+        apply_sql_block(&pool, v13_sql).await;
+        sqlx::query("INSERT INTO schema_version(version, description) VALUES (13, 'V13')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Apply V14, then V15.
+        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v == 14 || *v == 15) {
+            apply_sql_block(&pool, sql).await;
+            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
+                .bind(v)
+                .bind(desc)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        // V15's UPDATE must have set deleted_at on the synthetic '(deleted)' user.
+        // fetch_one (not fetch_optional): if the row is absent the test must fail,
+        // because V13 was guaranteed to create it given our seeded orphan.
+        let row: (i64, Option<String>) = sqlx::query_as(
+            "SELECT id, deleted_at FROM users WHERE name = '(deleted)' ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            row.1.is_some(),
+            "V15 must set deleted_at on the synthetic (deleted) user"
+        );
+    }
+
+    #[tokio::test]
+    async fn v15_is_idempotent() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        // Second run is a no-op via the migration runner's version-table guard.
+        run_migrations(&pool).await.unwrap();
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'deleted_at'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            count, 1,
+            "users.deleted_at must exist exactly once after re-run"
+        );
     }
 }

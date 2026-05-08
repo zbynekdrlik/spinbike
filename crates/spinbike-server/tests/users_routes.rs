@@ -556,12 +556,12 @@ async fn user_routes_are_registered() {
             "route {path} should be registered and return 200"
         );
     }
-    // DELETE isn't wired on /api/users/{id}, so Axum returns 405 Method Not
-    // Allowed — confirms the path segment itself is known to the router.
+    // DELETE on /api/users/{id} is wired (#56 soft-delete). Unknown id returns
+    // 404 from the handler, which proves the route + method are registered.
     let (status, _) = app
         .request(delete("/api/users/9999", &app.staff_token))
         .await;
-    assert_eq!(status, axum::http::StatusCode::METHOD_NOT_ALLOWED);
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
 }
 
 // ─── negative-balance boundary tests ─────────────────────────────────────────
