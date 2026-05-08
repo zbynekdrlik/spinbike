@@ -54,6 +54,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "rename monthly_pass label: Mesačný preplatok → Mesačná permanentka",
         V14_RENAME_MONTHLY_PASS_LABEL,
     ),
+    (
+        15,
+        "users: soft-delete column + retire V13 (deleted) synthetic",
+        V15_USERS_SOFT_DELETE,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -562,6 +567,23 @@ const V14_RENAME_MONTHLY_PASS_LABEL: &str = r#"
 UPDATE services
 SET name_sk = 'Mesačná permanentka'
 WHERE name_sk = 'Mesačný preplatok';
+"#;
+
+const V15_USERS_SOFT_DELETE: &str = r#"
+-- Issue #56: soft-delete column on users + retire V13 (deleted) placeholder.
+-- Adds users.deleted_at; every existing user-listing query in db/users.rs
+-- gains `WHERE u.deleted_at IS NULL` in Task 4 of this plan. Per-user-history
+-- endpoints intentionally do NOT add the filter so a deep link still renders
+-- the row's history.
+--
+-- Side effect (closes #68): V13 inserted a synthetic '(deleted)' customer to
+-- keep orphan transactions referenceable. Set its deleted_at so it stops
+-- surfacing in search/dropdowns/reports. Transactions stay attached.
+ALTER TABLE users ADD COLUMN deleted_at TEXT;
+
+UPDATE users
+   SET deleted_at = datetime('now')
+ WHERE name = '(deleted)' AND deleted_at IS NULL;
 "#;
 
 #[cfg(test)]
@@ -1946,5 +1968,58 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(pass_name_again, "Mesačná permanentka");
+    }
+
+    #[tokio::test]
+    async fn v15_adds_users_deleted_at_column() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let cols: Vec<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('users')")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        let names: Vec<&str> = cols.iter().map(|(n,)| n.as_str()).collect();
+        assert!(
+            names.contains(&"deleted_at"),
+            "users.deleted_at column missing; found columns: {names:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v15_retires_synthetic_deleted_user() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        // V13 inserts (deleted) only when there are orphan rows. On a clean pool,
+        // no orphans exist, so the row may be absent — assert that IF the row
+        // exists it has deleted_at set.
+        let row: Option<(i64, Option<String>)> = sqlx::query_as(
+            "SELECT id, deleted_at FROM users WHERE name = '(deleted)' ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        if let Some((_id, deleted_at)) = row {
+            assert!(
+                deleted_at.is_some(),
+                "synthetic (deleted) user must have deleted_at set after V15"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn v15_is_idempotent() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'deleted_at'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            count, 1,
+            "users.deleted_at must exist exactly once after re-run"
+        );
     }
 }
