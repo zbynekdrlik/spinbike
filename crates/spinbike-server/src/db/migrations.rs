@@ -1414,13 +1414,24 @@ mod tests {
     /// Also toggles PRAGMA foreign_keys OFF/ON around the transaction so that
     /// DROP TABLE on a parent table with FK children succeeds.
     async fn apply_sql_block(pool: &sqlx::SqlitePool, sql: &str) {
+        // Strip `-- line comments` before splitting on `;` — V14's comment text
+        // contains semicolons (`(V8 seeds the old label; V14 renames it; ...)`),
+        // and the naive splitter would otherwise treat those as statements.
+        let stripped: String = sql
+            .lines()
+            .map(|line| match line.find("--") {
+                Some(idx) => &line[..idx],
+                None => line,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
         let mut conn = pool.acquire().await.unwrap();
         sqlx::query("PRAGMA foreign_keys = OFF")
             .execute(&mut *conn)
             .await
             .unwrap();
         let mut tx = conn.begin().await.unwrap();
-        for stmt in sql.split(';') {
+        for stmt in stripped.split(';') {
             let trimmed = stmt.trim();
             if trimmed.is_empty() {
                 continue;
