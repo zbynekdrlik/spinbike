@@ -21,7 +21,6 @@ pub fn DeleteUserSheet(
     on_saved: Callback<()>,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
-    let name_for_template = name.clone();
 
     view! {
         {move || {
@@ -32,7 +31,7 @@ pub fn DeleteUserSheet(
             // Per-mount form state — every open of the sheet starts fresh.
             let (err, set_err) = signal(String::new());
             let (saving, set_saving) = signal(false);
-            let name_inner = name_for_template.clone();
+            let name_inner = name.clone();
 
             let on_confirm = move |_| {
                 set_err.set(String::new());
@@ -70,7 +69,7 @@ pub fn DeleteUserSheet(
                             let txt = i18n::t(lang.get(), "delete_user_warning_balance")
                                 .replace("{amount}", &format!("{:+.2}", balance));
                             view! {
-                                <div class="alert alert--warning" data-testid="delete-user-warning-balance">{txt}</div>
+                                <div class="alert alert-info" data-testid="delete-user-warning-balance">{txt}</div>
                             }.into_any()
                         }
                     }}
@@ -80,7 +79,7 @@ pub fn DeleteUserSheet(
                                 let txt = i18n::t(lang.get(), "delete_user_warning_pass")
                                     .replace("{date}", &d.format("%d.%m.%Y").to_string());
                                 view! {
-                                    <div class="alert alert--warning" data-testid="delete-user-warning-pass">{txt}</div>
+                                    <div class="alert alert-info" data-testid="delete-user-warning-pass">{txt}</div>
                                 }.into_any()
                             }
                             None => ().into_any(),
@@ -91,7 +90,7 @@ pub fn DeleteUserSheet(
                         if e.is_empty() {
                             view! { <div></div> }.into_any()
                         } else {
-                            view! { <div class="alert alert--error" data-testid="delete-user-error">{e}</div> }.into_any()
+                            view! { <div class="alert alert-error" data-testid="delete-user-error">{e}</div> }.into_any()
                         }
                     }}
                     <div class="sheet__actions">
