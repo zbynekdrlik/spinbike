@@ -1987,29 +1987,118 @@ mod tests {
 
     #[tokio::test]
     async fn v15_retires_synthetic_deleted_user() {
-        let pool = create_memory_pool().await.unwrap();
-        run_migrations(&pool).await.unwrap();
-        // V13 inserts (deleted) only when there are orphan rows. On a clean pool,
-        // no orphans exist, so the row may be absent — assert that IF the row
-        // exists it has deleted_at set.
-        let row: Option<(i64, Option<String>)> = sqlx::query_as(
-            "SELECT id, deleted_at FROM users WHERE name = '(deleted)' ORDER BY id DESC LIMIT 1",
+        // V13 inserts the synthetic '(deleted)' user ONLY when orphan transactions
+        // exist (user_id IS NULL). We must seed an orphan before V13 runs, or the
+        // '(deleted)' row is never created and V15's UPDATE never fires — making
+        // any assertion vacuously true.
+        //
+        // Strategy (mirrors migration_13_users_replace_cards_full_round_trip):
+        //   1. Raw pool — no auto-migrations.
+        //   2. Bootstrap schema_version.
+        //   3. Apply migrations 1..=12 (cards table still exists).
+        //   4. Seed a staff user + an orphan transaction (card_id=NULL, user_id=NULL).
+        //   5. Apply V13 → synthetic '(deleted)' user created, orphan mapped to it.
+        //   6. Apply V14, V15.
+        //   7. Assert '(deleted)' user EXISTS and has deleted_at IS NOT NULL.
+        //      fetch_one (not fetch_optional) — row absence must fail the test.
+        use sqlx::sqlite::SqlitePoolOptions;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        // Bootstrap schema_version (run_migrations expects this table).
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
         )
-        .fetch_optional(&pool)
+        .execute(&pool)
         .await
         .unwrap();
-        if let Some((_id, deleted_at)) = row {
-            assert!(
-                deleted_at.is_some(),
-                "synthetic (deleted) user must have deleted_at set after V15"
-            );
+
+        // Apply migrations 1..=12 only.
+        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 12) {
+            apply_sql_block(&pool, sql).await;
+            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
+                .bind(v)
+                .bind(desc)
+                .execute(&pool)
+                .await
+                .unwrap();
         }
+
+        // Seed a minimal staff user (required by transactions.staff_id FK).
+        let staff_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users(email, name, role) VALUES('staff@v15', 'Staff', 'staff') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Seed an orphan transaction: card_id=NULL, user_id=NULL.
+        // This is the condition V13 detects to create the synthetic '(deleted)' user.
+        // Disable FK enforcement temporarily so the NULL card_id doesn't violate
+        // any constraint that might be strict on this column.
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO transactions(card_id, user_id, staff_id, amount, action)
+             VALUES(NULL, NULL, ?, -1.00, 'charge')",
+        )
+        .bind(staff_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Apply V13: detects orphan → inserts '(deleted)' user, maps orphan to it.
+        let v13_sql = MIGRATIONS.iter().find(|(v, _, _)| *v == 13).unwrap().2;
+        apply_sql_block(&pool, v13_sql).await;
+        sqlx::query("INSERT INTO schema_version(version, description) VALUES (13, 'V13')")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        // Apply V14, then V15.
+        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v == 14 || *v == 15) {
+            apply_sql_block(&pool, sql).await;
+            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
+                .bind(v)
+                .bind(desc)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        // V15's UPDATE must have set deleted_at on the synthetic '(deleted)' user.
+        // fetch_one (not fetch_optional): if the row is absent the test must fail,
+        // because V13 was guaranteed to create it given our seeded orphan.
+        let row: (i64, Option<String>) = sqlx::query_as(
+            "SELECT id, deleted_at FROM users WHERE name = '(deleted)' ORDER BY id DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            row.1.is_some(),
+            "V15 must set deleted_at on the synthetic (deleted) user"
+        );
     }
 
     #[tokio::test]
     async fn v15_is_idempotent() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
+        // Second run is a no-op via the migration runner's version-table guard.
         run_migrations(&pool).await.unwrap();
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name = 'deleted_at'",
