@@ -204,8 +204,15 @@ async fn list_default_limit_returns_multiple_rows() {
     // Seed 5 fresh users so the default-limit response contains plenty of rows
     // even on a clean test DB (TestApp seeds admin/staff/customer at minimum).
     for i in 0..5 {
-        app.seed_card(&format!("DEF-{i}"), 0.0, None, None, Some(&format!("D{i}")), None)
-            .await;
+        app.seed_card(
+            &format!("DEF-{i}"),
+            0.0,
+            None,
+            None,
+            Some(&format!("D{i}")),
+            None,
+        )
+        .await;
     }
     let (status, body) = app
         .request(get("/api/users/by-last-movement", &app.staff_token))

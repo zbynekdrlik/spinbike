@@ -1259,9 +1259,7 @@ mod tests {
         .await
         .unwrap();
 
-        let found = get_user_by_oauth(&pool, "google", "sub-123")
-            .await
-            .unwrap();
+        let found = get_user_by_oauth(&pool, "google", "sub-123").await.unwrap();
         assert!(found.is_some(), "active oauth user must be returned");
         assert_eq!(found.unwrap().id, id);
 
@@ -1271,9 +1269,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let after = get_user_by_oauth(&pool, "google", "sub-123")
-            .await
-            .unwrap();
+        let after = get_user_by_oauth(&pool, "google", "sub-123").await.unwrap();
         assert!(after.is_none(), "soft-deleted oauth user must be hidden");
     }
 }
