@@ -48,7 +48,6 @@ pub fn DeleteUserSheet(
                 });
             };
             let on_cancel = move |_| {
-                set_err.set(String::new());
                 show.set(false);
             };
 
