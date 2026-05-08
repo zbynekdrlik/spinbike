@@ -671,6 +671,45 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("name_required",        ("Meno je povinne", "Name is required"));
     m.insert("optional_paren",       ("(volitelne)",     "(optional)"));
 
+    // Reports tabs + users-by-movement report + delete-user modal (#56)
+    m.insert("reports_tab_daily", ("Denna aktivita", "Daily activity"));
+    m.insert("reports_tab_users", ("Pouzivatelia", "Users"));
+    m.insert(
+        "users_by_movement_heading",
+        (
+            "Pouzivatelia podla posledneho pohybu",
+            "Users by last movement",
+        ),
+    );
+    m.insert("last_movement", ("Posledny pohyb", "Last movement"));
+    m.insert("no_movement_yet", ("Bez pohybu", "No movement yet"));
+    m.insert("show_more", ("Zobrazit dalsie", "Show more"));
+    m.insert("delete_user", ("Zmazat pouzivatela", "Delete user"));
+    m.insert(
+        "delete_user_confirm_title",
+        ("Zmazat {name}?", "Delete {name}?"),
+    );
+    m.insert(
+        "delete_user_confirm_body",
+        (
+            "Tato akcia skryje pouzivatela vsade. Historia ostane v DB.",
+            "Hides the user everywhere. History stays in the DB.",
+        ),
+    );
+    m.insert(
+        "delete_user_warning_balance",
+        ("Zostatok: {amount} EUR", "Balance: {amount} EUR"),
+    );
+    m.insert(
+        "delete_user_warning_pass",
+        (
+            "Aktivna permanentka do {date}",
+            "Active permanentka until {date}",
+        ),
+    );
+    m.insert("delete_user_cancel", ("Zrusit", "Cancel"));
+    m.insert("delete_user_confirm", ("Zmazat", "Delete"));
+
     m
 });
 
