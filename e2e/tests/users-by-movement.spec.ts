@@ -121,4 +121,33 @@ test.describe('Users by last movement (#56)', () => {
 
         assertCleanConsole(msgs);
     });
+
+    test('DeleteUserSheet Cancel closes modal with clean console (#84)', async ({ page }) => {
+        const msgs = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+
+        // Seed an independent user so the Cancel test never collides with the
+        // Confirm test above. Prefix uses CAN- to make the test row easy to
+        // spot in CI logs.
+        const u = await createUniqueUser(token, 0.0, 'CAN-D');
+
+        // Open the user via /staff?card=<code> directly — same nav target the
+        // Reports row click produces. Cheaper than re-paginating the list.
+        await page.goto(`/staff?card=${u.card_code}`);
+        await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+
+        // Open delete modal.
+        await page.click('[data-testid="delete-user-button"]');
+        const sheet = page.locator('[data-testid="sheet-delete-user"]');
+        await expect(sheet).toBeVisible();
+
+        // Click Cancel — the bug under test.
+        await page.click('[data-testid="delete-user-cancel"]');
+
+        // Sheet hides; the action panel stays open since no destructive action ran.
+        await expect(sheet).toBeHidden({ timeout: 2000 });
+        await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+
+        assertCleanConsole(msgs);
+    });
 });
