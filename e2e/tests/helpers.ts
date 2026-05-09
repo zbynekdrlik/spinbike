@@ -3,33 +3,53 @@ import { Page, expect } from '@playwright/test';
 /**
  * Set up console error/warning collection on a page.
  * Returns an array that accumulates messages during the test.
+ *
+ * Captures both console.error / console.warning AND uncaught page errors
+ * (which is how wasm-bindgen `throw` events surface — they are NOT
+ * console events, so listening only to 'console' silently misses every
+ * Leptos panic. See #89.)
  */
 export function setupConsoleCheck(page: Page): string[] {
     const messages: string[] = [];
+
+    const isFiltered = (text: string): boolean =>
+        text.includes('SharedArrayBuffer') ||
+        text.includes('integrity') ||
+        text.includes('subresource integrity') ||
+        text.includes('crbug.com') ||
+        // Trunk bootstrap calls wasm-bindgen init with the legacy
+        // positional arg form; wasm-bindgen 0.2.x emits a deprecation
+        // warning until Trunk migrates to the single-object form.
+        // Not our code's bug; filter until upstream upgrade.
+        text.includes('using deprecated parameters for the initialization function') ||
+        text.includes('using deprecated parameters for `initSync()`') ||
+        // Playwright sometimes navigates away while a previous WASM bundle
+        // is still streaming. The browser cancels the in-flight fetch and
+        // raises this error. Not a real bug — it is a test-runner artefact.
+        text.includes('WebAssembly compilation aborted: Network error') ||
+        /the server responded with a status of 4\d\d/.test(text);
+
     page.on('console', (msg) => {
         if (msg.type() === 'error' || msg.type() === 'warning') {
             const text = msg.text();
             // Ignore benign browser-level warnings and expected 4xx responses
             // (tests intentionally trigger 401/403/409 — those are not bugs)
             // 5xx errors are NOT filtered — those indicate real server bugs
-            if (
-                text.includes('SharedArrayBuffer') ||
-                text.includes('integrity') ||
-                text.includes('subresource integrity') ||
-                text.includes('crbug.com') ||
-                // Trunk bootstrap calls wasm-bindgen init with the legacy
-                // positional arg form; wasm-bindgen 0.2.x emits a deprecation
-                // warning until Trunk migrates to the single-object form.
-                // Not our code's bug; filter until upstream upgrade.
-                text.includes('using deprecated parameters for the initialization function') ||
-                text.includes('using deprecated parameters for `initSync()`') ||
-                /the server responded with a status of 4\d\d/.test(text)
-            ) {
+            if (isFiltered(text)) {
                 return;
             }
             messages.push(`[${msg.type()}] ${text}`);
         }
     });
+
+    page.on('pageerror', (err) => {
+        const text = `${err.message}\n${err.stack ?? ''}`;
+        if (isFiltered(text)) {
+            return;
+        }
+        messages.push(`[pageerror] ${text}`);
+    });
+
     return messages;
 }
 

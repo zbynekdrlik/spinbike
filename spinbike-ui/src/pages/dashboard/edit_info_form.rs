@@ -120,7 +120,17 @@ pub fn EditInfoForm(
                                 type="button"
                                 class="btn btn--ghost"
                                 disabled=move || loading.get()
-                                on:click=move |_| on_close_btn.run(())
+                                on:click=move |_| {
+                                    // Defer the close to next macrotask so the
+                                    // click event finishes dispatching before
+                                    // the parent's reactive tree unmounts the
+                                    // sheet. See #89.
+                                    let cb = on_close_btn.clone();
+                                    spawn_local(async move {
+                                        gloo_timers::future::TimeoutFuture::new(0).await;
+                                        cb.run(());
+                                    });
+                                }
                             >
                                 {i18n::t(lang.get(), "cancel")}
                             </button>

@@ -66,7 +66,14 @@ pub fn EditPassDateSheet(
             };
 
             let on_cancel = move |_| {
-                show.set(false);
+                // See #89 — bare spawn_local without an await is synchronous
+                // and does not defer. TimeoutFuture(0).await yields to the
+                // JS event loop so the click event finishes dispatching
+                // before the reactive tree unmounts.
+                spawn_local(async move {
+                    gloo_timers::future::TimeoutFuture::new(0).await;
+                    show.set(false);
+                });
             };
 
             view! {

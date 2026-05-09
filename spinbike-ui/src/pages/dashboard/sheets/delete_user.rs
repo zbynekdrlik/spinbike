@@ -48,7 +48,19 @@ pub fn DeleteUserSheet(
                 });
             };
             let on_cancel = move |_| {
-                show.set(false);
+                // Defer the unmount to the next macrotask via TimeoutFuture(0).
+                // spawn_local without an await runs synchronously, so a bare
+                // spawn_local(async { show.set(false) }) does not actually
+                // defer. The TimeoutFuture(0).await yields to the JS event
+                // loop so the click event finishes dispatching (and any
+                // focus/cleanup events on the sheet's DOM nodes settle)
+                // before the reactive tree unmounts. Without this, Leptos
+                // emits "closure invoked recursively or after being dropped".
+                // See #89.
+                spawn_local(async move {
+                    gloo_timers::future::TimeoutFuture::new(0).await;
+                    show.set(false);
+                });
             };
 
             let title = i18n::t(lang.get(), "delete_user_confirm_title")
