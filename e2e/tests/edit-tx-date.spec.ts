@@ -89,4 +89,53 @@ test.describe('Edit transaction date (#76)', () => {
 
         assertCleanConsole(msgs);
     });
+
+    test('EditTxDateSheet Cancel closes modal with clean console (#84)', async ({ page }) => {
+        const msgs = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+        const { card_code, user_id } = await createUniqueUser(token, 0.0, 'TXC');
+
+        // Seed a Spinning charge so the txn list has a row.
+        const svcResp = await fetch(`${BASE_URL}/api/admin/services`, {
+            headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!svcResp.ok) throw new Error(`/api/admin/services failed: ${svcResp.status}`);
+        const services = (await svcResp.json()) as Array<{ id: number; name_en: string }>;
+        const spinning = services.find((s) => s.name_en === 'Spinning');
+        if (!spinning) throw new Error('Spinning service not found');
+        const chargeResp = await fetch(`${BASE_URL}/api/payments/charge`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${token}`,
+            },
+            body: JSON.stringify({ user_id, amount: 1.0, service_id: spinning.id }),
+        });
+        if (!chargeResp.ok) throw new Error(`charge POST failed: ${chargeResp.status}`);
+
+        // Open the card.
+        await page.goto('/staff');
+        const search = page.locator('input[type="search"]');
+        await search.waitFor();
+        await search.focus();
+        await page.keyboard.type(card_code, { delay: 30 });
+        await page.locator('[data-testid="search-result"]').first().click();
+        await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+
+        // Click date-edit pencil to open the sheet.
+        const list = page.locator('[data-testid="transactions-list"]');
+        await expect(list).toBeVisible();
+        const row = list.locator('[data-testid="transaction-row"]').first();
+        await row.locator('[data-testid="txn-date-edit"]').click();
+        const sheet = page.locator('[data-testid="sheet-edit-tx-date"]');
+        await expect(sheet).toBeVisible();
+
+        // Click Cancel — the bug under test. The sheet has no testid'd Cancel
+        // button (only Save has tx-date-save), so filter by i18n text just
+        // like redesign-sheets.spec.ts does for EditPassDateSheet.
+        await sheet.locator('button').filter({ hasText: /zrusit|cancel/i }).click();
+        await expect(sheet).not.toBeVisible({ timeout: 2000 });
+
+        assertCleanConsole(msgs);
+    });
 });

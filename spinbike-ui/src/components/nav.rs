@@ -17,9 +17,9 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
         auth::get_user()
     };
 
+    let set_auth_ver = expect_context::<WriteSignal<u32>>();
     let on_logout = move |_| {
         auth::clear_auth();
-        let set_auth_ver = expect_context::<WriteSignal<u32>>();
         set_auth_ver.update(|v| *v += 1);
         if let Some(w) = web_sys::window() {
             let _ = w.location().set_href("/");
