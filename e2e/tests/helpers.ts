@@ -23,6 +23,10 @@ export function setupConsoleCheck(page: Page): string[] {
         // Not our code's bug; filter until upstream upgrade.
         text.includes('using deprecated parameters for the initialization function') ||
         text.includes('using deprecated parameters for `initSync()`') ||
+        // Playwright sometimes navigates away while a previous WASM bundle
+        // is still streaming. The browser cancels the in-flight fetch and
+        // raises this error. Not a real bug — it is a test-runner artefact.
+        text.includes('WebAssembly compilation aborted: Network error') ||
         /the server responded with a status of 4\d\d/.test(text);
 
     page.on('console', (msg) => {
