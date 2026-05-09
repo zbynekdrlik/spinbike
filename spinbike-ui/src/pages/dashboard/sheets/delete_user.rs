@@ -48,7 +48,16 @@ pub fn DeleteUserSheet(
                 });
             };
             let on_cancel = move |_| {
-                show.set(false);
+                // Defer the unmount to next microtask so the click event
+                // finishes bubbling through the still-mounted sheet (whose
+                // stop_propagation guards the backdrop) before the reactive
+                // tree is dropped. Synchronous show.set(false) here would
+                // tear the click handler's own scope mid-event and Leptos
+                // would emit "closure invoked recursively or after being
+                // dropped". See #89.
+                spawn_local(async move {
+                    show.set(false);
+                });
             };
 
             let title = i18n::t(lang.get(), "delete_user_confirm_title")

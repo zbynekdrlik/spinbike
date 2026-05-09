@@ -61,7 +61,13 @@ pub fn EditTxDateSheet(
             };
 
             let on_cancel = move |_| {
-                show.set(false);
+                // See #89 — synchronous show.set(false) inside a click
+                // handler tears down its own reactive scope mid-event and
+                // Leptos emits "closure invoked recursively or after being
+                // dropped". Defer the unmount to next microtask.
+                spawn_local(async move {
+                    show.set(false);
+                });
             };
 
             view! {
