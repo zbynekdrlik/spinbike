@@ -44,8 +44,8 @@ fn ScheduleRoute() -> impl IntoView {
     }
 }
 
-/// Role-aware root route. Staff/admin land on the Desk (`/staff`); customers
-/// and logged-out visitors see the public schedule. Reactive on `auth_ver`.
+/// Role-aware root route. Staff/admin → `/staff`; customers → `/my/balance`;
+/// logged-out visitors see the public schedule. Reactive on `auth_ver`.
 #[component]
 fn RootRoute() -> impl IntoView {
     let auth_ver = use_context::<ReadSignal<u32>>().expect("auth_ver context");
@@ -53,14 +53,14 @@ fn RootRoute() -> impl IntoView {
         {move || {
             let _ = auth_ver.get();
             let user = crate::auth::get_user();
-            let is_staff = user
-                .as_ref()
-                .map(|u| u.role == "staff" || u.role == "admin")
-                .unwrap_or(false);
-            if is_staff {
-                view! { <RedirectTo to="/staff".to_string()/> }.into_any()
-            } else {
-                SchedulePage().into_any()
+            match user.as_ref().map(|u| u.role.as_str()) {
+                Some("staff") | Some("admin") => {
+                    view! { <RedirectTo to="/staff".to_string()/> }.into_any()
+                }
+                Some(_) => {
+                    view! { <RedirectTo to="/my/balance".to_string()/> }.into_any()
+                }
+                None => SchedulePage().into_any(),
             }
         }}
     }
