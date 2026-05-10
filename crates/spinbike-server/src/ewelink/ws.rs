@@ -268,10 +268,10 @@ async fn connect_loop_with_url_inner(
 
             // Stale-entry sweep.
             stale = sweep_rx.recv() => {
-                if let Some(sequence) = stale {
-                    if pending.remove(&sequence).is_some() {
-                        tracing::debug!(%sequence, "ewelink: sweeping stale pending entry");
-                    }
+                if let Some(sequence) = stale
+                    && pending.remove(&sequence).is_some()
+                {
+                    tracing::debug!(%sequence, "ewelink: sweeping stale pending entry");
                 }
             }
 
