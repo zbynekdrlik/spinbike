@@ -23,7 +23,6 @@ pub struct NegativeBalanceUser {
     pub blocked: bool,
     pub company: Option<String>,
     pub last_visit_at: Option<String>,
-    pub last_payment_at: Option<String>,
     #[serde(default)]
     pub pass: Option<CardPass>,
 }
@@ -188,7 +187,6 @@ mod tests {
             blocked: false,
             company: None,
             last_visit_at: None,
-            last_payment_at: None,
             pass: None,
         }
     }

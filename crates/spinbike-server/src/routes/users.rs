@@ -49,7 +49,6 @@ pub struct NegativeBalanceUserResponse {
     pub email: Option<String>,
     pub company: Option<String>,
     pub last_visit_at: Option<String>,
-    pub last_payment_at: Option<String>,
     pub pass: Option<CardPass>,
 }
 
@@ -550,7 +549,6 @@ async fn negative_balance(
                 email: r.email,
                 company: r.company,
                 last_visit_at: r.last_visit_at,
-                last_payment_at: r.last_payment_at,
                 pass,
             }
         })
