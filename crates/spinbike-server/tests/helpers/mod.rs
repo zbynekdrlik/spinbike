@@ -23,6 +23,13 @@ use tower::util::ServiceExt;
 
 pub const JWT_SECRET: &str = "test-secret-for-integration";
 
+/// Process-wide lock guarding mutations to the EWELINK_TEST_MODE env var.
+/// Tests in this crate run as a single binary per file, but multiple #[tokio::test]
+/// futures execute concurrently — without this lock, two TestApp::with_door_mode
+/// constructions could race on the env var and pick up the wrong value when
+/// EwelinkHandle::spawn() reads it.
+static EWELINK_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 pub struct TestApp {
     pub router: Router,
     pub pool: SqlitePool,
@@ -40,6 +47,21 @@ pub struct TestApp {
 
 impl TestApp {
     pub async fn new() -> Self {
+        Self::new_inner(None).await
+    }
+
+    /// Construct a TestApp with `EWELINK_TEST_MODE` set to the given mode
+    /// while `EwelinkHandle::spawn()` runs. The mode is restored to its
+    /// prior value (or removed) immediately after the handle is built so
+    /// subsequent TestApp constructions in the same process are unaffected.
+    ///
+    /// The mode is held under a process-wide lock so concurrent tests don't
+    /// race on the global EWELINK_TEST_MODE env var while constructing.
+    pub async fn with_door_mode(mode: &str) -> Self {
+        Self::new_inner(Some(mode)).await
+    }
+
+    async fn new_inner(door_mode: Option<&str>) -> Self {
         let pool = db::create_memory_pool().await.unwrap();
         db::run_migrations(&pool).await.unwrap();
 
@@ -103,10 +125,43 @@ impl TestApp {
         let customer_card_id = customer_id;
 
         let (event_tx, _) = broadcast::channel(16);
+
+        // Build the ewelink handle under a process-wide lock so concurrent
+        // tests don't race on EWELINK_TEST_MODE. The env var is restored to
+        // its prior state right after spawn() reads it.
+        let ewelink = {
+            let _guard = EWELINK_ENV_LOCK.lock().await;
+            // Snapshot prior env state.
+            let prior = std::env::var("EWELINK_TEST_MODE").ok();
+            // SAFETY: set_var / remove_var are unsafe in 2024 edition. We're
+            // holding the process-wide lock so no other test thread is racing
+            // on this env var during the window the lock is held.
+            unsafe {
+                if let Some(m) = door_mode {
+                    std::env::set_var("EWELINK_TEST_MODE", m);
+                } else {
+                    std::env::remove_var("EWELINK_TEST_MODE");
+                }
+            }
+            let h = spinbike_server::ewelink::EwelinkHandle::spawn();
+            // Restore the prior value (or remove if it was unset).
+            unsafe {
+                match prior {
+                    Some(v) => std::env::set_var("EWELINK_TEST_MODE", v),
+                    None => std::env::remove_var("EWELINK_TEST_MODE"),
+                }
+            }
+            h
+        };
+
         let state = AppState {
             pool: pool.clone(),
             event_tx,
             jwt_secret: JWT_SECRET.to_string(),
+            ewelink,
+            door_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                spinbike_server::routes::door::RateLimiter::new(),
+            )),
         };
         // TestApp always merges test_fixtures regardless of SPINBIKE_TEST_MODE —
         // the harness knows it's a test context. start_server() in production uses

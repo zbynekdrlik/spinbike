@@ -19,6 +19,10 @@ pub struct AppState {
     pub event_tx: broadcast::Sender<ServerMsg>,
     pub jwt_secret: String,
     pub ewelink: crate::ewelink::EwelinkHandle,
+    /// In-memory door-route rate-limit state. Per-AppState so concurrent
+    /// integration tests don't share throttle windows across separate
+    /// TestApp instances.
+    pub door_rate_limit: std::sync::Arc<std::sync::Mutex<crate::routes::door::RateLimiter>>,
 }
 
 /// Build the CORS layer by reading the CORS_ORIGIN environment variable.
@@ -65,6 +69,9 @@ pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Re
         event_tx,
         jwt_secret,
         ewelink: crate::ewelink::EwelinkHandle::spawn(),
+        door_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+            crate::routes::door::RateLimiter::new(),
+        )),
     };
 
     let mut router = routes::all_routes();
