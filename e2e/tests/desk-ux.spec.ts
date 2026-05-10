@@ -307,4 +307,37 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
 
         assertCleanConsole(msgs);
     });
+
+    test('Spinning chip re-entry guard: rapid double-click fires only one charge POST (#60)', async ({ page }) => {
+        const msgs = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const { lastName } = await activateUniqueCard(token, 50.0, 'GRD');
+        await page.goto('/staff');
+        await openCardByLastName(page, lastName);
+
+        // Track every POST to /api/payments/charge.
+        const chargeRequests: string[] = [];
+        page.on('request', (req) => {
+            if (req.url().endsWith('/api/payments/charge') && req.method() === 'POST') {
+                chargeRequests.push(req.url());
+            }
+        });
+
+        const chip = page.locator('[data-testid="quick-charge-spinning"]');
+        await expect(chip).toBeVisible();
+
+        // Two clicks dispatched back-to-back. The first sets loading=true;
+        // the second hits either the re-entry guard (loading.get_untracked()
+        // already true) or the disabled DOM attribute. Either way, exactly
+        // one POST should fire.
+        await chip.click();
+        await chip.click({ force: true });
+
+        // Wait for the first POST to complete (txn list appears).
+        await expect(page.locator('[data-testid="transaction-row"]')).not.toHaveCount(0);
+
+        expect(chargeRequests.length).toBe(1);
+
+        assertCleanConsole(msgs);
+    });
 });

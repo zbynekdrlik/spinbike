@@ -350,6 +350,13 @@ pub fn ActionForm(
             let svc_id = svc.id;
             let price = svc.default_price;
             let on_click = move |_ev: web_sys::MouseEvent| {
+                // Sub-frame re-entry guard — same pattern as the visit
+                // buttons in #53. The disabled binding catches most repeats,
+                // but double-taps that land between click dispatch and
+                // attribute repaint slip through. See #60.
+                if loading.get_untracked() {
+                    return;
+                }
                 set_err.set(String::new());
                 set_loading.set(true);
                 spawn_local(async move {
