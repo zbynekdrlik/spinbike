@@ -119,6 +119,8 @@ pub struct UpdateUserRequest {
     pub company: Option<String>,
     #[serde(default)]
     pub card_code: Option<String>,
+    #[serde(default)]
+    pub allow_self_entry: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -626,6 +628,20 @@ async fn update_user(
     )
     .await
     .map_err(internal_error)?;
+
+    if let Some(allow) = body.allow_self_entry {
+        if claims.role != spinbike_core::auth::Role::Admin {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "Only admin can modify allow_self_entry"
+                })),
+            ));
+        }
+        db::update_user_allow_self_entry(&state.pool, id, allow)
+            .await
+            .map_err(internal_error)?;
+    }
 
     let user = db::get_user_by_id(&state.pool, id)
         .await

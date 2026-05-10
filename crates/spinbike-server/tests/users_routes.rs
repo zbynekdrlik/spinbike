@@ -958,3 +958,59 @@ async fn update_user_card_code_unchanged_returns_200() {
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
 }
+
+// ─── allow_self_entry — admin-only guard ──────────────────────────────────────
+
+#[tokio::test]
+async fn admin_can_set_allow_self_entry() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"allow_self_entry": true});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.admin_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let val: i64 = sqlx::query_scalar("SELECT allow_self_entry FROM users WHERE id = ?")
+        .bind(app.customer_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(val, 1);
+}
+
+#[tokio::test]
+async fn staff_cannot_set_allow_self_entry() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"allow_self_entry": true});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.staff_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+    let val: i64 = sqlx::query_scalar("SELECT allow_self_entry FROM users WHERE id = ?")
+        .bind(app.customer_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(val, 0, "field must not have been updated");
+}
+
+#[tokio::test]
+async fn staff_can_still_edit_other_fields() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"name": "Renamed By Staff"});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.staff_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+}
