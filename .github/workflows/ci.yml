@@ -210,7 +210,7 @@ jobs:
           # exact target "spinbike", not "spinbike_server::routes::*").
           RUST_LOG=spinbike_server=info,spinbike=info \
             PORT=8099 DATABASE_PATH=/tmp/spinbike-e2e.db JWT_SECRET=ci-test \
-            SPINBIKE_TEST_MODE=1 \
+            SPINBIKE_TEST_MODE=1 EWELINK_TEST_MODE=success \
             ./target/release/spinbike-server > /tmp/spinbike-server.log 2>&1 &
 
       - name: Wait for server
