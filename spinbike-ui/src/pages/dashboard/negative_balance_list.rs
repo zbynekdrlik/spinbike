@@ -5,6 +5,7 @@
 //! the parent's `txn_refresh` signal increments.
 
 use chrono::NaiveDate;
+use leptos::logging;
 use leptos::prelude::*;
 use serde::Deserialize;
 use wasm_bindgen_futures::spawn_local;
@@ -43,12 +44,17 @@ pub fn NegativeBalanceList(
     Effect::new(move |_| {
         let _ = txn_refresh.get(); // reactive dependency
         spawn_local(async move {
-            // Errors are swallowed: an alert list that fails to load has no
-            // useful UI fallback, and we'd rather hide it than show noise.
-            let fetched = api::get::<Vec<NegativeBalanceUser>>("/api/users/negative-balance")
-                .await
-                .unwrap_or_default();
-            set_rows.set(fetched);
+            match api::get::<Vec<NegativeBalanceUser>>("/api/users/negative-balance").await {
+                Ok(fetched) => set_rows.set(fetched),
+                Err(e) => {
+                    // Hide the alert list rather than show stale data, but
+                    // log the underlying error so a 3am debugging session can
+                    // see why no negative-balance customers ever appeared.
+                    // See #64 + comprehensive-logging.md.
+                    logging::warn!("negative-balance fetch failed: {e}");
+                    set_rows.set(Vec::new());
+                }
+            }
         });
     });
 
