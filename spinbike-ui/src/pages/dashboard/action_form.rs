@@ -114,12 +114,22 @@ pub fn ActionForm(
                 Ok(c) => {
                     let credit = c.credit;
                     set_selected.set(Some(c));
-                    set_msg.set(i18n::tf(
+                    let m = i18n::tf(
                         lang.get_untracked(),
                         "topup_ok_format",
                         &[&format!("{credit:.2}")],
-                    ));
+                    );
+                    set_msg.set(m.clone());
                     clear_note();
+                    // Auto-clear after 2.5s if msg hasn't been replaced by a
+                    // newer action. Mirrors the visit-button banner from
+                    // #53 and removes the asymmetry described in #61.
+                    spawn_local(async move {
+                        gloo_timers::future::TimeoutFuture::new(2500).await;
+                        if msg.get_untracked() == m {
+                            set_msg.set(String::new());
+                        }
+                    });
                 }
                 Err(e) => set_err.set(e),
             }
@@ -219,11 +229,12 @@ pub fn ActionForm(
                 .await
                 {
                     Ok(r) => {
-                        set_msg.set(i18n::tf(
+                        let m = i18n::tf(
                             lang.get_untracked(),
                             "charge_ok_format",
                             &[&format!("{:.2}", r.new_credit)],
-                        ));
+                        );
+                        set_msg.set(m.clone());
                         set_selected.update(|s| {
                             if let Some(c) = s {
                                 c.credit = r.new_credit;
@@ -231,6 +242,14 @@ pub fn ActionForm(
                         });
                         set_txn_refresh.update(|n| *n += 1);
                         clear_note();
+                        // Auto-clear after 2.5s if msg hasn't been replaced by
+                        // a newer action. Mirrors visit-button banner / #53.
+                        spawn_local(async move {
+                            gloo_timers::future::TimeoutFuture::new(2500).await;
+                            if msg.get_untracked() == m {
+                                set_msg.set(String::new());
+                            }
+                        });
                     }
                     Err(e) => set_err.set(e),
                 }
