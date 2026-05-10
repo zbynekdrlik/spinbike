@@ -150,4 +150,27 @@ test.describe('Users by last movement (#56)', () => {
 
         assertCleanConsole(msgs);
     });
+
+    test('DeleteUserSheet backdrop close clean console (#88)', async ({ page }) => {
+        const msgs = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+        const u = await createUniqueUser(token, 0.0, 'BKD-D');
+
+        await page.goto(`/staff?card=${u.card_code}`);
+        await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+
+        await page.click('[data-testid="delete-user-button"]');
+        const sheet = page.locator('[data-testid="sheet-delete-user"]');
+        await expect(sheet).toBeVisible();
+
+        // Click the backdrop at top-left so we land outside the centered .sheet
+        // (which has stop_propagation). The Sheet's on_close runs deferred via
+        // TimeoutFuture(0) — must not emit closure-after-drop. See #88.
+        await page.locator('.sheet-backdrop').click({ position: { x: 5, y: 5 } });
+
+        await expect(sheet).toBeHidden({ timeout: 2000 });
+        await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+
+        assertCleanConsole(msgs);
+    });
 });

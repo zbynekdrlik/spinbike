@@ -51,12 +51,21 @@ pub fn EditTxDateSheet(
                     .await
                     {
                         Ok(_) => {
-                            show.set(false);
+                            // Reset per-mount signals BEFORE unmount so we
+                            // never write to a dropped subscriber. Then yield
+                            // to the JS event loop so on_saved's parent-side
+                            // refresh settles before the sheet vanishes.
+                            // See #88.
+                            set_saving.set(false);
                             on_saved.run(());
+                            gloo_timers::future::TimeoutFuture::new(0).await;
+                            show.set(false);
                         }
-                        Err(e) => set_err.set(e),
+                        Err(e) => {
+                            set_err.set(e);
+                            set_saving.set(false);
+                        }
                     }
-                    set_saving.set(false);
                 });
             };
 
