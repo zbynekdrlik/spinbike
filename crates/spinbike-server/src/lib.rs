@@ -2,6 +2,7 @@ pub mod auth;
 pub mod db;
 pub mod jobs;
 pub mod routes;
+pub mod util;
 pub mod ws;
 
 use anyhow::Result;
