@@ -42,9 +42,9 @@ async fn mock_ws_round_trip() {
             .next()
             .unwrap()
             .to_string();
-        ws.send(Message::Text(
-            format!(r#"{{"error":0,"sequence":"{seq}"}}"#).into(),
-        ))
+        ws.send(Message::Text(format!(
+            r#"{{"error":0,"sequence":"{seq}"}}"#
+        )))
         .await
         .unwrap();
     });
