@@ -710,6 +710,25 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("delete_user_cancel", ("Zrusit", "Cancel"));
     m.insert("delete_user_confirm", ("Zmazat", "Delete"));
 
+    // Door self-entry (#92)
+    m.insert("door_button_idle",       ("Otvorit dvere - drz 2s",      "Hold to open door"));
+    m.insert("door_button_holding",    ("Drz...",                       "Hold..."));
+    m.insert("door_button_firing",     ("Otvaram...",                   "Opening..."));
+    m.insert("door_success",           ("Dvere otvorene - vojdi",      "Door open - step in"));
+    m.insert("door_unavailable",       ("Dvere nedostupne - oslov recepciu", "Door unavailable - ask reception"));
+    m.insert("door_rate_limited",      ("Pockaj chvilu...",             "Wait a moment..."));
+    m.insert("door_not_allowed",       ("Oslov recepciu pre vstup",     "Ask reception for entry"));
+    m.insert("door_lock_icon_aria",    ("Ikona zamku",                  "Lock icon"));
+    m.insert("monthly_pass_active_until", ("Mesacny preplatok aktivny do {}", "Monthly pass active until {}"));
+    m.insert("monthly_pass_not_active", ("Mesacny preplatok neaktivny", "Monthly pass not active"));
+    m.insert("my_balance_hello",        ("Ahoj, {}",                    "Hello, {}"));
+    m.insert("my_balance_credit",       ("Zostatok",                    "Credit"));
+    m.insert("my_balance_recent_visits", ("Posledne navstevy",          "Recent visits"));
+    m.insert("admin_allow_self_entry",  ("Povolit samoobsluzny vstup",  "Allow self-entry"));
+    m.insert("admin_allow_self_entry_help",
+        ("(otvaranie dveri z PWA bez pritomnosti personalu)",
+         "(open door from PWA without staff present)"));
+
     m
 });
 
