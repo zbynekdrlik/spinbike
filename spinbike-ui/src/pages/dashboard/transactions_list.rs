@@ -119,7 +119,7 @@ pub fn TransactionsList(
                             });
                     match parsed_utc {
                         Some(utc) => bratislava.from_utc_datetime(&utc).date_naive(),
-                        None => chrono::Local::now().date_naive(),
+                        None => crate::relative_date::today_local(),
                     }
                 };
 

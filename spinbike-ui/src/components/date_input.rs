@@ -79,7 +79,7 @@ pub fn DateInput(
         set_value.update(|d| *d = *d + chrono::Duration::days(1));
     };
     let set_today = move |_| {
-        set_value.set(chrono::Local::now().date_naive());
+        set_value.set(crate::relative_date::today_local());
     };
 
     let testid_value = testid.unwrap_or_default();

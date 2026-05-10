@@ -43,7 +43,7 @@ pub fn ActionForm(
         }
     };
 
-    let today = chrono::Local::now().date_naive();
+    let today = crate::relative_date::today_local();
     let default_valid_until = card
         .pass
         .as_ref()

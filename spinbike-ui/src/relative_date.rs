@@ -13,6 +13,13 @@
 use crate::i18n::{self, Lang};
 use chrono::{Datelike, NaiveDate};
 
+/// Locale-aware "today" — wraps `chrono::Local::now().date_naive()`.
+/// Centralised so future date-formatting features (and tests that mock
+/// the current day) share a single call site. See #63.
+pub fn today_local() -> NaiveDate {
+    chrono::Local::now().date_naive()
+}
+
 /// Format `visited` as a date label combined with a relative-time hint
 /// computed against `today`. Output examples:
 ///   - Slovak, 6 days ago, visited 2026-04-28 → "28.04.2026 (pred 6 dnami)"

@@ -13,7 +13,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::api;
 use crate::i18n::{self, Lang};
 use crate::pages::dashboard::{CardInfo, CardPass};
-use crate::relative_date::relative;
+use crate::relative_date::{relative, today_local};
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct NegativeBalanceUser {
@@ -149,10 +149,6 @@ fn summary_suffix(rows: &[NegativeBalanceUser]) -> String {
     let count = rows.len();
     let sum: f64 = rows.iter().map(|r| r.credit).sum();
     format!("  ·  {count}  ·  {sum:.2} €")
-}
-
-fn today_local() -> NaiveDate {
-    chrono::Local::now().date_naive()
 }
 
 /// Promote a `NegativeBalanceUser` into the parent `CardInfo` so clicking a

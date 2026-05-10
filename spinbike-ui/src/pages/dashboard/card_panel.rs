@@ -91,7 +91,7 @@ pub fn CardActionPanel(
                     {move || {
                         match parse_last_visit(&last_visit_at) {
                             Some(visited) => {
-                                let today = chrono::Local::now().date_naive();
+                                let today = crate::relative_date::today_local();
                                 let label = i18n::t(lang.get(), "last_visit_label");
                                 let value = format_last_visit(visited, today, lang.get());
                                 view! {
