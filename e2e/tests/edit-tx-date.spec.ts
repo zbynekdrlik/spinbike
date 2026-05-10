@@ -130,10 +130,8 @@ test.describe('Edit transaction date (#76)', () => {
         const sheet = page.locator('[data-testid="sheet-edit-tx-date"]');
         await expect(sheet).toBeVisible();
 
-        // Click Cancel — the bug under test. The sheet has no testid'd Cancel
-        // button (only Save has tx-date-save), so filter by i18n text just
-        // like redesign-sheets.spec.ts does for EditPassDateSheet.
-        await sheet.locator('button').filter({ hasText: /zrusit|cancel/i }).click();
+        // Click Cancel — the bug under test.
+        await page.locator('[data-testid="edit-tx-date-cancel"]').click();
         await expect(sheet).not.toBeVisible({ timeout: 2000 });
 
         assertCleanConsole(msgs);

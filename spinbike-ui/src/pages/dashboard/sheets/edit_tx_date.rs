@@ -92,6 +92,7 @@ pub fn EditTxDateSheet(
                     <div class="sheet__actions">
                         <button
                             class="btn btn--ghost"
+                            data-testid="edit-tx-date-cancel"
                             disabled=move || saving.get()
                             on:click=on_cancel
                         >

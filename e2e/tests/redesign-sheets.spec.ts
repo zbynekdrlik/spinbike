@@ -68,8 +68,8 @@ test.describe('redesign: sheets', () => {
         await page.locator('[data-testid="pass-date-edit"]').click();
         await expect(page.locator('[data-testid="sheet-edit-pass-date"]')).toBeVisible();
 
-        // Close via the cancel button (uses the cancel i18n key).
-        await page.locator('[data-testid="sheet-edit-pass-date"] button').filter({ hasText: /zrusit|cancel/i }).click();
+        // Close via the cancel button.
+        await page.locator('[data-testid="edit-pass-date-cancel"]').click();
         await expect(page.locator('[data-testid="sheet-edit-pass-date"]')).not.toBeVisible({ timeout: 2000 });
 
         assertCleanConsole(msgs);
