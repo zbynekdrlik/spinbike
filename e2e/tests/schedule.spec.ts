@@ -157,8 +157,10 @@ test.describe('Schedule and booking', () => {
             localStorage.setItem('spinbike_user', JSON.stringify(authData.user));
         }, { token: loginData.token, user: loginData.user });
 
-        // Reload to pick up the auth state
-        await page.reload();
+        // Authenticated customers now land on /my/balance from `/` (router
+        // redirect for the door self-entry feature, #92). Navigate directly
+        // to /schedule for the booking-verification UI flow.
+        await page.goto('/schedule');
         await page.waitForSelector('h1.page-title');
         await page.waitForFunction(() => {
             return !document.querySelector('.spinner');
