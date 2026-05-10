@@ -352,9 +352,13 @@ jobs:
           # Mutate only PR-changed lines in spinbike-ui. The preceding
           # sanity-check step guards against the silent-no-op pattern
           # (mutants list empty when production code changed).
+          # --timeout 180s: WASM tests run via wasm-bindgen-test --node
+          # are 3x slower than native; baseline test phase clocks ~60s on
+          # ubuntu-latest, so 60s timeout would give zero buffer. 180s
+          # leaves room for normal variance without masking real hangs.
           cargo mutants \
             --in-diff pr.diff \
-            --timeout 60 \
+            --timeout 180 \
             --no-shuffle \
             --manifest-path spinbike-ui/Cargo.toml \
             -- --target wasm32-unknown-unknown
