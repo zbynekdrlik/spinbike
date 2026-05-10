@@ -225,12 +225,15 @@ test.describe('Door self-entry (#92)', () => {
             expect(text).not.toContain('door:');
         }
 
-        // The intentional 503 from page.route surfaces in the browser console
-        // as a `Failed to load resource ... 503 (Service Unavailable)` error.
-        // That is expected behavior for this test, not a real regression —
-        // filter it before asserting clean-console.
+        // The intentional 503 from page.route surfaces in TWO console lines:
+        //   1. browser: "Failed to load resource ... 503 (Service Unavailable)"
+        //   2. Leptos:  "[warning] door open: HTTP 503" (logged by the
+        //      my_balance page's post_door_open helper)
+        // Both are expected for this test, not real regressions — filter.
         const filtered = messages.filter(
-            (m) => !m.includes('503 (Service Unavailable)'),
+            (m) =>
+                !m.includes('503 (Service Unavailable)') &&
+                !m.includes('door open: HTTP 503'),
         );
         expect(filtered).toEqual([]);
     });
