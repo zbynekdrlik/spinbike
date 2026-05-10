@@ -53,26 +53,15 @@ pub fn EditPassDateSheet(
                         Ok(_) => {
                             match api::get::<CardInfo>(&format!("/api/users/lookup/{code}")).await {
                                 Ok(c) => {
-                                    // Reset per-mount signals BEFORE unmount,
-                                    // then yield so the parent's refresh from
-                                    // set_selected settles before the sheet
-                                    // vanishes. See #88.
                                     set_selected.set(Some(c));
-                                    set_saving.set(false);
-                                    gloo_timers::future::TimeoutFuture::new(0).await;
                                     show.set(false);
                                 }
-                                Err(e) => {
-                                    set_err.set(e);
-                                    set_saving.set(false);
-                                }
+                                Err(e) => set_err.set(e),
                             }
                         }
-                        Err(e) => {
-                            set_err.set(e);
-                            set_saving.set(false);
-                        }
+                        Err(e) => set_err.set(e),
                     }
+                    set_saving.set(false);
                 });
             };
 

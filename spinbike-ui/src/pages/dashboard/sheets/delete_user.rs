@@ -39,21 +39,12 @@ pub fn DeleteUserSheet(
                 spawn_local(async move {
                     match api::delete(&format!("/api/users/{user_id}")).await {
                         Ok(()) => {
-                            // Reset per-mount signals BEFORE unmount so we
-                            // never write to a dropped subscriber. Then yield
-                            // to the JS event loop so on_saved's parent-side
-                            // refresh can complete before the sheet vanishes.
-                            // See #88.
-                            set_saving.set(false);
-                            on_saved.run(());
-                            gloo_timers::future::TimeoutFuture::new(0).await;
                             show.set(false);
+                            on_saved.run(());
                         }
-                        Err(e) => {
-                            set_err.set(e);
-                            set_saving.set(false);
-                        }
+                        Err(e) => set_err.set(e),
                     }
+                    set_saving.set(false);
                 });
             };
             let on_cancel = move |_| {
