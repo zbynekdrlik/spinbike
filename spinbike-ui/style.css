@@ -1451,12 +1451,6 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
     min-width: 0;
 }
 
-.list-row__end--column {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-}
-
 /* Per-row action icons (note edit, date edit, void) on the transactions
  * list. Stays horizontal so the row height does not balloon to fit a
  * vertical stack — see #85. Uses btn--icon (square 28px) instead of
