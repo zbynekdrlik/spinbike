@@ -348,6 +348,14 @@ jobs:
         run: python3 .github/scripts/sanity_check_ui_mutants.py "${{ github.base_ref }}"
 
       - name: Run cargo-mutants on UI diff
+        env:
+          # Force-route wasm32 test binaries through wasm-bindgen-test-runner.
+          # cargo-mutants copies the workspace into a temp dir and invokes
+          # `cargo test` from there; the .cargo/config.toml runner setting
+          # lives outside that temp tree so cargo otherwise tries to exec
+          # the .wasm binary natively and fails with "end of file unexpected".
+          # Setting the env var bypasses config-file lookup entirely.
+          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
         run: |
           # Mutate only PR-changed lines in spinbike-ui. The preceding
           # sanity-check step guards against the silent-no-op pattern
