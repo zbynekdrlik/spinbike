@@ -175,6 +175,7 @@ fn neg_to_card_info(c: &NegativeBalanceUser) -> CardInfo {
         // `allow_debit` and `phone` aren't read by the action panel's
         // monthly-pass header or the visit-log button, so defaults are safe.
         allow_debit: false,
+        allow_self_entry: false,
         phone: None,
         email: None,
     }
