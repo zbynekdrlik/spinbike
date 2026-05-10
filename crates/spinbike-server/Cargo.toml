@@ -25,6 +25,15 @@ jsonwebtoken = "9"
 argon2 = "0.5"
 rand = "0.8"
 unicode-normalization = "0.1"
+tokio-tungstenite = { workspace = true }
+reqwest = { workspace = true }
+hmac = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+aes = { workspace = true }
+cbc = { workspace = true }
+urlencoding = { workspace = true }
+base64 = { workspace = true }
 
 [[bin]]
 name = "spinbike-server"
@@ -35,3 +44,4 @@ path = "src/bin/server.rs"
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"
+httpmock = "0.8"
