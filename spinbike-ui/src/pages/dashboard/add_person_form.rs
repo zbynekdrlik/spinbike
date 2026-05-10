@@ -1,12 +1,12 @@
 use leptos::prelude::*;
-use wasm_bindgen_futures::spawn_local;
 use serde::{Deserialize, Serialize};
+use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
 use crate::i18n::{self, Lang};
 
-use super::helpers::event_target_value;
 use super::CardInfo;
+use super::helpers::event_target_value;
 
 #[derive(Serialize)]
 struct CreateUserReq {
@@ -74,7 +74,11 @@ pub fn AddPersonForm(
         spawn_local(async move {
             match api::post::<CreateUserReq, UserResp>("/api/users", &body).await {
                 Ok(u) => {
-                    set_msg.set(i18n::tf(lang.get_untracked(), "add_person_ok_format", &[&u.name]));
+                    set_msg.set(i18n::tf(
+                        lang.get_untracked(),
+                        "add_person_ok_format",
+                        &[&u.name],
+                    ));
                     set_selected.set(Some(CardInfo {
                         id: u.id,
                         card_code: u.card_code,

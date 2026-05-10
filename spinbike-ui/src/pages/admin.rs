@@ -58,7 +58,12 @@ pub fn AdminPage() -> impl IntoView {
 
     let seg_items: Vec<(String, String)> = ADMIN_TAB_KEYS
         .iter()
-        .map(|(id, key)| (id.to_string(), i18n::t(lang.get_untracked(), key).to_string()))
+        .map(|(id, key)| {
+            (
+                id.to_string(),
+                i18n::t(lang.get_untracked(), key).to_string(),
+            )
+        })
         .collect();
 
     view! {

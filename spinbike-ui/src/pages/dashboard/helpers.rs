@@ -19,11 +19,7 @@ pub fn full_name(c: &super::CardInfo) -> String {
 /// Display name with a richer fallback chain: prefers `name`, then company,
 /// then card_code in brackets. Useful for list rows where "—" would be
 /// uninformative (e.g. a corporate card with no person name).
-pub fn user_display_name(
-    name: &str,
-    company: Option<&str>,
-    card_code: Option<&str>,
-) -> String {
+pub fn user_display_name(name: &str, company: Option<&str>, card_code: Option<&str>) -> String {
     let trimmed = name.trim();
     if !trimmed.is_empty() && trimmed != "(no name)" {
         return trimmed.to_string();

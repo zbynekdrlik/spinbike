@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
 
@@ -28,6 +29,7 @@ pub fn EditInfoForm(
     let ev = StoredValue::new(card.email.clone().unwrap_or_default());
     let cv = StoredValue::new(card.company.clone().unwrap_or_default());
     let pv = StoredValue::new(card.phone.clone().unwrap_or_default());
+    let (allow_self_entry, set_allow_self_entry) = signal(card.allow_self_entry);
 
     view! {
         {move || {
@@ -62,6 +64,7 @@ pub fn EditInfoForm(
 
                 set_loading.set(true);
                 let on_close_inner = on_close_save.clone();
+                let allow_se = allow_self_entry.get_untracked();
                 spawn_local(async move {
                     #[derive(serde::Serialize)]
                     struct Req {
@@ -69,12 +72,14 @@ pub fn EditInfoForm(
                         email: Option<String>,
                         company: Option<String>,
                         phone: Option<String>,
+                        allow_self_entry: Option<bool>,
                     }
                     let req = Req {
                         name: if name.trim().is_empty() { None } else { Some(name) },
                         email: if email.trim().is_empty() { None } else { Some(email) },
                         company: if company.is_empty() { None } else { Some(company) },
                         phone: if phone.is_empty() { None } else { Some(phone) },
+                        allow_self_entry: Some(allow_se),
                     };
                     match api::put_json::<Req, CardInfo>(&format!("/api/users/{card_id}"), &req).await {
                         Ok(c) => {
@@ -115,6 +120,22 @@ pub fn EditInfoForm(
                             <label>{i18n::t(lang.get(), "phone")}</label>
                             <input type="text" class="form-control" node_ref=phone_ref value=pv.get_value() />
                         </div>
+                        <label class="form-row" data-testid="user-edit-allow-self-entry-row">
+                            <input
+                                type="checkbox"
+                                data-testid="user-edit-allow-self-entry"
+                                prop:checked=move || allow_self_entry.get()
+                                on:change=move |ev| {
+                                    let el: HtmlInputElement =
+                                        ev.target().unwrap().unchecked_into();
+                                    set_allow_self_entry.set(el.checked());
+                                }
+                            />
+                            <span>{move || i18n::t(lang.get(), "admin_allow_self_entry")}</span>
+                            <small class="form-help">
+                                {move || i18n::t(lang.get(), "admin_allow_self_entry_help")}
+                            </small>
+                        </label>
                         <div class="sheet__actions">
                             <button
                                 type="button"

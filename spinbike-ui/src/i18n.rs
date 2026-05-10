@@ -133,9 +133,7 @@ fn parse_to_local(s: &str) -> Option<chrono::DateTime<chrono_tz::Tz>> {
 /// the None branch without linking JS interop.
 #[cfg(target_arch = "wasm32")]
 fn warn_unparseable(helper: &str, s: &str) {
-    web_sys::console::warn_1(
-        &format!("i18n::{helper}: unparseable timestamp '{s}'").into(),
-    );
+    web_sys::console::warn_1(&format!("i18n::{helper}: unparseable timestamp '{s}'").into());
 }
 #[cfg(not(target_arch = "wasm32"))]
 fn warn_unparseable(_helper: &str, _s: &str) {}
@@ -292,7 +290,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
 
     // My balance
     m.insert("my_balance", ("Moj zostatok", "My Balance"));
-
 
     // Card operations
     m.insert("card_operations", ("Operacie s kartami", "Card Operations"));
@@ -465,15 +462,21 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     );
 
     // Transaction history action labels (EventKind-driven; DB stores raw English: topup/charge/visit/pass).
-    m.insert("tx_label_topup",  ("Dobitie kreditu",      "Top-up"));
-    m.insert("tx_label_charge", ("Výdaj z kreditu",      "Spent from credit"));
-    m.insert("tx_label_visit",  ("Vstup s permanentkou", "Entry with pass"));
-    m.insert("tx_label_pass",   ("Predaj permanentky",   "Sale of pass"));
+    m.insert("tx_label_topup", ("Dobitie kreditu", "Top-up"));
+    m.insert("tx_label_charge", ("Výdaj z kreditu", "Spent from credit"));
+    m.insert(
+        "tx_label_visit",
+        ("Vstup s permanentkou", "Entry with pass"),
+    );
+    m.insert("tx_label_pass", ("Predaj permanentky", "Sale of pass"));
     // Transaction note UI strings
-    m.insert("tx_note_placeholder", ("Poznámka (nepovinné)", "Note (optional)"));
-    m.insert("tx_note_edit",        ("Upraviť poznámku",     "Edit note"));
-    m.insert("tx_note_save",        ("Uložiť",               "Save"));
-    m.insert("tx_note_cancel",      ("Zrušiť",               "Cancel"));
+    m.insert(
+        "tx_note_placeholder",
+        ("Poznámka (nepovinné)", "Note (optional)"),
+    );
+    m.insert("tx_note_edit", ("Upraviť poznámku", "Edit note"));
+    m.insert("tx_note_save", ("Uložiť", "Save"));
+    m.insert("tx_note_cancel", ("Zrušiť", "Cancel"));
     m.insert("tx_until_short", ("do", "until"));
     m.insert("error_format", ("Chyba: {}", "Error: {}"));
 
@@ -488,10 +491,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("modal_confirm", ("Potvrdit", "OK"));
     m.insert("modal_cancel", ("Zrusit", "Cancel"));
     m.insert("sell_pass_action", ("Predat", "Sell pass"));
-    m.insert(
-        "price_required",
-        ("Zadajte cenu", "Please enter a price"),
-    );
+    m.insert("price_required", ("Zadajte cenu", "Please enter a price"));
 
     // Upcoming classes + persistent booking
     m.insert(
@@ -559,7 +559,10 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("days_short", ("dni", "days"));
     m.insert("days_ago_short", ("pred {} d", "{}d ago"));
     m.insert("edit_pass_date", ("Upravit datum", "Edit date"));
-    m.insert("edit_tx_date", ("Zmenit datum zaznamu", "Change entry date"));
+    m.insert(
+        "edit_tx_date",
+        ("Zmenit datum zaznamu", "Change entry date"),
+    );
     m.insert("tx_date_edit_tooltip", ("Zmenit datum", "Change date"));
     m.insert(
         "tx_date_window_error",
@@ -611,12 +614,15 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     );
 
     // Reports — feed event labels (Other is a fallback; main labels come from tx_label_*)
-    m.insert("event_other",    ("Iné",          "Other"));
+    m.insert("event_other", ("Iné", "Other"));
     // Reports — feed
     m.insert("feed_load_older", ("Nacitat starsie", "Load older"));
     m.insert(
         "feed_empty_day",
-        ("Na tento den nie je ziadna aktivita.", "No activity on this day."),
+        (
+            "Na tento den nie je ziadna aktivita.",
+            "No activity on this day.",
+        ),
     );
     m.insert(
         "feed_empty_filter",
@@ -627,10 +633,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     );
 
     // Card detail (collapsed contact)
-    m.insert(
-        "card_show_contact",
-        ("Zobrazit kontakt", "Show contact"),
-    );
+    m.insert("card_show_contact", ("Zobrazit kontakt", "Show contact"));
     m.insert("card_hide_contact", ("Skryt kontakt", "Hide contact"));
 
     // Settings (renamed /admin) tabs
@@ -649,7 +652,10 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("last_visit_label", ("Posledna navsteva", "Last visit"));
 
     // Negative-balance list (#49)
-    m.insert("negative_balance_heading", ("Klienti v minuse", "Customers with negative balance"));
+    m.insert(
+        "negative_balance_heading",
+        ("Klienti v minuse", "Customers with negative balance"),
+    );
     m.insert("last_payment_label", ("Posledna platba", "Last payment"));
     m.insert("never_label", ("nikdy", "never"));
     m.insert("rel_today", ("dnes", "today"));
@@ -664,12 +670,15 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("rel_years_few", ("pred {n} rokmi", "{n} years ago"));
 
     // Add person form (#55)
-    m.insert("add_person",           ("Pridat osobu",    "Add Person"));
-    m.insert("hide_add_person",      ("Skryt formular",  "Hide form"));
-    m.insert("add_person_submit",    ("Ulozit osobu",    "Save Person"));
-    m.insert("add_person_ok_format", ("Osoba pridana: {}", "Person added: {}"));
-    m.insert("name_required",        ("Meno je povinne", "Name is required"));
-    m.insert("optional_paren",       ("(volitelne)",     "(optional)"));
+    m.insert("add_person", ("Pridat osobu", "Add Person"));
+    m.insert("hide_add_person", ("Skryt formular", "Hide form"));
+    m.insert("add_person_submit", ("Ulozit osobu", "Save Person"));
+    m.insert(
+        "add_person_ok_format",
+        ("Osoba pridana: {}", "Person added: {}"),
+    );
+    m.insert("name_required", ("Meno je povinne", "Name is required"));
+    m.insert("optional_paren", ("(volitelne)", "(optional)"));
 
     // Reports tabs + users-by-movement report + delete-user modal (#56)
     m.insert("reports_tab_daily", ("Denna aktivita", "Daily activity"));
@@ -711,23 +720,60 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("delete_user_confirm", ("Zmazat", "Delete"));
 
     // Door self-entry (#92)
-    m.insert("door_button_idle",       ("Otvorit dvere - drz 2s",      "Hold to open door"));
-    m.insert("door_button_holding",    ("Drz...",                       "Hold..."));
-    m.insert("door_button_firing",     ("Otvaram...",                   "Opening..."));
-    m.insert("door_success",           ("Dvere otvorene - vojdi",      "Door open - step in"));
-    m.insert("door_unavailable",       ("Dvere nedostupne - oslov recepciu", "Door unavailable - ask reception"));
-    m.insert("door_rate_limited",      ("Pockaj chvilu...",             "Wait a moment..."));
-    m.insert("door_not_allowed",       ("Oslov recepciu pre vstup",     "Ask reception for entry"));
-    m.insert("door_lock_icon_aria",    ("Ikona zamku",                  "Lock icon"));
-    m.insert("monthly_pass_active_until", ("Mesacny preplatok aktivny do {}", "Monthly pass active until {}"));
-    m.insert("monthly_pass_not_active", ("Mesacny preplatok neaktivny", "Monthly pass not active"));
-    m.insert("my_balance_hello",        ("Ahoj, {}",                    "Hello, {}"));
-    m.insert("my_balance_credit",       ("Zostatok",                    "Credit"));
-    m.insert("my_balance_recent_visits", ("Posledne navstevy",          "Recent visits"));
-    m.insert("admin_allow_self_entry",  ("Povolit samoobsluzny vstup",  "Allow self-entry"));
-    m.insert("admin_allow_self_entry_help",
-        ("(otvaranie dveri z PWA bez pritomnosti personalu)",
-         "(open door from PWA without staff present)"));
+    m.insert(
+        "door_button_idle",
+        ("Otvorit dvere - drz 2s", "Hold to open door"),
+    );
+    m.insert("door_button_holding", ("Drz...", "Hold..."));
+    m.insert("door_button_firing", ("Otvaram...", "Opening..."));
+    m.insert(
+        "door_success",
+        ("Dvere otvorene - vojdi", "Door open - step in"),
+    );
+    m.insert(
+        "door_unavailable",
+        (
+            "Dvere nedostupne - oslov recepciu",
+            "Door unavailable - ask reception",
+        ),
+    );
+    m.insert(
+        "door_rate_limited",
+        ("Pockaj chvilu...", "Wait a moment..."),
+    );
+    m.insert(
+        "door_not_allowed",
+        ("Oslov recepciu pre vstup", "Ask reception for entry"),
+    );
+    m.insert("door_lock_icon_aria", ("Ikona zamku", "Lock icon"));
+    m.insert(
+        "monthly_pass_active_until",
+        (
+            "Mesacny preplatok aktivny do {}",
+            "Monthly pass active until {}",
+        ),
+    );
+    m.insert(
+        "monthly_pass_not_active",
+        ("Mesacny preplatok neaktivny", "Monthly pass not active"),
+    );
+    m.insert("my_balance_hello", ("Ahoj, {}", "Hello, {}"));
+    m.insert("my_balance_credit", ("Zostatok", "Credit"));
+    m.insert(
+        "my_balance_recent_visits",
+        ("Posledne navstevy", "Recent visits"),
+    );
+    m.insert(
+        "admin_allow_self_entry",
+        ("Povolit samoobsluzny vstup", "Allow self-entry"),
+    );
+    m.insert(
+        "admin_allow_self_entry_help",
+        (
+            "(otvaranie dveri z PWA bez pritomnosti personalu)",
+            "(open door from PWA without staff present)",
+        ),
+    );
 
     m
 });
@@ -753,24 +799,33 @@ pub static WEEKDAY_KEYS: [&str; 7] = ["mon", "tue", "wed", "thu", "fri", "sat", 
 
 #[cfg(test)]
 mod datetime_tests {
-    use super::{fmt_datetime_str, fmt_time_str, Lang};
+    use super::{Lang, fmt_datetime_str, fmt_time_str};
     use wasm_bindgen_test::*;
 
     // UTC-source rows shift into Europe/Bratislava (CET = +1 winter,
     // CEST = +2 summer). 2026-04-14 18:13 UTC is in CEST → 20:13 local.
     #[wasm_bindgen_test]
     fn sqlite_format_sk_shifts_to_local() {
-        assert_eq!(fmt_datetime_str("2026-04-14 18:13:11", Lang::Sk), "14.04.2026 20:13");
+        assert_eq!(
+            fmt_datetime_str("2026-04-14 18:13:11", Lang::Sk),
+            "14.04.2026 20:13"
+        );
     }
 
     #[wasm_bindgen_test]
     fn sqlite_format_en_shifts_to_local() {
-        assert_eq!(fmt_datetime_str("2026-04-14 18:13:11", Lang::En), "2026-04-14 20:13");
+        assert_eq!(
+            fmt_datetime_str("2026-04-14 18:13:11", Lang::En),
+            "2026-04-14 20:13"
+        );
     }
 
     #[wasm_bindgen_test]
     fn iso_8601_shifts_to_local() {
-        assert_eq!(fmt_datetime_str("2026-04-14T18:13:11", Lang::Sk), "14.04.2026 20:13");
+        assert_eq!(
+            fmt_datetime_str("2026-04-14T18:13:11", Lang::Sk),
+            "14.04.2026 20:13"
+        );
     }
 
     #[wasm_bindgen_test]
@@ -784,50 +839,74 @@ mod datetime_tests {
     // CET (winter): UTC + 1.
     #[wasm_bindgen_test]
     fn cet_winter_shift() {
-        assert_eq!(fmt_datetime_str("2026-01-15 10:00:00", Lang::Sk), "15.01.2026 11:00");
+        assert_eq!(
+            fmt_datetime_str("2026-01-15 10:00:00", Lang::Sk),
+            "15.01.2026 11:00"
+        );
     }
 
     // CEST (summer): UTC + 2.
     #[wasm_bindgen_test]
     fn cest_summer_shift() {
-        assert_eq!(fmt_datetime_str("2026-07-15 10:00:00", Lang::Sk), "15.07.2026 12:00");
+        assert_eq!(
+            fmt_datetime_str("2026-07-15 10:00:00", Lang::Sk),
+            "15.07.2026 12:00"
+        );
     }
 
     // Spring forward 2026: at 01:00 UTC on Sun Mar 29, local jumps 02:00→03:00.
     #[wasm_bindgen_test]
     fn dst_spring_forward_before() {
         // 00:30 UTC → CET 01:30 local
-        assert_eq!(fmt_datetime_str("2026-03-29 00:30:00", Lang::Sk), "29.03.2026 01:30");
+        assert_eq!(
+            fmt_datetime_str("2026-03-29 00:30:00", Lang::Sk),
+            "29.03.2026 01:30"
+        );
     }
 
     #[wasm_bindgen_test]
     fn dst_spring_forward_after() {
         // 01:30 UTC → CEST 03:30 local (the 02:00–03:00 local window doesn't exist)
-        assert_eq!(fmt_datetime_str("2026-03-29 01:30:00", Lang::Sk), "29.03.2026 03:30");
+        assert_eq!(
+            fmt_datetime_str("2026-03-29 01:30:00", Lang::Sk),
+            "29.03.2026 03:30"
+        );
     }
 
     // Fall back 2026: at 01:00 UTC on Sun Oct 25, local goes 03:00→02:00.
     #[wasm_bindgen_test]
     fn dst_fall_back_before() {
         // 00:30 UTC → CEST 02:30 local
-        assert_eq!(fmt_datetime_str("2026-10-25 00:30:00", Lang::Sk), "25.10.2026 02:30");
+        assert_eq!(
+            fmt_datetime_str("2026-10-25 00:30:00", Lang::Sk),
+            "25.10.2026 02:30"
+        );
     }
 
     #[wasm_bindgen_test]
     fn dst_fall_back_after() {
         // 01:30 UTC → CET 02:30 local (the 02:00–03:00 local window repeats)
-        assert_eq!(fmt_datetime_str("2026-10-25 01:30:00", Lang::Sk), "25.10.2026 02:30");
+        assert_eq!(
+            fmt_datetime_str("2026-10-25 01:30:00", Lang::Sk),
+            "25.10.2026 02:30"
+        );
     }
 
     // Legacy MS Access rows are already Slovak local time → no shift.
     #[wasm_bindgen_test]
     fn legacy_two_digit_year_unchanged() {
-        assert_eq!(fmt_datetime_str("03/24/26 18:59:08", Lang::Sk), "24.03.2026 18:59");
+        assert_eq!(
+            fmt_datetime_str("03/24/26 18:59:08", Lang::Sk),
+            "24.03.2026 18:59"
+        );
     }
 
     #[wasm_bindgen_test]
     fn legacy_four_digit_year_unchanged() {
-        assert_eq!(fmt_datetime_str("03/24/2026 18:59:08", Lang::Sk), "24.03.2026 18:59");
+        assert_eq!(
+            fmt_datetime_str("03/24/2026 18:59:08", Lang::Sk),
+            "24.03.2026 18:59"
+        );
     }
 
     // A legacy timestamp during CEST window must still NOT shift — proves
@@ -835,7 +914,10 @@ mod datetime_tests {
     // even when their date would otherwise look summer-time-eligible.
     #[wasm_bindgen_test]
     fn legacy_summer_date_does_not_shift() {
-        assert_eq!(fmt_datetime_str("07/15/2026 10:00:00", Lang::Sk), "15.07.2026 10:00");
+        assert_eq!(
+            fmt_datetime_str("07/15/2026 10:00:00", Lang::Sk),
+            "15.07.2026 10:00"
+        );
     }
 
     #[wasm_bindgen_test]
@@ -869,7 +951,7 @@ mod datetime_tests {
 
 #[cfg(test)]
 mod format_key_tests {
-    use super::{tf, Lang};
+    use super::{Lang, tf};
     use wasm_bindgen_test::*;
 
     // No wasm_bindgen_test_configure! — CI uses wasm-pack test --node (not browser).
@@ -893,7 +975,7 @@ mod format_key_tests {
 
 #[cfg(test)]
 mod neg_balance_tests {
-    use super::{t, Lang};
+    use super::{Lang, t};
     use wasm_bindgen_test::*;
 
     // No wasm_bindgen_test_configure! — CI uses wasm-pack test --node (not browser).
@@ -905,7 +987,10 @@ mod neg_balance_tests {
 
     #[wasm_bindgen_test]
     fn negative_balance_heading_english() {
-        assert_eq!(t(Lang::En, "negative_balance_heading"), "Customers with negative balance");
+        assert_eq!(
+            t(Lang::En, "negative_balance_heading"),
+            "Customers with negative balance"
+        );
     }
 
     #[wasm_bindgen_test]
