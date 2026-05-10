@@ -14,6 +14,7 @@ use crate::api;
 use crate::i18n::{self, Lang};
 use crate::pages::dashboard::{CardInfo, CardPass};
 use crate::relative_date::{relative, today_local};
+use crate::util::RequestId;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct NegativeBalanceUser {
@@ -41,10 +42,17 @@ pub fn NegativeBalanceList(
     // `Resource::new` requires `Send`.
     let (rows, set_rows) = signal::<Vec<NegativeBalanceUser>>(Vec::new());
 
+    let req_id = RequestId::new();
     Effect::new(move |_| {
         let _ = txn_refresh.get(); // reactive dependency
+        let token = req_id.next();
         spawn_local(async move {
-            match api::get::<Vec<NegativeBalanceUser>>("/api/users/negative-balance").await {
+            let result =
+                api::get::<Vec<NegativeBalanceUser>>("/api/users/negative-balance").await;
+            if !token.is_latest() {
+                return; // stale — a newer trigger run superseded this fetch (#66)
+            }
+            match result {
                 Ok(fetched) => set_rows.set(fetched),
                 Err(e) => {
                     // Hide the alert list rather than show stale data, but

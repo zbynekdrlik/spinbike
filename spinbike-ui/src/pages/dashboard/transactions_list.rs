@@ -5,6 +5,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::api;
 use crate::i18n::{self, Lang};
 use crate::pages::dashboard::sheets::EditTxDateSheet;
+use crate::util::RequestId;
 
 use super::TxnInfo;
 
@@ -20,15 +21,20 @@ pub fn TransactionsList(
     let (has_more, set_has_more) = signal(false);
 
     let lang_for_fetch = lang;
+    let req_id = RequestId::new();
     Effect::new(move |_| {
         let _ = txn_refresh.get(); // reactive dependency — re-runs on increment
         let l = limit.get();
+        let token = req_id.next();
         spawn_local(async move {
-            match api::get::<Vec<TxnInfo>>(&format!(
+            let result = api::get::<Vec<TxnInfo>>(&format!(
                 "/api/users/{card_id}/transactions?limit={l}"
             ))
-            .await
-            {
+            .await;
+            if !token.is_latest() {
+                return; // stale — a newer trigger run superseded this fetch (#66)
+            }
+            match result {
                 Ok(t) => {
                     set_has_more.set(t.len() >= l);
                     set_txns.set(t);
