@@ -18,6 +18,7 @@ pub struct AppState {
     pub pool: SqlitePool,
     pub event_tx: broadcast::Sender<ServerMsg>,
     pub jwt_secret: String,
+    pub ewelink: crate::ewelink::EwelinkHandle,
 }
 
 /// Build the CORS layer by reading the CORS_ORIGIN environment variable.
@@ -63,6 +64,7 @@ pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Re
         pool,
         event_tx,
         jwt_secret,
+        ewelink: crate::ewelink::EwelinkHandle::spawn(),
     };
 
     let mut router = routes::all_routes();
