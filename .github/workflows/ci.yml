@@ -289,87 +289,39 @@ jobs:
           # --no-shuffle keeps output deterministic for log readability.
           # Exclude one-off CLI tools and the trivial server main() — these are
           # entry points that would need full E2E harnesses to mutate usefully.
+          # --timeout 180s: server test crate baseline clocks ~60s on
+          # ubuntu-latest; 60s gave zero buffer and tipped into TIMEOUT on
+          # normal variance. 180s leaves room without masking real hangs.
           cargo mutants \
             --in-diff pr.diff \
-            --timeout 60 \
+            --timeout 180 \
             --no-shuffle \
             --exclude 'crates/spinbike-server/src/bin/*' \
             --package spinbike-core \
             --package spinbike-server
 
-  mutation-ui:
-    name: Mutation Testing (UI)
-    runs-on: ubuntu-latest
-    timeout-minutes: 240
-    needs: test-ui
-    if: github.event_name == 'pull_request'
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
-
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: spinbike-ui
-          cache-on-failure: true
-
-      - name: Install cargo-mutants
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-mutants
-
-      - name: Install wasm-pack
-        uses: taiki-e/install-action@v2
-        with:
-          tool: wasm-pack
-
-      - name: Install wasm-bindgen-cli
-        uses: taiki-e/install-action@v2
-        with:
-          tool: wasm-bindgen-cli
-
-      - name: Compute PR diff vs base
-        # `--relative=spinbike-ui` strips the `spinbike-ui/` prefix so paths
-        # in pr.diff are workspace-relative (`src/...`), matching what
-        # cargo-mutants expects when run with `--manifest-path
-        # spinbike-ui/Cargo.toml`. Original path-format bug from #47:
-        # without --relative, paths were `spinbike-ui/src/...` and every
-        # mutant was silently filtered out.
-        run: git diff --relative=spinbike-ui origin/${{ github.base_ref }}...HEAD > pr.diff
-
-      - name: Sanity check — fail on silent no-op
-        # The script reads the diff via `git diff origin/<base>...HEAD`
-        # internally (un-relativised) so it sees the full repo paths and
-        # can scope its non-test-line scan correctly.
-        run: python3 .github/scripts/sanity_check_ui_mutants.py "${{ github.base_ref }}"
-
-      - name: Run cargo-mutants on UI diff
-        env:
-          # Force-route wasm32 test binaries through wasm-bindgen-test-runner.
-          # cargo-mutants copies the workspace into a temp dir and invokes
-          # `cargo test` from there; the .cargo/config.toml runner setting
-          # lives outside that temp tree so cargo otherwise tries to exec
-          # the .wasm binary natively and fails with "end of file unexpected".
-          # Setting the env var bypasses config-file lookup entirely.
-          CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER: wasm-bindgen-test-runner
-        run: |
-          # Mutate only PR-changed lines in spinbike-ui. The preceding
-          # sanity-check step guards against the silent-no-op pattern
-          # (mutants list empty when production code changed).
-          # --timeout 180s: WASM tests run via wasm-bindgen-test --node
-          # are 3x slower than native; baseline test phase clocks ~60s on
-          # ubuntu-latest, so 60s timeout would give zero buffer. 180s
-          # leaves room for normal variance without masking real hangs.
-          cargo mutants \
-            --in-diff pr.diff \
-            --timeout 180 \
-            --no-shuffle \
-            --manifest-path spinbike-ui/Cargo.toml \
-            -- --target wasm32-unknown-unknown
+  # mutation-ui job intentionally absent.
+  #
+  # Attempted re-enable on this branch (commits e8b03bd, 0a7a7c0, dbd6f1d)
+  # but cargo-mutants invokes `cargo test` from inside a copied temp tree
+  # where neither .cargo/config.toml nor the
+  # CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER env var were enough to
+  # route the wasm32 test binary through wasm-bindgen-test-runner — the
+  # baseline failed with "test failed, to rerun pass -p spinbike-ui --lib"
+  # before any mutant was tested. This is a tooling-integration gap, not
+  # a project bug.
+  #
+  # Per `no-continue-on-error.md`: "If a check cannot be made reliable,
+  # remove the step entirely rather than hiding the gap behind a fake
+  # green checkmark." Server-side `Mutation Testing` job above is
+  # unaffected.
+  #
+  # Re-enable tracked in #47. Real fix likely requires either:
+  #   - cargo-mutants gaining `--test-tool wasm-pack` integration, OR
+  #   - patching cargo-mutants's --copy-target behaviour to include
+  #     repo-level .cargo/config.toml.
+  # The sanity-check script at .github/scripts/sanity_check_ui_mutants.py
+  # is preserved so it's ready when the gate returns.
 
   deploy-dev:
     name: Deploy (dev)
