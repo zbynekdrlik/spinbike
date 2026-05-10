@@ -22,6 +22,7 @@ pub struct UserRow {
     pub search_text: Option<String>, // added in migration #13
     pub created_at: String,
     pub deleted_at: Option<String>, // added in migration #15
+    pub allow_self_entry: bool,     // added in migration #16
 }
 
 /// Fold a string to a diacritic-free, lowercase representation used for
@@ -193,6 +194,7 @@ pub struct UserRowWithPass {
     pub search_text: Option<String>,
     pub created_at: String,
     pub deleted_at: Option<String>,
+    pub allow_self_entry: bool,
     pub pass_valid_until: Option<chrono::NaiveDate>,
     pub pass_tx_id: Option<i64>,
     pub last_visit_at: Option<String>,
@@ -224,6 +226,7 @@ impl UserRowWithPass {
                 search_text: self.search_text,
                 created_at: self.created_at,
                 deleted_at: self.deleted_at,
+                allow_self_entry: self.allow_self_entry,
             },
             pass,
             last_visit_at,
@@ -240,7 +243,7 @@ pub async fn list_all_users_with_pass(
     let rows: Vec<UserRowWithPass> = sqlx::query_as::<_, UserRowWithPass>(
         "SELECT u.id, u.email, u.name, u.password_hash, u.phone, u.company,
                 u.role, u.oauth_provider, u.oauth_id, u.credit, u.card_code,
-                u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at,
+                u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at, u.allow_self_entry,
                 (SELECT MAX(valid_until) FROM transactions
                  WHERE user_id = u.id AND valid_until IS NOT NULL AND deleted_at IS NULL
                 ) AS pass_valid_until,
@@ -281,7 +284,7 @@ pub async fn search_users_with_pass(
     let rows: Vec<UserRowWithPass> = sqlx::query_as::<_, UserRowWithPass>(
         "SELECT u.id, u.email, u.name, u.password_hash, u.phone, u.company,
                 u.role, u.oauth_provider, u.oauth_id, u.credit, u.card_code,
-                u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at,
+                u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at, u.allow_self_entry,
                 (SELECT MAX(valid_until) FROM transactions
                  WHERE user_id = u.id AND valid_until IS NOT NULL AND deleted_at IS NULL
                 ) AS pass_valid_until,
@@ -386,6 +389,22 @@ pub async fn set_allow_debit(pool: &SqlitePool, user_id: i64, allow: bool) -> Re
         .execute(pool)
         .await
         .context("Failed to set allow_debit")?;
+    Ok(())
+}
+
+/// Set the per-user opt-in flag for self-service door entry.
+/// Admin-only — caller must enforce role at the route layer.
+pub async fn update_user_allow_self_entry(
+    pool: &SqlitePool,
+    user_id: i64,
+    allow: bool,
+) -> Result<()> {
+    sqlx::query("UPDATE users SET allow_self_entry = ? WHERE id = ?")
+        .bind(if allow { 1 } else { 0 })
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .context("Failed to update allow_self_entry")?;
     Ok(())
 }
 
@@ -1262,5 +1281,41 @@ mod tests {
             .unwrap();
         let after = get_user_by_oauth(&pool, "google", "sub-123").await.unwrap();
         assert!(after.is_none(), "soft-deleted oauth user must be hidden");
+    }
+
+    // ── allow_self_entry default and round-trip ────────────────────────────
+    // mutant kill: replace update_user_allow_self_entry → Ok(()) would leave
+    // the flag unchanged and both assertions would fail.
+    #[tokio::test]
+    async fn allow_self_entry_default_is_false() {
+        let pool = setup().await;
+        let id = make_user(&pool, Some("ase@x.com"), "ASE").await;
+        let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert!(
+            !u.allow_self_entry,
+            "allow_self_entry must default to false after migration"
+        );
+    }
+
+    #[tokio::test]
+    async fn update_user_allow_self_entry_round_trips() {
+        let pool = setup().await;
+        let id = make_user(&pool, Some("ase2@x.com"), "ASE2").await;
+
+        update_user_allow_self_entry(&pool, id, true).await.unwrap();
+        let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert!(
+            u.allow_self_entry,
+            "update_user_allow_self_entry(true) must persist"
+        );
+
+        update_user_allow_self_entry(&pool, id, false)
+            .await
+            .unwrap();
+        let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert!(
+            !u.allow_self_entry,
+            "update_user_allow_self_entry(false) must persist"
+        );
     }
 }
