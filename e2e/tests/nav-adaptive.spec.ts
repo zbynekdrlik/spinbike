@@ -13,7 +13,8 @@ test.describe('Adaptive nav', () => {
         await expect(page.locator('[data-testid="nav-desk"]')).toBeVisible();
         await expect(page.locator('[data-testid="nav-schedule"]')).toBeVisible();
         await expect(page.locator('[data-testid="nav-reports"]')).toBeVisible();
-        await expect(page.locator('[data-testid="nav-settings"]')).toBeVisible();
+        // Settings moved into the more-sheet in #82.
+        await expect(page.locator('[data-testid="nav-settings"]')).toHaveCount(0);
         await expect(page.locator('[data-testid="nav-more"]')).toBeVisible();
 
         // For staff/admin, the top navbar collapses to just the SpinBike
@@ -28,7 +29,11 @@ test.describe('Adaptive nav', () => {
         await expect(page).toHaveURL(/\/reports/);
         await page.locator('[data-testid="nav-schedule"]').click();
         await expect(page).toHaveURL(/\/schedule/);
-        await page.locator('[data-testid="nav-settings"]').click();
+        // Settings now reached via the More sheet (#82).
+        await page.locator('[data-testid="nav-more"]').click();
+        await expect(page.locator('[data-testid="more-sheet"]')).toBeVisible();
+        await expect(page.locator('[data-testid="more-settings"]')).toBeVisible();
+        await page.locator('[data-testid="more-settings"]').click();
         await expect(page).toHaveURL(/\/settings/);
         await page.locator('[data-testid="nav-desk"]').click();
         await expect(page).toHaveURL(/\/staff$/);

@@ -32,6 +32,8 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
             let desk_active = path.starts_with("/staff");
             let schedule_active = path.starts_with("/schedule");
             let reports_active = path.starts_with("/reports");
+            // Settings active state still drives more-sheet aria-current
+            // even though the link itself moved into the sheet (#82).
             let settings_active = path.starts_with("/settings") || path.starts_with("/admin");
 
             // 'More' sheet state — opens on tap, contains username + lang
@@ -72,12 +74,6 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
                                 <span class="adaptive-nav__icon" inner_html=ICON_REPORTS></span>
                                 <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_reports")}</span>
                             </a>
-                            <a href="/settings" class="adaptive-nav__item"
-                               data-testid="nav-settings"
-                               aria-current=if settings_active { "page" } else { "false" }>
-                                <span class="adaptive-nav__icon" inner_html=ICON_SETTINGS></span>
-                                <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_settings")}</span>
-                            </a>
                         }.into_any()
                     } else { ().into_any() }}
                     <button
@@ -99,6 +95,22 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
                             on_close=Callback::new(move |_| set_more_open.set(false))
                         >
                             <div class="more-sheet__user">{user_name}</div>
+                            {if is_admin {
+                                // Settings moved here from the bottom-nav per #82.
+                                // Plain anchor — full navigation reload, parent
+                                // closure unmounts the sheet on auth_ver bump or
+                                // route change.
+                                view! {
+                                    <a
+                                        href="/settings"
+                                        class="btn btn--block btn--ghost"
+                                        data-testid="more-settings"
+                                        aria-current=if settings_active { "page" } else { "false" }
+                                    >
+                                        {move || i18n::t(lang.get(), "nav_settings")}
+                                    </a>
+                                }.into_any()
+                            } else { ().into_any() }}
                             <button
                                 class="btn btn--block btn--ghost"
                                 data-testid="more-lang-toggle"

@@ -20,9 +20,12 @@ test.describe('Staff navigation', () => {
         // AdaptiveNav (replaces old Navbar links) shows Desk + Schedule for staff.
         await expect(page.locator('[data-testid="nav-desk"]')).toBeVisible();
         await expect(page.locator('[data-testid="nav-schedule"]')).toBeVisible();
-        // Reports + Settings are admin-only and must NOT show for staff.
+        // Reports is admin-only and must NOT show for staff. Settings moved
+        // into the more-sheet in #82 (still admin-only) — staff opening the
+        // more-sheet must not see more-settings either.
         await expect(page.locator('[data-testid="nav-reports"]')).toHaveCount(0);
-        await expect(page.locator('[data-testid="nav-settings"]')).toHaveCount(0);
+        await page.click('[data-testid="nav-more"]');
+        await expect(page.locator('[data-testid="more-settings"]')).toHaveCount(0);
 
         assertCleanConsole(consoleMessages);
     });

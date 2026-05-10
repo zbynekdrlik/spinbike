@@ -14,8 +14,10 @@ test.describe('Admin pages', () => {
         await page.waitForSelector('h1.page-title');
         expect(await page.textContent('h1.page-title')).toBe('Admin');
 
-        // AdaptiveNav (replaces old Navbar links) should show the Settings tab
-        await expect(page.locator('[data-testid="nav-settings"]')).toBeVisible();
+        // Settings moved into the more-sheet in #82 — open the More sheet
+        // and assert the Settings link is reachable from there.
+        await page.click('[data-testid="nav-more"]');
+        await expect(page.locator('[data-testid="more-settings"]')).toBeVisible();
 
         assertCleanConsole(consoleMessages);
     });
