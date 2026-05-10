@@ -537,6 +537,7 @@ pub struct UserByMovementRow {
     pub name: String,
     pub card_code: Option<String>,
     pub last_movement_at: Option<String>,
+    pub allow_self_entry: bool,
 }
 
 /// List users (excluding soft-deleted) with their most recent non-voided
@@ -552,6 +553,7 @@ pub async fn users_by_last_movement(
             u.id,
             u.name,
             u.card_code,
+            u.allow_self_entry,
             MAX(t.created_at) AS last_movement_at
            FROM users u
            LEFT JOIN transactions t

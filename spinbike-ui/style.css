@@ -1202,6 +1202,7 @@ table tbody tr:last-child td,
 .search-result-credit { font-weight: 600; white-space: nowrap; }
 .search-hint          { font-size: var(--fs-sm); color: var(--text-muted); }
 .badge--inline        { margin-left: var(--s-2); }
+.badge--lock          { margin-left: 0.35rem; font-size: 0.9rem; opacity: 0.85; }
 
 /* ─────────── Negative-balance idle list ─────────── */
 .negative-balance-list__heading {

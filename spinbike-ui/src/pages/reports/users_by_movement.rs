@@ -13,6 +13,8 @@ struct Row {
     card_code: Option<String>,
     #[serde(default)]
     last_movement_at: Option<String>,
+    #[serde(default)]
+    allow_self_entry: bool,
 }
 
 #[component]
@@ -80,6 +82,7 @@ pub fn UsersByMovement() -> impl IntoView {
                             Some(s) if s.len() >= 10 => s[..10].to_string(),
                             _ => i18n::t(lang.get(), "no_movement_yet").to_string(),
                         };
+                        let allow_self_entry = r.allow_self_entry;
                         let on_click = move |_| {
                             // Navigate to Desk with card_code if known, else ?q=<name>.
                             let target = if let Some(code) = card_code.as_deref().filter(|s| !s.is_empty()) {
@@ -95,7 +98,20 @@ pub fn UsersByMovement() -> impl IntoView {
                             <li class="list-row" data-testid="user-row" data-user-id=id
                                 on:click=on_click>
                                 <div class="list-row__main">
-                                    <div class="list-row__title">{r.name.clone()}</div>
+                                    <div class="list-row__title">
+                                        {r.name.clone()}
+                                        {if allow_self_entry {
+                                            view! {
+                                                <span class="badge badge--lock"
+                                                      title="Allow self-entry"
+                                                      data-testid="user-row-self-entry-badge">
+                                                    "🔓"
+                                                </span>
+                                            }.into_any()
+                                        } else {
+                                            ().into_any()
+                                        }}
+                                    </div>
                                     <div class="list-row__sub">{display_date}</div>
                                 </div>
                             </li>
