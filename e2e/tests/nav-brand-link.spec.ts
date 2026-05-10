@@ -13,7 +13,9 @@ test.describe('SpinBike brand link — role-aware target + active state', () => 
         await expect(page).toHaveURL(/\/staff$/);
         await expect(page.locator('[data-testid="nav-desk"]')).toHaveAttribute('aria-current', 'page');
 
-        for (const id of ['nav-schedule', 'nav-reports', 'nav-settings']) {
+        // Settings moved into the more-sheet in #82, so it is no longer a
+        // direct nav item.
+        for (const id of ['nav-schedule', 'nav-reports']) {
             const el = page.locator(`[data-testid="${id}"]`);
             if (await el.count() > 0) {
                 await expect(el).toHaveAttribute('aria-current', 'false');

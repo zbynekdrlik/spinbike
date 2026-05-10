@@ -5,6 +5,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::api;
 use crate::i18n::{self, Lang};
 use crate::pages::dashboard::sheets::EditTxDateSheet;
+use crate::util::RequestId;
 
 use super::TxnInfo;
 
@@ -20,15 +21,20 @@ pub fn TransactionsList(
     let (has_more, set_has_more) = signal(false);
 
     let lang_for_fetch = lang;
+    let req_id = RequestId::new();
     Effect::new(move |_| {
         let _ = txn_refresh.get(); // reactive dependency — re-runs on increment
         let l = limit.get();
+        let token = req_id.next();
         spawn_local(async move {
-            match api::get::<Vec<TxnInfo>>(&format!(
+            let result = api::get::<Vec<TxnInfo>>(&format!(
                 "/api/users/{card_id}/transactions?limit={l}"
             ))
-            .await
-            {
+            .await;
+            if !token.is_latest() {
+                return; // stale — a newer trigger run superseded this fetch (#66)
+            }
+            match result {
                 Ok(t) => {
                     set_has_more.set(t.len() >= l);
                     set_txns.set(t);
@@ -119,7 +125,7 @@ pub fn TransactionsList(
                             });
                     match parsed_utc {
                         Some(utc) => bratislava.from_utc_datetime(&utc).date_naive(),
-                        None => chrono::Local::now().date_naive(),
+                        None => crate::relative_date::today_local(),
                     }
                 };
 
@@ -223,21 +229,21 @@ pub fn TransactionsList(
                         <div class=amount_class>{amount_str}</div>
                         {if !is_voided {
                             view! {
-                                <div class="list-row__end list-row__end--column">
+                                <div class="list-row__end list-row__end--icons">
                                     <button
-                                        class="btn btn--compact btn--ghost"
+                                        class="btn btn--icon btn--ghost"
                                         data-testid="txn-note-edit"
                                         title=move || i18n::t(lang.get(), "tx_note_edit")
                                         on:click=on_edit
                                     >"\u{270e}"</button>
                                     <button
-                                        class="btn btn--compact btn--ghost"
+                                        class="btn btn--icon btn--ghost"
                                         data-testid="txn-date-edit"
                                         title=move || i18n::t(lang.get(), "tx_date_edit_tooltip")
                                         on:click=move |_| editing_date.set(true)
                                     >"\u{1F4C5}"</button>
                                     <button
-                                        class="btn btn--compact btn--ghost"
+                                        class="btn btn--icon btn--ghost"
                                         data-testid="txn-void"
                                         title=move || i18n::t(lang.get(), "void")
                                         on:click=on_void

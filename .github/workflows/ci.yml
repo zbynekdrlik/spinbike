@@ -289,37 +289,39 @@ jobs:
           # --no-shuffle keeps output deterministic for log readability.
           # Exclude one-off CLI tools and the trivial server main() — these are
           # entry points that would need full E2E harnesses to mutate usefully.
+          # --timeout 180s: server test crate baseline clocks ~60s on
+          # ubuntu-latest; 60s gave zero buffer and tipped into TIMEOUT on
+          # normal variance. 180s leaves room without masking real hangs.
           cargo mutants \
             --in-diff pr.diff \
-            --timeout 60 \
+            --timeout 180 \
             --no-shuffle \
             --exclude 'crates/spinbike-server/src/bin/*' \
             --package spinbike-core \
             --package spinbike-server
 
-  # mutation-ui job removed in PR #46.
+  # mutation-ui job intentionally absent.
   #
-  # PR #44 added this gate aspirationally with the note that "the runner's
-  # first real exercise is the next PR that touches non-test
-  # spinbike-ui/src/". PR #46 was that first real exercise and revealed
-  # two compounding problems:
-  #
-  # 1. Path format bug: `git diff` produced repo-root-relative paths
-  #    (`spinbike-ui/src/...`), but `cargo mutants --manifest-path
-  #    spinbike-ui/Cargo.toml` expects workspace-relative paths
-  #    (`src/...`). cargo-mutants silently filtered all candidates out,
-  #    producing 0 mutants — the sanity check correctly caught this.
-  # 2. Even with the path fix, the new mutants would all SURVIVE: the
-  #    Leptos UI layer has near-zero `#[wasm_bindgen_test]` coverage for
-  #    components like adaptive_nav.rs and activity_feed.rs. The mutation
-  #    gate would just churn red on every UI PR until that test coverage
-  #    is built up.
+  # Attempted re-enable on this branch (commits e8b03bd, 0a7a7c0, dbd6f1d)
+  # but cargo-mutants invokes `cargo test` from inside a copied temp tree
+  # where neither .cargo/config.toml nor the
+  # CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER env var were enough to
+  # route the wasm32 test binary through wasm-bindgen-test-runner — the
+  # baseline failed with "test failed, to rerun pass -p spinbike-ui --lib"
+  # before any mutant was tested. This is a tooling-integration gap, not
+  # a project bug.
   #
   # Per `no-continue-on-error.md`: "If a check cannot be made reliable,
   # remove the step entirely rather than hiding the gap behind a fake
-  # green checkmark." Re-enable when there's a meaningful baseline of
-  # wasm_bindgen tests for the UI components — tracked separately.
-  # Server-side `Mutation Testing` job above is unaffected.
+  # green checkmark." Server-side `Mutation Testing` job above is
+  # unaffected.
+  #
+  # Re-enable tracked in #47. Real fix likely requires either:
+  #   - cargo-mutants gaining `--test-tool wasm-pack` integration, OR
+  #   - patching cargo-mutants's --copy-target behaviour to include
+  #     repo-level .cargo/config.toml.
+  # The sanity-check script at .github/scripts/sanity_check_ui_mutants.py
+  # is preserved so it's ready when the gate returns.
 
   deploy-dev:
     name: Deploy (dev)

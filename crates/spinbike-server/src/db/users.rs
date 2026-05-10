@@ -434,13 +434,12 @@ pub struct NegativeBalanceUserRow {
     pub email: Option<String>,
     pub company: Option<String>,
     pub last_visit_at: Option<String>,
-    pub last_payment_at: Option<String>,
     pub pass_valid_until: Option<chrono::NaiveDate>,
     pub pass_tx_id: Option<i64>,
 }
 
 /// Users with `credit < 0`, sorted most-negative-first. Includes blocked
-/// users (still owe money). The four scalar subqueries on `transactions`
+/// users (still owe money). Three scalar subqueries on `transactions`
 /// run for each negative-credit user; at current data scale this is
 /// sub-millisecond.
 pub async fn list_negative_balance(pool: &SqlitePool) -> Result<Vec<NegativeBalanceUserRow>> {
@@ -452,12 +451,6 @@ pub async fn list_negative_balance(pool: &SqlitePool) -> Result<Vec<NegativeBala
                   AND t.deleted_at IS NULL
                   AND t.service_id IN (SELECT id FROM services WHERE name_en IN (?, ?))
             ) AS last_visit_at,
-            (SELECT MAX(t.created_at) FROM transactions t
-                WHERE t.user_id = u.id
-                  AND t.action = 'topup'
-                  AND t.amount > 0
-                  AND t.deleted_at IS NULL
-            ) AS last_payment_at,
             (SELECT MAX(valid_until) FROM transactions
                 WHERE user_id = u.id AND valid_until IS NOT NULL AND deleted_at IS NULL
             ) AS pass_valid_until,
@@ -1038,10 +1031,6 @@ mod tests {
         assert_eq!(rows[0].id, deep);
         assert!((rows[0].credit - (-10.0)).abs() < f64::EPSILON);
         assert_eq!(rows[0].last_visit_at, None);
-        assert_eq!(
-            rows[0].last_payment_at.as_deref(),
-            Some("2026-03-05 09:00:00"),
-        );
         assert_eq!(rows[0].pass_tx_id, None, "deep has no pass");
         assert_eq!(rows[0].pass_valid_until, None);
         assert_eq!(rows[1].id, mid);
@@ -1051,7 +1040,6 @@ mod tests {
             rows[1].last_visit_at.as_deref(),
             Some("2026-04-25 18:00:00"),
         );
-        assert_eq!(rows[1].last_payment_at, None);
         assert_eq!(rows[1].pass_tx_id, Some(mid_pass_tx_id));
         assert_eq!(rows[1].pass_valid_until, Some(mid_pass_until));
     }

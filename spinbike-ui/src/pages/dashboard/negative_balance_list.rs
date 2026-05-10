@@ -5,6 +5,7 @@
 //! the parent's `txn_refresh` signal increments.
 
 use chrono::NaiveDate;
+use leptos::logging;
 use leptos::prelude::*;
 use serde::Deserialize;
 use wasm_bindgen_futures::spawn_local;
@@ -12,7 +13,8 @@ use wasm_bindgen_futures::spawn_local;
 use crate::api;
 use crate::i18n::{self, Lang};
 use crate::pages::dashboard::{CardInfo, CardPass};
-use crate::relative_date::relative;
+use crate::relative_date::{relative, today_local};
+use crate::util::RequestId;
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct NegativeBalanceUser {
@@ -23,7 +25,6 @@ pub struct NegativeBalanceUser {
     pub blocked: bool,
     pub company: Option<String>,
     pub last_visit_at: Option<String>,
-    pub last_payment_at: Option<String>,
     #[serde(default)]
     pub pass: Option<CardPass>,
 }
@@ -41,15 +42,27 @@ pub fn NegativeBalanceList(
     // `Resource::new` requires `Send`.
     let (rows, set_rows) = signal::<Vec<NegativeBalanceUser>>(Vec::new());
 
+    let req_id = RequestId::new();
     Effect::new(move |_| {
         let _ = txn_refresh.get(); // reactive dependency
+        let token = req_id.next();
         spawn_local(async move {
-            // Errors are swallowed: an alert list that fails to load has no
-            // useful UI fallback, and we'd rather hide it than show noise.
-            let fetched = api::get::<Vec<NegativeBalanceUser>>("/api/users/negative-balance")
-                .await
-                .unwrap_or_default();
-            set_rows.set(fetched);
+            let result =
+                api::get::<Vec<NegativeBalanceUser>>("/api/users/negative-balance").await;
+            if !token.is_latest() {
+                return; // stale — a newer trigger run superseded this fetch (#66)
+            }
+            match result {
+                Ok(fetched) => set_rows.set(fetched),
+                Err(e) => {
+                    // Hide the alert list rather than show stale data, but
+                    // log the underlying error so a 3am debugging session can
+                    // see why no negative-balance customers ever appeared.
+                    // See #64 + comprehensive-logging.md.
+                    logging::warn!("negative-balance fetch failed: {e}");
+                    set_rows.set(Vec::new());
+                }
+            }
         });
     });
 
@@ -146,10 +159,6 @@ fn summary_suffix(rows: &[NegativeBalanceUser]) -> String {
     format!("  ·  {count}  ·  {sum:.2} €")
 }
 
-fn today_local() -> NaiveDate {
-    chrono::Local::now().date_naive()
-}
-
 /// Promote a `NegativeBalanceUser` into the parent `CardInfo` so clicking a
 /// row opens the full action panel with the same fidelity as a search-result
 /// click — including the active monthly pass when present.
@@ -188,7 +197,6 @@ mod tests {
             blocked: false,
             company: None,
             last_visit_at: None,
-            last_payment_at: None,
             pass: None,
         }
     }

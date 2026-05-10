@@ -31,7 +31,7 @@ pub fn EditTxDateSheet(
 
             let on_save = move |_| {
                 let new_date = draft.get();
-                let today = chrono::Local::now().date_naive();
+                let today = crate::relative_date::today_local();
                 let earliest = today - chrono::Duration::days(30);
                 if new_date < earliest || new_date > today {
                     set_err.set(i18n::t(lang.get_untracked(), "tx_date_window_error").to_string());
@@ -92,6 +92,7 @@ pub fn EditTxDateSheet(
                     <div class="sheet__actions">
                         <button
                             class="btn btn--ghost"
+                            data-testid="edit-tx-date-cancel"
                             disabled=move || saving.get()
                             on:click=on_cancel
                         >

@@ -1451,10 +1451,27 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
     min-width: 0;
 }
 
-.list-row__end--column {
+/* Per-row action icons (note edit, date edit, void) on the transactions
+ * list. Stays horizontal so the row height does not balloon to fit a
+ * vertical stack — see #85. Uses btn--icon (square 28px) instead of
+ * btn--compact (text-sized) so all three glyphs render uniformly. */
+.list-row__end--icons {
     display: flex;
-    flex-direction: column;
-    gap: 2px;
+    flex-direction: row;
+    align-items: center;
+    gap: var(--s-1);
+    flex-shrink: 0;
+}
+
+.btn--icon {
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    line-height: 1;
+    font-size: var(--fs-sm);
 }
 
 /* ═════════════════════════════════════════════════════════════

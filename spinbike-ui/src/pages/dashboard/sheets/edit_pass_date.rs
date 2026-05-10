@@ -97,6 +97,7 @@ pub fn EditPassDateSheet(
                     <div class="sheet__actions">
                         <button
                             class="btn btn--ghost"
+                            data-testid="edit-pass-date-cancel"
                             disabled=move || saving.get()
                             on:click=on_cancel
                         >

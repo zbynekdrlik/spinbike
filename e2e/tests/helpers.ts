@@ -27,6 +27,12 @@ export function setupConsoleCheck(page: Page): string[] {
         // is still streaming. The browser cancels the in-flight fetch and
         // raises this error. Not a real bug — it is a test-runner artefact.
         text.includes('WebAssembly compilation aborted: Network error') ||
+        // The negative-balance list logs every api::get failure (#64) so
+        // 3am debugging has signal. Filter ONLY the two specific test-
+        // runner artefacts — a generic prefix match would mask real API
+        // regressions (e.g. malformed JSON from a deploy) in CI.
+        text.includes('negative-balance fetch failed: TypeError: Failed to fetch') ||
+        text.includes('negative-balance fetch failed: Missing authorization header') ||
         /the server responded with a status of 4\d\d/.test(text);
 
     page.on('console', (msg) => {

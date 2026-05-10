@@ -68,9 +68,34 @@ test.describe('redesign: sheets', () => {
         await page.locator('[data-testid="pass-date-edit"]').click();
         await expect(page.locator('[data-testid="sheet-edit-pass-date"]')).toBeVisible();
 
-        // Close via the cancel button (uses the cancel i18n key).
-        await page.locator('[data-testid="sheet-edit-pass-date"] button').filter({ hasText: /zrusit|cancel/i }).click();
+        // Close via the cancel button.
+        await page.locator('[data-testid="edit-pass-date-cancel"]').click();
         await expect(page.locator('[data-testid="sheet-edit-pass-date"]')).not.toBeVisible({ timeout: 2000 });
+
+        assertCleanConsole(msgs);
+    });
+
+    test('EditPassDateSheet backdrop close clean console (#88)', async ({ page, request }) => {
+        const msgs = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+
+        const barcode = 'SHEET-EDIT-DATE-BKD';
+        await seedCardWithPass(request, token, barcode, '2030-12-31');
+        await openCard(page, barcode);
+
+        const activeBanner = page.locator('[data-testid="pass-banner-active"]');
+        if (!(await activeBanner.isVisible())) {
+            test.skip(true, 'No active pass on this card — seeding may have failed');
+            return;
+        }
+
+        await page.locator('[data-testid="pass-date-edit"]').click();
+        const sheet = page.locator('[data-testid="sheet-edit-pass-date"]');
+        await expect(sheet).toBeVisible();
+
+        // Click backdrop top-left, outside the centered .sheet (stop_propagation).
+        await page.locator('.sheet-backdrop').click({ position: { x: 5, y: 5 } });
+        await expect(sheet).not.toBeVisible({ timeout: 2000 });
 
         assertCleanConsole(msgs);
     });

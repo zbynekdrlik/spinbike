@@ -35,7 +35,7 @@ pub fn ReportsPage() -> impl IntoView {
 
     let (tab, set_tab) = signal(UsersTab::DailyActivity);
 
-    let (anchor, set_anchor) = signal(chrono::Local::now().date_naive());
+    let (anchor, set_anchor) = signal(crate::relative_date::today_local());
     let (mode, set_mode) = signal(RangeMode::Day);
     let (filters, set_filters) = signal(FiltersState::default());
 
@@ -113,23 +113,23 @@ pub fn ReportsPage() -> impl IntoView {
                         <div class="seg" role="tablist">
                             <button class="seg__item" data-testid="quick-yesterday"
                                     aria-selected=move || {
-                                        let y = chrono::Local::now().date_naive() - chrono::Duration::days(1);
+                                        let y = crate::relative_date::today_local() - chrono::Duration::days(1);
                                         (mode.get() == RangeMode::Day && anchor.get() == y).to_string()
                                     }
                                     on:click=move |_| {
                                         set_mode.set(RangeMode::Day);
-                                        set_anchor.set(chrono::Local::now().date_naive() - chrono::Duration::days(1));
+                                        set_anchor.set(crate::relative_date::today_local() - chrono::Duration::days(1));
                                     }>
                                 {move || i18n::t(lang.get(), "reports_yesterday")}
                             </button>
                             <button class="seg__item" data-testid="quick-today"
                                     aria-selected=move || {
-                                        let t = chrono::Local::now().date_naive();
+                                        let t = crate::relative_date::today_local();
                                         (mode.get() == RangeMode::Day && anchor.get() == t).to_string()
                                     }
                                     on:click=move |_| {
                                         set_mode.set(RangeMode::Day);
-                                        set_anchor.set(chrono::Local::now().date_naive());
+                                        set_anchor.set(crate::relative_date::today_local());
                                     }>
                                 {move || i18n::t(lang.get(), "reports_today")}
                             </button>
@@ -137,7 +137,7 @@ pub fn ReportsPage() -> impl IntoView {
                                     aria-selected=move || (mode.get() == RangeMode::Week).to_string()
                                     on:click=move |_| {
                                         set_mode.set(RangeMode::Week);
-                                        set_anchor.set(chrono::Local::now().date_naive());
+                                        set_anchor.set(crate::relative_date::today_local());
                                     }>
                                 {move || i18n::t(lang.get(), "reports_week")}
                             </button>
@@ -145,7 +145,7 @@ pub fn ReportsPage() -> impl IntoView {
                                     aria-selected=move || (mode.get() == RangeMode::Month).to_string()
                                     on:click=move |_| {
                                         set_mode.set(RangeMode::Month);
-                                        set_anchor.set(chrono::Local::now().date_naive());
+                                        set_anchor.set(crate::relative_date::today_local());
                                     }>
                                 {move || i18n::t(lang.get(), "reports_month")}
                             </button>
