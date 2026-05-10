@@ -59,6 +59,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "users: soft-delete column + retire V13 (deleted) synthetic",
         V15_USERS_SOFT_DELETE,
     ),
+    (
+        16,
+        "users.allow_self_entry + services.kind='single_entry' retag",
+        V16_DOOR_SELF_ENTRY,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -584,6 +589,50 @@ ALTER TABLE users ADD COLUMN deleted_at TEXT;
 UPDATE users
    SET deleted_at = datetime('now')
  WHERE name = '(deleted)' AND deleted_at IS NULL;
+"#;
+
+// V16: per-user opt-in flag for self-service door entry + widen services.kind
+// to include 'single_entry' and re-tag the seeded 'Fitness' row.
+//
+// SQLite cannot widen a CHECK constraint in place, so we re-create the
+// services table. Pattern mirrors V8_SERVICES_DUAL_LANG_KIND and
+// V11_TRANSACTIONS_NOTE_CHECK. The runner (db::run_migrations) toggles
+// PRAGMA foreign_keys around the transaction; no inline PRAGMA here.
+//
+// Re-creating services drops and re-adds the partial unique index on
+// kind='monthly_pass' as well — without this, a second monthly_pass row
+// could slip in between v8 and the next index creation.
+const V16_DOOR_SELF_ENTRY: &str = r#"
+-- 1. Per-user opt-in flag for self-service door entry.
+ALTER TABLE users ADD COLUMN allow_self_entry INTEGER NOT NULL DEFAULT 0;
+
+-- 2. Widen services.kind CHECK to include 'single_entry'.
+CREATE TABLE services_new (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind          TEXT    NOT NULL DEFAULT 'generic'
+                  CHECK (kind IN ('generic', 'monthly_pass', 'single_entry')),
+    name_sk       TEXT    NOT NULL,
+    name_en       TEXT    NOT NULL,
+    default_price REAL    NOT NULL,
+    active        INTEGER NOT NULL DEFAULT 1
+);
+
+INSERT INTO services_new (id, kind, name_sk, name_en, default_price, active)
+SELECT id, kind, name_sk, name_en, default_price, active
+  FROM services;
+
+DROP TABLE services;
+ALTER TABLE services_new RENAME TO services;
+
+-- 3. Re-create partial unique index on kind='monthly_pass'.
+CREATE UNIQUE INDEX idx_services_monthly_pass
+    ON services(kind) WHERE kind = 'monthly_pass';
+
+-- 4. Re-tag the seeded Fitness row so the door route can look it up by
+--    kind alone (name is i18n-mutable; kind is the stable handle).
+UPDATE services
+   SET kind = 'single_entry'
+ WHERE name_sk = 'Fitness';
 "#;
 
 #[cfg(test)]
@@ -2121,5 +2170,71 @@ mod tests {
             count, 1,
             "users.deleted_at must exist exactly once after re-run"
         );
+    }
+
+    // V16 — door self-entry -----------------------------------------------
+
+    #[tokio::test]
+    async fn v16_adds_allow_self_entry_column() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.expect("migrations");
+        let cols: Vec<(String, String)> = sqlx::query_as(
+            "SELECT name, type FROM pragma_table_info('users') WHERE name = 'allow_self_entry'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(cols.len(), 1, "allow_self_entry column must exist");
+        assert_eq!(cols[0].1, "INTEGER", "column type must be INTEGER");
+    }
+
+    #[tokio::test]
+    async fn v16_creates_single_entry_kind() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.expect("migrations");
+        let n: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE kind = 'single_entry'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(n, 1, "exactly one services row with kind='single_entry'");
+
+        let name_sk: String =
+            sqlx::query_scalar("SELECT name_sk FROM services WHERE kind = 'single_entry'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(name_sk, "Fitness", "name_sk preserved across migration");
+    }
+
+    #[tokio::test]
+    async fn v16_monthly_pass_unique_index_still_enforced() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.expect("migrations");
+        let err = sqlx::query(
+            "INSERT INTO services (kind, name_sk, name_en, default_price)
+             VALUES ('monthly_pass', 'Druhy', 'Second', 99.0)",
+        )
+        .execute(&pool)
+        .await
+        .expect_err("expected unique-index violation");
+        let msg = format!("{err:?}").to_lowercase();
+        assert!(
+            msg.contains("unique") || msg.contains("constraint"),
+            "expected unique-index error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v16_is_idempotent_on_rerun() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.expect("first run");
+        run_migrations(&pool).await.expect("second run");
+        let n: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE kind = 'single_entry'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(n, 1, "still exactly one single_entry row after re-run");
     }
 }
