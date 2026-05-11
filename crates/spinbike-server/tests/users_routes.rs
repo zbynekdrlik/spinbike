@@ -628,9 +628,7 @@ async fn my_balance_admin_with_flag_off_reports_effective_true() {
         .execute(&app.pool)
         .await
         .unwrap();
-    let (status, body) = app
-        .request(get("/api/my/balance", &app.admin_token))
-        .await;
+    let (status, body) = app.request(get("/api/my/balance", &app.admin_token)).await;
     assert_eq!(status, axum::http::StatusCode::OK);
     assert_eq!(
         body["allow_self_entry"], true,
@@ -647,9 +645,7 @@ async fn my_balance_staff_with_flag_off_reports_effective_true() {
         .execute(&app.pool)
         .await
         .unwrap();
-    let (status, body) = app
-        .request(get("/api/my/balance", &app.staff_token))
-        .await;
+    let (status, body) = app.request(get("/api/my/balance", &app.staff_token)).await;
     assert_eq!(status, axum::http::StatusCode::OK);
     assert_eq!(
         body["allow_self_entry"], true,
