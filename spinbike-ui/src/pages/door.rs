@@ -60,7 +60,7 @@ pub fn DoorPage() -> impl IntoView {
                 view! {
                     <DoorButton
                         allowed=allowed_signal
-                        on_success=|| {}
+                        on_success=Callback::new(|()| {})
                     />
                 }.into_any()
             }}

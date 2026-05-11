@@ -69,82 +69,77 @@ const TICK_MS: u32 = 16;
 /// - `on_success` — called after a successful press so the parent can refresh
 ///   any related data (e.g. /my/balance recent visits).
 #[component]
-pub fn DoorButton<F>(
+pub fn DoorButton(
     /// Reactive: true when the current user has `allow_self_entry = 1`.
     allowed: Signal<bool>,
     /// Called when the press succeeded. Parent uses this to refresh balance /
-    /// recent-visits / wherever the visit row should show up.
-    on_success: F,
-) -> impl IntoView
-where
-    F: Fn() + Send + Sync + 'static,
-{
+    /// recent-visits / wherever the visit row should show up. `Callback::<()>`
+    /// is Copy so the closure capturing it stays Copy too — Leptos can
+    /// reuse the event handler across renders without extra `.clone()` calls.
+    #[prop(into)]
+    on_success: Callback<()>,
+) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (door_state, set_door_state) = signal(DoorState::Idle);
     let (hold_progress, set_hold_progress) = signal(0.0_f64);
     let (press_gen, set_press_gen) = signal(0_u64);
-    let on_success = std::sync::Arc::new(on_success);
 
-    let on_pointer_down = {
-        let on_success = on_success.clone();
-        move |_ev: web_sys::PointerEvent| {
-            if !allowed.get_untracked() {
-                return;
-            }
-            if !matches!(door_state.get_untracked(), DoorState::Idle) {
-                return;
-            }
+    let on_pointer_down = move |_ev: web_sys::PointerEvent| {
+        if !allowed.get_untracked() {
+            return;
+        }
+        if !matches!(door_state.get_untracked(), DoorState::Idle) {
+            return;
+        }
 
-            let gen_id = press_gen.get_untracked().wrapping_add(1);
-            set_press_gen.set(gen_id);
-            set_door_state.set(DoorState::Holding);
-            set_hold_progress.set(0.0);
+        let gen_id = press_gen.get_untracked().wrapping_add(1);
+        set_press_gen.set(gen_id);
+        set_door_state.set(DoorState::Holding);
+        set_hold_progress.set(0.0);
 
-            let on_success = on_success.clone();
-            spawn_local(async move {
-                let start = now_ms();
-                loop {
-                    gloo_timers::future::TimeoutFuture::new(TICK_MS).await;
-                    if press_gen.get_untracked() != gen_id {
-                        return;
-                    }
-                    let elapsed = now_ms() - start;
-                    let progress = (elapsed / HOLD_DURATION_MS).clamp(0.0, 1.0);
-                    set_hold_progress.set(progress);
-                    if elapsed >= HOLD_DURATION_MS {
-                        break;
-                    }
-                }
+        spawn_local(async move {
+            let start = now_ms();
+            loop {
+                gloo_timers::future::TimeoutFuture::new(TICK_MS).await;
                 if press_gen.get_untracked() != gen_id {
                     return;
                 }
-
-                set_door_state.set(DoorState::Firing);
-                let next_state = match post_door_open().await {
-                    Ok(()) => DoorState::Success,
-                    Err(429) => DoorState::ErrorRateLimited,
-                    Err(_) => DoorState::ErrorUnavailable,
-                };
-                set_door_state.set(next_state);
-                set_hold_progress.set(0.0);
-
-                if matches!(next_state, DoorState::Success) {
-                    on_success();
+                let elapsed = now_ms() - start;
+                let progress = (elapsed / HOLD_DURATION_MS).clamp(0.0, 1.0);
+                set_hold_progress.set(progress);
+                if elapsed >= HOLD_DURATION_MS {
+                    break;
                 }
+            }
+            if press_gen.get_untracked() != gen_id {
+                return;
+            }
 
-                let reset_ms = if matches!(next_state, DoorState::Success) {
-                    3000
-                } else {
-                    5000
-                };
-                spawn_local(async move {
-                    gloo_timers::future::TimeoutFuture::new(reset_ms).await;
-                    if press_gen.get_untracked() == gen_id {
-                        set_door_state.set(DoorState::Idle);
-                    }
-                });
+            set_door_state.set(DoorState::Firing);
+            let next_state = match post_door_open().await {
+                Ok(()) => DoorState::Success,
+                Err(429) => DoorState::ErrorRateLimited,
+                Err(_) => DoorState::ErrorUnavailable,
+            };
+            set_door_state.set(next_state);
+            set_hold_progress.set(0.0);
+
+            if matches!(next_state, DoorState::Success) {
+                on_success.run(());
+            }
+
+            let reset_ms = if matches!(next_state, DoorState::Success) {
+                3000
+            } else {
+                5000
+            };
+            spawn_local(async move {
+                gloo_timers::future::TimeoutFuture::new(reset_ms).await;
+                if press_gen.get_untracked() == gen_id {
+                    set_door_state.set(DoorState::Idle);
+                }
             });
-        }
+        });
     };
 
     let on_pointer_cancel = move |_ev: web_sys::PointerEvent| {
@@ -171,7 +166,6 @@ where
                         </button>
                     }.into_any();
                 }
-                let on_pd = on_pointer_down.clone();
                 view! {
                     <button
                         class=move || format!("door-btn door-btn--{}", door_state.get().css_suffix())
@@ -180,7 +174,7 @@ where
                         disabled=move || matches!(door_state.get(),
                             DoorState::Firing | DoorState::Success
                                 | DoorState::ErrorUnavailable | DoorState::ErrorRateLimited)
-                        on:pointerdown=on_pd
+                        on:pointerdown=on_pointer_down
                         on:pointerup=on_pointer_cancel
                         on:pointerleave=on_pointer_cancel
                         on:pointercancel=on_pointer_cancel

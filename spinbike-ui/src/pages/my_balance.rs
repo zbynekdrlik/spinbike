@@ -62,14 +62,14 @@ pub fn MyBalancePage() -> impl IntoView {
         data.with(|d| d.as_ref().map(|d| d.allow_self_entry).unwrap_or(false))
     });
 
-    let on_door_success = move || {
+    let on_door_success = Callback::new(move |()| {
         // Refresh balance — credit / pass / recent rows may have changed.
         spawn_local(async move {
             if let Ok(d) = api::get::<BalanceResp>("/api/my/balance").await {
                 set_data.set(Some(d));
             }
         });
-    };
+    });
 
     view! {
         <h1 class="page-title">
