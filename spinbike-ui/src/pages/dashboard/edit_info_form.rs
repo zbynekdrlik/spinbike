@@ -40,12 +40,13 @@ pub fn EditInfoForm(
     // FnOnce. The Effect runs on the first show=true with prev=None and
     // populates inputs from the latest server state.
     let initial_allow_se = card.allow_self_entry;
-    // Initial values from the card prop, wrapped in Arc so the Effect
-    // closure (FnMut) can re-clone them on every show=true run.
-    let initial_name = std::sync::Arc::new(card.name.clone());
-    let initial_email = std::sync::Arc::new(card.email.clone().unwrap_or_default());
-    let initial_company = std::sync::Arc::new(card.company.clone().unwrap_or_default());
-    let initial_phone = std::sync::Arc::new(card.phone.clone().unwrap_or_default());
+    // Initial values from the card prop, exposed as ReadSignals so the
+    // outer `move ||` closure stays Fn (signals are Copy). Inputs use
+    // `value=<sig>.get()` which evaluates fresh on every render.
+    let (initial_name, _) = signal(card.name.clone());
+    let (initial_email, _) = signal(card.email.clone().unwrap_or_default());
+    let (initial_company, _) = signal(card.company.clone().unwrap_or_default());
+    let (initial_phone, _) = signal(card.phone.clone().unwrap_or_default());
 
     // NodeRefs declared at the function-body level so the refresh Effect
     // can write to them directly when fetch completes. They're populated
@@ -66,54 +67,43 @@ pub fn EditInfoForm(
     // Refresh from server every time show transitions false→true. Sets the
     // input values via NodeRef + HtmlInputElement::set_value, so the latest
     // saved data is what the user sees on reopen.
+    // Refresh on REOPEN only. First-open uses the `value=` HTML attribute
+    // on each input (set from the card prop at render time). The Effect
+    // fetches the latest user state on the false→true transition AFTER
+    // the form has previously been shown — this is the case where the
+    // parent's `card` prop may be stale (set_selected.set after save
+    // doesn't always trigger CardActionPanel to remount, so the EditInfoForm's
+    // initial values can be from the pre-save state).
     let lookup_code = initial_code.clone();
     Effect::new(move |prev_shown: Option<bool>| {
         let now_shown = show.get();
-        let is_first_open = prev_shown.is_none() && now_shown;
         let is_reopen = prev_shown == Some(false) && now_shown;
-        if !is_first_open && !is_reopen {
+        if !is_reopen {
             return now_shown;
         }
         let code = lookup_code.clone();
-        let name0 = initial_name.clone();
-        let email0 = initial_email.clone();
-        let company0 = initial_company.clone();
-        let phone0 = initial_phone.clone();
-        spawn_local(async move {
-            // Yield to next frame so the sheet has mounted and NodeRefs
-            // point at the live inputs before we try to write them.
-            gloo_timers::future::TimeoutFuture::new(0).await;
-            let set_value = |nr: &NodeRef<leptos::html::Input>, val: &str| {
-                if let Some(el) = nr.get_untracked() {
-                    let input: &HtmlInputElement = &el;
-                    input.set_value(val);
-                }
-            };
-            // ALWAYS populate inputs from the initial card prop so users
-            // see SOMETHING immediately on every open.
-            set_value(&name_ref, name0.as_str());
-            set_value(&email_ref, email0.as_str());
-            set_value(&company_ref, company0.as_str());
-            set_value(&phone_ref, phone0.as_str());
-
-            // Only REOPEN triggers a server refetch. First-open already
-            // has fresh card prop (set by the parent's user-lookup that
-            // selected the card) — refetching there would overwrite the
-            // user's typed-but-not-saved input mid-edit. On reopen, the
-            // card prop may be stale (parent component might not remount),
-            // so we re-fetch to show the latest saved state.
-            if is_reopen && let Some(code) = code {
+        if let Some(code) = code {
+            spawn_local(async move {
+                // Yield so the new sheet is mounted and the NodeRefs point at
+                // the live inputs before we write to them.
+                gloo_timers::future::TimeoutFuture::new(0).await;
                 if let Ok(c) =
                     api::get::<CardInfo>(&format!("/api/users/lookup/{code}")).await
                 {
+                    let set_value = |nr: &NodeRef<leptos::html::Input>, val: &str| {
+                        if let Some(el) = nr.get_untracked() {
+                            let input: &HtmlInputElement = &el;
+                            input.set_value(val);
+                        }
+                    };
                     set_value(&name_ref, &c.name);
                     set_value(&email_ref, c.email.as_deref().unwrap_or(""));
                     set_value(&company_ref, c.company.as_deref().unwrap_or(""));
                     set_value(&phone_ref, c.phone.as_deref().unwrap_or(""));
                     set_allow_self_entry.set(c.allow_self_entry);
                 }
-            }
-        });
+            });
+        }
         now_shown
     });
 
@@ -206,6 +196,7 @@ pub fn EditInfoForm(
                                 type="text"
                                 class="form-control"
                                 node_ref=name_ref
+                                value=initial_name.get_untracked()
                             />
                         </div>
                         <div class="form-group">
@@ -214,6 +205,7 @@ pub fn EditInfoForm(
                                 type="email"
                                 class="form-control"
                                 node_ref=email_ref
+                                value=initial_email.get_untracked()
                             />
                         </div>
                         <div class="form-group">
@@ -222,6 +214,7 @@ pub fn EditInfoForm(
                                 type="text"
                                 class="form-control"
                                 node_ref=company_ref
+                                value=initial_company.get_untracked()
                             />
                         </div>
                         <div class="form-group">
@@ -230,6 +223,7 @@ pub fn EditInfoForm(
                                 type="text"
                                 class="form-control"
                                 node_ref=phone_ref
+                                value=initial_phone.get_untracked()
                             />
                         </div>
                         {if is_admin {
