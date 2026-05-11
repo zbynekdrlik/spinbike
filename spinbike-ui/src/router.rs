@@ -103,6 +103,7 @@ use crate::components::nav::Navbar;
 use crate::i18n;
 use crate::pages::admin::AdminPage;
 use crate::pages::dashboard::DashboardPage;
+use crate::pages::door::DoorPage;
 use crate::pages::login::{LoginPage, RegisterPage};
 use crate::pages::my_balance::MyBalancePage;
 use crate::pages::my_bookings::MyBookingsPage;
@@ -147,6 +148,10 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/register") view=RegisterPage />
                         <Route path=path!("/my/bookings") view=MyBookingsPage />
                         <Route path=path!("/my/balance") view=MyBalancePage />
+                        // Door page — minimal UI for admin/staff/customers
+                        // with allow_self_entry=1. No role gate; server's
+                        // allow_self_entry check is the actual authorization.
+                        <Route path=path!("/door") view=DoorPage />
                         <Route path=path!("/staff") view=|| staff_gated(|| DashboardPage().into_any()) />
                         // Admin schedule view (rosters, walk-in, cancel) lives at /schedule.
                         // /staff/classes kept as alias for back-compat.

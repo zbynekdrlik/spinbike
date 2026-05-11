@@ -97,10 +97,12 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
                             <div class="more-sheet__user">{user_name}</div>
                             // Open-door link visible to ALL admin/staff (whether
                             // their own allow_self_entry flag is on or off — the
-                            // door page itself shows "Ask reception" when the
-                            // flag is off, so this stays informative).
+                            // dedicated /door page itself shows "Ask reception"
+                            // when the flag is off). Links to /door (NOT
+                            // /my/balance) so admin/staff see ONLY the hold-
+                            // button, not the customer-facing credit/pass UI.
                             <a
-                                href="/my/balance"
+                                href="/door"
                                 class="btn btn--block btn--ghost"
                                 data-testid="more-open-door"
                             >

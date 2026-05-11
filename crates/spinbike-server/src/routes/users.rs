@@ -594,10 +594,37 @@ async fn update_user(
     // admin-or-self for `password`. Staff/admin keep their existing
     // permissions for editing OTHER users.
     let is_self = claims.sub == id;
-    if !claims.role.can_manage_cards() && !is_self {
+    let is_staff_or_admin = claims.role.can_manage_cards();
+    tracing::info!(
+        caller_id = claims.sub,
+        caller_role = %claims.role,
+        target_id = id,
+        has_name = body.name.is_some(),
+        has_email = body.email.is_some(),
+        has_phone = body.phone.is_some(),
+        has_company = body.company.is_some(),
+        has_card_code = body.card_code.is_some(),
+        has_allow_self_entry = body.allow_self_entry.is_some(),
+        has_password = body.password.is_some(),
+        "PUT /api/users/{id}: update request"
+    );
+    if !is_staff_or_admin && !is_self {
         return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "Staff access required"})),
+        ));
+    }
+
+    // card_code is the legacy-barcode identifier used by staff search/scan
+    // workflows. Only staff/admin can change it — customers cannot rewrite
+    // their own card_code (would let them collide with other users' codes or
+    // claim a freshly-typed code).
+    if body.card_code.is_some() && !is_staff_or_admin {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "Only staff can modify card_code"
+            })),
         ));
     }
 

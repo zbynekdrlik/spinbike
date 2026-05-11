@@ -190,6 +190,26 @@ async fn open(
     let mut charged = false;
     let door_count_today = n + 1;
 
+    // Look up the single_entry service id ONCE — used for ALL door tx rows
+    // (1st-with-pass visit, 1st-no-pass charge, Nth-of-day audit row). This
+    // is so the existing attendance KPI report SQL (which filters by
+    // service_id IN (single_entry, monthly_pass)) picks up door visits;
+    // without it, door entries are invisible to reports.
+    let single_entry_svc: Option<(i64, f64)> = sqlx::query_as(
+        "SELECT id, default_price FROM services \
+         WHERE kind = 'single_entry' AND active = 1 LIMIT 1",
+    )
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(internal_error)?;
+    let (single_entry_id, single_entry_price) = match single_entry_svc {
+        Some(s) => s,
+        None => {
+            tracing::error!("door: no active single_entry service seeded");
+            return Err(internal_error("no active single_entry service configured"));
+        }
+    };
+
     // 5. Build the row to insert (action/service_id/amount/note).
     let is_staff_or_admin = role == "admin" || role == "staff";
     let (action, service_id_opt, amount, note): (&str, Option<i64>, f64, String) = if n == 0 {
@@ -215,39 +235,35 @@ async fn open(
         };
 
         if pass_active.is_some() {
-            // Monthly pass covers the entry — zero-amount visit row.
-            ("visit", None, 0.0, "door: 1st".to_string())
+            // Monthly pass covers the entry — zero-amount visit row. Tag
+            // with single_entry service_id so attendance reports count it.
+            ("visit", Some(single_entry_id), 0.0, "door: 1st".to_string())
         } else {
             // No pass — charge single_entry price and deduct from user.credit.
-            let svc: Option<(i64, f64)> = sqlx::query_as(
-                "SELECT id, default_price FROM services \
-                 WHERE kind = 'single_entry' AND active = 1 LIMIT 1",
-            )
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(internal_error)?;
-            let (svc_id, price) = match svc {
-                Some(s) => s,
-                None => {
-                    tracing::error!("door: no active single_entry service seeded");
-                    return Err(internal_error("no active single_entry service configured"));
-                }
-            };
-            // Deduct from running balance.
             sqlx::query("UPDATE users SET credit = credit - ? WHERE id = ?")
-                .bind(price)
+                .bind(single_entry_price)
                 .bind(user_id)
                 .execute(&mut *tx)
                 .await
                 .map_err(internal_error)?;
-            credit -= price;
+            credit -= single_entry_price;
             charged = true;
-            ("charge", Some(svc_id), -price, "door: 1st".to_string())
+            (
+                "charge",
+                Some(single_entry_id),
+                -single_entry_price,
+                "door: 1st".to_string(),
+            )
         }
     } else {
-        // N-th press today (N >= 2) — zero-amount marker row.
+        // N-th press today (N >= 2) — zero-amount audit row. Still tagged
+        // with single_entry service_id so the row visually groups under the
+        // same service in the user's tx history; the visit-definition memo
+        // (`action='visit' OR (action='charge' AND amount<0 AND valid_until
+        // IS NULL)`) excludes amount=0 charges from the visit count, so
+        // reports do NOT double-count these.
         let ord = crate::util::ordinal((n + 1) as u32);
-        ("charge", None, 0.0, format!("door: {ord}"))
+        ("charge", Some(single_entry_id), 0.0, format!("door: {ord}"))
     };
 
     // 6. Insert the row (still uncommitted).
