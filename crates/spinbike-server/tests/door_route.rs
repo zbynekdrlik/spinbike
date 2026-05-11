@@ -72,11 +72,12 @@ async fn admin_with_allow_self_entry_can_open_door() {
     assert_eq!(body["charged"], false);
 }
 
-/// Staff WITHOUT allow_self_entry gets 403 — gate is the flag, not the role.
+/// Staff WITHOUT allow_self_entry STILL opens the door — admin/staff
+/// bypass the per-user opt-in toggle. (Customers still need the flag.)
 #[tokio::test]
-async fn staff_without_allow_self_entry_forbidden() {
+async fn staff_without_allow_self_entry_still_opens() {
     let app = TestApp::with_door_mode("success").await;
-    // allow_self_entry defaults to 0.
+    // allow_self_entry defaults to 0 — but staff/admin role bypasses the gate.
     let (status, body) = app
         .request(post_json(
             "/api/door/open",
@@ -84,9 +85,25 @@ async fn staff_without_allow_self_entry_forbidden() {
             &serde_json::json!({}),
         ))
         .await;
-    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
-    assert_eq!(body["status"], "rejected");
-    assert_eq!(body["reason"], "not_allowed");
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["status"], "opened");
+    assert_eq!(body["charged"], false);
+}
+
+/// Admin WITHOUT allow_self_entry also opens the door — same role bypass.
+#[tokio::test]
+async fn admin_without_allow_self_entry_still_opens() {
+    let app = TestApp::with_door_mode("success").await;
+    let (status, body) = app
+        .request(post_json(
+            "/api/door/open",
+            &app.admin_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["status"], "opened");
+    assert_eq!(body["charged"], false);
 }
 
 #[tokio::test]

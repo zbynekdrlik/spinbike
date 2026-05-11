@@ -136,13 +136,12 @@ async fn open(
         }
     };
 
-    // Role-agnostic per original prompt ("users which are allowed by CEO
-    // config could come and open the door"). The only gate is the per-user
-    // allow_self_entry flag — admin/staff can self-open just like customers
-    // when their flag is on. Billing logic still distinguishes customers vs
-    // admin/staff below: admin/staff visits are logged with action='visit',
-    // amount=0, regardless of monthly_pass status, because they don't pay.
-    if allow_self_entry == 0 {
+    // Admin/staff bypass the allow_self_entry gate — they run the place,
+    // they don't need their own opt-in toggle. Customers still need the CEO
+    // to enable the flag. Billing logic below: admin/staff always log a
+    // visit (no charge); customers follow pass / charge / Nth-of-day flow.
+    let is_staff_or_admin_role = role == "admin" || role == "staff";
+    if !is_staff_or_admin_role && allow_self_entry == 0 {
         tracing::warn!(
             user_id,
             %role,
@@ -211,12 +210,11 @@ async fn open(
     };
 
     // 5. Build the row to insert (action/service_id/amount/note).
-    let is_staff_or_admin = role == "admin" || role == "staff";
     let (action, service_id_opt, amount, note): (&str, Option<i64>, f64, String) = if n == 0 {
         // First press today — visit or charge depending on monthly-pass state.
         // Admin/staff are never charged for their own door use — always
         // logged as a visit. Customer flow falls through to the pass check.
-        let pass_active: Option<i64> = if is_staff_or_admin {
+        let pass_active: Option<i64> = if is_staff_or_admin_role {
             Some(1) // short-circuit — treat as "pass covers it"
         } else {
             sqlx::query_scalar(

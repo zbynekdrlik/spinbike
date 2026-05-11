@@ -995,7 +995,17 @@ async fn my_balance(
     .map_err(internal_error)?;
 
     let (id, name, credit, card_code, allow_self_entry) = match user_row {
-        Some((id, name, credit, card_code, ase)) => (id, name, credit, card_code, ase != 0),
+        Some((id, name, credit, card_code, ase)) => {
+            // Admin/staff always see the door button enabled — they bypass
+            // the per-user opt-in toggle (they manage the place). Stored
+            // flag stays as-is; this is just the effective UI value.
+            let role_is_staff_or_admin = matches!(
+                claims.role,
+                spinbike_core::auth::Role::Admin | spinbike_core::auth::Role::Staff
+            );
+            let effective_ase = ase != 0 || role_is_staff_or_admin;
+            (id, name, credit, card_code, effective_ase)
+        }
         None => {
             tracing::warn!(user_id, "my_balance: user not found or soft-deleted");
             return Err((
