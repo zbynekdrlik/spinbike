@@ -69,11 +69,9 @@ pub fn EditInfoForm(
     let lookup_code = initial_code.clone();
     Effect::new(move |prev_shown: Option<bool>| {
         let now_shown = show.get();
-        let should_fetch = match prev_shown {
-            None => now_shown,
-            Some(was) => !was && now_shown,
-        };
-        if !should_fetch {
+        let is_first_open = prev_shown.is_none() && now_shown;
+        let is_reopen = prev_shown == Some(false) && now_shown;
+        if !is_first_open && !is_reopen {
             return now_shown;
         }
         let code = lookup_code.clone();
@@ -82,8 +80,8 @@ pub fn EditInfoForm(
         let company0 = initial_company.clone();
         let phone0 = initial_phone.clone();
         spawn_local(async move {
-            // Small yield to ensure the sheet has mounted and NodeRefs
-            // point at the live inputs before we try to write to them.
+            // Yield to next frame so the sheet has mounted and NodeRefs
+            // point at the live inputs before we try to write them.
             gloo_timers::future::TimeoutFuture::new(0).await;
             let set_value = |nr: &NodeRef<leptos::html::Input>, val: &str| {
                 if let Some(el) = nr.get_untracked() {
@@ -91,17 +89,20 @@ pub fn EditInfoForm(
                     input.set_value(val);
                 }
             };
-            // First: populate from the initial card prop so user sees
-            // SOMETHING immediately (covers the case where the lookup
-            // endpoint is slow or returns an error).
+            // ALWAYS populate inputs from the initial card prop so users
+            // see SOMETHING immediately on every open.
             set_value(&name_ref, name0.as_str());
             set_value(&email_ref, email0.as_str());
             set_value(&company_ref, company0.as_str());
             set_value(&phone_ref, phone0.as_str());
 
-            // Then: refresh from server with the latest authoritative
-            // state. Overwrites the initial values if the lookup returns.
-            if let Some(code) = code {
+            // Only REOPEN triggers a server refetch. First-open already
+            // has fresh card prop (set by the parent's user-lookup that
+            // selected the card) — refetching there would overwrite the
+            // user's typed-but-not-saved input mid-edit. On reopen, the
+            // card prop may be stale (parent component might not remount),
+            // so we re-fetch to show the latest saved state.
+            if is_reopen && let Some(code) = code {
                 if let Ok(c) =
                     api::get::<CardInfo>(&format!("/api/users/lookup/{code}")).await
                 {
