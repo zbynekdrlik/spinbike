@@ -287,16 +287,20 @@ mod tests {
                 std::env::set_var("EWELINK_TEST_MODE", "success");
             }
             let h = EwelinkHandle::spawn();
-            // Before any press: None.
+            // Before any press: None. (spawn is sync; the stub task hasn't
+            // necessarily run yet, but last_ack_ms is initialised to the
+            // sentinel before spawn returns, so this is safe to assert now.)
             assert_eq!(
                 h.last_ack_ms_ago(),
                 None,
                 "no presses yet → last_ack_ms_ago should be None"
             );
-            // Connected state once the stub starts.
-            assert_eq!(h.state(), EwelinkState::Connected);
-            // Successful press → last_ack_ms is now ≈ Utc::now_ms.
+            // Successful press → drives the stub task to completion of its
+            // first iteration (sets state=Connected before reading rx) AND
+            // updates last_ack_ms_ago to ≈ Utc::now_ms.
             h.press().await.expect("press should succeed in test stub");
+            // Now the stub has definitely run — state must be Connected.
+            assert_eq!(h.state(), EwelinkState::Connected);
             // Sleep so the elapsed window is detectably > 0 and < 10s.
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             let ms = h
