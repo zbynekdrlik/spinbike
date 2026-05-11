@@ -1066,3 +1066,134 @@ async fn staff_can_still_edit_other_fields() {
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
 }
+
+// ─── password — admin/self-set guard ──────────────────────────────────────
+
+/// Admin can reset any user's password. Verifies via re-login.
+#[tokio::test]
+async fn admin_can_set_other_user_password() {
+    let app = TestApp::new().await;
+    let new_pw = "BrandNewPw#42";
+    let body = serde_json::json!({"password": new_pw});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.admin_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    // Confirm by attempting login as that user with the new password.
+    let login_body = serde_json::json!({"email": "user@test.com", "password": new_pw});
+    let (login_status, _) = app
+        .request(post_json("/api/auth/login", "", &login_body))
+        .await;
+    assert_eq!(
+        login_status,
+        axum::http::StatusCode::OK,
+        "new password must work for login"
+    );
+}
+
+/// A user can change their OWN password. Verifies via re-login.
+#[tokio::test]
+async fn customer_can_set_own_password() {
+    let app = TestApp::new().await;
+    let new_pw = "MyNewPw9876";
+    let body = serde_json::json!({"password": new_pw});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.customer_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let login_body = serde_json::json!({"email": "user@test.com", "password": new_pw});
+    let (login_status, _) = app
+        .request(post_json("/api/auth/login", "", &login_body))
+        .await;
+    assert_eq!(login_status, axum::http::StatusCode::OK);
+}
+
+/// Staff CANNOT reset another user's password. Server-side 403 even if the
+/// UI submits the field. Original password remains valid.
+#[tokio::test]
+async fn staff_cannot_set_other_user_password() {
+    let app = TestApp::new().await;
+    let attempted_pw = "ShouldNotApply9";
+    let body = serde_json::json!({"password": attempted_pw});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.staff_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+
+    // Original password ("password") still valid; attempted_pw rejected.
+    let bad_login = serde_json::json!({"email": "user@test.com", "password": attempted_pw});
+    let (bad_status, _) = app
+        .request(post_json("/api/auth/login", "", &bad_login))
+        .await;
+    assert_ne!(
+        bad_status,
+        axum::http::StatusCode::OK,
+        "attempted password must NOT have been applied"
+    );
+
+    let good_login = serde_json::json!({"email": "user@test.com", "password": "password"});
+    let (good_status, _) = app
+        .request(post_json("/api/auth/login", "", &good_login))
+        .await;
+    assert_eq!(
+        good_status,
+        axum::http::StatusCode::OK,
+        "original password must still work"
+    );
+}
+
+/// Password shorter than 8 chars is rejected with 400.
+#[tokio::test]
+async fn password_too_short_rejected() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"password": "short7c"});
+    let (status, body_resp) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.admin_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    let err = body_resp["error"]
+        .as_str()
+        .unwrap_or_default()
+        .to_lowercase();
+    assert!(err.contains("8"), "error message must mention min length");
+}
+
+/// Staff CAN change their own password (path id == claims.sub).
+#[tokio::test]
+async fn staff_can_set_own_password() {
+    let app = TestApp::new().await;
+    let new_pw = "StaffOwnPw321";
+    let body = serde_json::json!({"password": new_pw});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.staff_id),
+            &app.staff_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let login_body = serde_json::json!({"email": "staff@test.com", "password": new_pw});
+    let (login_status, _) = app
+        .request(post_json("/api/auth/login", "", &login_body))
+        .await;
+    assert_eq!(login_status, axum::http::StatusCode::OK);
+}
