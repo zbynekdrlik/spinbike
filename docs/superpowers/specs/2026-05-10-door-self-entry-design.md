@@ -153,10 +153,15 @@ Authorization: Bearer <jwt>
   2. SELECT allow_self_entry, role, credit FROM users
        WHERE id = ? AND deleted_at IS NULL.
        not found / deleted        → 403 "ask_reception"
-       role != 'customer'         → 403 "ask_reception" (staff/admin
-                                       do not use this route; they have
-                                       the legacy buzzer button)
        allow_self_entry = 0       → 403 "not_allowed"
+                                     EXCEPT when role IN ('admin', 'staff')
+                                     — they bypass the flag entirely (deviation
+                                     from initial spec, see commit 0dfe85b).
+                                     Customers still require the CEO to enable
+                                     allow_self_entry. The original prompt's
+                                     "users allowed by CEO config" is the
+                                     per-customer toggle; admin/staff need
+                                     no opt-in because they manage the place.
   3. Rate-limit check (per-user + global).
        exceeds                    → 429 "rate_limited"
   4. BEGIN DB TRANSACTION.
@@ -502,8 +507,8 @@ Order of operations on merge:
 3. Pair the MINI-D once via the Sonoff phone app (one-time, ~5 min). Set Inching = ON, 3000 ms.
 4. Set `EWELINK_EMAIL`, `EWELINK_PASSWORD`, `EWELINK_DEVICE_ID` (and optionally `EWELINK_REGION`) in the server's secrets file; restart the spinbike-server service.
 5. Health endpoint shows `ewelink_ws: connected`.
-6. CEO toggles `allow_self_entry=true` on their own user via the admin modal, logs in as themselves on phone, smoke-tests by holding the button at the front door.
-7. CEO toggles `allow_self_entry=true` for the first batch of trusted customers.
+6. CEO logs in as themselves on phone, opens `/door`, holds the button at the front door (no `allow_self_entry` toggle needed for admin/staff — they bypass the flag, per commit `0dfe85b`).
+7. CEO toggles `allow_self_entry=true` for the first batch of trusted customers via the admin user-edit modal.
 
 If the eWeLink integration ever breaks: clear `EWELINK_DEVICE_ID`, restart server. Module enters `Disabled`. All `/api/door/open` calls return 503; PWA shows "Door unavailable"; staff still operates the buzzer manually from the reception phone. No DB rollback needed.
 

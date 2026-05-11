@@ -616,6 +616,47 @@ async fn my_balance_reports_no_allow_self_entry_when_opted_out() {
     );
 }
 
+/// Admin's allow_self_entry stored value is 0 (default) BUT my_balance must
+/// report effective true — admin/staff bypass the flag entirely (commit
+/// 0dfe85b). Without this override, admin's /door page would render the
+/// disabled "Ask reception" button.
+#[tokio::test]
+async fn my_balance_admin_with_flag_off_reports_effective_true() {
+    let app = TestApp::new().await;
+    sqlx::query("UPDATE users SET allow_self_entry = 0 WHERE id = ?")
+        .bind(app.admin_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (status, body) = app
+        .request(get("/api/my/balance", &app.admin_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        body["allow_self_entry"], true,
+        "admin role must report effective allow_self_entry=true regardless of stored flag"
+    );
+}
+
+/// Same bypass for staff role.
+#[tokio::test]
+async fn my_balance_staff_with_flag_off_reports_effective_true() {
+    let app = TestApp::new().await;
+    sqlx::query("UPDATE users SET allow_self_entry = 0 WHERE id = ?")
+        .bind(app.staff_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (status, body) = app
+        .request(get("/api/my/balance", &app.staff_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        body["allow_self_entry"], true,
+        "staff role must report effective allow_self_entry=true regardless of stored flag"
+    );
+}
+
 // ─── negative-balance boundary tests ─────────────────────────────────────────
 
 #[tokio::test]
