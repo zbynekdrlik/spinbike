@@ -1591,7 +1591,7 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
 .door-btn--idle, .door-btn--holding, .door-btn--firing { background: #2563eb; }
 .door-btn--success { background: #16a34a; }
 .door-btn--errorunavailable { background: #dc2626; }
-.door-btn--erroratelimited { background: #6b7280; }
+.door-btn--errorratelimited { background: #6b7280; }
 .door-btn--notallowed { background: #9ca3af; }
 
 .banner { padding: 0.75rem; border-radius: 8px; margin: 0.75rem 0; text-align: center; font-weight: 500; }

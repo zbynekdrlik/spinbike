@@ -45,7 +45,7 @@ pub fn DoorPage() -> impl IntoView {
 
     view! {
         <div class="door-page" data-testid="door-page">
-            <h1 class="page-title">{move || i18n::t(lang.get(), "door_button_idle")}</h1>
+            <h1 class="page-title">{move || i18n::t(lang.get(), "door_page_title")}</h1>
 
             {move || {
                 let e = error.get();

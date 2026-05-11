@@ -774,6 +774,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "(open door from PWA without staff present)",
         ),
     );
+    m.insert("door_page_title", ("Otvorenie dveri", "Open door"));
     m.insert("user_edit_new_password", ("Nove heslo", "New password"));
     m.insert(
         "user_edit_new_password_placeholder",

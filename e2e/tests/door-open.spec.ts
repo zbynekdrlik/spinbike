@@ -318,4 +318,44 @@ test.describe('Door self-entry (#92)', () => {
 
         assertCleanConsole(messages);
     });
+
+    test('admin edits user → saves → reopens form → fields show saved values', async ({ page, baseURL }) => {
+        const messages = setupConsoleCheck(page);
+        const adminToken = await loginViaAPI(page, baseURL!, 'admin@test.com', 'admin123');
+
+        // Create the target user and assign a card_code so the staff dashboard
+        // can find them.
+        const u = await createUniqueUser(adminToken, 0, 'ER');
+
+        // Admin opens the staff dashboard with the user pre-selected.
+        await page.goto(`/staff?card=${u.card_code}`);
+        await expect(page.locator('[data-testid="action-panel"]')).toBeVisible({ timeout: 8000 });
+
+        // Click "Edit info" → form opens.
+        await page.locator('button', { hasText: 'Edit info' }).click();
+        const sheet = page.locator('[data-testid="sheet-edit-info"]');
+        await expect(sheet).toBeVisible({ timeout: 6000 });
+
+        // Edit the name field — type a fresh unique value.
+        const newName = `Renamed ${Date.now()}`;
+        const nameInput = sheet.locator('input').first();
+        await nameInput.fill(newName);
+
+        // Save.
+        await sheet.locator('button', { hasText: 'Save' }).click();
+        // Wait for sheet to close (the on_close callback hides it).
+        await expect(sheet).not.toBeVisible({ timeout: 6000 });
+
+        // Reopen the form by clicking "Edit info" again.
+        await page.locator('button', { hasText: 'Edit info' }).click();
+        await expect(sheet).toBeVisible({ timeout: 6000 });
+
+        // The form MUST show the saved name, not the original. This catches
+        // the StoredValue staleness regression that shipped the "nothing
+        // saved" perception on dev.
+        const reopenedName = sheet.locator('input').first();
+        await expect(reopenedName).toHaveValue(newName, { timeout: 6000 });
+
+        assertCleanConsole(messages);
+    });
 });
