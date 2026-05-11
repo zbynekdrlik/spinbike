@@ -77,42 +77,56 @@ pub fn MyBalancePage() -> impl IntoView {
                 .unwrap_or_else(|| i18n::t(lang.get(), "my_balance").to_string()))}
         </h1>
 
-        {move || {
-            let e = error.get();
-            if !e.is_empty() {
-                return view! { <div class="alert alert-error">{e}</div> }.into_any();
-            }
-            if loading.get() {
-                return view! { <div class="text-center mt-3"><span class="spinner"></span></div> }.into_any();
-            }
+        // Credit + pass cards — re-render reactively on data changes (no
+        // remount of children; just text updates).
+        <div class="card-credit" data-testid="my-balance-credit">
+            <div class="card-credit__label">{move || i18n::t(lang.get(), "my_balance_credit")}</div>
+            <div class="card-credit__value">
+                "\u{20ac} "
+                {move || data.with(|d| d.as_ref().map(|d| format!("{:.2}", d.credit)).unwrap_or_else(|| "—".into()))}
+            </div>
+        </div>
 
-            data.with(|d| match d {
-                None => view! { <div class="empty-state">{i18n::t(lang.get(), "unable_to_load")}</div> }.into_any(),
-                Some(b) => {
-                    let credit_val = format!("{:.2}", b.credit);
-                    let pass_label = match &b.monthly_pass_active_until {
+        <div class="card-pass" data-testid="my-balance-pass">
+            <div class="card-pass__label">{move || i18n::t(lang.get(), "service_kind_monthly_pass")}</div>
+            <div class="card-pass__value">
+                {move || data.with(|d| {
+                    let Some(b) = d.as_ref() else {
+                        return String::new();
+                    };
+                    match &b.monthly_pass_active_until {
                         Some(ts) => match parse_pass_date(ts) {
                             Some(d) => tf(lang.get(), "monthly_pass_active_until", &[&fmt_date_short(d, lang.get())]),
                             None => tf(lang.get(), "monthly_pass_active_until", &[ts]),
                         },
                         None => i18n::t(lang.get(), "monthly_pass_not_active").to_string(),
-                    };
+                    }
+                })}
+            </div>
+        </div>
+
+        // DoorButton rendered ONCE at the top level. It reads `allowed`
+        // reactively but its component instance is stable — `on_door_success`
+        // refreshing the parent's `data` signal does NOT remount the button,
+        // so the Success banner stays on screen until the auto-reset timer.
+        <DoorButton allowed=allowed_signal on_success=on_door_success />
+
+        // Loading spinner / error banner / recent visits — these update
+        // reactively on data changes.
+        {move || {
+            let e = error.get();
+            if !e.is_empty() {
+                return view! { <div class="alert alert-error">{e}</div> }.into_any();
+            }
+            if loading.get() && data.with(|d| d.is_none()) {
+                return view! { <div class="text-center mt-3"><span class="spinner"></span></div> }.into_any();
+            }
+            data.with(|d| match d {
+                None => view! { <div class="empty-state">{i18n::t(lang.get(), "unable_to_load")}</div> }.into_any(),
+                Some(b) => {
                     let recent_rows = b.recent.clone();
                     let lang_now = lang.get();
-
                     view! {
-                        <div class="card-credit" data-testid="my-balance-credit">
-                            <div class="card-credit__label">{i18n::t(lang_now, "my_balance_credit")}</div>
-                            <div class="card-credit__value">"\u{20ac} "{credit_val}</div>
-                        </div>
-
-                        <div class="card-pass" data-testid="my-balance-pass">
-                            <div class="card-pass__label">{i18n::t(lang_now, "service_kind_monthly_pass")}</div>
-                            <div class="card-pass__value">{pass_label}</div>
-                        </div>
-
-                        <DoorButton allowed=allowed_signal on_success=on_door_success />
-
                         <h2 class="recent-visits__heading">{i18n::t(lang_now, "my_balance_recent_visits")}</h2>
                         <ul class="recent-visits">
                             {recent_rows.into_iter().map(|t| {
