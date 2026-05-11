@@ -148,6 +148,15 @@ impl EwelinkHandle {
         }
     }
 
+    /// Test-only setter so unit tests can drive `state()` through every
+    /// variant including `Disconnected` without spinning up a real WS.
+    /// Production has only two writers: `run_real_ws` and `run_test_stub`.
+    #[cfg(test)]
+    pub(crate) fn set_state_for_test(&self, s: EwelinkState) {
+        self.state
+            .store(s as u8, std::sync::atomic::Ordering::Relaxed);
+    }
+
     /// Milliseconds since the last successful ack. `None` if never acked.
     pub fn last_ack_ms_ago(&self) -> Option<i64> {
         let ts = self.last_ack_ms.load(std::sync::atomic::Ordering::Relaxed);
@@ -217,6 +226,27 @@ mod tests {
             assert_eq!(h.state(), EwelinkState::Disabled);
             let res = h.press().await;
             assert!(matches!(res, Err(EwelinkError::Disabled)), "got {res:?}");
+        })
+        .await;
+    }
+
+    /// Drives every variant of `state()`. Catches the Disconnected match-arm
+    /// mutation (the integration-only tests don't normally exercise the
+    /// Disconnected branch because the test stub jumps straight to Connected).
+    #[tokio::test]
+    async fn state_returns_each_variant() {
+        with_clean_env(|| async {
+            let h = EwelinkHandle::spawn();
+            // initial — Disabled
+            h.set_state_for_test(EwelinkState::Disabled);
+            assert_eq!(h.state(), EwelinkState::Disabled);
+            h.set_state_for_test(EwelinkState::Connected);
+            assert_eq!(h.state(), EwelinkState::Connected);
+            h.set_state_for_test(EwelinkState::Disconnected);
+            assert_eq!(h.state(), EwelinkState::Disconnected);
+            // Back to Disabled to confirm round-trip.
+            h.set_state_for_test(EwelinkState::Disabled);
+            assert_eq!(h.state(), EwelinkState::Disabled);
         })
         .await;
     }

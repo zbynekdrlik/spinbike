@@ -30,6 +30,15 @@ const APP_ID: &str = "oeVkj2lYFGnJu5XUtWisfW4utiN4u9Mq";
 
 /// Production task. Logs in, then drives reconnect cycles until the mpsc
 /// receiver closes (server shutdown). Backoff: 1, 2, 4, 8, 30 s cap.
+///
+/// Excluded from mutation testing — this fn is a thin reconnect wrapper
+/// over `connect_loop_with_url_inner` (whose internals are unit-tested
+/// individually) plus `auth::login` (which has its own httpmock tests
+/// at `crates/spinbike-server/src/ewelink/auth.rs`). Exercising
+/// `run_real_ws` itself would require either a real eWeLink cloud
+/// connection (breaks CI hermeticity) or a non-trivial trait-object
+/// refactor for one mutant. Tradeoff isn't worth it.
+#[mutants::skip]
 pub async fn run_real_ws(
     mut rx: mpsc::Receiver<PressRequest>,
     email: String,
@@ -194,14 +203,19 @@ async fn connect_loop_with_url_inner(
     match ws.next().await {
         Some(Ok(Message::Text(txt))) => match serde_json::from_str::<Value>(&txt) {
             Ok(v) => {
-                let err_code = v.get("error").and_then(|e| e.as_i64()).unwrap_or(-1);
-                if err_code != 0 {
+                // Use Option<i64> directly so the "absent error field" case
+                // and the "non-zero error code" case both reject without a
+                // sentinel magic number.
+                let err_code = v.get("error").and_then(|e| e.as_i64());
+                if err_code != Some(0) {
+                    let display = err_code
+                        .map_or_else(|| "missing".to_string(), |c| c.to_string());
                     tracing::warn!(
-                        code = err_code,
+                        code = %display,
                         body = %txt,
                         "ewelink: userOnline rejected"
                     );
-                    return ConnectOutcome::ConnectionLost(format!("userOnline error {err_code}"));
+                    return ConnectOutcome::ConnectionLost(format!("userOnline error {display}"));
                 }
                 tracing::info!("ewelink: WS connected + handshake ok");
             }

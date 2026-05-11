@@ -475,6 +475,52 @@ mod tests {
         );
     }
 
+    /// Global prune at exactly 60 s — `>` strict means the entry is KEPT
+    /// (elapsed of 60 s is NOT greater than 60 s). Catches mutation of `>`
+    /// to `>=` on the global prune comparison.
+    #[test]
+    fn rate_limiter_global_keeps_entry_at_exactly_60s() {
+        let mut rl = RateLimiter::new();
+        let t0 = Instant::now();
+        for uid in 1..=30 {
+            rl.check_and_record_at(uid, t0).unwrap();
+        }
+        // At t0 + exactly 60 s, prune compares `Duration::from_secs(60) > 60s`
+        // which is false under `>` (entries kept) but true under `>=` (pruned).
+        // With entries still in the deque, 31st press hits global cap.
+        let result = rl.check_and_record_at(99, t0 + Duration::from_secs(60));
+        assert_eq!(
+            result,
+            Err("global_cap"),
+            "at exactly 60 s, the > strict comparison must keep entries in the global window"
+        );
+    }
+
+    /// Per-user prune at exactly 60 s — strict `>` keeps the oldest entry,
+    /// so the user is still at cap. Catches `>` → `>=` and `>` → `==` on the
+    /// per-user prune.
+    #[test]
+    fn rate_limiter_per_user_keeps_entry_at_exactly_60s() {
+        let mut rl = RateLimiter::new();
+        let t0 = Instant::now();
+        // 5 entries 11 s apart so the 10 s consecutive check passes.
+        for i in 0..5 {
+            rl.check_and_record_at(1, t0 + Duration::from_secs(11 * i as u64))
+                .unwrap();
+        }
+        // At t0 + 60 s, the first entry (at t0) is exactly 60 s old. Under `>`
+        // strict it stays in the deque → len = 5 → 6th press hits per_user_cap.
+        // Under `>=` mutation, it would be pruned → len = 4 → success.
+        // Under `==` mutation, only entries EXACTLY 60 s old are pruned —
+        // first entry pruned, others kept → len = 4 → also success.
+        let result = rl.check_and_record_at(1, t0 + Duration::from_secs(60));
+        assert_eq!(
+            result,
+            Err("per_user_cap"),
+            "at exactly 60 s the per-user prune `>` must keep the oldest entry"
+        );
+    }
+
     /// User 1 is at the per-user cap; user 2 is still allowed independently.
     #[test]
     fn rate_limiter_per_user_isolation_under_caps() {
