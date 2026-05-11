@@ -75,18 +75,19 @@ fn is_staff_or_admin(auth_ver: ReadSignal<u32>) -> bool {
         .unwrap_or(false)
 }
 
-/// Wraps a staff/admin-only page. Customer-JWT (or logged-out) visitors are
-/// bounced to `/my/balance` (or `/login` if no auth). The page itself is only
-/// constructed for authorised roles, so customer JWTs never see /staff data
-/// rendered client-side. This complements the existing server-side 403 on
-/// the underlying API calls.
-#[component]
-fn StaffGated(view_fn: std::rc::Rc<dyn Fn() -> leptos::prelude::AnyView>) -> impl IntoView {
+/// Render `inner` if the current auth is staff/admin, otherwise redirect.
+/// Customer JWTs bounce to `/my/balance`; logged-out visitors to `/login`.
+/// Complements the server-side API 403 with a client-side route gate so
+/// customer JWTs never even render the staff dashboard page.
+fn staff_gated<F>(inner: F) -> impl IntoView
+where
+    F: Fn() -> leptos::prelude::AnyView + 'static,
+{
     let auth_ver = use_context::<ReadSignal<u32>>().expect("auth_ver context");
     view! {
         {move || {
             if is_staff_or_admin(auth_ver) {
-                view_fn()
+                inner()
             } else {
                 let user = crate::auth::get_user();
                 let target = if user.is_some() { "/my/balance" } else { "/login" };
@@ -146,21 +147,13 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/register") view=RegisterPage />
                         <Route path=path!("/my/bookings") view=MyBookingsPage />
                         <Route path=path!("/my/balance") view=MyBalancePage />
-                        <Route path=path!("/staff") view=|| view! {
-                            <StaffGated view_fn=std::rc::Rc::new(|| DashboardPage().into_any())/>
-                        } />
+                        <Route path=path!("/staff") view=|| staff_gated(|| DashboardPage().into_any()) />
                         // Admin schedule view (rosters, walk-in, cancel) lives at /schedule.
                         // /staff/classes kept as alias for back-compat.
-                        <Route path=path!("/staff/classes") view=|| view! {
-                            <StaffGated view_fn=std::rc::Rc::new(|| StaffDashboardPage().into_any())/>
-                        } />
+                        <Route path=path!("/staff/classes") view=|| staff_gated(|| StaffDashboardPage().into_any()) />
                         <Route path=path!("/schedule") view=ScheduleRoute />
-                        <Route path=path!("/reports") view=|| view! {
-                            <StaffGated view_fn=std::rc::Rc::new(|| ReportsPage().into_any())/>
-                        } />
-                        <Route path=path!("/settings") view=|| view! {
-                            <StaffGated view_fn=std::rc::Rc::new(|| AdminPage().into_any())/>
-                        } />
+                        <Route path=path!("/reports") view=|| staff_gated(|| ReportsPage().into_any()) />
+                        <Route path=path!("/settings") view=|| staff_gated(|| AdminPage().into_any()) />
                         <Route path=path!("/admin") view=|| view! { <RedirectTo to="/settings".to_string()/> } />
                     </Routes>
                 </div>
