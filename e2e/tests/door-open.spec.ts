@@ -314,7 +314,7 @@ test.describe('Door self-entry (#92)', () => {
 
         const link = page.locator('[data-testid="more-open-door"]');
         await expect(link).toBeVisible({ timeout: 6000 });
-        await expect(link).toHaveAttribute('href', '/my/balance');
+        await expect(link).toHaveAttribute('href', '/door');
 
         assertCleanConsole(messages);
     });

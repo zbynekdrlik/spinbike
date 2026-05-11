@@ -156,60 +156,67 @@ where
     };
 
     view! {
-        {move || {
-            if !allowed.get() {
-                let lang_now = lang.get();
-                return view! {
+        <div class="door-area">
+            {move || {
+                if !allowed.get() {
+                    let lang_now = lang.get();
+                    return view! {
+                        <button
+                            class="door-btn door-btn--notallowed"
+                            data-testid="door-open-button"
+                            disabled=true
+                            title=i18n::t(lang_now, "door_not_allowed")
+                        >
+                            <span class="door-btn__label">{i18n::t(lang_now, "door_not_allowed")}</span>
+                        </button>
+                    }.into_any();
+                }
+                let on_pd = on_pointer_down.clone();
+                view! {
                     <button
-                        class="door-btn door-btn--notallowed"
+                        class=move || format!("door-btn door-btn--{}", door_state.get().css_suffix())
                         data-testid="door-open-button"
-                        disabled=true
-                        title=i18n::t(lang_now, "door_not_allowed")
+                        aria-label=move || i18n::t(lang.get(), DoorState::Idle.label_key())
+                        disabled=move || matches!(door_state.get(),
+                            DoorState::Firing | DoorState::Success
+                                | DoorState::ErrorUnavailable | DoorState::ErrorRateLimited)
+                        on:pointerdown=on_pd
+                        on:pointerup=on_pointer_cancel
+                        on:pointerleave=on_pointer_cancel
+                        on:pointercancel=on_pointer_cancel
                     >
-                        <span class="door-btn__label">{i18n::t(lang_now, "door_not_allowed")}</span>
+                        <span class="door-btn__progress" style:width=move || format!("{}%", (hold_progress.get() * 100.0).clamp(0.0, 100.0))></span>
+                        <span class="door-btn__icon" role="img" aria-label=move || i18n::t(lang.get(), "door_lock_icon_aria")>"\u{1F513}"</span>
+                        <span class="door-btn__label">
+                            {move || i18n::t(lang.get(), door_state.get().label_key())}
+                        </span>
                     </button>
-                }.into_any();
-            }
-            view! {
-                <button
-                    class=move || format!("door-btn door-btn--{}", door_state.get().css_suffix())
-                    data-testid="door-open-button"
-                    aria-label=move || i18n::t(lang.get(), DoorState::Idle.label_key())
-                    disabled=move || matches!(door_state.get(),
-                        DoorState::Firing | DoorState::Success
-                            | DoorState::ErrorUnavailable | DoorState::ErrorRateLimited)
-                    on:pointerdown=on_pointer_down.clone()
-                    on:pointerup=on_pointer_cancel
-                    on:pointerleave=on_pointer_cancel
-                    on:pointercancel=on_pointer_cancel
-                >
-                    <span class="door-btn__progress" style:width=move || format!("{}%", (hold_progress.get() * 100.0).clamp(0.0, 100.0))></span>
-                    <span class="door-btn__icon" role="img" aria-label=move || i18n::t(lang.get(), "door_lock_icon_aria")>"\u{1F513}"</span>
-                    <span class="door-btn__label">
-                        {move || i18n::t(lang.get(), door_state.get().label_key())}
-                    </span>
-                </button>
+                }.into_any()
+            }}
 
-                {move || {
-                    let state = door_state.get();
-                    let kind = match state {
-                        DoorState::Success => "success",
-                        DoorState::ErrorUnavailable => "error",
-                        DoorState::ErrorRateLimited => "warn",
-                        _ => "",
-                    };
-                    if kind.is_empty() {
-                        view! {}.into_any()
-                    } else {
-                        view! {
-                            <div data-testid="door-banner" class=format!("banner banner--{}", kind)>
-                                {i18n::t(lang.get(), state.label_key())}
-                            </div>
-                        }.into_any()
-                    }
-                }}
-            }.into_any()
-        }}
+            // Banner — rendered at the parent level (sibling of the button)
+            // so its reactivity on door_state is independent of the
+            // allowed-gated outer closure. data-testid="door-banner" appears
+            // only when state ∈ {Success, ErrorUnavailable, ErrorRateLimited}.
+            {move || {
+                let state = door_state.get();
+                let kind = match state {
+                    DoorState::Success => "success",
+                    DoorState::ErrorUnavailable => "error",
+                    DoorState::ErrorRateLimited => "warn",
+                    _ => "",
+                };
+                if kind.is_empty() {
+                    ().into_any()
+                } else {
+                    view! {
+                        <div data-testid="door-banner" class=format!("banner banner--{}", kind)>
+                            {i18n::t(lang.get(), state.label_key())}
+                        </div>
+                    }.into_any()
+                }
+            }}
+        </div>
     }
 }
 
