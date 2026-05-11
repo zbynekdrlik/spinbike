@@ -67,39 +67,67 @@ pub fn EditInfoForm(
     // Refresh from server every time show transitions false→true. Sets the
     // input values via NodeRef + HtmlInputElement::set_value, so the latest
     // saved data is what the user sees on reopen.
-    // Refresh on REOPEN only. First-open uses the `value=` HTML attribute
-    // on each input (set from the card prop at render time). The Effect
-    // fetches the latest user state on the false→true transition AFTER
-    // the form has previously been shown — this is the case where the
-    // parent's `card` prop may be stale (set_selected.set after save
-    // doesn't always trigger CardActionPanel to remount, so the EditInfoForm's
-    // initial values can be from the pre-save state).
+    // Refresh on every show=true transition (including first open).
+    // SMART OVERWRITE: only writes a fetched value to the input if the
+    // input currently still holds the initial/expected value — i.e. the
+    // user hasn't typed anything new. This avoids the race where the
+    // fetch overwrites a user-typed value mid-edit (which previously
+    // sent the user's keystrokes back to "Original Name" before save).
     let lookup_code = initial_code.clone();
+    let initial_name_for_eff = initial_name;
+    let initial_email_for_eff = initial_email;
+    let initial_company_for_eff = initial_company;
+    let initial_phone_for_eff = initial_phone;
     Effect::new(move |prev_shown: Option<bool>| {
         let now_shown = show.get();
-        let is_reopen = prev_shown == Some(false) && now_shown;
-        if !is_reopen {
+        if !now_shown {
             return now_shown;
+        }
+        // No-op on the initial run when show is already false (most cases).
+        if prev_shown == Some(true) {
+            return now_shown; // re-triggered by other tracked signal, not a transition
         }
         let code = lookup_code.clone();
         if let Some(code) = code {
+            let initial_name = initial_name_for_eff.get_untracked();
+            let initial_email = initial_email_for_eff.get_untracked();
+            let initial_company = initial_company_for_eff.get_untracked();
+            let initial_phone = initial_phone_for_eff.get_untracked();
             spawn_local(async move {
-                // Yield so the new sheet is mounted and the NodeRefs point at
-                // the live inputs before we write to them.
                 gloo_timers::future::TimeoutFuture::new(0).await;
                 if let Ok(c) =
                     api::get::<CardInfo>(&format!("/api/users/lookup/{code}")).await
                 {
-                    let set_value = |nr: &NodeRef<leptos::html::Input>, val: &str| {
+                    // Overwrite only if the input's current DOM value matches
+                    // the initial rendered value (user hasn't typed anything).
+                    // Otherwise the user is mid-edit; leave it alone.
+                    let smart_set = |nr: &NodeRef<leptos::html::Input>, initial: &str, new_val: &str| {
                         if let Some(el) = nr.get_untracked() {
                             let input: &HtmlInputElement = &el;
-                            input.set_value(val);
+                            let cur = input.value();
+                            if cur == initial {
+                                input.set_value(new_val);
+                            }
                         }
                     };
-                    set_value(&name_ref, &c.name);
-                    set_value(&email_ref, c.email.as_deref().unwrap_or(""));
-                    set_value(&company_ref, c.company.as_deref().unwrap_or(""));
-                    set_value(&phone_ref, c.phone.as_deref().unwrap_or(""));
+                    smart_set(&name_ref, &initial_name, &c.name);
+                    smart_set(
+                        &email_ref,
+                        &initial_email,
+                        c.email.as_deref().unwrap_or(""),
+                    );
+                    smart_set(
+                        &company_ref,
+                        &initial_company,
+                        c.company.as_deref().unwrap_or(""),
+                    );
+                    smart_set(
+                        &phone_ref,
+                        &initial_phone,
+                        c.phone.as_deref().unwrap_or(""),
+                    );
+                    // Checkbox uses a signal, not NodeRef — safe to always sync
+                    // (user can re-toggle if they want a different value).
                     set_allow_self_entry.set(c.allow_self_entry);
                 }
             });
