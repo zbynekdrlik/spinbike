@@ -597,7 +597,7 @@ async fn update_user(
     let is_staff_or_admin = claims.role.can_manage_cards();
     tracing::info!(
         caller_id = claims.sub,
-        caller_role = %claims.role,
+        caller_role = ?claims.role,
         target_id = id,
         has_name = body.name.is_some(),
         has_email = body.email.is_some(),
