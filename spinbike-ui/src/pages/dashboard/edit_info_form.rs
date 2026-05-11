@@ -33,11 +33,19 @@ pub fn EditInfoForm(
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let card_id = card.id;
     let initial_code = card.card_code.clone();
-    let initial_name = card.name.clone();
-    let initial_email = card.email.clone().unwrap_or_default();
-    let initial_company = card.company.clone().unwrap_or_default();
-    let initial_phone = card.phone.clone().unwrap_or_default();
+    // Initial values are written into the inputs via NodeRef.set_value
+    // inside the refresh Effect (see below) — we don't pass `value=` at
+    // the macro level because the move closure that wraps the sheet must
+    // stay FnMut across re-renders, and `value=expr.clone()` made it
+    // FnOnce. The Effect runs on the first show=true with prev=None and
+    // populates inputs from the latest server state.
     let initial_allow_se = card.allow_self_entry;
+    // Initial values from the card prop, wrapped in Arc so the Effect
+    // closure (FnMut) can re-clone them on every show=true run.
+    let initial_name = std::sync::Arc::new(card.name.clone());
+    let initial_email = std::sync::Arc::new(card.email.clone().unwrap_or_default());
+    let initial_company = std::sync::Arc::new(card.company.clone().unwrap_or_default());
+    let initial_phone = std::sync::Arc::new(card.phone.clone().unwrap_or_default());
 
     // NodeRefs declared at the function-body level so the refresh Effect
     // can write to them directly when fetch completes. They're populated
@@ -69,28 +77,42 @@ pub fn EditInfoForm(
             return now_shown;
         }
         let code = lookup_code.clone();
-        if let Some(code) = code {
-            spawn_local(async move {
-                // Small yield to ensure the sheet has mounted and NodeRefs
-                // point at the live inputs before we try to write to them.
-                gloo_timers::future::TimeoutFuture::new(0).await;
-                let Ok(c) = api::get::<CardInfo>(&format!("/api/users/lookup/{code}")).await
-                else {
-                    return;
-                };
-                let set_value = |nr: &NodeRef<leptos::html::Input>, val: &str| {
-                    if let Some(el) = nr.get_untracked() {
-                        let input: &HtmlInputElement = &el;
-                        input.set_value(val);
-                    }
-                };
-                set_value(&name_ref, &c.name);
-                set_value(&email_ref, c.email.as_deref().unwrap_or(""));
-                set_value(&company_ref, c.company.as_deref().unwrap_or(""));
-                set_value(&phone_ref, c.phone.as_deref().unwrap_or(""));
-                set_allow_self_entry.set(c.allow_self_entry);
-            });
-        }
+        let name0 = initial_name.clone();
+        let email0 = initial_email.clone();
+        let company0 = initial_company.clone();
+        let phone0 = initial_phone.clone();
+        spawn_local(async move {
+            // Small yield to ensure the sheet has mounted and NodeRefs
+            // point at the live inputs before we try to write to them.
+            gloo_timers::future::TimeoutFuture::new(0).await;
+            let set_value = |nr: &NodeRef<leptos::html::Input>, val: &str| {
+                if let Some(el) = nr.get_untracked() {
+                    let input: &HtmlInputElement = &el;
+                    input.set_value(val);
+                }
+            };
+            // First: populate from the initial card prop so user sees
+            // SOMETHING immediately (covers the case where the lookup
+            // endpoint is slow or returns an error).
+            set_value(&name_ref, name0.as_str());
+            set_value(&email_ref, email0.as_str());
+            set_value(&company_ref, company0.as_str());
+            set_value(&phone_ref, phone0.as_str());
+
+            // Then: refresh from server with the latest authoritative
+            // state. Overwrites the initial values if the lookup returns.
+            if let Some(code) = code {
+                if let Ok(c) =
+                    api::get::<CardInfo>(&format!("/api/users/lookup/{code}")).await
+                {
+                    set_value(&name_ref, &c.name);
+                    set_value(&email_ref, c.email.as_deref().unwrap_or(""));
+                    set_value(&company_ref, c.company.as_deref().unwrap_or(""));
+                    set_value(&phone_ref, c.phone.as_deref().unwrap_or(""));
+                    set_allow_self_entry.set(c.allow_self_entry);
+                }
+            }
+        });
         now_shown
     });
 
@@ -183,7 +205,6 @@ pub fn EditInfoForm(
                                 type="text"
                                 class="form-control"
                                 node_ref=name_ref
-                                value=initial_name.clone()
                             />
                         </div>
                         <div class="form-group">
@@ -192,7 +213,6 @@ pub fn EditInfoForm(
                                 type="email"
                                 class="form-control"
                                 node_ref=email_ref
-                                value=initial_email.clone()
                             />
                         </div>
                         <div class="form-group">
@@ -201,7 +221,6 @@ pub fn EditInfoForm(
                                 type="text"
                                 class="form-control"
                                 node_ref=company_ref
-                                value=initial_company.clone()
                             />
                         </div>
                         <div class="form-group">
@@ -210,7 +229,6 @@ pub fn EditInfoForm(
                                 type="text"
                                 class="form-control"
                                 node_ref=phone_ref
-                                value=initial_phone.clone()
                             />
                         </div>
                         {if is_admin {
