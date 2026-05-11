@@ -279,4 +279,43 @@ test.describe('Door self-entry (#92)', () => {
 
         assertCleanConsole(messages);
     });
+
+    test('customer JWT visiting /staff redirects to /my/balance (client-side gate)', async ({ page, baseURL }) => {
+        const messages = setupConsoleCheck(page);
+        const adminToken = await loginViaAPI(page, baseURL!, 'admin@test.com', 'admin123');
+        const customer = await createSelfEntryCustomer(adminToken, 'RG');
+
+        await page.evaluate(() => { localStorage.clear(); });
+        await loginViaAPI(page, baseURL!, customer.email, customer.password);
+
+        // Customer typing /staff directly into the URL bar should be bounced
+        // client-side to /my/balance (server-side 403 alone leaves the page
+        // rendered with empty data, which leaks UI shape).
+        await page.goto('/staff');
+        await expect(page).toHaveURL(/\/my\/balance$/, { timeout: 6000 });
+
+        // Same for /reports and /settings.
+        await page.goto('/reports');
+        await expect(page).toHaveURL(/\/my\/balance$/, { timeout: 6000 });
+
+        await page.goto('/settings');
+        await expect(page).toHaveURL(/\/my\/balance$/, { timeout: 6000 });
+
+        assertCleanConsole(messages);
+    });
+
+    test('admin More sheet contains Open door link', async ({ page, baseURL }) => {
+        const messages = setupConsoleCheck(page);
+        await loginViaAPI(page, baseURL!, 'admin@test.com', 'admin123');
+        await page.goto('/staff');
+
+        // Tap the More tab to reveal the sheet (phone-style bottom nav).
+        await page.locator('[data-testid="nav-more"]').click();
+
+        const link = page.locator('[data-testid="more-open-door"]');
+        await expect(link).toBeVisible({ timeout: 6000 });
+        await expect(link).toHaveAttribute('href', '/my/balance');
+
+        assertCleanConsole(messages);
+    });
 });
