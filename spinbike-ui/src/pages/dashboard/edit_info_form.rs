@@ -11,17 +11,14 @@ use crate::i18n::{self, Lang};
 use super::CardInfo;
 
 /// Admin user-edit form. Refreshes its inputs on EVERY reopen from the
-/// authoritative server state via `GET /api/users/lookup/{card_code}` so
-/// the user always sees the actual saved values, not a stale capture of
-/// the previously-loaded card prop.
+/// authoritative server state via `GET /api/users/lookup/{card_code}` and
+/// writes values directly to the input elements via `NodeRef`. Bypasses
+/// `prop:value` so re-rendering doesn't lose the user's typed input mid-edit
+/// and a server refetch DOES override stale signal state.
 ///
 /// Field-level guards on the server:
 /// - `allow_self_entry`: admin-only.
 /// - `password`: admin OR self.
-///
-/// Client-side: this form is only opened from the staff dashboard, so the
-/// caller is always staff or admin. The `allow_self_entry` checkbox and
-/// the password field render only for admin (read role from auth context).
 #[component]
 pub fn EditInfoForm(
     card: CardInfo,
@@ -36,33 +33,34 @@ pub fn EditInfoForm(
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let card_id = card.id;
     let initial_code = card.card_code.clone();
+    let initial_name = card.name.clone();
+    let initial_email = card.email.clone().unwrap_or_default();
+    let initial_company = card.company.clone().unwrap_or_default();
+    let initial_phone = card.phone.clone().unwrap_or_default();
+    let initial_allow_se = card.allow_self_entry;
 
-    // Reactive form-state signals. Initialised from the props once; refreshed
-    // from the server on every show=true transition.
-    let (name_val, set_name_val) = signal(card.name.clone());
-    let (email_val, set_email_val) = signal(card.email.clone().unwrap_or_default());
-    let (company_val, set_company_val) = signal(card.company.clone().unwrap_or_default());
-    let (phone_val, set_phone_val) = signal(card.phone.clone().unwrap_or_default());
-    let (allow_self_entry, set_allow_self_entry) = signal(card.allow_self_entry);
-    // Password input is intentionally not pre-populated and not refreshed —
-    // it represents "set new password" and must always start empty.
+    // NodeRefs declared at the function-body level so the refresh Effect
+    // can write to them directly when fetch completes. They're populated
+    // when the sheet mounts (inside the show=true branch); the Effect
+    // checks `get_untracked()` for None and no-ops in that case.
+    let name_ref = NodeRef::<leptos::html::Input>::new();
+    let email_ref = NodeRef::<leptos::html::Input>::new();
+    let company_ref = NodeRef::<leptos::html::Input>::new();
+    let phone_ref = NodeRef::<leptos::html::Input>::new();
+    let password_ref = NodeRef::<leptos::html::Input>::new();
+    let (allow_self_entry, set_allow_self_entry) = signal(initial_allow_se);
 
     // Read the caller's role to gate the admin-only fields client-side.
-    // The server-side guard is the authoritative gate; this just avoids
-    // showing controls the staff role can't actually use.
     let is_admin = auth::get_user()
         .map(|u| u.role == "admin")
         .unwrap_or(false);
 
-    // Refresh from server on every show=true transition. Uses the card_code
-    // lookup endpoint to fetch the authoritative current state — covers the
-    // case where the user was edited, saved, closed, reopened: previous
-    // implementation captured initial values into StoredValue and never
-    // refreshed, so reopening showed stale data.
+    // Refresh from server every time show transitions false→true. Sets the
+    // input values via NodeRef + HtmlInputElement::set_value, so the latest
+    // saved data is what the user sees on reopen.
     let lookup_code = initial_code.clone();
     Effect::new(move |prev_shown: Option<bool>| {
         let now_shown = show.get();
-        // Edge: only fire on the false→true transition (first mount counts).
         let should_fetch = match prev_shown {
             None => now_shown,
             Some(was) => !was && now_shown,
@@ -73,15 +71,24 @@ pub fn EditInfoForm(
         let code = lookup_code.clone();
         if let Some(code) = code {
             spawn_local(async move {
-                if let Ok(c) =
-                    api::get::<CardInfo>(&format!("/api/users/lookup/{code}")).await
-                {
-                    set_name_val.set(c.name);
-                    set_email_val.set(c.email.unwrap_or_default());
-                    set_company_val.set(c.company.unwrap_or_default());
-                    set_phone_val.set(c.phone.unwrap_or_default());
-                    set_allow_self_entry.set(c.allow_self_entry);
-                }
+                // Small yield to ensure the sheet has mounted and NodeRefs
+                // point at the live inputs before we try to write to them.
+                gloo_timers::future::TimeoutFuture::new(0).await;
+                let Ok(c) = api::get::<CardInfo>(&format!("/api/users/lookup/{code}")).await
+                else {
+                    return;
+                };
+                let set_value = |nr: &NodeRef<leptos::html::Input>, val: &str| {
+                    if let Some(el) = nr.get_untracked() {
+                        let input: &HtmlInputElement = &el;
+                        input.set_value(val);
+                    }
+                };
+                set_value(&name_ref, &c.name);
+                set_value(&email_ref, c.email.as_deref().unwrap_or(""));
+                set_value(&company_ref, c.company.as_deref().unwrap_or(""));
+                set_value(&phone_ref, c.phone.as_deref().unwrap_or(""));
+                set_allow_self_entry.set(c.allow_self_entry);
             });
         }
         now_shown
@@ -93,18 +100,11 @@ pub fn EditInfoForm(
                 return ().into_any();
             }
 
-            let name_ref = NodeRef::<leptos::html::Input>::new();
-            let email_ref = NodeRef::<leptos::html::Input>::new();
-            let company_ref = NodeRef::<leptos::html::Input>::new();
-            let phone_ref = NodeRef::<leptos::html::Input>::new();
-            let password_ref = NodeRef::<leptos::html::Input>::new();
             let (loading, set_loading) = signal(false);
-
             let on_close_cancel = on_close.clone();
             let on_close_btn = on_close.clone();
             let on_close_save = on_close.clone();
-
-            let initial_allow_se = allow_self_entry.get_untracked();
+            let initial_allow_se_at_open = allow_self_entry.get_untracked();
 
             let on_submit = move |ev: web_sys::SubmitEvent| {
                 ev.prevent_default();
@@ -146,18 +146,12 @@ pub fn EditInfoForm(
                         email: if email.trim().is_empty() { None } else { Some(email) },
                         company: if company.is_empty() { None } else { Some(company) },
                         phone: if phone.is_empty() { None } else { Some(phone) },
-                        // Only admin sends allow_self_entry, and only when the
-                        // current checkbox state DIFFERS from the value the
-                        // form opened with. Staff role sending Some(_) at all
-                        // would get 403 from the server; admin sending an
-                        // unchanged value is a no-op but pollutes the diff.
-                        allow_self_entry: if is_admin && allow_se != initial_allow_se {
+                        // Admin-only field, only sent when changed.
+                        allow_self_entry: if is_admin && allow_se != initial_allow_se_at_open {
                             Some(allow_se)
                         } else {
                             None
                         },
-                        // Password only when the user typed something. Server
-                        // checks admin OR self.
                         password: if password.is_empty() { None } else { Some(password) },
                     };
                     match api::put_json::<Req, CardInfo>(&format!("/api/users/{card_id}"), &req).await {
@@ -189,7 +183,7 @@ pub fn EditInfoForm(
                                 type="text"
                                 class="form-control"
                                 node_ref=name_ref
-                                prop:value=move || name_val.get()
+                                value=initial_name.clone()
                             />
                         </div>
                         <div class="form-group">
@@ -198,7 +192,7 @@ pub fn EditInfoForm(
                                 type="email"
                                 class="form-control"
                                 node_ref=email_ref
-                                prop:value=move || email_val.get()
+                                value=initial_email.clone()
                             />
                         </div>
                         <div class="form-group">
@@ -207,7 +201,7 @@ pub fn EditInfoForm(
                                 type="text"
                                 class="form-control"
                                 node_ref=company_ref
-                                prop:value=move || company_val.get()
+                                value=initial_company.clone()
                             />
                         </div>
                         <div class="form-group">
@@ -216,7 +210,7 @@ pub fn EditInfoForm(
                                 type="text"
                                 class="form-control"
                                 node_ref=phone_ref
-                                prop:value=move || phone_val.get()
+                                value=initial_phone.clone()
                             />
                         </div>
                         {if is_admin {
