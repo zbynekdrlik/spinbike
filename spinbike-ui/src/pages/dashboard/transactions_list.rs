@@ -27,10 +27,9 @@ pub fn TransactionsList(
         let l = limit.get();
         let token = req_id.next();
         spawn_local(async move {
-            let result = api::get::<Vec<TxnInfo>>(&format!(
-                "/api/users/{card_id}/transactions?limit={l}"
-            ))
-            .await;
+            let result =
+                api::get::<Vec<TxnInfo>>(&format!("/api/users/{card_id}/transactions?limit={l}"))
+                    .await;
             if !token.is_latest() {
                 return; // stale — a newer trigger run superseded this fetch (#66)
             }

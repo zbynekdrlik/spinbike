@@ -1,13 +1,24 @@
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
 
 use crate::api;
+use crate::auth;
 use crate::components::Sheet;
 use crate::i18n::{self, Lang};
 
 use super::CardInfo;
 
+/// Admin user-edit form. Refreshes its inputs on EVERY reopen from the
+/// authoritative server state via `GET /api/users/lookup/{card_code}` and
+/// writes values directly to the input elements via `NodeRef`. Bypasses
+/// `prop:value` so re-rendering doesn't lose the user's typed input mid-edit
+/// and a server refetch DOES override stale signal state.
+///
+/// Field-level guards on the server:
+/// - `allow_self_entry`: admin-only.
+/// - `password`: admin OR self.
 #[component]
 pub fn EditInfoForm(
     card: CardInfo,
@@ -21,13 +32,108 @@ pub fn EditInfoForm(
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let card_id = card.id;
+    let initial_code = card.card_code.clone();
+    // Initial values are written into the inputs via NodeRef.set_value
+    // inside the refresh Effect (see below) — we don't pass `value=` at
+    // the macro level because the move closure that wraps the sheet must
+    // stay FnMut across re-renders, and `value=expr.clone()` made it
+    // FnOnce. The Effect runs on the first show=true with prev=None and
+    // populates inputs from the latest server state.
+    let initial_allow_se = card.allow_self_entry;
+    // Initial values from the card prop, exposed as ReadSignals so the
+    // outer `move ||` closure stays Fn (signals are Copy). Inputs use
+    // `value=<sig>.get()` which evaluates fresh on every render.
+    let (initial_name, _) = signal(card.name.clone());
+    let (initial_email, _) = signal(card.email.clone().unwrap_or_default());
+    let (initial_company, _) = signal(card.company.clone().unwrap_or_default());
+    let (initial_phone, _) = signal(card.phone.clone().unwrap_or_default());
 
-    // Stash non-Copy locals so the reactive mount closure (Fn) can clone them
-    // cheaply per render rather than moving them once.
-    let nv = StoredValue::new(card.name.clone());
-    let ev = StoredValue::new(card.email.clone().unwrap_or_default());
-    let cv = StoredValue::new(card.company.clone().unwrap_or_default());
-    let pv = StoredValue::new(card.phone.clone().unwrap_or_default());
+    // NodeRefs declared at the function-body level so the refresh Effect
+    // can write to them directly when fetch completes. They're populated
+    // when the sheet mounts (inside the show=true branch); the Effect
+    // checks `get_untracked()` for None and no-ops in that case.
+    let name_ref = NodeRef::<leptos::html::Input>::new();
+    let email_ref = NodeRef::<leptos::html::Input>::new();
+    let company_ref = NodeRef::<leptos::html::Input>::new();
+    let phone_ref = NodeRef::<leptos::html::Input>::new();
+    let password_ref = NodeRef::<leptos::html::Input>::new();
+    let (allow_self_entry, set_allow_self_entry) = signal(initial_allow_se);
+
+    // Read the caller's role to gate the admin-only fields client-side.
+    let is_admin = auth::get_user()
+        .map(|u| u.role == "admin")
+        .unwrap_or(false);
+
+    // Refresh from server every time show transitions false→true. Sets the
+    // input values via NodeRef + HtmlInputElement::set_value, so the latest
+    // saved data is what the user sees on reopen.
+    // Refresh on every show=true transition (including first open).
+    // SMART OVERWRITE: only writes a fetched value to the input if the
+    // input currently still holds the initial/expected value — i.e. the
+    // user hasn't typed anything new. This avoids the race where the
+    // fetch overwrites a user-typed value mid-edit (which previously
+    // sent the user's keystrokes back to "Original Name" before save).
+    let lookup_code = initial_code.clone();
+    let initial_name_for_eff = initial_name;
+    let initial_email_for_eff = initial_email;
+    let initial_company_for_eff = initial_company;
+    let initial_phone_for_eff = initial_phone;
+    Effect::new(move |prev_shown: Option<bool>| {
+        let now_shown = show.get();
+        if !now_shown {
+            return now_shown;
+        }
+        // No-op on the initial run when show is already false (most cases).
+        if prev_shown == Some(true) {
+            return now_shown; // re-triggered by other tracked signal, not a transition
+        }
+        let code = lookup_code.clone();
+        if let Some(code) = code {
+            let initial_name = initial_name_for_eff.get_untracked();
+            let initial_email = initial_email_for_eff.get_untracked();
+            let initial_company = initial_company_for_eff.get_untracked();
+            let initial_phone = initial_phone_for_eff.get_untracked();
+            spawn_local(async move {
+                gloo_timers::future::TimeoutFuture::new(0).await;
+                if let Ok(c) =
+                    api::get::<CardInfo>(&format!("/api/users/lookup/{code}")).await
+                {
+                    // Overwrite only if the input's current DOM value matches
+                    // the initial rendered value (user hasn't typed anything).
+                    // Otherwise the user is mid-edit; leave it alone.
+                    let smart_set = |nr: &NodeRef<leptos::html::Input>, initial: &str, new_val: &str| {
+                        if let Some(el) = nr.get_untracked() {
+                            let input: &HtmlInputElement = &el;
+                            let cur = input.value();
+                            if cur == initial {
+                                input.set_value(new_val);
+                            }
+                        }
+                    };
+                    smart_set(&name_ref, &initial_name, &c.name);
+                    smart_set(
+                        &email_ref,
+                        &initial_email,
+                        c.email.as_deref().unwrap_or(""),
+                    );
+                    smart_set(
+                        &company_ref,
+                        &initial_company,
+                        c.company.as_deref().unwrap_or(""),
+                    );
+                    smart_set(
+                        &phone_ref,
+                        &initial_phone,
+                        c.phone.as_deref().unwrap_or(""),
+                    );
+                    // Checkbox uses a signal, not NodeRef — safe to always sync
+                    // (user can re-toggle if they want a different value).
+                    set_allow_self_entry.set(c.allow_self_entry);
+                }
+            });
+        }
+        now_shown
+    });
 
     view! {
         {move || {
@@ -35,15 +141,11 @@ pub fn EditInfoForm(
                 return ().into_any();
             }
 
-            let name_ref = NodeRef::<leptos::html::Input>::new();
-            let email_ref = NodeRef::<leptos::html::Input>::new();
-            let company_ref = NodeRef::<leptos::html::Input>::new();
-            let phone_ref = NodeRef::<leptos::html::Input>::new();
             let (loading, set_loading) = signal(false);
-
             let on_close_cancel = on_close.clone();
             let on_close_btn = on_close.clone();
             let on_close_save = on_close.clone();
+            let initial_allow_se_at_open = allow_self_entry.get_untracked();
 
             let on_submit = move |ev: web_sys::SubmitEvent| {
                 ev.prevent_default();
@@ -59,22 +161,39 @@ pub fn EditInfoForm(
                 let email = read(&email_ref);
                 let company = read(&company_ref);
                 let phone = read(&phone_ref);
+                let password = read(&password_ref);
+                let allow_se = allow_self_entry.get_untracked();
 
                 set_loading.set(true);
                 let on_close_inner = on_close_save.clone();
                 spawn_local(async move {
                     #[derive(serde::Serialize)]
                     struct Req {
+                        #[serde(skip_serializing_if = "Option::is_none")]
                         name: Option<String>,
+                        #[serde(skip_serializing_if = "Option::is_none")]
                         email: Option<String>,
+                        #[serde(skip_serializing_if = "Option::is_none")]
                         company: Option<String>,
+                        #[serde(skip_serializing_if = "Option::is_none")]
                         phone: Option<String>,
+                        #[serde(skip_serializing_if = "Option::is_none")]
+                        allow_self_entry: Option<bool>,
+                        #[serde(skip_serializing_if = "Option::is_none")]
+                        password: Option<String>,
                     }
                     let req = Req {
                         name: if name.trim().is_empty() { None } else { Some(name) },
                         email: if email.trim().is_empty() { None } else { Some(email) },
                         company: if company.is_empty() { None } else { Some(company) },
                         phone: if phone.is_empty() { None } else { Some(phone) },
+                        // Admin-only field, only sent when changed.
+                        allow_self_entry: if is_admin && allow_se != initial_allow_se_at_open {
+                            Some(allow_se)
+                        } else {
+                            None
+                        },
+                        password: if password.is_empty() { None } else { Some(password) },
                     };
                     match api::put_json::<Req, CardInfo>(&format!("/api/users/{card_id}"), &req).await {
                         Ok(c) => {
@@ -101,30 +220,82 @@ pub fn EditInfoForm(
                     <form on:submit=on_submit>
                         <div class="form-group">
                             <label>{i18n::t(lang.get(), "name")}</label>
-                            <input type="text" class="form-control" node_ref=name_ref value=nv.get_value() />
+                            <input
+                                type="text"
+                                class="form-control"
+                                node_ref=name_ref
+                                value=initial_name.get_untracked()
+                            />
                         </div>
                         <div class="form-group">
                             <label>{i18n::t(lang.get(), "email")}</label>
-                            <input type="email" class="form-control" node_ref=email_ref value=ev.get_value() />
+                            <input
+                                type="email"
+                                class="form-control"
+                                node_ref=email_ref
+                                value=initial_email.get_untracked()
+                            />
                         </div>
                         <div class="form-group">
                             <label>{i18n::t(lang.get(), "company")}</label>
-                            <input type="text" class="form-control" node_ref=company_ref value=cv.get_value() />
+                            <input
+                                type="text"
+                                class="form-control"
+                                node_ref=company_ref
+                                value=initial_company.get_untracked()
+                            />
                         </div>
                         <div class="form-group">
                             <label>{i18n::t(lang.get(), "phone")}</label>
-                            <input type="text" class="form-control" node_ref=phone_ref value=pv.get_value() />
+                            <input
+                                type="text"
+                                class="form-control"
+                                node_ref=phone_ref
+                                value=initial_phone.get_untracked()
+                            />
                         </div>
+                        {if is_admin {
+                            view! {
+                                <div class="form-group">
+                                    <label>{move || i18n::t(lang.get(), "user_edit_new_password")}</label>
+                                    <input
+                                        type="password"
+                                        class="form-control"
+                                        data-testid="user-edit-password"
+                                        node_ref=password_ref
+                                        placeholder=move || i18n::t(lang.get(), "user_edit_new_password_placeholder")
+                                        autocomplete="new-password"
+                                    />
+                                    <small class="form-help">
+                                        {move || i18n::t(lang.get(), "user_edit_new_password_help")}
+                                    </small>
+                                </div>
+                                <label class="form-row" data-testid="user-edit-allow-self-entry-row">
+                                    <input
+                                        type="checkbox"
+                                        data-testid="user-edit-allow-self-entry"
+                                        prop:checked=move || allow_self_entry.get()
+                                        on:change=move |ev| {
+                                            let el: HtmlInputElement =
+                                                ev.target().unwrap().unchecked_into();
+                                            set_allow_self_entry.set(el.checked());
+                                        }
+                                    />
+                                    <span>{move || i18n::t(lang.get(), "admin_allow_self_entry")}</span>
+                                    <small class="form-help">
+                                        {move || i18n::t(lang.get(), "admin_allow_self_entry_help")}
+                                    </small>
+                                </label>
+                            }.into_any()
+                        } else {
+                            ().into_any()
+                        }}
                         <div class="sheet__actions">
                             <button
                                 type="button"
                                 class="btn btn--ghost"
                                 disabled=move || loading.get()
                                 on:click=move |_| {
-                                    // Defer the close to next macrotask so the
-                                    // click event finishes dispatching before
-                                    // the parent's reactive tree unmounts the
-                                    // sheet. See #89.
                                     let cb = on_close_btn.clone();
                                     spawn_local(async move {
                                         gloo_timers::future::TimeoutFuture::new(0).await;

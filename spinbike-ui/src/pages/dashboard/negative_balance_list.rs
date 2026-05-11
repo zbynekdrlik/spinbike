@@ -47,8 +47,7 @@ pub fn NegativeBalanceList(
         let _ = txn_refresh.get(); // reactive dependency
         let token = req_id.next();
         spawn_local(async move {
-            let result =
-                api::get::<Vec<NegativeBalanceUser>>("/api/users/negative-balance").await;
+            let result = api::get::<Vec<NegativeBalanceUser>>("/api/users/negative-balance").await;
             if !token.is_latest() {
                 return; // stale — a newer trigger run superseded this fetch (#66)
             }
@@ -176,6 +175,7 @@ fn neg_to_card_info(c: &NegativeBalanceUser) -> CardInfo {
         // `allow_debit` and `phone` aren't read by the action panel's
         // monthly-pass header or the visit-log button, so defaults are safe.
         allow_debit: false,
+        allow_self_entry: false,
         phone: None,
         email: None,
     }
@@ -215,7 +215,10 @@ mod tests {
 
     #[wasm_bindgen_test]
     fn meta_inline_typical() {
-        assert_eq!(meta_inline("Posledna navsteva", "vcera"), " (Posledna navsteva: vcera)");
+        assert_eq!(
+            meta_inline("Posledna navsteva", "vcera"),
+            " (Posledna navsteva: vcera)"
+        );
     }
 
     #[wasm_bindgen_test]

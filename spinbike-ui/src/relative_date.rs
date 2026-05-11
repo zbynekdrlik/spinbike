@@ -191,7 +191,10 @@ mod tests {
     #[wasm_bindgen_test]
     fn combined_format_sk_six_days_ago() {
         let (v, t) = mk(2026, 5, 4, 6);
-        assert_eq!(format_last_visit(v, t, Lang::Sk), "28.04.2026 (pred 6 dnami)");
+        assert_eq!(
+            format_last_visit(v, t, Lang::Sk),
+            "28.04.2026 (pred 6 dnami)"
+        );
     }
     #[wasm_bindgen_test]
     fn combined_format_sk_today() {

@@ -161,10 +161,10 @@ fn render_row(e: ReportEvent) -> impl IntoView {
     };
     let event_label_key = match kind {
         EventKind::PassSale => "tx_label_pass",
-        EventKind::Visit    => "tx_label_visit",
-        EventKind::Charge   => "tx_label_charge",
-        EventKind::TopUp    => "tx_label_topup",
-        EventKind::Other    => "event_other",
+        EventKind::Visit => "tx_label_visit",
+        EventKind::Charge => "tx_label_charge",
+        EventKind::TopUp => "tx_label_topup",
+        EventKind::Other => "event_other",
     };
     let amount_class = if e.amount < 0.0 {
         "list-row__amount list-row__amount--neg"
@@ -197,7 +197,9 @@ fn render_row(e: ReportEvent) -> impl IntoView {
     };
     let bc = e.barcode.clone();
     let on_row_click = move |_| {
-        let Some(bc) = bc.clone() else { return; };
+        let Some(bc) = bc.clone() else {
+            return;
+        };
         if let Some(w) = web_sys::window() {
             let encoded = url_encode(&bc);
             let _ = w.location().set_href(&format!("/staff?card={encoded}"));

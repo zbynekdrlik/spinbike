@@ -35,10 +35,20 @@ mod tests {
         let pool = crate::db::create_memory_pool().await.unwrap();
         crate::db::run_migrations(&pool).await.unwrap();
         let (event_tx, _) = tokio::sync::broadcast::channel(8);
+        // SAFETY: remove_var is unsafe in 2024 edition. This test is the only
+        // one in this module touching EWELINK_TEST_MODE; clearing it ensures
+        // EwelinkHandle::spawn() enters the Disabled fast-path with no task.
+        unsafe {
+            std::env::remove_var("EWELINK_TEST_MODE");
+        }
         let state = crate::AppState {
             pool,
             event_tx,
             jwt_secret: "test-jwt".to_string(),
+            ewelink: crate::ewelink::EwelinkHandle::spawn(),
+            door_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::door::RateLimiter::new(),
+            )),
         };
         let app = Router::new().merge(routes()).with_state(state);
 

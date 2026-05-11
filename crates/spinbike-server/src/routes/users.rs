@@ -27,6 +27,7 @@ pub struct UserResponse {
     pub credit: f64,
     pub blocked: bool,
     pub allow_debit: bool,
+    pub allow_self_entry: bool,
     pub role: String,
     pub last_visit_at: Option<String>,
     pub pass: Option<CardPass>,
@@ -55,8 +56,24 @@ pub struct NegativeBalanceUserResponse {
 #[derive(Serialize)]
 pub struct BalanceResponse {
     pub user_id: i64,
+    pub name: String,
     pub credit: f64,
     pub card_code: Option<String>,
+    pub allow_self_entry: bool,
+    /// SQLite UTC timestamp; `None` = no active monthly pass.
+    pub monthly_pass_active_until: Option<String>,
+    /// Last 20 transactions for this user, newest first.
+    pub recent: Vec<RecentTx>,
+}
+
+#[derive(Serialize)]
+pub struct RecentTx {
+    pub id: i64,
+    pub created_at: String,
+    pub action: String,
+    pub amount: f64,
+    pub valid_until: Option<String>,
+    pub note: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -119,6 +136,14 @@ pub struct UpdateUserRequest {
     pub company: Option<String>,
     #[serde(default)]
     pub card_code: Option<String>,
+    #[serde(default)]
+    pub allow_self_entry: Option<bool>,
+    /// Plain-text password. Hashed server-side via argon2 before storage.
+    /// Admin can set any user's password; customer can set OWN password
+    /// (caller.sub == path id); staff is forbidden from resetting passwords
+    /// for any user other than themselves.
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -170,6 +195,7 @@ fn user_response_from_row_with_pass(
         credit: u.credit,
         blocked: u.blocked,
         allow_debit: u.allow_debit,
+        allow_self_entry: u.allow_self_entry,
         role: u.role.clone(),
         last_visit_at,
         pass,
@@ -562,10 +588,43 @@ async fn update_user(
     Path(id): Path<i64>,
     Json(body): Json<UpdateUserRequest>,
 ) -> Result<Json<UserResponse>, (StatusCode, Json<serde_json::Value>)> {
-    if !claims.role.can_manage_cards() {
+    // Self-edit is allowed regardless of role: a customer can update their
+    // own name/email/phone/company/password on their own user row. Field-
+    // level guards below still enforce admin-only for `allow_self_entry` and
+    // admin-or-self for `password`. Staff/admin keep their existing
+    // permissions for editing OTHER users.
+    let is_self = claims.sub == id;
+    let is_staff_or_admin = claims.role.can_manage_cards();
+    tracing::info!(
+        caller_id = claims.sub,
+        caller_role = ?claims.role,
+        target_id = id,
+        has_name = body.name.is_some(),
+        has_email = body.email.is_some(),
+        has_phone = body.phone.is_some(),
+        has_company = body.company.is_some(),
+        has_card_code = body.card_code.is_some(),
+        has_allow_self_entry = body.allow_self_entry.is_some(),
+        has_password = body.password.is_some(),
+        "PUT /api/users/{id}: update request"
+    );
+    if !is_staff_or_admin && !is_self {
         return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "Staff access required"})),
+        ));
+    }
+
+    // card_code is the legacy-barcode identifier used by staff search/scan
+    // workflows. Only staff/admin can change it — customers cannot rewrite
+    // their own card_code (would let them collide with other users' codes or
+    // claim a freshly-typed code).
+    if body.card_code.is_some() && !is_staff_or_admin {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": "Only staff can modify card_code"
+            })),
         ));
     }
 
@@ -626,6 +685,43 @@ async fn update_user(
     )
     .await
     .map_err(internal_error)?;
+
+    if let Some(allow) = body.allow_self_entry {
+        if claims.role != spinbike_core::auth::Role::Admin {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "Only admin can modify allow_self_entry"
+                })),
+            ));
+        }
+        db::update_user_allow_self_entry(&state.pool, id, allow)
+            .await
+            .map_err(internal_error)?;
+    }
+
+    if let Some(ref pw) = body.password {
+        // Admin can set any user's password.
+        // Anyone (incl. customer / staff) can set their OWN password.
+        // Staff CANNOT reset another user's password.
+        let is_admin = claims.role == spinbike_core::auth::Role::Admin;
+        let is_self = claims.sub == id;
+        if !is_admin && !is_self {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "Only admin can set another user's password"
+                })),
+            ));
+        }
+        if pw.len() < 8 {
+            return Err(super::bad_request("Password must be at least 8 characters"));
+        }
+        let hash = crate::auth::hash_password(pw).map_err(internal_error)?;
+        db::update_user_password_hash(&state.pool, id, &hash)
+            .await
+            .map_err(internal_error)?;
+    }
 
     let user = db::get_user_by_id(&state.pool, id)
         .await
@@ -881,20 +977,106 @@ async fn my_balance(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<BalanceResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let user = db::get_user_by_id(&state.pool, claims.sub)
-        .await
-        .map_err(internal_error)?
-        .ok_or_else(|| {
-            (
+    let user_id = claims.sub;
+    tracing::debug!(user_id, "my_balance: loading user row");
+
+    // 1. User row — includes the new allow_self_entry column.
+    // SQLite stores allow_self_entry as INTEGER (0/1); fetch as i64 here and
+    // map to bool below — sqlx tuple destructuring is stricter about types
+    // than `#[derive(FromRow)]`, so we avoid the bool type entirely at the
+    // query boundary.
+    let user_row: Option<(i64, String, f64, Option<String>, i64)> = sqlx::query_as(
+        "SELECT id, name, credit, card_code, allow_self_entry \
+         FROM users WHERE id = ? AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(internal_error)?;
+
+    let (id, name, credit, card_code, allow_self_entry) = match user_row {
+        Some((id, name, credit, card_code, ase)) => {
+            // Admin/staff always see the door button enabled — they bypass
+            // the per-user opt-in toggle (they manage the place). Stored
+            // flag stays as-is; this is just the effective UI value.
+            let role_is_staff_or_admin = matches!(
+                claims.role,
+                spinbike_core::auth::Role::Admin | spinbike_core::auth::Role::Staff
+            );
+            let effective_ase = ase != 0 || role_is_staff_or_admin;
+            (id, name, credit, card_code, effective_ase)
+        }
+        None => {
+            tracing::warn!(user_id, "my_balance: user not found or soft-deleted");
+            return Err((
                 StatusCode::NOT_FOUND,
                 Json(serde_json::json!({"error": "User not found"})),
-            )
-        })?;
+            ));
+        }
+    };
+
+    // 2. Active monthly-pass valid_until (max in case of overlapping passes).
+    tracing::debug!(user_id, "my_balance: querying monthly_pass_active_until");
+    let monthly_pass_active_until: Option<String> = sqlx::query_scalar(
+        "SELECT max(valid_until) \
+           FROM transactions \
+          WHERE user_id = ? \
+            AND action = 'charge' \
+            AND service_id = (SELECT id FROM services WHERE kind = 'monthly_pass') \
+            AND valid_until > datetime('now') \
+            AND deleted_at IS NULL",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(internal_error)?
+    .flatten();
+
+    // 3. Last 20 transactions (newest first).
+    tracing::debug!(user_id, "my_balance: querying recent transactions");
+    let recent: Vec<RecentTx> =
+        sqlx::query_as::<_, (i64, String, String, f64, Option<String>, Option<String>)>(
+            "SELECT id, created_at, action, amount, valid_until, note \
+           FROM transactions \
+          WHERE user_id = ? \
+            AND deleted_at IS NULL \
+          ORDER BY created_at DESC \
+          LIMIT 20",
+        )
+        .bind(user_id)
+        .fetch_all(&state.pool)
+        .await
+        .map_err(internal_error)?
+        .into_iter()
+        .map(
+            |(id, created_at, action, amount, valid_until, note)| RecentTx {
+                id,
+                created_at,
+                action,
+                amount,
+                valid_until,
+                note,
+            },
+        )
+        .collect();
+
+    tracing::info!(
+        user_id = id,
+        credit,
+        allow_self_entry,
+        pass_active = monthly_pass_active_until.is_some(),
+        recent_count = recent.len(),
+        "my_balance: ok"
+    );
 
     Ok(Json(BalanceResponse {
-        user_id: user.id,
-        credit: user.credit,
-        card_code: user.card_code,
+        user_id: id,
+        name,
+        credit,
+        card_code,
+        allow_self_entry,
+        monthly_pass_active_until,
+        recent,
     }))
 }
 

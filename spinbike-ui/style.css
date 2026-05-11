@@ -1202,6 +1202,7 @@ table tbody tr:last-child td,
 .search-result-credit { font-weight: 600; white-space: nowrap; }
 .search-hint          { font-size: var(--fs-sm); color: var(--text-muted); }
 .badge--inline        { margin-left: var(--s-2); }
+.badge--lock          { margin-left: 0.35rem; font-size: 0.9rem; opacity: 0.85; }
 
 /* ─────────── Negative-balance idle list ─────────── */
 .negative-balance-list__heading {
@@ -1559,3 +1560,70 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
 .stats-row__value {
     text-align: right;
 }
+
+/* ---- Door open self-service (#92) ---------------------------------- */
+.door-btn {
+    width: 100%;
+    min-height: 64px;
+    border-radius: 12px;
+    border: none;
+    background: var(--color-primary, #2563eb);
+    color: #fff;
+    font-size: 1.1rem;
+    font-weight: 600;
+    position: relative;
+    overflow: hidden;
+    touch-action: none; /* required for pointer events on mobile */
+    user-select: none;
+    cursor: pointer;
+    margin: 1rem 0;
+}
+.door-btn[disabled] { cursor: not-allowed; opacity: 0.7; }
+.door-btn__label { position: relative; z-index: 1; }
+.door-btn__icon { position: relative; z-index: 1; margin-right: 0.5rem; }
+.door-btn__progress {
+    position: absolute;
+    inset: 0;
+    background: rgba(255,255,255,0.25);
+    pointer-events: none;
+    z-index: 0;
+}
+.door-btn--idle, .door-btn--holding, .door-btn--firing { background: #2563eb; }
+.door-btn--success { background: #16a34a; }
+.door-btn--errorunavailable { background: #dc2626; }
+.door-btn--errorratelimited { background: #6b7280; }
+.door-btn--notallowed { background: #9ca3af; }
+
+.banner { padding: 0.75rem; border-radius: 8px; margin: 0.75rem 0; text-align: center; font-weight: 500; }
+.banner--success { background: #dcfce7; color: #166534; }
+.banner--error   { background: #fee2e2; color: #991b1b; }
+.banner--warn    { background: #f1f5f9; color: #475569; }
+
+.card-credit, .card-pass {
+    background: var(--surface, #fff);
+    border-radius: 10px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
+}
+.card-credit__label, .card-pass__label { font-size: 0.85rem; color: #6b7280; }
+.card-credit__value { font-size: 1.6rem; font-weight: 700; }
+.card-pass__value { font-size: 1.1rem; }
+
+.recent-visits__heading {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text, #111827);
+    margin: 1.25rem 0 0.5rem;
+}
+.recent-visits { list-style: none; padding: 0; }
+.recent-visits__row {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid #e5e7eb;
+}
+.recent-visits__date { color: #6b7280; min-width: 4rem; }
+.recent-visits__action { flex: 1; }
+.recent-visits__amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.recent-visits__note { color: #6b7280; font-size: 0.85rem; }

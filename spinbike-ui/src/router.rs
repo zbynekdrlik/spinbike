@@ -44,8 +44,8 @@ fn ScheduleRoute() -> impl IntoView {
     }
 }
 
-/// Role-aware root route. Staff/admin land on the Desk (`/staff`); customers
-/// and logged-out visitors see the public schedule. Reactive on `auth_ver`.
+/// Role-aware root route. Staff/admin → `/staff`; customers → `/my/balance`;
+/// logged-out visitors see the public schedule. Reactive on `auth_ver`.
 #[component]
 fn RootRoute() -> impl IntoView {
     let auth_ver = use_context::<ReadSignal<u32>>().expect("auth_ver context");
@@ -53,14 +53,45 @@ fn RootRoute() -> impl IntoView {
         {move || {
             let _ = auth_ver.get();
             let user = crate::auth::get_user();
-            let is_staff = user
-                .as_ref()
-                .map(|u| u.role == "staff" || u.role == "admin")
-                .unwrap_or(false);
-            if is_staff {
-                view! { <RedirectTo to="/staff".to_string()/> }.into_any()
+            match user.as_ref().map(|u| u.role.as_str()) {
+                Some("staff") | Some("admin") => {
+                    view! { <RedirectTo to="/staff".to_string()/> }.into_any()
+                }
+                Some(_) => {
+                    view! { <RedirectTo to="/my/balance".to_string()/> }.into_any()
+                }
+                None => SchedulePage().into_any(),
+            }
+        }}
+    }
+}
+
+/// Returns true when the current auth token's role is staff or admin.
+/// Reactive on auth_ver so a logout flips it back to false immediately.
+fn is_staff_or_admin(auth_ver: ReadSignal<u32>) -> bool {
+    let _ = auth_ver.get();
+    crate::auth::get_user()
+        .map(|u| u.role == "staff" || u.role == "admin")
+        .unwrap_or(false)
+}
+
+/// Render `inner` if the current auth is staff/admin, otherwise redirect.
+/// Customer JWTs bounce to `/my/balance`; logged-out visitors to `/login`.
+/// Complements the server-side API 403 with a client-side route gate so
+/// customer JWTs never even render the staff dashboard page.
+fn staff_gated<F>(inner: F) -> impl IntoView
+where
+    F: Fn() -> leptos::prelude::AnyView + Send + Sync + 'static,
+{
+    let auth_ver = use_context::<ReadSignal<u32>>().expect("auth_ver context");
+    view! {
+        {move || {
+            if is_staff_or_admin(auth_ver) {
+                inner()
             } else {
-                SchedulePage().into_any()
+                let user = crate::auth::get_user();
+                let target = if user.is_some() { "/my/balance" } else { "/login" };
+                view! { <RedirectTo to=target.to_string()/> }.into_any()
             }
         }}
     }
@@ -72,6 +103,7 @@ use crate::components::nav::Navbar;
 use crate::i18n;
 use crate::pages::admin::AdminPage;
 use crate::pages::dashboard::DashboardPage;
+use crate::pages::door::DoorPage;
 use crate::pages::login::{LoginPage, RegisterPage};
 use crate::pages::my_balance::MyBalancePage;
 use crate::pages::my_bookings::MyBookingsPage;
@@ -116,13 +148,17 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/register") view=RegisterPage />
                         <Route path=path!("/my/bookings") view=MyBookingsPage />
                         <Route path=path!("/my/balance") view=MyBalancePage />
-                        <Route path=path!("/staff") view=DashboardPage />
+                        // Door page — minimal UI for admin/staff/customers
+                        // with allow_self_entry=1. No role gate; server's
+                        // allow_self_entry check is the actual authorization.
+                        <Route path=path!("/door") view=DoorPage />
+                        <Route path=path!("/staff") view=|| staff_gated(|| DashboardPage().into_any()) />
                         // Admin schedule view (rosters, walk-in, cancel) lives at /schedule.
                         // /staff/classes kept as alias for back-compat.
-                        <Route path=path!("/staff/classes") view=StaffDashboardPage />
+                        <Route path=path!("/staff/classes") view=|| staff_gated(|| StaffDashboardPage().into_any()) />
                         <Route path=path!("/schedule") view=ScheduleRoute />
-                        <Route path=path!("/reports") view=ReportsPage />
-                        <Route path=path!("/settings") view=AdminPage />
+                        <Route path=path!("/reports") view=|| staff_gated(|| ReportsPage().into_any()) />
+                        <Route path=path!("/settings") view=|| staff_gated(|| AdminPage().into_any()) />
                         <Route path=path!("/admin") view=|| view! { <RedirectTo to="/settings".to_string()/> } />
                     </Routes>
                 </div>

@@ -564,6 +564,95 @@ async fn user_routes_are_registered() {
     assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
 }
 
+// ─── /api/my/balance allow_self_entry boundary ───────────────────────────────
+//
+// my_balance maps the SQLite INTEGER (0 / 1) column to a Rust bool via
+// `ase != 0`. The L936:87 mutant flips `!=` to `==`, which inverts the
+// resulting bool (so an opted-in user reports false and vice versa).
+
+#[tokio::test]
+async fn my_balance_reports_allow_self_entry_when_opted_in() {
+    let app = TestApp::new().await;
+    sqlx::query("UPDATE users SET allow_self_entry = 1, credit = 21.50 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (status, body) = app
+        .request(get("/api/my/balance", &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        body["allow_self_entry"], true,
+        "allow_self_entry=1 column must surface as true (catches `!=` → `==` mutant)"
+    );
+    // Round-trip the credit too — locks down that the row is read correctly.
+    let credit = body["credit"]
+        .as_f64()
+        .expect("credit must be a number, got {body}");
+    assert!(
+        (credit - 21.5).abs() < 0.001,
+        "expected credit 21.5, got {credit}"
+    );
+}
+
+#[tokio::test]
+async fn my_balance_reports_no_allow_self_entry_when_opted_out() {
+    let app = TestApp::new().await;
+    // Customer starts with allow_self_entry = 0 (V16 default). Force-set it
+    // here so the assertion is unambiguous.
+    sqlx::query("UPDATE users SET allow_self_entry = 0 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (status, body) = app
+        .request(get("/api/my/balance", &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        body["allow_self_entry"], false,
+        "allow_self_entry=0 column must surface as false (catches `!=` → `==` mutant)"
+    );
+}
+
+/// Admin's allow_self_entry stored value is 0 (default) BUT my_balance must
+/// report effective true — admin/staff bypass the flag entirely (commit
+/// 0dfe85b). Without this override, admin's /door page would render the
+/// disabled "Ask reception" button.
+#[tokio::test]
+async fn my_balance_admin_with_flag_off_reports_effective_true() {
+    let app = TestApp::new().await;
+    sqlx::query("UPDATE users SET allow_self_entry = 0 WHERE id = ?")
+        .bind(app.admin_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (status, body) = app.request(get("/api/my/balance", &app.admin_token)).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        body["allow_self_entry"], true,
+        "admin role must report effective allow_self_entry=true regardless of stored flag"
+    );
+}
+
+/// Same bypass for staff role.
+#[tokio::test]
+async fn my_balance_staff_with_flag_off_reports_effective_true() {
+    let app = TestApp::new().await;
+    sqlx::query("UPDATE users SET allow_self_entry = 0 WHERE id = ?")
+        .bind(app.staff_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (status, body) = app.request(get("/api/my/balance", &app.staff_token)).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        body["allow_self_entry"], true,
+        "staff role must report effective allow_self_entry=true regardless of stored flag"
+    );
+}
+
 // ─── negative-balance boundary tests ─────────────────────────────────────────
 
 #[tokio::test]
@@ -957,4 +1046,191 @@ async fn update_user_card_code_unchanged_returns_200() {
         ))
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
+}
+
+// ─── allow_self_entry — admin-only guard ──────────────────────────────────────
+
+#[tokio::test]
+async fn admin_can_set_allow_self_entry() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"allow_self_entry": true});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.admin_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let val: i64 = sqlx::query_scalar("SELECT allow_self_entry FROM users WHERE id = ?")
+        .bind(app.customer_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(val, 1);
+}
+
+#[tokio::test]
+async fn staff_cannot_set_allow_self_entry() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"allow_self_entry": true});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.staff_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+    let val: i64 = sqlx::query_scalar("SELECT allow_self_entry FROM users WHERE id = ?")
+        .bind(app.customer_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(val, 0, "field must not have been updated");
+}
+
+#[tokio::test]
+async fn staff_can_still_edit_other_fields() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"name": "Renamed By Staff"});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.staff_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+}
+
+// ─── password — admin/self-set guard ──────────────────────────────────────
+
+/// Admin can reset any user's password. Verifies via re-login.
+#[tokio::test]
+async fn admin_can_set_other_user_password() {
+    let app = TestApp::new().await;
+    let new_pw = "BrandNewPw#42";
+    let body = serde_json::json!({"password": new_pw});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.admin_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    // Confirm by attempting login as that user with the new password.
+    let login_body = serde_json::json!({"email": "user@test.com", "password": new_pw});
+    let (login_status, _) = app
+        .request(post_json("/api/auth/login", "", &login_body))
+        .await;
+    assert_eq!(
+        login_status,
+        axum::http::StatusCode::OK,
+        "new password must work for login"
+    );
+}
+
+/// A user can change their OWN password. Verifies via re-login.
+#[tokio::test]
+async fn customer_can_set_own_password() {
+    let app = TestApp::new().await;
+    let new_pw = "MyNewPw9876";
+    let body = serde_json::json!({"password": new_pw});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.customer_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let login_body = serde_json::json!({"email": "user@test.com", "password": new_pw});
+    let (login_status, _) = app
+        .request(post_json("/api/auth/login", "", &login_body))
+        .await;
+    assert_eq!(login_status, axum::http::StatusCode::OK);
+}
+
+/// Staff CANNOT reset another user's password. Server-side 403 even if the
+/// UI submits the field. Original password remains valid.
+#[tokio::test]
+async fn staff_cannot_set_other_user_password() {
+    let app = TestApp::new().await;
+    let attempted_pw = "ShouldNotApply9";
+    let body = serde_json::json!({"password": attempted_pw});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.staff_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+
+    // Original password ("password") still valid; attempted_pw rejected.
+    let bad_login = serde_json::json!({"email": "user@test.com", "password": attempted_pw});
+    let (bad_status, _) = app
+        .request(post_json("/api/auth/login", "", &bad_login))
+        .await;
+    assert_ne!(
+        bad_status,
+        axum::http::StatusCode::OK,
+        "attempted password must NOT have been applied"
+    );
+
+    let good_login = serde_json::json!({"email": "user@test.com", "password": "password"});
+    let (good_status, _) = app
+        .request(post_json("/api/auth/login", "", &good_login))
+        .await;
+    assert_eq!(
+        good_status,
+        axum::http::StatusCode::OK,
+        "original password must still work"
+    );
+}
+
+/// Password shorter than 8 chars is rejected with 400.
+#[tokio::test]
+async fn password_too_short_rejected() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"password": "short7c"});
+    let (status, body_resp) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.admin_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+    let err = body_resp["error"]
+        .as_str()
+        .unwrap_or_default()
+        .to_lowercase();
+    assert!(err.contains("8"), "error message must mention min length");
+}
+
+/// Staff CAN change their own password (path id == claims.sub).
+#[tokio::test]
+async fn staff_can_set_own_password() {
+    let app = TestApp::new().await;
+    let new_pw = "StaffOwnPw321";
+    let body = serde_json::json!({"password": new_pw});
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.staff_id),
+            &app.staff_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let login_body = serde_json::json!({"email": "staff@test.com", "password": new_pw});
+    let (login_status, _) = app
+        .request(post_json("/api/auth/login", "", &login_body))
+        .await;
+    assert_eq!(login_status, axum::http::StatusCode::OK);
 }

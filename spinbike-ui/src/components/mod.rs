@@ -2,6 +2,7 @@ pub mod adaptive_nav;
 pub mod class_card;
 pub mod date_input;
 pub mod day_picker;
+pub mod door_button;
 pub mod nav;
 pub mod persistent_toggles;
 pub mod segmented;
@@ -11,6 +12,7 @@ pub mod version_footer;
 
 pub use adaptive_nav::AdaptiveNav;
 pub use date_input::DateInput;
+pub use door_button::DoorButton;
 pub use persistent_toggles::PersistentToggles;
 pub use segmented::Segmented;
 pub use sheet::Sheet;

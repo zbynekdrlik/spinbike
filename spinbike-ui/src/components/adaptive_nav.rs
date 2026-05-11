@@ -95,6 +95,19 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
                             on_close=Callback::new(move |_| set_more_open.set(false))
                         >
                             <div class="more-sheet__user">{user_name}</div>
+                            // Open-door link visible to ALL admin/staff (whether
+                            // their own allow_self_entry flag is on or off — the
+                            // dedicated /door page itself shows "Ask reception"
+                            // when the flag is off). Links to /door (NOT
+                            // /my/balance) so admin/staff see ONLY the hold-
+                            // button, not the customer-facing credit/pass UI.
+                            <a
+                                href="/door"
+                                class="btn btn--block btn--ghost"
+                                data-testid="more-open-door"
+                            >
+                                {move || i18n::t(lang.get(), "door_button_idle")}
+                            </a>
                             {if is_admin {
                                 // Settings moved here from the bottom-nav per #82.
                                 // Plain anchor — full navigation reload, parent

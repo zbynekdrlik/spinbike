@@ -57,6 +57,8 @@ pub struct CardInfo {
     pub credit: f64,
     pub allow_debit: bool,
     #[serde(default)]
+    pub allow_self_entry: bool,
+    #[serde(default)]
     pub email: Option<String>,
     #[serde(default)]
     pub company: Option<String>,
@@ -218,9 +220,13 @@ pub fn DashboardPage() -> impl IntoView {
     // `?card=` wins when both are present (defensive — Reports only
     // sets `?card=` since v0.13.15).
     Effect::new(move |_| {
-        let Some(w) = web_sys::window() else { return; };
+        let Some(w) = web_sys::window() else {
+            return;
+        };
         let search = w.location().search().unwrap_or_default();
-        let Some(stripped) = search.strip_prefix('?') else { return; };
+        let Some(stripped) = search.strip_prefix('?') else {
+            return;
+        };
 
         let mut card_param: Option<String> = None;
         let mut q_param: Option<String> = None;

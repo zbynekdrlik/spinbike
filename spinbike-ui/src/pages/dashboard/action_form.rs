@@ -110,7 +110,16 @@ pub fn ActionForm(
                 amount: f64,
                 note: Option<String>,
             }
-            match api::post::<Req, CardInfo>("/api/users/topup", &Req { user_id, amount, note }).await {
+            match api::post::<Req, CardInfo>(
+                "/api/users/topup",
+                &Req {
+                    user_id,
+                    amount,
+                    note,
+                },
+            )
+            .await
+            {
                 Ok(c) => {
                     let credit = c.credit;
                     set_selected.set(Some(c));
@@ -295,11 +304,7 @@ pub fn ActionForm(
                 .await
                 {
                     Ok(_) => {
-                        let m = i18n::tf(
-                            lang.get_untracked(),
-                            "visit_added_format",
-                            &[&svc_name],
-                        );
+                        let m = i18n::tf(lang.get_untracked(), "visit_added_format", &[&svc_name]);
                         set_msg.set(m.clone());
                         set_txn_refresh.update(|n| *n += 1);
                         clear_note();
