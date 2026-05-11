@@ -136,15 +136,18 @@ async fn open(
         }
     };
 
-    if role != "customer" {
-        tracing::warn!(user_id, %role, "door: rejected — role is not customer");
-        return Ok((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"status": "rejected", "reason": "not_allowed"})),
-        ));
-    }
+    // Role-agnostic per original prompt ("users which are allowed by CEO
+    // config could come and open the door"). The only gate is the per-user
+    // allow_self_entry flag — admin/staff can self-open just like customers
+    // when their flag is on. Billing logic still distinguishes customers vs
+    // admin/staff below: admin/staff visits are logged with action='visit',
+    // amount=0, regardless of monthly_pass status, because they don't pay.
     if allow_self_entry == 0 {
-        tracing::warn!(user_id, "door: rejected — allow_self_entry is 0");
+        tracing::warn!(
+            user_id,
+            %role,
+            "door: rejected — allow_self_entry is 0"
+        );
         return Ok((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"status": "rejected", "reason": "not_allowed"})),
@@ -188,21 +191,28 @@ async fn open(
     let door_count_today = n + 1;
 
     // 5. Build the row to insert (action/service_id/amount/note).
+    let is_staff_or_admin = role == "admin" || role == "staff";
     let (action, service_id_opt, amount, note): (&str, Option<i64>, f64, String) = if n == 0 {
         // First press today — visit or charge depending on monthly-pass state.
-        let pass_active: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 FROM transactions \
-             WHERE user_id = ? \
-               AND action = 'charge' \
-               AND service_id = (SELECT id FROM services WHERE kind = 'monthly_pass') \
-               AND valid_until > datetime('now') \
-               AND deleted_at IS NULL \
-             LIMIT 1",
-        )
-        .bind(user_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(internal_error)?;
+        // Admin/staff are never charged for their own door use — always
+        // logged as a visit. Customer flow falls through to the pass check.
+        let pass_active: Option<i64> = if is_staff_or_admin {
+            Some(1) // short-circuit — treat as "pass covers it"
+        } else {
+            sqlx::query_scalar(
+                "SELECT 1 FROM transactions \
+                 WHERE user_id = ? \
+                   AND action = 'charge' \
+                   AND service_id = (SELECT id FROM services WHERE kind = 'monthly_pass') \
+                   AND valid_until > datetime('now') \
+                   AND deleted_at IS NULL \
+                 LIMIT 1",
+            )
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(internal_error)?
+        };
 
         if pass_active.is_some() {
             // Monthly pass covers the entry — zero-amount visit row.

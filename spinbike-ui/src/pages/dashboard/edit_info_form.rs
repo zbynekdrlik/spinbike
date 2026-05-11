@@ -41,6 +41,7 @@ pub fn EditInfoForm(
             let email_ref = NodeRef::<leptos::html::Input>::new();
             let company_ref = NodeRef::<leptos::html::Input>::new();
             let phone_ref = NodeRef::<leptos::html::Input>::new();
+            let password_ref = NodeRef::<leptos::html::Input>::new();
             let (loading, set_loading) = signal(false);
 
             let on_close_cancel = on_close.clone();
@@ -61,6 +62,7 @@ pub fn EditInfoForm(
                 let email = read(&email_ref);
                 let company = read(&company_ref);
                 let phone = read(&phone_ref);
+                let password = read(&password_ref);
 
                 set_loading.set(true);
                 let on_close_inner = on_close_save.clone();
@@ -73,6 +75,8 @@ pub fn EditInfoForm(
                         company: Option<String>,
                         phone: Option<String>,
                         allow_self_entry: Option<bool>,
+                        #[serde(skip_serializing_if = "Option::is_none")]
+                        password: Option<String>,
                     }
                     let req = Req {
                         name: if name.trim().is_empty() { None } else { Some(name) },
@@ -80,6 +84,7 @@ pub fn EditInfoForm(
                         company: if company.is_empty() { None } else { Some(company) },
                         phone: if phone.is_empty() { None } else { Some(phone) },
                         allow_self_entry: Some(allow_se),
+                        password: if password.is_empty() { None } else { Some(password) },
                     };
                     match api::put_json::<Req, CardInfo>(&format!("/api/users/{card_id}"), &req).await {
                         Ok(c) => {
@@ -119,6 +124,20 @@ pub fn EditInfoForm(
                         <div class="form-group">
                             <label>{i18n::t(lang.get(), "phone")}</label>
                             <input type="text" class="form-control" node_ref=phone_ref value=pv.get_value() />
+                        </div>
+                        <div class="form-group">
+                            <label>{move || i18n::t(lang.get(), "user_edit_new_password")}</label>
+                            <input
+                                type="password"
+                                class="form-control"
+                                data-testid="user-edit-password"
+                                node_ref=password_ref
+                                placeholder=move || i18n::t(lang.get(), "user_edit_new_password_placeholder")
+                                autocomplete="new-password"
+                            />
+                            <small class="form-help">
+                                {move || i18n::t(lang.get(), "user_edit_new_password_help")}
+                            </small>
                         </div>
                         <label class="form-row" data-testid="user-edit-allow-self-entry-row">
                             <input

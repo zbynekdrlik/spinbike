@@ -774,6 +774,21 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "(open door from PWA without staff present)",
         ),
     );
+    m.insert("user_edit_new_password", ("Nove heslo", "New password"));
+    m.insert(
+        "user_edit_new_password_placeholder",
+        (
+            "ponechaj prazdne pre zachovanie hesla",
+            "leave blank to keep existing password",
+        ),
+    );
+    m.insert(
+        "user_edit_new_password_help",
+        (
+            "Min. 8 znakov. Iba admin moze menit cudzie heslo.",
+            "Min 8 characters. Only admin can set another user's password.",
+        ),
+    );
 
     m
 });

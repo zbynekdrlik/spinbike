@@ -408,6 +408,23 @@ pub async fn update_user_allow_self_entry(
     Ok(())
 }
 
+/// Set the password hash for a user. Caller must enforce role authorization
+/// (admin can set any user's password; customer can set OWN password; staff
+/// cannot reset other users' passwords).
+pub async fn update_user_password_hash(
+    pool: &SqlitePool,
+    user_id: i64,
+    password_hash: &str,
+) -> Result<()> {
+    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        .bind(password_hash)
+        .bind(user_id)
+        .execute(pool)
+        .await
+        .context("Failed to update password_hash")?;
+    Ok(())
+}
+
 /// Return the latest `valid_until` across a user's transactions, or `None` if
 /// the user has never had a monthly-pass purchase. Callers compare against
 /// today's date to determine whether the pass is active or expired.

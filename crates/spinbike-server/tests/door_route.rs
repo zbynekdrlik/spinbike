@@ -17,9 +17,66 @@ async fn enable_self_entry(app: &TestApp) {
         .unwrap();
 }
 
+/// Staff with allow_self_entry=true can open the door — verifies the door
+/// route is role-agnostic per the original prompt ("each user which is
+/// allowed by some user configuration could come and open door").
 #[tokio::test]
-async fn forbidden_when_role_not_customer() {
+async fn staff_with_allow_self_entry_can_open_door() {
     let app = TestApp::with_door_mode("success").await;
+    sqlx::query("UPDATE users SET allow_self_entry = 1 WHERE id = ?")
+        .bind(app.staff_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (status, body) = app
+        .request(post_json(
+            "/api/door/open",
+            &app.staff_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["status"], "opened");
+    // Staff is never charged, regardless of pass status.
+    assert_eq!(body["charged"], false);
+    // The row was a 'visit' (no charge).
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM transactions \
+         WHERE user_id = ? AND action = 'visit' AND amount = 0 AND note = 'door: 1st'",
+    )
+    .bind(app.staff_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(n, 1);
+}
+
+/// Admin with allow_self_entry=true can also open the door — same path,
+/// different role.
+#[tokio::test]
+async fn admin_with_allow_self_entry_can_open_door() {
+    let app = TestApp::with_door_mode("success").await;
+    sqlx::query("UPDATE users SET allow_self_entry = 1 WHERE id = ?")
+        .bind(app.admin_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (status, body) = app
+        .request(post_json(
+            "/api/door/open",
+            &app.admin_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["charged"], false);
+}
+
+/// Staff WITHOUT allow_self_entry gets 403 — gate is the flag, not the role.
+#[tokio::test]
+async fn staff_without_allow_self_entry_forbidden() {
+    let app = TestApp::with_door_mode("success").await;
+    // allow_self_entry defaults to 0.
     let (status, body) = app
         .request(post_json(
             "/api/door/open",

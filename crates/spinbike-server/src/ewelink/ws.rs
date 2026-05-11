@@ -208,7 +208,8 @@ async fn connect_loop_with_url_inner(
                 // sentinel magic number.
                 let err_code = v.get("error").and_then(|e| e.as_i64());
                 if err_code != Some(0) {
-                    let code_str = err_code.map_or_else(|| "missing".to_string(), |c| c.to_string());
+                    let code_str =
+                        err_code.map_or_else(|| "missing".to_string(), |c| c.to_string());
                     tracing::warn!(
                         code = %code_str,
                         body = %txt,

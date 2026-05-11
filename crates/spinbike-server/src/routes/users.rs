@@ -138,6 +138,12 @@ pub struct UpdateUserRequest {
     pub card_code: Option<String>,
     #[serde(default)]
     pub allow_self_entry: Option<bool>,
+    /// Plain-text password. Hashed server-side via argon2 before storage.
+    /// Admin can set any user's password; customer can set OWN password
+    /// (caller.sub == path id); staff is forbidden from resetting passwords
+    /// for any user other than themselves.
+    #[serde(default)]
+    pub password: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -657,6 +663,29 @@ async fn update_user(
             ));
         }
         db::update_user_allow_self_entry(&state.pool, id, allow)
+            .await
+            .map_err(internal_error)?;
+    }
+
+    if let Some(ref pw) = body.password {
+        // Admin can set any user's password.
+        // Anyone (incl. customer / staff) can set their OWN password.
+        // Staff CANNOT reset another user's password.
+        let is_admin = claims.role == spinbike_core::auth::Role::Admin;
+        let is_self = claims.sub == id;
+        if !is_admin && !is_self {
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({
+                    "error": "Only admin can set another user's password"
+                })),
+            ));
+        }
+        if pw.len() < 8 {
+            return Err(super::bad_request("Password must be at least 8 characters"));
+        }
+        let hash = crate::auth::hash_password(pw).map_err(internal_error)?;
+        db::update_user_password_hash(&state.pool, id, &hash)
             .await
             .map_err(internal_error)?;
     }
