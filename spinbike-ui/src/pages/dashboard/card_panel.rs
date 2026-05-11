@@ -1,6 +1,8 @@
 use chrono::NaiveDate;
 use leptos::prelude::*;
+use wasm_bindgen_futures::spawn_local;
 
+use crate::api;
 use crate::components::{PersistentToggles, Segmented, UpcomingClasses};
 use crate::i18n::{self, Lang};
 use crate::relative_date::format_last_visit;
@@ -52,6 +54,9 @@ pub fn CardActionPanel(
     let last_visit_at = card.last_visit_at.clone();
     let card_for_edit = card.clone();
     let card_for_form = card.clone();
+    // Signal-wrapped card_code for the Edit-button click handler — has to
+    // be Copy (signal IDs are Copy) so the closure stays Fn.
+    let (edit_lookup_code, _) = signal(card.card_code.clone());
 
     let editing_delete = RwSignal::new(false);
     let delete_user_id = card_id;
@@ -179,7 +184,31 @@ pub fn CardActionPanel(
             <div class="action-row stack-12">
                 <button
                     class="btn btn--ghost"
-                    on:click=move |_| set_show_edit.update(|v| *v = !*v)
+                    on:click=move |_| {
+                        // Fetch latest user data BEFORE opening the form so
+                        // the inputs always reflect what's currently in the
+                        // DB. Without this, a save + reopen cycle shows the
+                        // stale card prop (parent component may not remount
+                        // on set_selected).
+                        let cc = edit_lookup_code.get_untracked();
+                        if let Some(cc) = cc {
+                            spawn_local(async move {
+                                if let Ok(c) = api::get::<CardInfo>(
+                                    &format!("/api/users/lookup/{cc}"),
+                                )
+                                .await
+                                {
+                                    set_selected.set(Some(c));
+                                }
+                                // Open the sheet on next tick so the
+                                // re-mounted EditInfoForm sees the fresh card.
+                                gloo_timers::future::TimeoutFuture::new(0).await;
+                                set_show_edit.set(true);
+                            });
+                        } else {
+                            set_show_edit.set(true);
+                        }
+                    }
                 >
                     {move || i18n::t(lang.get(), "edit_info")}
                 </button>
