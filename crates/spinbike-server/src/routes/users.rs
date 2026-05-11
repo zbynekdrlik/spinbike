@@ -588,7 +588,13 @@ async fn update_user(
     Path(id): Path<i64>,
     Json(body): Json<UpdateUserRequest>,
 ) -> Result<Json<UserResponse>, (StatusCode, Json<serde_json::Value>)> {
-    if !claims.role.can_manage_cards() {
+    // Self-edit is allowed regardless of role: a customer can update their
+    // own name/email/phone/company/password on their own user row. Field-
+    // level guards below still enforce admin-only for `allow_self_entry` and
+    // admin-or-self for `password`. Staff/admin keep their existing
+    // permissions for editing OTHER users.
+    let is_self = claims.sub == id;
+    if !claims.role.can_manage_cards() && !is_self {
         return Err((
             StatusCode::FORBIDDEN,
             Json(serde_json::json!({"error": "Staff access required"})),

@@ -81,7 +81,7 @@ fn is_staff_or_admin(auth_ver: ReadSignal<u32>) -> bool {
 /// customer JWTs never even render the staff dashboard page.
 fn staff_gated<F>(inner: F) -> impl IntoView
 where
-    F: Fn() -> leptos::prelude::AnyView + 'static,
+    F: Fn() -> leptos::prelude::AnyView + Send + Sync + 'static,
 {
     let auth_ver = use_context::<ReadSignal<u32>>().expect("auth_ver context");
     view! {
