@@ -41,7 +41,6 @@ pub async fn run_real_ws(
     state.store(EwelinkState::Disconnected as u8, Ordering::Relaxed);
 
     let mut backoff = Duration::from_secs(1);
-    let max_backoff = Duration::from_secs(30);
 
     loop {
         // If the mpsc closed while we were sleeping or logging in, exit.
@@ -61,7 +60,7 @@ pub async fn run_real_ws(
                     tracing::info!("ewelink: rx closed during backoff, shutting down");
                     return;
                 }
-                backoff = (backoff * 2).min(max_backoff);
+                backoff = next_backoff(backoff);
                 continue;
             }
         };
@@ -105,10 +104,18 @@ pub async fn run_real_ws(
                     tracing::info!("ewelink: rx closed during backoff, shutting down");
                     return;
                 }
-                backoff = (backoff * 2).min(max_backoff);
+                backoff = next_backoff(backoff);
             }
         }
     }
+}
+
+/// Exponential backoff: double the current delay, capping at 30 s.
+/// Extracted as a `pub` pure fn so the arithmetic (the `*` operator
+/// and the 30 s cap) is unit-testable without spinning up the WS task.
+pub fn next_backoff(current: Duration) -> Duration {
+    const MAX_BACKOFF: Duration = Duration::from_secs(30);
+    (current * 2).min(MAX_BACKOFF)
 }
 
 #[derive(Debug)]
@@ -319,7 +326,7 @@ async fn connect_loop_with_url_inner(
 }
 
 /// Parse a text frame and route any ack to the matching pending oneshot.
-fn handle_text_frame(
+pub(crate) fn handle_text_frame(
     txt: &str,
     pending: &mut HashMap<String, oneshot::Sender<Result<(), EwelinkError>>>,
     last_ack_ms: &Arc<AtomicI64>,
@@ -364,11 +371,16 @@ fn handle_text_frame(
 /// Map known eWeLink error codes to `DeviceOffline`. The cloud uses 503
 /// for offline devices; the rest are treated as bad-response so the
 /// caller surfaces the exact code in tracing.
-fn is_offline_code(code: i64) -> bool {
+///
+/// `pub` so unit tests can lock down the 503-vs-everything-else boundary
+/// without simulating a full WS round-trip.
+pub fn is_offline_code(code: i64) -> bool {
     matches!(code, 503)
 }
 
-fn random_nonce() -> String {
+/// 8-char base36 nonce. `pub` so unit tests can assert uniqueness +
+/// character set without driving the WS task.
+pub fn random_nonce() -> String {
     const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
     let mut rng = rand::thread_rng();
     (0..8)
@@ -408,5 +420,130 @@ pub async fn run_test_stub(
             ))),
         };
         let _ = req.ack.send(result);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `is_offline_code(503)` MUST be true; every other code MUST be false.
+    /// Catches:
+    ///   * the L368 constant-return mutations (true / false)
+    ///   * the L355 match-guard mutations (true / false) — because
+    ///     handle_text_frame routes to DeviceOffline only via this fn.
+    #[test]
+    fn is_offline_code_503_only() {
+        assert!(is_offline_code(503), "503 must be classified offline");
+        assert!(!is_offline_code(0), "0 (success) is not offline");
+        assert!(!is_offline_code(401), "401 (auth) is not offline");
+        assert!(!is_offline_code(404), "404 is not offline");
+        assert!(!is_offline_code(500), "500 is not offline");
+        assert!(!is_offline_code(502), "502 is not offline");
+        assert!(!is_offline_code(504), "504 is not offline");
+        assert!(!is_offline_code(-1), "-1 is not offline");
+    }
+
+    /// Drive `handle_text_frame` end-to-end via the offline / bad-response
+    /// branches. Catches the L355 match-guard mutations (`true` would
+    /// route 500 to DeviceOffline; `false` would route 503 to BadResponse).
+    #[tokio::test]
+    async fn handle_text_frame_routes_503_to_device_offline() {
+        let mut pending: HashMap<String, oneshot::Sender<Result<(), EwelinkError>>> =
+            HashMap::new();
+        let last_ack_ms = Arc::new(AtomicI64::new(i64::MIN));
+
+        // 503 — offline.
+        let (tx, rx) = oneshot::channel();
+        pending.insert("seq-503".into(), tx);
+        handle_text_frame(
+            r#"{"sequence":"seq-503","error":503}"#,
+            &mut pending,
+            &last_ack_ms,
+        );
+        let res = rx.await.expect("oneshot");
+        assert!(
+            matches!(res, Err(EwelinkError::DeviceOffline)),
+            "got {res:?}"
+        );
+
+        // 500 — bad response, not offline.
+        let (tx, rx) = oneshot::channel();
+        pending.insert("seq-500".into(), tx);
+        handle_text_frame(
+            r#"{"sequence":"seq-500","error":500}"#,
+            &mut pending,
+            &last_ack_ms,
+        );
+        let res = rx.await.expect("oneshot");
+        match res {
+            Err(EwelinkError::BadResponse(msg)) => {
+                assert!(
+                    msg.contains("error 500"),
+                    "msg should mention error 500, got {msg:?}"
+                );
+            }
+            other => panic!("expected BadResponse, got {other:?}"),
+        }
+
+        // 0 — success, updates last_ack_ms.
+        let (tx, rx) = oneshot::channel();
+        pending.insert("seq-0".into(), tx);
+        let before = last_ack_ms.load(Ordering::Relaxed);
+        handle_text_frame(
+            r#"{"sequence":"seq-0","error":0}"#,
+            &mut pending,
+            &last_ack_ms,
+        );
+        let res = rx.await.expect("oneshot");
+        assert!(res.is_ok(), "got {res:?}");
+        let after = last_ack_ms.load(Ordering::Relaxed);
+        assert!(
+            after > before,
+            "last_ack_ms must advance on success: before={before} after={after}"
+        );
+    }
+
+    /// random_nonce is non-empty, 8 chars, base36, and varies across calls.
+    /// Catches the L372 constant-return mutations ("" / "xyzzy").
+    #[test]
+    fn random_nonce_varies_and_is_base36_8() {
+        let a = random_nonce();
+        let b = random_nonce();
+        let c = random_nonce();
+        assert_eq!(a.len(), 8);
+        assert!(!(a == b && b == c), "three nonces identical: {a} {b} {c}");
+        for ch in a.chars().chain(b.chars()).chain(c.chars()) {
+            assert!(ch.is_ascii_lowercase() || ch.is_ascii_digit(), "{ch:?}");
+        }
+    }
+
+    /// Backoff doubles each call and caps at 30 s.
+    /// Catches the `*` → `/` and `*` → `+` mutations on the doubling step
+    /// AND a hypothetical removal of the `.min(MAX_BACKOFF)` cap.
+    #[test]
+    fn next_backoff_doubles_then_caps_at_30s() {
+        assert_eq!(next_backoff(Duration::from_secs(1)), Duration::from_secs(2));
+        assert_eq!(next_backoff(Duration::from_secs(2)), Duration::from_secs(4));
+        assert_eq!(next_backoff(Duration::from_secs(4)), Duration::from_secs(8));
+        assert_eq!(
+            next_backoff(Duration::from_secs(8)),
+            Duration::from_secs(16)
+        );
+        assert_eq!(
+            next_backoff(Duration::from_secs(15)),
+            Duration::from_secs(30),
+            "30 s is the cap"
+        );
+        assert_eq!(
+            next_backoff(Duration::from_secs(16)),
+            Duration::from_secs(30),
+            "32 s capped at 30 s"
+        );
+        assert_eq!(
+            next_backoff(Duration::from_secs(30)),
+            Duration::from_secs(30),
+            "60 s capped at 30 s"
+        );
     }
 }

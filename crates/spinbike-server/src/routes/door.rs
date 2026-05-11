@@ -59,8 +59,14 @@ impl RateLimiter {
     /// Returns Ok if this press is allowed and records it. Err with a short
     /// reason tag otherwise. Reason tags are logged but the HTTP response
     /// flattens them to "rate_limited" per spec.
-    fn check_and_record(&mut self, user_id: i64) -> Result<(), &'static str> {
-        let now = Instant::now();
+    pub fn check_and_record(&mut self, user_id: i64) -> Result<(), &'static str> {
+        self.check_and_record_at(user_id, Instant::now())
+    }
+
+    /// Same as `check_and_record` but takes the current `Instant` as a
+    /// parameter so unit tests can simulate elapsed time without sleeping.
+    /// Production callers use the no-arg shim above.
+    pub fn check_and_record_at(&mut self, user_id: i64, now: Instant) -> Result<(), &'static str> {
         // Prune global window (60s).
         while let Some(front) = self.global.front() {
             if now.duration_since(*front) > Duration::from_secs(60) {
@@ -350,5 +356,187 @@ mod tests {
         assert!(rl.check_and_record(1).is_ok());
         // User 2's first press is independent.
         assert!(rl.check_and_record(2).is_ok());
+    }
+
+    // ─── 10-second consecutive-press boundary ────────────────────────────────
+    //
+    // The check is `now.duration_since(*last) < Duration::from_secs(10)`.
+    // Mutations to test: < → <= (would block at exactly 10 s) and < → ==
+    // (would let almost any value through).
+
+    /// At exactly 10 s of gap, the second press MUST be allowed.
+    /// Catches the `<` → `<=` mutation on the consecutive-press check.
+    #[test]
+    fn rate_limiter_allows_at_exactly_10s_boundary() {
+        let mut rl = RateLimiter::new();
+        let t0 = Instant::now();
+        rl.check_and_record_at(1, t0).unwrap();
+        let result = rl.check_and_record_at(1, t0 + Duration::from_secs(10));
+        assert!(
+            result.is_ok(),
+            "press 10s after the previous one MUST be allowed, got {result:?}"
+        );
+    }
+
+    /// Just under 10 s (9.999 s) MUST still be too_fast.
+    /// Catches the `<` → `<=` mutation AND `<` → `==`.
+    #[test]
+    fn rate_limiter_blocks_just_under_10s() {
+        let mut rl = RateLimiter::new();
+        let t0 = Instant::now();
+        rl.check_and_record_at(1, t0).unwrap();
+        let result = rl.check_and_record_at(1, t0 + Duration::from_millis(9_999));
+        assert_eq!(result, Err("too_fast"));
+    }
+
+    /// 11 s gap is allowed.
+    #[test]
+    fn rate_limiter_allows_after_11s_gap() {
+        let mut rl = RateLimiter::new();
+        let t0 = Instant::now();
+        rl.check_and_record_at(1, t0).unwrap();
+        rl.check_and_record_at(1, t0 + Duration::from_secs(11))
+            .expect("11s after the previous press must succeed");
+    }
+
+    // ─── per-user 5 / 60 s cap ──────────────────────────────────────────────
+    //
+    // The check is `if q.len() >= 5`. Mutants to test: >= → > (lets 6 in)
+    // and >= → == (lets 7+ in but blocks at exactly 5).
+
+    /// Exactly 5 presses spaced 11 s apart are allowed; the 6th is capped.
+    /// Catches `>=` → `>` and `>=` → `==`.
+    #[test]
+    fn rate_limiter_per_user_cap_kicks_in_at_6th_press() {
+        let mut rl = RateLimiter::new();
+        let t0 = Instant::now();
+        for i in 0..5 {
+            let when = t0 + Duration::from_secs(11 * i as u64);
+            rl.check_and_record_at(7, when)
+                .unwrap_or_else(|e| panic!("press #{i} should succeed, got {e}"));
+        }
+        // 6th attempt — still within the 60 s sliding window (11 s × 5 = 55 s).
+        let sixth_at = t0 + Duration::from_secs(11 * 5);
+        let result = rl.check_and_record_at(7, sixth_at);
+        assert_eq!(
+            result,
+            Err("per_user_cap"),
+            "6th press inside the 60s window must hit per_user_cap"
+        );
+    }
+
+    // ─── global 30 / 60 s cap ───────────────────────────────────────────────
+    //
+    // The check is `if self.global.len() >= 30`. Test:
+    //   `>=` → `>` (lets 31 in)
+    //   `>=` → `==` (lets 31+ in but blocks at exactly 30 — same effect for
+    //                 this test boundary).
+
+    /// 30 distinct users each get one press; the 31st distinct user is
+    /// blocked with global_cap. Catches `>=` → `>` on the global cap.
+    #[test]
+    fn rate_limiter_global_cap_kicks_in_at_31st_press() {
+        let mut rl = RateLimiter::new();
+        let t0 = Instant::now();
+        for uid in 1..=30 {
+            // Stagger by 1ms so the 60s window still contains them all.
+            let when = t0 + Duration::from_millis(uid as u64);
+            rl.check_and_record_at(uid, when)
+                .unwrap_or_else(|e| panic!("user {uid} should succeed, got {e}"));
+        }
+        let result = rl.check_and_record_at(31, t0 + Duration::from_millis(100));
+        assert_eq!(
+            result,
+            Err("global_cap"),
+            "31st distinct user inside the 60s window must hit global_cap"
+        );
+    }
+
+    /// After the 60 s window slides past, an old global entry is pruned and
+    /// the global counter goes back below the cap. This locks down the
+    /// global window's `> Duration::from_secs(60)` prune condition; if
+    /// that were mutated to `>=`, the prune logic would also fire at
+    /// exactly 60 s (still safe), but if mutated to `<` the queue would
+    /// never prune and we'd never recover.
+    #[test]
+    fn rate_limiter_global_window_prunes_after_60s() {
+        let mut rl = RateLimiter::new();
+        let t0 = Instant::now();
+        for uid in 1..=30 {
+            let when = t0 + Duration::from_millis(uid as u64);
+            rl.check_and_record_at(uid, when).unwrap();
+        }
+        // 31st (any user) at t0 + 90 s — every prior entry is older than 60 s
+        // and should have been pruned, leaving room for this press.
+        let result = rl.check_and_record_at(99, t0 + Duration::from_secs(90));
+        assert!(
+            result.is_ok(),
+            "global cap must clear after the 60s window slides; got {result:?}"
+        );
+    }
+
+    /// User 1 is at the per-user cap; user 2 is still allowed independently.
+    #[test]
+    fn rate_limiter_per_user_isolation_under_caps() {
+        let mut rl = RateLimiter::new();
+        let t0 = Instant::now();
+        for i in 0..5 {
+            rl.check_and_record_at(1, t0 + Duration::from_secs(11 * i as u64))
+                .unwrap();
+        }
+        // User 1 hits the cap.
+        assert_eq!(
+            rl.check_and_record_at(1, t0 + Duration::from_secs(55)),
+            Err("per_user_cap")
+        );
+        // User 2 (first press for this user) is fine.
+        rl.check_and_record_at(2, t0 + Duration::from_secs(55))
+            .expect("independent user must not be affected by user 1's cap");
+    }
+
+    // ─── role guard for /api/door/health ─────────────────────────────────────
+    //
+    // require_admin_or_staff is invoked from `health` and returns Ok / 403.
+    // L297 mutant: replace body with `Ok(())` — would let customers in.
+    // We assert all three role paths directly without going through axum.
+
+    #[test]
+    fn require_admin_or_staff_allows_admin() {
+        let claims = spinbike_core::auth::Claims {
+            sub: 1,
+            email: "a@x".to_string(),
+            role: spinbike_core::auth::Role::Admin,
+            exp: 0,
+            iat: 0,
+        };
+        assert!(require_admin_or_staff(&claims).is_ok());
+    }
+
+    #[test]
+    fn require_admin_or_staff_allows_staff() {
+        let claims = spinbike_core::auth::Claims {
+            sub: 1,
+            email: "s@x".to_string(),
+            role: spinbike_core::auth::Role::Staff,
+            exp: 0,
+            iat: 0,
+        };
+        assert!(require_admin_or_staff(&claims).is_ok());
+    }
+
+    #[test]
+    fn require_admin_or_staff_rejects_customer() {
+        let claims = spinbike_core::auth::Claims {
+            sub: 1,
+            email: "c@x".to_string(),
+            role: spinbike_core::auth::Role::Customer,
+            exp: 0,
+            iat: 0,
+        };
+        let result = require_admin_or_staff(&claims);
+        match result {
+            Err((status, _)) => assert_eq!(status, StatusCode::FORBIDDEN),
+            Ok(()) => panic!("customer must be rejected; L297 Ok(()) mutant"),
+        }
     }
 }

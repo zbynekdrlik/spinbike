@@ -564,6 +564,58 @@ async fn user_routes_are_registered() {
     assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
 }
 
+// ─── /api/my/balance allow_self_entry boundary ───────────────────────────────
+//
+// my_balance maps the SQLite INTEGER (0 / 1) column to a Rust bool via
+// `ase != 0`. The L936:87 mutant flips `!=` to `==`, which inverts the
+// resulting bool (so an opted-in user reports false and vice versa).
+
+#[tokio::test]
+async fn my_balance_reports_allow_self_entry_when_opted_in() {
+    let app = TestApp::new().await;
+    sqlx::query("UPDATE users SET allow_self_entry = 1, credit = 21.50 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (status, body) = app
+        .request(get("/api/my/balance", &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        body["allow_self_entry"], true,
+        "allow_self_entry=1 column must surface as true (catches `!=` → `==` mutant)"
+    );
+    // Round-trip the credit too — locks down that the row is read correctly.
+    let credit = body["credit"]
+        .as_f64()
+        .expect("credit must be a number, got {body}");
+    assert!(
+        (credit - 21.5).abs() < 0.001,
+        "expected credit 21.5, got {credit}"
+    );
+}
+
+#[tokio::test]
+async fn my_balance_reports_no_allow_self_entry_when_opted_out() {
+    let app = TestApp::new().await;
+    // Customer starts with allow_self_entry = 0 (V16 default). Force-set it
+    // here so the assertion is unambiguous.
+    sqlx::query("UPDATE users SET allow_self_entry = 0 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (status, body) = app
+        .request(get("/api/my/balance", &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        body["allow_self_entry"], false,
+        "allow_self_entry=0 column must surface as false (catches `!=` → `==` mutant)"
+    );
+}
+
 // ─── negative-balance boundary tests ─────────────────────────────────────────
 
 #[tokio::test]

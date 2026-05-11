@@ -67,7 +67,9 @@ pub fn sign(body: &str) -> String {
     base64::engine::general_purpose::STANDARD.encode(bytes)
 }
 
-fn random_nonce() -> String {
+/// 8-char base36 nonce. `pub(crate)` so tests can assert uniqueness +
+/// character set without going through the network round-trip.
+pub(crate) fn random_nonce() -> String {
     const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
     let mut rng = rand::thread_rng();
     (0..8)
@@ -99,10 +101,28 @@ pub async fn login(
     region_hint: Option<&str>,
 ) -> Result<LoginResult, EwelinkError> {
     let region = region_hint.unwrap_or(DEFAULT_REGION).to_string();
+    let base_url = format!("https://{region}-api.coolkit.cc:8080");
+    login_with_base(&base_url, email, password, region_hint, &region).await
+}
+
+/// Test seam: same behaviour as `login` but with an injectable base URL
+/// (used by httpmock tests). Production code always reaches it via
+/// `login` which builds the real eWeLink regional endpoint.
+///
+/// `region_hint` and `region` are kept separate so we faithfully reproduce
+/// `login`'s "pingpong" check (no second redirect allowed) even when the
+/// base URL was injected by a test.
+pub async fn login_with_base(
+    base_url: &str,
+    email: &str,
+    password: &str,
+    region_hint: Option<&str>,
+    region: &str,
+) -> Result<LoginResult, EwelinkError> {
     let ts = chrono::Utc::now().timestamp();
     let (body, sig) = build_request(email, password, ts, random_nonce());
 
-    let url = format!("https://{region}-api.coolkit.cc:8080/api/user/login");
+    let url = format!("{base_url}/api/user/login");
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
@@ -141,7 +161,7 @@ pub async fn login(
     }
     Ok(LoginResult {
         access_token: parsed.at,
-        region: parsed.region.unwrap_or_else(|| region.clone()),
+        region: parsed.region.unwrap_or_else(|| region.to_string()),
         apikey: parsed.user.apikey,
     })
 }
@@ -171,5 +191,135 @@ mod tests {
         assert!(body.contains("\"countryCode\":\"+421\""));
         assert!(body.contains("\"nonce\":\"abcdefgh\""));
         assert_eq!(sig, "9uhtXQCO/zWvmqsBLT5xDJ8o/ZY2hOu/M5QmVWNwLOc=");
+    }
+
+    /// random_nonce must vary between calls and stay inside [a-z0-9]{8}.
+    /// Catches the L71 "return empty string" / "return constant" mutations.
+    #[test]
+    fn random_nonce_varies_and_is_base36_8() {
+        let a = random_nonce();
+        let b = random_nonce();
+        let c = random_nonce();
+        assert_eq!(a.len(), 8, "nonce should be 8 chars, got {a:?}");
+        assert_eq!(b.len(), 8);
+        assert_eq!(c.len(), 8);
+        // Not all three identical (collision probability ~10^-24).
+        assert!(
+            !(a == b && b == c),
+            "three consecutive nonces all identical: {a} {b} {c}"
+        );
+        for ch in a.chars().chain(b.chars()).chain(c.chars()) {
+            assert!(
+                ch.is_ascii_lowercase() || ch.is_ascii_digit(),
+                "unexpected nonce char {ch:?}"
+            );
+        }
+    }
+
+    /// Success path: error=0, region "eu", returns the access token /
+    /// region / apikey from the response. Kills the L139 "!= → ==" mutant
+    /// (this test would fail if the success path were treated as an error).
+    #[tokio::test]
+    async fn login_success_returns_token_and_region() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/api/user/login");
+                then.status(200).json_body(serde_json::json!({
+                    "error": 0,
+                    "region": "eu",
+                    "at": "tok123",
+                    "user": { "apikey": "key456" }
+                }));
+            })
+            .await;
+
+        let result = login_with_base(&server.base_url(), "x@x", "p", None, "eu")
+            .await
+            .expect("login should succeed");
+        assert_eq!(result.access_token, "tok123");
+        assert_eq!(result.region, "eu");
+        assert_eq!(result.apikey, "key456");
+    }
+
+    /// Non-zero error code (other than 301) must surface as Auth.
+    /// Catches the L139 `!= → ==` mutant (under that mutation `error: 0`
+    /// would become Auth and `error: 10` would succeed — flips both
+    /// branches).
+    #[tokio::test]
+    async fn login_returns_auth_error_on_nonzero_error_code() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/api/user/login");
+                then.status(200).json_body(serde_json::json!({
+                    "error": 10,
+                    "at": "",
+                    "user": { "apikey": "" }
+                }));
+            })
+            .await;
+
+        let result = login_with_base(&server.base_url(), "x@x", "p", None, "eu").await;
+        match result {
+            Err(EwelinkError::Auth(msg)) => {
+                assert!(msg.contains("error 10"), "expected 'error 10' in {msg:?}")
+            }
+            other => panic!("expected Auth error, got {other:?}"),
+        }
+    }
+
+    /// error=301 WITHOUT region falls through to the explicit
+    /// "error 301 without region" Auth. Catches the L127 `== → !=` mutant
+    /// (under that mutation this body would yield `error 301` via the
+    /// != 0 branch instead).
+    #[tokio::test]
+    async fn login_fails_on_error_301_without_region() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/api/user/login");
+                then.status(200).json_body(serde_json::json!({
+                    "error": 301,
+                    "at": "",
+                    "user": { "apikey": "" }
+                }));
+            })
+            .await;
+
+        let result = login_with_base(&server.base_url(), "x@x", "p", None, "eu").await;
+        match result {
+            Err(EwelinkError::Auth(msg)) => assert!(
+                msg.contains("without region"),
+                "expected 'without region' in {msg:?}"
+            ),
+            other => panic!("expected Auth(without region), got {other:?}"),
+        }
+    }
+
+    /// HTTP 500 should hit the `!resp.status().is_success()` early-return.
+    /// Catches the L119 `!` deletion (without `!` the success-check
+    /// inverts and a 500 would parse as JSON instead of returning Auth).
+    #[tokio::test]
+    async fn login_fails_on_http_500() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/api/user/login");
+                then.status(500).body("internal server error");
+            })
+            .await;
+
+        let result = login_with_base(&server.base_url(), "x@x", "p", None, "eu").await;
+        match result {
+            Err(EwelinkError::Auth(msg)) => {
+                assert!(msg.contains("HTTP 500"), "expected 'HTTP 500' in {msg:?}")
+            }
+            other => panic!("expected Auth(HTTP 500), got {other:?}"),
+        }
     }
 }

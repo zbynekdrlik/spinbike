@@ -6,7 +6,7 @@
 
 mod helpers;
 
-use helpers::{TestApp, post_json};
+use helpers::{TestApp, get, post_json};
 
 /// Enable self-service door entry on the seeded customer.
 async fn enable_self_entry(app: &TestApp) {
@@ -218,6 +218,98 @@ async fn rate_limited_after_quick_consecutive_presses() {
         assert_eq!(body["status"], "rejected");
         assert_eq!(body["reason"], "rate_limited");
     }
+}
+
+/// Locks down the DIRECTION of the `credit -= price` operation. If the
+/// `-=` were mutated to `+=`, the credit after the open would jump UP by
+/// the price; `/=` would yield the price's reciprocal-ish noise. Both
+/// would fail the strict equality below.
+#[tokio::test]
+async fn first_open_without_pass_deducts_exact_price_from_credit() {
+    let app = TestApp::with_door_mode("success").await;
+    enable_self_entry(&app).await;
+    // Start with a known credit and read back the price the service uses.
+    sqlx::query("UPDATE users SET credit = 10.0 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let price: f64 = sqlx::query_scalar(
+        "SELECT default_price FROM services WHERE kind = 'single_entry' AND active = 1 LIMIT 1",
+    )
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    let expected_after = 10.0 - price;
+
+    let (status, body) = app
+        .request(post_json(
+            "/api/door/open",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["status"], "opened");
+    assert_eq!(body["charged"], true);
+    // The response field must reflect the deducted (= decreased) credit.
+    let returned: f64 = body["new_credit"]
+        .as_f64()
+        .expect("new_credit must be a number");
+    assert!(
+        (returned - expected_after).abs() < 0.001,
+        "credit deduction direction broke: started at 10.0, price={price}, \
+         expected new_credit={expected_after}, got {returned}"
+    );
+    // Round-trip via DB to catch a mutation that only patched the response.
+    let db_credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+        .bind(app.customer_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert!(
+        (db_credit - expected_after).abs() < 0.001,
+        "DB credit must match response; expected {expected_after}, got {db_credit}"
+    );
+}
+
+// ─── /api/door/health role gating ───────────────────────────────────────────
+//
+// `require_admin_or_staff` is the inline guard. Mutation L297 replaces
+// its body with `Ok(())` — which would let customers in. We assert all
+// three role paths through the live router.
+
+#[tokio::test]
+async fn door_health_403_for_customer() {
+    let app = TestApp::with_door_mode("success").await;
+    let (status, body) = app
+        .request(get("/api/door/health", &app.customer_token))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::FORBIDDEN,
+        "customer must NOT be able to read /api/door/health"
+    );
+    assert_eq!(body["error"], "Staff access required");
+}
+
+#[tokio::test]
+async fn door_health_200_for_admin() {
+    let app = TestApp::with_door_mode("success").await;
+    let (status, body) = app.request(get("/api/door/health", &app.admin_token)).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(
+        body["ewelink_ws"].is_string(),
+        "response should include ewelink_ws"
+    );
+}
+
+#[tokio::test]
+async fn door_health_200_for_staff() {
+    let app = TestApp::with_door_mode("success").await;
+    let (status, body) = app.request(get("/api/door/health", &app.staff_token)).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(body["ewelink_ws"].is_string());
 }
 
 #[tokio::test]
