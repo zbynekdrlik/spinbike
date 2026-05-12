@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use spinbike_core::auth::Role;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
@@ -43,7 +44,7 @@ pub fn EditInfoForm(
     // Target user's role — used to hide `allow_self_entry` when editing
     // an admin/staff row (those roles bypass the flag, so an "off"
     // checkbox confuses the operator — #94).
-    let target_is_customer = !matches!(card.role.as_str(), "admin" | "staff");
+    let target_is_customer = !matches!(card.role, Some(Role::Admin | Role::Staff));
     // Initial values from the card prop, exposed as ReadSignals so the
     // outer `move ||` closure stays Fn (signals are Copy). Inputs use
     // `value=<sig>.get()` which evaluates fresh on every render.
