@@ -259,6 +259,60 @@ test.describe('Door self-entry (#92)', () => {
         assertCleanConsole(messages);
     });
 
+    test('admin user-edit form HIDES allow_self_entry row when target is admin/staff (#94)', async ({ page, baseURL }) => {
+        const messages = setupConsoleCheck(page);
+
+        // Login as admin and capture admin's own user_id from the response —
+        // we need it to assign a card_code so we can navigate /staff?card=...
+        // to the admin's own row (target = admin/staff).
+        const loginResp = await fetch(`${BASE_URL}/api/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: 'admin@test.com', password: 'admin123' }),
+        });
+        if (!loginResp.ok) {
+            throw new Error(`admin login failed: ${loginResp.status} ${await loginResp.text()}`);
+        }
+        const loginData = await loginResp.json();
+        const adminToken = loginData.token as string;
+        const adminId = loginData.user.id as number;
+
+        // Assign a unique card_code to the admin so /staff?card=... resolves.
+        const suffix = Array.from({ length: 8 }, () =>
+            String.fromCharCode(97 + Math.floor(Math.random() * 26)),
+        ).join('');
+        const adminCardCode = `AD-${suffix}`;
+        const putResp = await fetch(`${BASE_URL}/api/users/${adminId}`, {
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${adminToken}`,
+            },
+            body: JSON.stringify({ card_code: adminCardCode }),
+        });
+        if (!putResp.ok) {
+            throw new Error(`PUT admin card_code failed: ${putResp.status} ${await putResp.text()}`);
+        }
+
+        // Now log into the page session and navigate to /staff with admin pre-selected.
+        await loginViaAPI(page, baseURL!, 'admin@test.com', 'admin123');
+        await page.goto(`/staff?card=${adminCardCode}`);
+        await expect(page.locator('[data-testid="action-panel"]')).toBeVisible({ timeout: 8000 });
+
+        await page.locator('button', { hasText: 'Edit info' }).click();
+        const sheet = page.locator('[data-testid="sheet-edit-info"]');
+        await expect(sheet).toBeVisible({ timeout: 6000 });
+
+        // The allow_self_entry row MUST be absent when editing an admin/staff
+        // user — admin/staff bypass the flag (0dfe85b), so showing an
+        // "off" checkbox confuses the operator (#94).
+        await expect(
+            page.locator('[data-testid="user-edit-allow-self-entry-row"]'),
+        ).toHaveCount(0);
+
+        assertCleanConsole(messages);
+    });
+
     test('customer JWT receives 403 from staff-only API', async ({ page, baseURL }) => {
         const messages = setupConsoleCheck(page);
         const adminToken = await loginViaAPI(page, baseURL!, 'admin@test.com', 'admin123');
