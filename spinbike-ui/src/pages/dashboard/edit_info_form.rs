@@ -121,7 +121,13 @@ pub fn EditInfoForm(
                     smart_set(&phone_ref, &initial_phone, c.phone.as_deref().unwrap_or(""));
                     // Checkbox uses a signal, not NodeRef — safe to always sync
                     // (user can re-toggle if they want a different value).
-                    set_allow_self_entry.set(c.allow_self_entry);
+                    // Skipped for admin/staff targets: the row isn't rendered
+                    // for them, so syncing a hidden signal would be wasted
+                    // reactive work and leave a stale value behind a hidden
+                    // control (#94 review item #4).
+                    if target_is_customer {
+                        set_allow_self_entry.set(c.allow_self_entry);
+                    }
                 }
             });
         }

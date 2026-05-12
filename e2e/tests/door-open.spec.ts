@@ -259,7 +259,7 @@ test.describe('Door self-entry (#92)', () => {
         assertCleanConsole(messages);
     });
 
-    test('admin user-edit form HIDES allow_self_entry row when target is admin/staff (#94)', async ({ page, baseURL }) => {
+    test('admin user-edit form HIDES allow_self_entry row when target is admin (#94)', async ({ page, baseURL }) => {
         const messages = setupConsoleCheck(page);
 
         // Login as admin and capture admin's own user_id from the response —
