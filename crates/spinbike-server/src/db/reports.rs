@@ -56,15 +56,24 @@ pub async fn day_report(
     }
     let events: Vec<ReportEvent> = rows.into_iter().map(Into::into).collect();
 
-    // KPIs — a separate aggregation over the entire day (not just this page).
-    // NOTE: `ELSE 0.0` (not `ELSE 0`) is required — otherwise SQLite returns an
-    // INTEGER for the SUM when no rows match, and sqlx refuses to decode that
-    // into f64 (the KPI struct's revenue_eur/cash_in_eur fields).
-    // Class-visit names bound from spinbike_core::services constants so renaming
-    // a service in the Rust constant updates this query automatically.
+    // Class-visit names bound from spinbike_core::services constants — `?2`
+    // is Spinning (for the new spinning_visits aggregate) and `?3` is
+    // Fitness (so the attendance aggregate still counts both).
+    // NOTE: `ELSE 0.0` (not `ELSE 0`) is required for cash_in_eur — otherwise
+    // SQLite returns INTEGER for the SUM when no rows match and sqlx refuses
+    // to decode that into f64.
     let kpi_row: DbKpiRow = sqlx::query_as::<_, DbKpiRow>(
         "SELECT
-            COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0.0 END), 0.0) AS revenue_eur,
+            COALESCE(SUM(
+              CASE
+                WHEN service_id IN (SELECT id FROM services WHERE name_en = ?2)
+                 AND (
+                   (action = 'charge' AND amount < 0 AND valid_until IS NULL)
+                   OR action = 'visit'
+                 )
+                THEN 1 ELSE 0
+              END
+            ), 0) AS spinning_visits,
             COALESCE(SUM(
               CASE
                 WHEN service_id IN (SELECT id FROM services WHERE name_en IN (?2, ?3))
@@ -81,13 +90,13 @@ pub async fn day_report(
          WHERE date(created_at) = ?1 AND deleted_at IS NULL",
     )
     .bind(&date_str)
-    .bind(spinbike_core::services::FITNESS_NAME_EN)
     .bind(spinbike_core::services::SPINNING_NAME_EN)
+    .bind(spinbike_core::services::FITNESS_NAME_EN)
     .fetch_one(pool)
     .await?;
 
     let kpi = KpiSummary {
-        revenue_eur: kpi_row.revenue_eur,
+        spinning_visits: kpi_row.spinning_visits,
         attendance: kpi_row.attendance,
         passes_sold: kpi_row.passes_sold,
         cash_in_eur: kpi_row.cash_in_eur,
@@ -98,7 +107,7 @@ pub async fn day_report(
 
 #[derive(sqlx::FromRow)]
 struct DbKpiRow {
-    revenue_eur: f64,
+    spinning_visits: i64,
     attendance: i64,
     passes_sold: i64,
     cash_in_eur: f64,
@@ -191,10 +200,19 @@ pub async fn range_report(
     let events: Vec<ReportEvent> = rows.into_iter().map(Into::into).collect();
 
     // Class-visit names bound from spinbike_core::services constants — see
-    // day_report for the rationale.
+    // day_report. Bind order: `?3` Spinning, `?4` Fitness.
     let kpi_row: DbKpiRow = sqlx::query_as::<_, DbKpiRow>(
         "SELECT
-            COALESCE(SUM(CASE WHEN amount < 0 THEN -amount ELSE 0.0 END), 0.0) AS revenue_eur,
+            COALESCE(SUM(
+              CASE
+                WHEN service_id IN (SELECT id FROM services WHERE name_en = ?3)
+                 AND (
+                   (action = 'charge' AND amount < 0 AND valid_until IS NULL)
+                   OR action = 'visit'
+                 )
+                THEN 1 ELSE 0
+              END
+            ), 0) AS spinning_visits,
             COALESCE(SUM(
               CASE
                 WHEN service_id IN (SELECT id FROM services WHERE name_en IN (?3, ?4))
@@ -212,14 +230,14 @@ pub async fn range_report(
     )
     .bind(&from_str)
     .bind(&to_str)
-    .bind(spinbike_core::services::FITNESS_NAME_EN)
     .bind(spinbike_core::services::SPINNING_NAME_EN)
+    .bind(spinbike_core::services::FITNESS_NAME_EN)
     .fetch_one(pool)
     .await?;
 
     Ok((
         KpiSummary {
-            revenue_eur: kpi_row.revenue_eur,
+            spinning_visits: kpi_row.spinning_visits,
             attendance: kpi_row.attendance,
             passes_sold: kpi_row.passes_sold,
             cash_in_eur: kpi_row.cash_in_eur,
@@ -401,6 +419,10 @@ mod tests {
             day_kpi.attendance, 4,
             "day_report attendance must count only Fitness/Spinning paid+visit rows"
         );
+        assert_eq!(
+            day_kpi.spinning_visits, 2,
+            "day_report spinning_visits = 1 paid Spinning charge + 1 zero-amount Spinning visit"
+        );
 
         let (range_kpi, _, _) = super::range_report(&pool, today, today, 50, None)
             .await
@@ -409,10 +431,12 @@ mod tests {
             range_kpi.attendance, 4,
             "range_report attendance must agree with day_report on the same date"
         );
+        assert_eq!(
+            range_kpi.spinning_visits, 2,
+            "range_report spinning_visits must agree with day_report on the same date"
+        );
 
         // Sanity: adjacent KPIs aren't disturbed by the change.
-        // revenue_eur sums all negative amounts: 5+5+2.50+2.50+3+35 = 53.00.
-        assert!((day_kpi.revenue_eur - 53.00).abs() < 0.001);
         // passes_sold counts valid_until-set rows: exactly 1.
         assert_eq!(day_kpi.passes_sold, 1);
         // cash_in_eur sums positive-amount rows: just the topup.

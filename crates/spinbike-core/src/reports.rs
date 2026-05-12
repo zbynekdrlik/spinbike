@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 /// Totals for a day or a date range.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct KpiSummary {
-    pub revenue_eur: f64,
+    pub spinning_visits: i64,
     pub attendance: i64,
     pub passes_sold: i64,
     pub cash_in_eur: f64,

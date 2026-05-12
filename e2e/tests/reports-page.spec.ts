@@ -10,7 +10,9 @@ test.describe('Reports page', () => {
         await page.goto('/reports');
 
         await expect(page.locator('[data-testid="reports-page"]')).toBeVisible();
-        await expect(page.locator('[data-testid="kpi-revenue"]')).toBeVisible();
+        await expect(page.locator('[data-testid="kpi-spinning-visits"]')).toBeVisible();
+        await expect(page.locator('[data-testid="kpi-spinning-visits"] .kpi-card__value')).toHaveText(/^\d+$/);
+        await expect(page.locator('[data-testid="kpi-revenue"]')).toHaveCount(0);
         await expect(page.locator('[data-testid="kpi-attendance"]')).toBeVisible();
         await expect(page.locator('[data-testid="kpi-passes"]')).toBeVisible();
         await expect(page.locator('[data-testid="kpi-cash-in"]')).toBeVisible();
@@ -40,11 +42,11 @@ test.describe('Reports page', () => {
         await page.goto('/reports');
 
         await page.locator('[data-testid="range-week"]').click();
-        await expect(page.locator('[data-testid="kpi-revenue"]')).toBeVisible();
+        await expect(page.locator('[data-testid="kpi-spinning-visits"]')).toBeVisible();
         await page.locator('[data-testid="range-month"]').click();
-        await expect(page.locator('[data-testid="kpi-revenue"]')).toBeVisible();
+        await expect(page.locator('[data-testid="kpi-spinning-visits"]')).toBeVisible();
         await page.locator('[data-testid="quick-today"]').click();
-        await expect(page.locator('[data-testid="kpi-revenue"]')).toBeVisible();
+        await expect(page.locator('[data-testid="kpi-spinning-visits"]')).toBeVisible();
 
         assertCleanConsole(consoleMessages);
     });

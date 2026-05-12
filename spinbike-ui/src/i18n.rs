@@ -590,7 +590,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("reports_pick_date", ("Zvolit datum", "Pick date"));
 
     // Reports — KPI cards
-    m.insert("kpi_revenue", ("TRZBA", "REVENUE"));
+    m.insert("kpi_spinning_visits", ("SPINNING", "SPINNING"));
     m.insert("kpi_attendance", ("NAVSTEVY", "ATTENDANCE"));
     m.insert("kpi_passes", ("PERMANENTKY", "PASSES"));
     m.insert("kpi_cash_in", ("VKLADY", "CASH IN"));

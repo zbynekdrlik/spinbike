@@ -40,7 +40,7 @@ pub fn ReportsPage() -> impl IntoView {
     let (filters, set_filters) = signal(FiltersState::default());
 
     let (kpi, set_kpi) = signal(KpiSummary {
-        revenue_eur: 0.0,
+        spinning_visits: 0,
         attendance: 0,
         passes_sold: 0,
         cash_in_eur: 0.0,
