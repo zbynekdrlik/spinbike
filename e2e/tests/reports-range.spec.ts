@@ -10,13 +10,13 @@ test.describe('Reports range', () => {
         await page.goto('/reports');
 
         await page.locator('[data-testid="range-week"]').click();
-        await expect(page.locator('[data-testid="kpi-revenue"]')).toBeVisible();
+        await expect(page.locator('[data-testid="kpi-spinning-visits"]')).toBeVisible();
 
         await page.locator('[data-testid="range-month"]').click();
-        await expect(page.locator('[data-testid="kpi-revenue"]')).toBeVisible();
+        await expect(page.locator('[data-testid="kpi-spinning-visits"]')).toBeVisible();
 
         await page.locator('[data-testid="quick-today"]').click();
-        await expect(page.locator('[data-testid="kpi-revenue"]')).toBeVisible();
+        await expect(page.locator('[data-testid="kpi-spinning-visits"]')).toBeVisible();
 
         assertCleanConsole(consoleMessages);
     });
