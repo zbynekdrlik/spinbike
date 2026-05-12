@@ -176,6 +176,7 @@ fn neg_to_card_info(c: &NegativeBalanceUser) -> CardInfo {
         // monthly-pass header or the visit-log button, so defaults are safe.
         allow_debit: false,
         allow_self_entry: false,
+        role: String::new(),
         phone: None,
         email: None,
     }
