@@ -277,6 +277,16 @@ test.describe('Door self-entry (#92)', () => {
         const adminToken = loginData.token as string;
         const adminId = loginData.user.id as number;
 
+        // Capture admin's existing card_code so we can restore it after the
+        // test (avoid leaking test state into later tests in the same run).
+        const meResp = await fetch(`${BASE_URL}/api/users/${adminId}`, {
+            headers: { Authorization: `Bearer ${adminToken}` },
+        });
+        if (!meResp.ok) {
+            throw new Error(`GET admin user failed: ${meResp.status} ${await meResp.text()}`);
+        }
+        const previousCardCode: string | null = (await meResp.json()).card_code ?? null;
+
         // Assign a unique card_code to the admin so /staff?card=... resolves.
         const suffix = Array.from({ length: 8 }, () =>
             String.fromCharCode(97 + Math.floor(Math.random() * 26)),
@@ -294,23 +304,43 @@ test.describe('Door self-entry (#92)', () => {
             throw new Error(`PUT admin card_code failed: ${putResp.status} ${await putResp.text()}`);
         }
 
-        // Now log into the page session and navigate to /staff with admin pre-selected.
-        await loginViaAPI(page, baseURL!, 'admin@test.com', 'admin123');
-        await page.goto(`/staff?card=${adminCardCode}`);
-        await expect(page.locator('[data-testid="action-panel"]')).toBeVisible({ timeout: 8000 });
+        try {
+            // Now log into the page session and navigate to /staff with admin pre-selected.
+            await loginViaAPI(page, baseURL!, 'admin@test.com', 'admin123');
+            await page.goto(`/staff?card=${adminCardCode}`);
+            await expect(page.locator('[data-testid="action-panel"]')).toBeVisible({ timeout: 8000 });
 
-        await page.locator('button', { hasText: 'Edit info' }).click();
-        const sheet = page.locator('[data-testid="sheet-edit-info"]');
-        await expect(sheet).toBeVisible({ timeout: 6000 });
+            await page.locator('button', { hasText: 'Edit info' }).click();
+            const sheet = page.locator('[data-testid="sheet-edit-info"]');
+            await expect(sheet).toBeVisible({ timeout: 6000 });
 
-        // The allow_self_entry row MUST be absent when editing an admin/staff
-        // user — admin/staff bypass the flag (0dfe85b), so showing an
-        // "off" checkbox confuses the operator (#94).
-        await expect(
-            page.locator('[data-testid="user-edit-allow-self-entry-row"]'),
-        ).toHaveCount(0);
+            // The allow_self_entry row MUST be absent when editing an admin/staff
+            // user — admin/staff bypass the flag (0dfe85b), so showing an
+            // "off" checkbox confuses the operator (#94).
+            await expect(
+                page.locator('[data-testid="user-edit-allow-self-entry-row"]'),
+            ).toHaveCount(0);
 
-        assertCleanConsole(messages);
+            assertCleanConsole(messages);
+        } finally {
+            // Restore admin's original card_code if there was one. Server's
+            // UpdateUserRequest treats null/absent identically (#[serde(default)]
+            // collapses both to None = no-change), so we cannot CLEAR back to
+            // null via the API — but admin@test.com is seeded without a
+            // card_code, and dev CI re-syncs prod DB on every deploy, so the
+            // leak is bounded to a single CI run. Best-effort restore: failure
+            // here is swallowed (the test assertion has already passed).
+            if (previousCardCode) {
+                await fetch(`${BASE_URL}/api/users/${adminId}`, {
+                    method: 'PUT',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${adminToken}`,
+                    },
+                    body: JSON.stringify({ card_code: previousCardCode }),
+                }).catch(() => undefined);
+            }
+        }
     });
 
     test('customer JWT receives 403 from staff-only API', async ({ page, baseURL }) => {
