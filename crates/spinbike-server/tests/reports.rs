@@ -62,9 +62,9 @@ async fn day_report_aggregates_charges_topups_passes_and_excludes_voided() {
 
     let kpi = &body["kpi"];
     assert_eq!(
-        kpi["revenue_eur"].as_f64().unwrap(),
-        40.0,
-        "5 charge + 35 pass = 40 revenue"
+        kpi["spinning_visits"].as_i64().unwrap(),
+        1,
+        "one paid Spinning charge counts as one spinning visit"
     );
     assert_eq!(
         kpi["attendance"].as_i64().unwrap(),
@@ -119,7 +119,7 @@ async fn range_report_aggregates_across_days_and_rejects_over_93_days() {
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body["kpi"]["attendance"].as_i64().unwrap(), 2);
-    assert_eq!(body["kpi"]["revenue_eur"].as_f64().unwrap(), 10.0);
+    assert_eq!(body["kpi"]["spinning_visits"].as_i64().unwrap(), 2);
     assert_eq!(body["kpi"]["cash_in_eur"].as_f64().unwrap(), 20.0);
 
     // Over-range rejection
