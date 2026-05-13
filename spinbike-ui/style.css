@@ -1627,3 +1627,365 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
 .recent-visits__action { flex: 1; }
 .recent-visits__amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
 .recent-visits__note { color: #6b7280; font-size: 0.85rem; }
+/* ════════════════════════════════════════════════════════════════════
+   SPINBIKE — STAFF DESK POLISH (laptop)
+   Append-only additions to style.css. No existing rules deleted; same-
+   selector rules later in the cascade win. Token names are preserved.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ──────────────────────────────────────────────────────────────────
+   1. FONT IMPORTS — Manrope (body) + JetBrains Mono (numbers/code)
+   ────────────────────────────────────────────────────────────────── */
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+/* ──────────────────────────────────────────────────────────────────
+   2. TYPE TOKENS — added alongside existing tokens
+   ────────────────────────────────────────────────────────────────── */
+:root {
+    --font-body:    "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --font-display: "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+    --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", monospace;
+}
+
+html, body { font-family: var(--font-body); }
+
+/* Numeric / tabular surfaces switch to mono — money reads cleaner */
+.card-title__barcode,
+.card-balance__num,
+.kpi-card__value,
+.list-row__amount,
+.recent-visits__amount,
+.recent-visits__date,
+.card-credit__value,
+code, kbd, samp {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   3. PAGE WIDTH — give the laptop its real estate back
+   The existing .page rule caps at 960px which wastes ~60% of a FullHD
+   screen. Bump globally; staff dashboard goes full-width via :has().
+   ────────────────────────────────────────────────────────────────── */
+.page { max-width: 1400px; }
+
+/* When a desk panel is present (= staff dashboard active card), drop
+   the cap entirely. Modern browsers only — :has() is in Chrome 105+,
+   Safari 15.4+, Firefox 121+. If older support is needed, wrap the
+   DashboardPage root in <div class="page--wide"> instead (also handled
+   below). */
+.page:has(.desk-panel),
+.page--wide {
+    max-width: none;
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   4. DESK PANEL — the new staff card layout primitive
+   Replaces the old vertically-stacked .card structure. Two-pane:
+   left = identity + action form + danger row, right = tabs + history.
+   History stays visible without scrolling, which is the single biggest
+   productivity win.
+   ────────────────────────────────────────────────────────────────── */
+.desk-panel {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-3);
+    margin-bottom: var(--s-4);
+}
+
+/* ── 4a. Identity strip — one horizontal row */
+.desk-identity {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: var(--s-3) var(--s-4);
+    display: flex;
+    align-items: center;
+    gap: var(--s-5);
+    box-shadow: var(--shadow-sm);
+}
+
+.desk-identity__main {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.desk-identity__heading {
+    display: flex;
+    align-items: center;
+    gap: var(--s-3);
+    flex-wrap: wrap;
+}
+
+.desk-identity__name {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.1;
+    margin: 0;
+}
+
+.desk-identity__barcode {
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-muted);
+    letter-spacing: 0.04em;
+    background: transparent;
+    padding: 0;
+}
+
+.desk-identity__meta {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin-top: 4px;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-dim);
+}
+
+.desk-identity__contact-toggle {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    cursor: pointer;
+    font: inherit;
+    color: var(--text-muted);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+}
+.desk-identity__contact-toggle:hover { color: var(--text); }
+
+.desk-identity__contact {
+    margin-top: var(--s-2);
+    font-family: var(--font-mono);
+    font-size: 12px;
+    color: var(--text-muted);
+    display: flex;
+    gap: 8px;
+}
+
+/* Balance lives in the identity strip — no longer a separate row */
+.desk-identity__balance {
+    border-left: 1px solid var(--border);
+    padding-left: var(--s-4);
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    flex-shrink: 0;
+}
+
+.desk-identity__balance-label {
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    color: var(--text-dim);
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+.desk-identity__balance-num {
+    font-family: var(--font-mono);
+    font-size: 26px;
+    font-weight: 600;
+    letter-spacing: -0.03em;
+    color: var(--brand);
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+    margin-top: 2px;
+}
+
+.desk-identity__balance-eur {
+    font-size: 13px;
+    color: var(--text-muted);
+    margin-left: 2px;
+}
+
+.desk-identity__balance--neg .desk-identity__balance-num { color: var(--danger); }
+.desk-identity__balance--neg .desk-identity__balance-eur { color: var(--danger); opacity: 0.6; }
+
+.desk-identity__close {
+    width: 28px;
+    height: 28px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: 7px;
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.desk-identity__close:hover { background: var(--surface-2); color: var(--text); }
+
+/* ── 4b. Pass pill — replaces the full-width pass-banner for ACTIVE
+   passes. Sits inline in the identity heading. Click opens the same
+   edit-pass-date sheet. Expired passes still use the existing red
+   pass-banner-expired rendered in the left pane (it's the warning we
+   want loud). */
+.desk-pass-pill {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: color-mix(in srgb, var(--pass) 16%, var(--surface));
+    border: 1px solid color-mix(in srgb, var(--pass) 35%, transparent);
+    border-radius: var(--r-pill);
+    padding: 4px 10px;
+    color: var(--pass);
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-out);
+}
+.desk-pass-pill:hover { background: color-mix(in srgb, var(--pass) 22%, var(--surface)); }
+
+/* Invisible click-target so [data-testid="pass-date-edit"] keeps working on
+   the active-pass pill — legacy tests click this id; the span overlays the
+   whole pill and clicks bubble up to the button which opens the edit sheet. */
+.desk-pass-pill__edit-hit {
+    position: absolute;
+    inset: 0;
+}
+
+.desk-pass-pill__dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--pass);
+    flex-shrink: 0;
+}
+
+/* ── 4c. Body — 2-column split. Charge form left, history right.
+   420px is enough for the form; right grows to fill. */
+.desk-body {
+    display: grid;
+    grid-template-columns: 420px 1fr;
+    gap: var(--s-3);
+    align-items: start;
+}
+
+@media (min-width: 1700px) {
+    .desk-body { grid-template-columns: 460px 1fr; gap: var(--s-4); }
+}
+
+/* Below 1100px (tablet or split-screen) → stack vertically, history
+   below the form. Keeps the layout usable without a horizontal scroll. */
+@media (max-width: 1100px) {
+    .desk-body { grid-template-columns: 1fr; }
+    .desk-identity {
+        flex-wrap: wrap;
+        row-gap: var(--s-3);
+    }
+    .desk-identity__balance {
+        border-left: none;
+        padding-left: 0;
+        align-items: flex-start;
+    }
+}
+
+.desk-body__left,
+.desk-body__right {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--r-lg);
+    padding: var(--s-4);
+    box-shadow: var(--shadow-sm);
+}
+
+/* ── 4d. Visit chips & action-form polish.
+   ActionForm renders inside .desk-body__left and the existing classes
+   (.chip-row, .form-group, .action-row) work as-is. A few tightenings: */
+.desk-body__left .form-group { margin-bottom: var(--s-3); }
+.desk-body__left .form-group label { margin-bottom: 4px; }
+
+/* Inline service + amount when they're sibling .form-groups inside
+   the action form. Compresses 4 stacked rows to 2. */
+.desk-body__left [data-testid="action-form"] {
+    display: flex;
+    flex-direction: column;
+    gap: var(--s-2);
+}
+
+/* ── 4e. Visit chips read bigger / bolder (existing readable class) */
+.desk-body__left .chip-row--readable .btn {
+    font-size: var(--fs-md);
+    font-weight: 700;
+    padding: var(--s-3) var(--s-4);
+    flex: 1;
+    min-width: 0;
+}
+
+/* ── 4f. Demoted danger row — edit/block/delete as text-links, not
+   equal-weight buttons. These are rare destructive actions; their old
+   sizing competed visually with the primary "log visit" action. */
+.desk-danger-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--s-3);
+    padding-top: var(--s-3);
+    margin-top: var(--s-3);
+    border-top: 1px solid var(--border);
+}
+
+.desk-link,
+.desk-danger-row .btn {
+    background: transparent !important;
+    border: 0 !important;
+    padding: 0 !important;
+    min-height: auto !important;
+    cursor: pointer;
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    color: var(--text-muted) !important;
+    font-weight: 500;
+    border-radius: 0;
+}
+.desk-link:hover,
+.desk-danger-row .btn:hover { color: var(--text) !important; text-decoration: underline; }
+
+.desk-link--danger,
+.desk-danger-row .btn--danger { color: var(--danger) !important; }
+.desk-link--danger:hover { color: var(--danger) !important; opacity: 0.85; }
+
+/* ── 4g. Right pane — tabs strip + history list */
+.desk-body__right { padding: 0; overflow: hidden; }
+.desk-body__right .seg {
+    border-radius: 0;
+    background: var(--surface-2);
+    padding: 6px 6px 0;
+    border-bottom: 1px solid var(--border);
+}
+.desk-body__right .seg__item { border-radius: var(--r-sm) var(--r-sm) 0 0; }
+.desk-body__right .seg-body {
+    padding: var(--s-3) var(--s-4);
+    max-height: calc(100vh - 280px);
+    overflow-y: auto;
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   5. ADAPTIVE-NAV TWEAKS — slimmer side rail to give the desk more
+   room. Keeps the existing icon system and active state.
+   ────────────────────────────────────────────────────────────────── */
+@media (min-width: 768px) {
+    .app-shell { padding-left: 64px; }
+    .adaptive-nav { width: 64px; padding: 10px 0; }
+    .adaptive-nav__item { min-height: 56px; padding: 6px 4px; font-size: 10.5px; }
+    .adaptive-nav__icon { width: 18px; height: 18px; }
+}
+
+/* ──────────────────────────────────────────────────────────────────
+   6. SEARCH-INPUT BIG — refined font + monospace placeholder feel
+   ────────────────────────────────────────────────────────────────── */
+.search-input--lg {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    height: 44px;
+    min-height: 44px;
+}

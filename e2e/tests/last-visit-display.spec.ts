@@ -99,7 +99,7 @@ test('last-visit display + Quick Search sort by last visit', async ({ page }) =>
     await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
     // Verify sort order via the OPENED panel's barcode (full barcode is visible
     // here, unlike search results which only show the last 4 chars).
-    await expect(page.locator('[data-testid="action-panel"] .card-title__barcode'))
+    await expect(page.locator('[data-testid="action-panel"] .desk-identity__barcode'))
         .toHaveText(`Zulu${RUN_TAG}`);
     const zuluLastVisit = page.locator('[data-testid="card-last-visit"]');
     await expect(zuluLastVisit).toBeVisible();
@@ -114,7 +114,7 @@ test('last-visit display + Quick Search sort by last visit', async ({ page }) =>
     await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
     // Verify sort order via the OPENED panel's barcode (full barcode is visible
     // here, unlike search results which only show the last 4 chars).
-    await expect(page.locator('[data-testid="action-panel"] .card-title__barcode'))
+    await expect(page.locator('[data-testid="action-panel"] .desk-identity__barcode'))
         .toHaveText(`Alpha${RUN_TAG}`);
     const alphaLastVisit = page.locator('[data-testid="card-last-visit"]');
     await expect(alphaLastVisit).toBeVisible();
@@ -129,7 +129,7 @@ test('last-visit display + Quick Search sort by last visit', async ({ page }) =>
     await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
     // Verify sort order via the OPENED panel's barcode (full barcode is visible
     // here, unlike search results which only show the last 4 chars).
-    await expect(page.locator('[data-testid="action-panel"] .card-title__barcode'))
+    await expect(page.locator('[data-testid="action-panel"] .desk-identity__barcode'))
         .toHaveText(`Mike${RUN_TAG}`);
     await expect(page.locator('[data-testid="card-last-visit"]')).toHaveCount(0);
 
