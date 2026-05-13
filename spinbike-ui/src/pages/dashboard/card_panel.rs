@@ -226,11 +226,14 @@ pub fn CardActionPanel(
                     } else { ().into_any() }}
                 </div>
 
-                <div class=credit_class data-testid="card-credit">
+                <div class=credit_class>
                     <div class="desk-identity__balance-label">
                         {move || i18n::t(lang.get(), "my_balance_credit")}
                     </div>
-                    <div class="desk-identity__balance-num">
+                    // testid sits on the number node so parseFloat(textContent)
+                    // works (legacy tests rely on the value being the only
+                    // textual content of [data-testid="card-credit"]).
+                    <div class="desk-identity__balance-num" data-testid="card-credit">
                         {format!("{:.2}", credit)}
                         <span class="desk-identity__balance-eur">" €"</span>
                     </div>
