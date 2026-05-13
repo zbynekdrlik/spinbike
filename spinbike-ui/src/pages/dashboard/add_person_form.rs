@@ -1,5 +1,6 @@
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
+use spinbike_core::auth::Role;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
@@ -28,6 +29,8 @@ struct UserResp {
     credit: f64,
     blocked: bool,
     allow_debit: bool,
+    #[serde(default)]
+    role: Option<Role>,
 }
 
 #[component]
@@ -89,6 +92,7 @@ pub fn AddPersonForm(
                         credit: u.credit,
                         blocked: u.blocked,
                         allow_debit: u.allow_debit,
+                        role: u.role,
                         ..Default::default()
                     }));
                     set_show.set(false);

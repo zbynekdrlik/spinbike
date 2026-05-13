@@ -58,6 +58,12 @@ pub struct CardInfo {
     pub allow_debit: bool,
     #[serde(default)]
     pub allow_self_entry: bool,
+    /// Target user's role. Used by the edit form to hide controls that
+    /// have no effect for admin/staff (e.g. `allow_self_entry`, which
+    /// admin/staff bypass per 0dfe85b). `None` from an older server →
+    /// treated as customer-mode, preserving the show-checkbox default.
+    #[serde(default)]
+    pub role: Option<spinbike_core::auth::Role>,
     #[serde(default)]
     pub email: Option<String>,
     #[serde(default)]

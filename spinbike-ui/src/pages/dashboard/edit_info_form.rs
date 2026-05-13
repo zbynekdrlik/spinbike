@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use spinbike_core::auth::Role;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
@@ -40,6 +41,10 @@ pub fn EditInfoForm(
     // FnOnce. The Effect runs on the first show=true with prev=None and
     // populates inputs from the latest server state.
     let initial_allow_se = card.allow_self_entry;
+    // Target user's role — used to hide `allow_self_entry` when editing
+    // an admin/staff row (those roles bypass the flag, so an "off"
+    // checkbox confuses the operator — #94).
+    let target_is_customer = !matches!(card.role, Some(Role::Admin | Role::Staff));
     // Initial values from the card prop, exposed as ReadSignals so the
     // outer `move ||` closure stays Fn (signals are Copy). Inputs use
     // `value=<sig>.get()` which evaluates fresh on every render.
@@ -60,9 +65,7 @@ pub fn EditInfoForm(
     let (allow_self_entry, set_allow_self_entry) = signal(initial_allow_se);
 
     // Read the caller's role to gate the admin-only fields client-side.
-    let is_admin = auth::get_user()
-        .map(|u| u.role == "admin")
-        .unwrap_or(false);
+    let is_admin = auth::get_user().map(|u| u.role == "admin").unwrap_or(false);
 
     // Refresh from server every time show transitions false→true. Sets the
     // input values via NodeRef + HtmlInputElement::set_value, so the latest
@@ -95,40 +98,37 @@ pub fn EditInfoForm(
             let initial_phone = initial_phone_for_eff.get_untracked();
             spawn_local(async move {
                 gloo_timers::future::TimeoutFuture::new(0).await;
-                if let Ok(c) =
-                    api::get::<CardInfo>(&format!("/api/users/lookup/{code}")).await
-                {
+                if let Ok(c) = api::get::<CardInfo>(&format!("/api/users/lookup/{code}")).await {
                     // Overwrite only if the input's current DOM value matches
                     // the initial rendered value (user hasn't typed anything).
                     // Otherwise the user is mid-edit; leave it alone.
-                    let smart_set = |nr: &NodeRef<leptos::html::Input>, initial: &str, new_val: &str| {
-                        if let Some(el) = nr.get_untracked() {
-                            let input: &HtmlInputElement = &el;
-                            let cur = input.value();
-                            if cur == initial {
-                                input.set_value(new_val);
+                    let smart_set =
+                        |nr: &NodeRef<leptos::html::Input>, initial: &str, new_val: &str| {
+                            if let Some(el) = nr.get_untracked() {
+                                let input: &HtmlInputElement = &el;
+                                let cur = input.value();
+                                if cur == initial {
+                                    input.set_value(new_val);
+                                }
                             }
-                        }
-                    };
+                        };
                     smart_set(&name_ref, &initial_name, &c.name);
-                    smart_set(
-                        &email_ref,
-                        &initial_email,
-                        c.email.as_deref().unwrap_or(""),
-                    );
+                    smart_set(&email_ref, &initial_email, c.email.as_deref().unwrap_or(""));
                     smart_set(
                         &company_ref,
                         &initial_company,
                         c.company.as_deref().unwrap_or(""),
                     );
-                    smart_set(
-                        &phone_ref,
-                        &initial_phone,
-                        c.phone.as_deref().unwrap_or(""),
-                    );
+                    smart_set(&phone_ref, &initial_phone, c.phone.as_deref().unwrap_or(""));
                     // Checkbox uses a signal, not NodeRef — safe to always sync
                     // (user can re-toggle if they want a different value).
-                    set_allow_self_entry.set(c.allow_self_entry);
+                    // Skipped for admin/staff targets: the row isn't rendered
+                    // for them, so syncing a hidden signal would be wasted
+                    // reactive work and leave a stale value behind a hidden
+                    // control (#94 review item #4).
+                    if target_is_customer {
+                        set_allow_self_entry.set(c.allow_self_entry);
+                    }
                 }
             });
         }
@@ -187,8 +187,13 @@ pub fn EditInfoForm(
                         email: if email.trim().is_empty() { None } else { Some(email) },
                         company: if company.is_empty() { None } else { Some(company) },
                         phone: if phone.is_empty() { None } else { Some(phone) },
-                        // Admin-only field, only sent when changed.
-                        allow_self_entry: if is_admin && allow_se != initial_allow_se_at_open {
+                        // Admin-only field, only sent when changed AND the
+                        // target user is a customer (admin/staff bypass the
+                        // flag, and the row is hidden for them — #94).
+                        allow_self_entry: if is_admin
+                            && target_is_customer
+                            && allow_se != initial_allow_se_at_open
+                        {
                             Some(allow_se)
                         } else {
                             None
@@ -255,6 +260,28 @@ pub fn EditInfoForm(
                             />
                         </div>
                         {if is_admin {
+                            let allow_se_row = if target_is_customer {
+                                view! {
+                                    <label class="form-row" data-testid="user-edit-allow-self-entry-row">
+                                        <input
+                                            type="checkbox"
+                                            data-testid="user-edit-allow-self-entry"
+                                            prop:checked=move || allow_self_entry.get()
+                                            on:change=move |ev| {
+                                                let el: HtmlInputElement =
+                                                    ev.target().unwrap().unchecked_into();
+                                                set_allow_self_entry.set(el.checked());
+                                            }
+                                        />
+                                        <span>{move || i18n::t(lang.get(), "admin_allow_self_entry")}</span>
+                                        <small class="form-help">
+                                            {move || i18n::t(lang.get(), "admin_allow_self_entry_help")}
+                                        </small>
+                                    </label>
+                                }.into_any()
+                            } else {
+                                ().into_any()
+                            };
                             view! {
                                 <div class="form-group">
                                     <label>{move || i18n::t(lang.get(), "user_edit_new_password")}</label>
@@ -270,22 +297,7 @@ pub fn EditInfoForm(
                                         {move || i18n::t(lang.get(), "user_edit_new_password_help")}
                                     </small>
                                 </div>
-                                <label class="form-row" data-testid="user-edit-allow-self-entry-row">
-                                    <input
-                                        type="checkbox"
-                                        data-testid="user-edit-allow-self-entry"
-                                        prop:checked=move || allow_self_entry.get()
-                                        on:change=move |ev| {
-                                            let el: HtmlInputElement =
-                                                ev.target().unwrap().unchecked_into();
-                                            set_allow_self_entry.set(el.checked());
-                                        }
-                                    />
-                                    <span>{move || i18n::t(lang.get(), "admin_allow_self_entry")}</span>
-                                    <small class="form-help">
-                                        {move || i18n::t(lang.get(), "admin_allow_self_entry_help")}
-                                    </small>
-                                </label>
+                                {allow_se_row}
                             }.into_any()
                         } else {
                             ().into_any()
