@@ -1989,3 +1989,52 @@ code, kbd, samp {
     height: 44px;
     min-height: 44px;
 }
+/* ════════════════════════════════════════════════════════════════════
+   SPINBIKE — STAFF DESK POLISH v1.1 patch
+   Append after style-additions.css. Fixes visit-chip overflow + minor
+   spacing. Safe to re-run; rules are additive.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* Visit chips (Zaznamenat navstevu Fitness / Spinning) overflowed
+   because .btn has white-space:nowrap and the flex:1 container is
+   narrower than the Slovak label. Allow wrapping + centered text. */
+.desk-body__left .chip-row--readable .btn {
+    white-space: normal;
+    line-height: 1.2;
+    text-align: center;
+    word-break: keep-all;
+    padding: 12px 14px;
+    min-height: 56px;
+    height: auto;
+}
+
+/* Make the chip row a clean 2-up grid so both buttons share width
+   equally instead of relying on flex:1 wrap. */
+.desk-body__left .chip-row--readable {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--s-2);
+}
+
+/* The quick-charge "Spinning 3.30 €" chip is its own row — full width
+   feels disconnected; let it sit left-aligned at intrinsic size. */
+.desk-body__left .quick-charge-row {
+    display: flex;
+    margin-top: 4px;
+}
+.desk-body__left .quick-charge-row .btn { flex: 0 0 auto; }
+
+/* The .card-balance__num that the original style.css renders inside
+   .card was visually competing with our new identity-strip balance.
+   Hide the duplicate (kept in DOM for any other consumers). */
+.desk-panel .card-balance { display: none; }
+
+/* If the legacy .card wrapping ActionForm leaks in, suppress its chrome
+   so it doesn't double-frame the left pane. */
+.desk-body__left .card {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    margin: 0;
+    box-shadow: none;
+}
