@@ -2051,11 +2051,14 @@ code, kbd, samp {
    5. Version label — move clear of transaction row buttons.
    ════════════════════════════════════════════════════════════════════ */
 
-/* ── 1. Hide top navbar when AdaptiveNav (= staff/admin) is present.
-   The left rail already provides nav; the top brand wordmark wastes
-   ~110px on a 1080p laptop. */
-body:has(.adaptive-nav) .navbar { display: none; }
-body:has(.adaptive-nav) .app-shell { padding-top: 0; }
+/* ── 1. [REVERTED] Designer's v1.2 hid the top navbar entirely on
+   staff/admin to free ~110 px. That removed the brand-link's "go home /
+   clear card" affordance, which is locked in by E2E:
+     - tests/nav-brand-link.spec.ts (staff click → /staff with Desk active)
+     - tests/dashboard-desk-reset.spec.ts (brand-link click clears card)
+   Keep the navbar visible until those affordances move to AdaptiveNav.
+   File the follow-up: relocate brand-link to the left rail, then re-apply
+   this section. */
 
 /* ── 2. Search input — flush, no .card chrome on the staff page.
    The DashboardPage wraps the search in a .card. We strip the chrome

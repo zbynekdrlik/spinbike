@@ -17,10 +17,11 @@ test.describe('Adaptive nav', () => {
         await expect(page.locator('[data-testid="nav-settings"]')).toHaveCount(0);
         await expect(page.locator('[data-testid="nav-more"]')).toBeVisible();
 
-        // For staff/admin, the entire top navbar is hidden — the left rail
-        // (AdaptiveNav) is the nav, and the top wordmark wasted ~110px on a
-        // 1080p laptop. Identity controls live in the More sheet.
-        await expect(page.locator('.navbar')).toBeHidden();
+        // For staff/admin, the top navbar collapses to just the SpinBike
+        // brand wordmark — `.navbar-links` (username/Logout/EN-SK) is hidden
+        // on every size; the brand stays visible. Identity controls live in
+        // the More sheet.
+        await expect(page.locator('.navbar-brand')).toBeVisible();
         await expect(page.locator('.navbar-links')).toBeHidden();
 
         // Existing route-tab assertions
@@ -64,10 +65,9 @@ test.describe('Adaptive nav', () => {
         await page.goto('/staff');
         await expect(page.locator('[data-testid="adaptive-nav"]')).toBeVisible();
 
-        // Same chrome on desktop as on phone — the entire top navbar is
-        // hidden on staff/admin; AdaptiveNav handles navigation, and the
-        // top wordmark is redundant.
-        await expect(page.locator('.navbar')).toBeHidden();
+        // Same chrome split on desktop as on phone: brand wordmark stays
+        // in the top navbar, identity controls live in the More sheet.
+        await expect(page.locator('.navbar-brand')).toBeVisible();
         await expect(page.locator('.navbar-links')).toBeHidden();
 
         await page.locator('[data-testid="nav-reports"]').click();
