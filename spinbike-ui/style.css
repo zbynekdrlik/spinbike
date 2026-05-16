@@ -2038,3 +2038,155 @@ code, kbd, samp {
     margin: 0;
     box-shadow: none;
 }
+/* ════════════════════════════════════════════════════════════════════
+   SPINBIKE — STAFF DESK POLISH v1.2 patch
+   Append after v1.1. Polish from real-app screenshot 16.5.2026.
+   Issues fixed:
+   1. Hide top navbar entirely when AdaptiveNav (left rail) present —
+      the brand wordmark is redundant; left rail is the nav.
+   2. Search input — drop the .card wrapper chrome on /staff so it
+      sits flush like the desk-identity strip.
+   3. Expired pass banner — smaller, single-line where possible.
+   4. Tabs — hug content on the left, don't fill full row.
+   5. Version label — move clear of transaction row buttons.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* ── 1. Hide top navbar when AdaptiveNav (= staff/admin) is present.
+   The left rail already provides nav; the top brand wordmark wastes
+   ~110px on a 1080p laptop. */
+body:has(.adaptive-nav) .navbar { display: none; }
+body:has(.adaptive-nav) .app-shell { padding-top: 0; }
+
+/* ── 2. Search input — flush, no .card chrome on the staff page.
+   The DashboardPage wraps the search in a .card. We strip the chrome
+   so it sits like the identity strip below it. */
+body:has(.desk-panel) .page > .card:has(.search-input--lg) {
+    background: transparent;
+    border: 0;
+    padding: 0;
+    margin-bottom: var(--s-3);
+    box-shadow: none;
+}
+
+/* Tighten the search input itself — was too tall. */
+.search-input--lg {
+    height: 42px !important;
+    min-height: 42px !important;
+    font-size: 13px;
+    padding: 0 14px;
+}
+
+/* ── 3. Expired pass banner — compact. The base .pass-banner had
+   font-size:var(--fs-md) which lands at 18px; with a 1165-day string
+   that wraps to 3 lines. Cap it. */
+.desk-body__left .pass-banner {
+    padding: var(--s-2) var(--s-3);
+    margin-bottom: var(--s-3);
+    border-radius: var(--r);
+}
+.desk-body__left .pass-banner__line {
+    font-size: 13px;
+    font-weight: 600;
+    gap: var(--s-2);
+    line-height: 1.35;
+}
+.desk-body__left .pass-banner__edit-btn {
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    font-size: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--r-sm);
+}
+.desk-body__left .pass-banner__edit-btn:hover {
+    background: rgba(255,255,255,0.06);
+}
+
+/* ── 4. Tabs — left-align, hug content. The .seg primitive uses flex
+   with .seg__item flex:1 which spreads tabs across full width. Inside
+   the desk-body right pane, that's too much air between labels. */
+.desk-body__right .seg {
+    display: inline-flex;
+    width: auto;
+    margin: var(--s-2) var(--s-3) 0;
+    padding: 4px;
+    border-bottom: none;
+}
+.desk-body__right .seg__item {
+    flex: 0 0 auto;
+    padding: 0 var(--s-3);
+    min-width: 0;
+    border-radius: var(--r-sm) !important;
+    min-height: 32px;
+    font-size: 13px;
+}
+.desk-body__right .seg-body {
+    padding: var(--s-2) var(--s-3) var(--s-3);
+    border-top: 1px solid var(--border);
+    max-height: calc(100vh - 220px);
+}
+
+/* ── 5. Version footer — move to top-right of viewport so it never
+   overlaps transaction row buttons. Tiny + dim, doesn't distract. */
+.app-version {
+    bottom: auto !important;
+    right: var(--s-3, 8px) !important;
+    top: var(--s-2, 6px) !important;
+    font-size: 10px;
+    opacity: 0.5;
+    background: transparent;
+}
+@media (min-width: 768px) {
+    .app-version { top: var(--s-2, 6px) !important; bottom: auto !important; }
+}
+
+/* ── 6. Transaction list rows — tighten icon column.
+   Three icons (note/date/void) per row was visually heavy. Make them
+   icon-only buttons in a compact horizontal stack. */
+.list-row__end--icons .btn--icon {
+    width: 22px;
+    height: 22px;
+    font-size: 11px;
+    color: var(--text-dim);
+    border: 0;
+    background: transparent;
+}
+.list-row__end--icons .btn--icon:hover {
+    background: var(--surface-2);
+    color: var(--text);
+}
+
+/* ── 7. Action-form labels — UPPERCASE 12px feels generic. Soften. */
+.desk-body__left .form-group label {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    color: var(--text-dim);
+    font-weight: 600;
+}
+
+/* ── 8. Inline service+amount on the staff form — service select is
+   currently full-width with amount stacked below. Side by side fits
+   in a 420px column when amount is narrow. */
+@media (min-width: 1200px) {
+    .desk-body__left [data-testid="action-form"] {
+        display: grid;
+        grid-template-columns: 1.6fr 1fr;
+        column-gap: var(--s-2);
+        row-gap: var(--s-3);
+    }
+    /* All children default to spanning both columns */
+    .desk-body__left [data-testid="action-form"] > * { grid-column: 1 / -1; }
+    /* Service select (first form-group) takes left column;
+       Amount field (second form-group) takes right column. */
+    .desk-body__left [data-testid="action-form"] > .form-group:nth-of-type(1) { grid-column: 1; }
+    .desk-body__left [data-testid="action-form"] > .form-group:nth-of-type(2) { grid-column: 2; }
+}
+
+/* ── 9. Amount input — right-aligned, tabular */
+.desk-body__left [data-testid="charge-amount"] {
+    text-align: right;
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+}
