@@ -76,21 +76,26 @@ test.describe('Staff desk UX cluster — issues #29 #30 #31 #32 #34', () => {
         await page.goto('/staff');
         await openCardByLastName(page, lastName);
 
-        const title = page.locator('[data-testid="action-panel"] .card-title');
+        // Post-designer layout: identity strip with name + barcode + pill on
+        // one row. Old `.card-title` family renamed to `.desk-identity__*`.
+        const title = page.locator('[data-testid="action-panel"] .desk-identity__heading');
         await expect(title).toBeVisible();
         await expect(title).toContainText(lastName);
         await expect(title).toContainText(barcode);
 
-        // .card-header__meta div is gone after #32b — barcode lives inside .card-title.
-        const meta = page.locator('[data-testid="action-panel"] .card-header__meta');
-        await expect(meta).toHaveCount(0);
+        // Old `.card-header__meta` / `.card-title` containers are gone after the
+        // designer refactor — barcode lives inside .desk-identity__heading.
+        const legacyMeta = page.locator('[data-testid="action-panel"] .card-header__meta');
+        await expect(legacyMeta).toHaveCount(0);
+        const legacyTitle = page.locator('[data-testid="action-panel"] .card-title');
+        await expect(legacyTitle).toHaveCount(0);
 
-        // Name font-size visibly larger (≥ 24px).
+        // Name font-size visibly larger than body text (designer sets 22px).
         const nameFontSize = await page
-            .locator('.card-title__name')
+            .locator('.desk-identity__name')
             .first()
             .evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
-        expect(nameFontSize).toBeGreaterThanOrEqual(24);
+        expect(nameFontSize).toBeGreaterThanOrEqual(20);
 
         assertCleanConsole(msgs);
     });
