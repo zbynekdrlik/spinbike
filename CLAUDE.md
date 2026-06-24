@@ -81,3 +81,19 @@ Requires `mdbtools` installed on the system.
 
 - Spec: `docs/superpowers/specs/2026-04-09-spinbike-pwa-design.md`
 - Plan: `docs/superpowers/plans/2026-04-09-spinbike-pwa.md`
+
+## Playbook router
+
+Load the skill for the area you're working in — each contains the full HOW-TO:
+
+| Area | Skill | When to load |
+|---|---|---|
+| DB migrations / queries | `.claude/skills/db-migrations/SKILL.md` | Any migration, backfill, visit count, or prod-DB validation |
+| CI / deploy workflows | `.claude/skills/ci-deploy/SKILL.md` | Writing CI YAML, subagent prompts, or staging commits |
+| Domain / design | `.claude/skills/domain/SKILL.md` | Any design, spec, brainstorm, or feature touching roles/users/cards |
+
+## Project-wide always-apply rules
+
+**Prod and dev run on the same machine.** Both `/opt/spinbike/prod/` and `/opt/spinbike/dev/` are LOCAL. Never ask the user to SSH or paste `systemctl`/`sqlite3`/`journalctl` output — run those commands directly via Bash.
+
+**Git staging: never `git add -A` or `git add .`** — untracked Playwright YAMLs and debug PNGs accumulate at the root. Always use explicit paths or `git add -u`.
