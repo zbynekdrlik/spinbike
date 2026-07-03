@@ -43,6 +43,11 @@ struct LoginBody<'a> {
 
 #[derive(Deserialize)]
 struct LoginResp {
+    /// Real eWeLink v1 responses omit `error` on success (only include it
+    /// on failure, e.g. `{"error": 301, ...}` or `{"error": 10, ...}`).
+    /// Default = 0 = success so the `at` / `user.apikey` fields land in
+    /// the returned `LoginResult`.
+    #[serde(default)]
     error: i64,
     region: Option<String>,
     #[serde(default)]
