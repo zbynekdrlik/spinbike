@@ -75,7 +75,24 @@ pub async fn run_real_ws(
         };
         backoff = Duration::from_secs(1); // reset after success
 
-        let url = format!("wss://{}-dispa.coolkit.cc:8080/dispatch/app", login.region);
+        // eWeLink's dispatch endpoint returns the current per-region WS
+        // host+port. The legacy hard-coded `wss://{region}-dispa.coolkit.cc:8080/dispatch/app`
+        // has been retired — port 8080 now refuses TLS. Resolve first.
+        let dispatch_base = format!("https://{}-dispa.coolkit.cc", login.region);
+        let url = match resolve_dispatch_url(&dispatch_base, &login.access_token).await {
+            Ok(u) => u,
+            Err(e) => {
+                tracing::warn!(err = %e, ?backoff, "ewelink: dispatch resolve failed, retrying");
+                state.store(EwelinkState::Disconnected as u8, Ordering::Relaxed);
+                tokio::time::sleep(backoff).await;
+                if rx.is_closed() {
+                    tracing::info!("ewelink: rx closed during backoff, shutting down");
+                    return;
+                }
+                backoff = next_backoff(backoff);
+                continue;
+            }
+        };
         tracing::info!(
             region = %login.region,
             url = %url,
@@ -133,6 +150,64 @@ enum ConnectOutcome {
     ChannelClosed,
     /// Connection failed or dropped — outer loop should reconnect.
     ConnectionLost(String),
+}
+
+/// Shape returned by `GET /dispatch/app`. Only the fields we care about
+/// are pulled; `IP`, `reason`, etc. are ignored. `error` may be absent
+/// on success (mirrors the login-response pattern).
+#[derive(serde::Deserialize)]
+struct DispatchResp {
+    #[serde(default)]
+    error: i64,
+    #[serde(default)]
+    domain: String,
+    #[serde(default)]
+    port: u16,
+}
+
+/// Resolve the current WS host+port by calling the REST dispatch endpoint.
+/// `base_url` is the region-scoped root (e.g. `https://eu-dispa.coolkit.cc`).
+/// Returns the full `wss://…/api/ws` URL for the WS handshake.
+///
+/// Kept `pub` + accepting `base_url` so a mock httpmock server can drive it.
+pub async fn resolve_dispatch_url(
+    base_url: &str,
+    access_token: &str,
+) -> Result<String, EwelinkError> {
+    let url = format!("{base_url}/dispatch/app");
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(10))
+        .build()
+        .map_err(|e| EwelinkError::Network(e.to_string()))?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {access_token}"))
+        .send()
+        .await
+        .map_err(|e| EwelinkError::Network(e.to_string()))?;
+    if !resp.status().is_success() {
+        return Err(EwelinkError::Auth(format!(
+            "dispatch HTTP {}",
+            resp.status()
+        )));
+    }
+    let parsed: DispatchResp = resp
+        .json()
+        .await
+        .map_err(|e| EwelinkError::BadResponse(e.to_string()))?;
+    if parsed.error != 0 {
+        return Err(EwelinkError::BadResponse(format!(
+            "dispatch error {}",
+            parsed.error
+        )));
+    }
+    if parsed.domain.is_empty() || parsed.port == 0 {
+        return Err(EwelinkError::BadResponse(format!(
+            "dispatch missing domain/port (domain={:?} port={})",
+            parsed.domain, parsed.port
+        )));
+    }
+    Ok(format!("wss://{}:{}/api/ws", parsed.domain, parsed.port))
 }
 
 /// Public entry-point used by the integration test. Skips `auth::login`
@@ -559,5 +634,121 @@ mod tests {
             Duration::from_secs(30),
             "60 s capped at 30 s"
         );
+    }
+
+    /// Success path: dispatch returns `{"error":0,"domain":"…","port":…}`
+    /// → we build `wss://{domain}:{port}/api/ws`. Legacy hard-coded WS URL
+    /// used `:8080/dispatch/app` which the server retired.
+    #[tokio::test]
+    async fn resolve_dispatch_url_builds_ws_url_from_domain_and_port() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/dispatch/app");
+                then.status(200).json_body(serde_json::json!({
+                    "error": 0,
+                    "reason": "ok",
+                    "IP": "35.157.208.224",
+                    "port": 443,
+                    "domain": "eu-pconnect2.coolkit.cc"
+                }));
+            })
+            .await;
+
+        let url = resolve_dispatch_url(&server.base_url(), "tok123")
+            .await
+            .expect("dispatch should succeed");
+        assert_eq!(url, "wss://eu-pconnect2.coolkit.cc:443/api/ws");
+    }
+
+    /// Real-live shape: `error` field may be absent on success. Regression:
+    /// mirrors the LoginResp fix in auth.rs.
+    #[tokio::test]
+    async fn resolve_dispatch_url_tolerates_missing_error_field() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/dispatch/app");
+                then.status(200).json_body(serde_json::json!({
+                    "domain": "eu-pconnect3.coolkit.cc",
+                    "port": 8080
+                }));
+            })
+            .await;
+
+        let url = resolve_dispatch_url(&server.base_url(), "tok")
+            .await
+            .expect("dispatch should succeed without 'error' field");
+        assert_eq!(url, "wss://eu-pconnect3.coolkit.cc:8080/api/ws");
+    }
+
+    /// Non-zero error surfaces as BadResponse.
+    #[tokio::test]
+    async fn resolve_dispatch_url_nonzero_error_returns_bad_response() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/dispatch/app");
+                then.status(200).json_body(serde_json::json!({
+                    "error": 401,
+                    "msg": "cannot found access token info"
+                }));
+            })
+            .await;
+
+        let result = resolve_dispatch_url(&server.base_url(), "tok").await;
+        match result {
+            Err(EwelinkError::BadResponse(msg)) => {
+                assert!(msg.contains("401"), "expected error 401 in {msg:?}");
+            }
+            other => panic!("expected BadResponse, got {other:?}"),
+        }
+    }
+
+    /// Missing `domain` or zero `port` also surfaces as BadResponse.
+    #[tokio::test]
+    async fn resolve_dispatch_url_rejects_empty_domain_or_zero_port() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/dispatch/app");
+                then.status(200).json_body(serde_json::json!({
+                    "error": 0,
+                    "port": 443
+                    // no domain
+                }));
+            })
+            .await;
+
+        let result = resolve_dispatch_url(&server.base_url(), "tok").await;
+        assert!(
+            matches!(result, Err(EwelinkError::BadResponse(_))),
+            "empty domain must not build a URL, got {result:?}"
+        );
+    }
+
+    /// HTTP 500 (dispatcher down) surfaces as Auth (retriable).
+    #[tokio::test]
+    async fn resolve_dispatch_url_http_500_returns_auth_error() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(GET).path("/dispatch/app");
+                then.status(500).body("boom");
+            })
+            .await;
+
+        let result = resolve_dispatch_url(&server.base_url(), "tok").await;
+        match result {
+            Err(EwelinkError::Auth(msg)) => {
+                assert!(msg.contains("500"), "expected 500 in {msg:?}");
+            }
+            other => panic!("expected Auth, got {other:?}"),
+        }
     }
 }

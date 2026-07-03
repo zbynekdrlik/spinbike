@@ -43,6 +43,11 @@ struct LoginBody<'a> {
 
 #[derive(Deserialize)]
 struct LoginResp {
+    /// Real eWeLink v1 responses omit `error` on success (only include it
+    /// on failure, e.g. `{"error": 301, ...}` or `{"error": 10, ...}`).
+    /// Default = 0 = success so the `at` / `user.apikey` fields land in
+    /// the returned `LoginResult`.
+    #[serde(default)]
     error: i64,
     region: Option<String>,
     #[serde(default)]
@@ -214,6 +219,41 @@ mod tests {
                 "unexpected nonce char {ch:?}"
             );
         }
+    }
+
+    /// Real eWeLink v1 login response OMITS the `error` field on success.
+    /// Regression: production login failed with "error decoding response
+    /// body" because `LoginResp.error: i64` had no default and refused
+    /// to deserialize an object without that key. See
+    /// crates/spinbike-server/src/ewelink/auth.rs — the `#[serde(default)]`
+    /// on `LoginResp.error` is the fix.
+    #[tokio::test]
+    async fn login_success_without_error_field_works() {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(POST).path("/api/user/login");
+                then.status(200).json_body(serde_json::json!({
+                    "at": "tok999",
+                    "rt": "refresh",
+                    "region": "eu",
+                    "user": {
+                        "email": "x@x",
+                        "apikey": "keyABC",
+                        "_id": "abc123",
+                        "extra": { "ipCountry": "SK" }
+                    }
+                }));
+            })
+            .await;
+
+        let result = login_with_base(&server.base_url(), "x@x", "p", None, "eu")
+            .await
+            .expect("login should succeed even when 'error' field is omitted");
+        assert_eq!(result.access_token, "tok999");
+        assert_eq!(result.region, "eu");
+        assert_eq!(result.apikey, "keyABC");
     }
 
     /// Success path: error=0, region "eu", returns the access token /
