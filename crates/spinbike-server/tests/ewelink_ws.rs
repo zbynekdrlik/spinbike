@@ -33,7 +33,16 @@ async fn mock_ws_round_trip() {
         let msg = ws.next().await.unwrap().unwrap();
         let text = msg.to_text().unwrap().to_string();
         assert!(text.contains("\"action\":\"update\""));
-        assert!(text.contains("\"switch\":\"on\""));
+        // MINI-D is a multi-outlet product: it acks the `switches` array
+        // frame (`{"switches":[{"outlet":0,"switch":"on"}]}`) with error:0
+        // but SILENTLY IGNORES the legacy single-channel `{"switch":"on"}`
+        // (no ack → the door route times out after 5 s). Verified live
+        // against the real device: switches-array → error:0 ack,
+        // single-switch → timeout. Assert the array form is on the wire.
+        assert!(
+            text.contains("\"switches\":[{\"outlet\":0,\"switch\":\"on\"}]"),
+            "update frame must use the multi-outlet switches array, got: {text}"
+        );
         let seq = text
             .split("\"sequence\":\"")
             .nth(1)
