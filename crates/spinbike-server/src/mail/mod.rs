@@ -67,6 +67,12 @@ impl MailHandle {
     /// empty/missing (or `SMTP_PORT` doesn't parse as a port number),
     /// returns the Disabled handle: `send()` always errors with
     /// `MailError::Disabled`.
+    ///
+    /// TLS: uses opportunistic STARTTLS (`starttls_relay`) — the correct
+    /// mode for `SMTP_PORT=587` submission (Gmail, the documented prod
+    /// target). Implicit-TLS/SMTPS relays (port 465) are NOT supported by
+    /// this path and would need a `relay()`-based branch; setting
+    /// `SMTP_PORT=465` here will attempt STARTTLS on 465 and fail.
     pub fn spawn() -> Self {
         let test_mode = std::env::var("SMTP_TEST_MODE").ok();
         let from = std::env::var("SMTP_FROM").ok().unwrap_or_default();
