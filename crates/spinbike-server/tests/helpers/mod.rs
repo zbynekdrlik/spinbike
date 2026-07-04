@@ -154,11 +154,19 @@ impl TestApp {
             h
         };
 
+        // No test currently drives mail behavior (that lands with the
+        // invite/token endpoints in a later ticket) — SMTP_TEST_MODE /
+        // SMTP_* stay unset here, so this is always the harmless Disabled
+        // fast-path. Unlike ewelink's door_mode, there's no per-test
+        // env-mode knob to thread through yet.
+        let mail = spinbike_server::mail::MailHandle::spawn();
+
         let state = AppState {
             pool: pool.clone(),
             event_tx,
             jwt_secret: JWT_SECRET.to_string(),
             ewelink,
+            mail,
             door_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 spinbike_server::routes::door::RateLimiter::new(),
             )),
