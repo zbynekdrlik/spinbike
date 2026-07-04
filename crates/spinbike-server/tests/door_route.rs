@@ -386,6 +386,130 @@ async fn door_health_200_for_staff() {
     assert!(body["ewelink_ws"].is_string());
 }
 
+// ─── #106 — blocked users must never open the door ─────────────────────────
+//
+// The precondition SELECT historically loaded role/allow_self_entry/credit
+// but never `blocked`, so a blocked customer with allow_self_entry=1 (or a
+// blocked admin/staff, who bypass the allow_self_entry gate entirely) could
+// still actuate the relay and get billed. Reject blocked users BEFORE the
+// relay is pressed and BEFORE any transaction row is written, for every role.
+
+#[tokio::test]
+async fn blocked_customer_with_allow_self_entry_is_rejected() {
+    let app = TestApp::with_door_mode("success").await;
+    enable_self_entry(&app).await;
+    sqlx::query("UPDATE users SET blocked = 1 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    let (status, body) = app
+        .request(post_json(
+            "/api/door/open",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::FORBIDDEN,
+        "blocked customer must be rejected even with allow_self_entry=1"
+    );
+    assert_eq!(body["status"], "rejected");
+    assert_eq!(body["reason"], "blocked");
+
+    // No door-tagged transaction row must exist for this user.
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM transactions \
+         WHERE user_id = ? AND note LIKE 'door:%'",
+    )
+    .bind(app.customer_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(n, 0, "blocked user must not get a door transaction row");
+
+    // The relay must never have been pressed — last_ack_ms_ago stays null.
+    let (_, health) = app.request(get("/api/door/health", &app.admin_token)).await;
+    assert!(
+        health["last_ack_ms_ago"].is_null(),
+        "relay must not be pressed for a rejected blocked user, got {health:?}"
+    );
+}
+
+#[tokio::test]
+async fn blocked_admin_is_rejected_despite_role_bypass() {
+    let app = TestApp::with_door_mode("success").await;
+    sqlx::query("UPDATE users SET blocked = 1 WHERE id = ?")
+        .bind(app.admin_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    let (status, body) = app
+        .request(post_json(
+            "/api/door/open",
+            &app.admin_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::FORBIDDEN,
+        "a blocked admin must be rejected — blocked-means-blocked regardless \
+         of the allow_self_entry role bypass"
+    );
+    assert_eq!(body["status"], "rejected");
+    assert_eq!(body["reason"], "blocked");
+
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM transactions \
+         WHERE user_id = ? AND note LIKE 'door:%'",
+    )
+    .bind(app.admin_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(n, 0, "blocked admin must not get a door transaction row");
+}
+
+#[tokio::test]
+async fn blocked_staff_is_rejected_despite_role_bypass() {
+    let app = TestApp::with_door_mode("success").await;
+    sqlx::query("UPDATE users SET blocked = 1 WHERE id = ?")
+        .bind(app.staff_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    let (status, body) = app
+        .request(post_json(
+            "/api/door/open",
+            &app.staff_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::FORBIDDEN,
+        "a blocked staff account must be rejected — blocked-means-blocked \
+         regardless of the allow_self_entry role bypass"
+    );
+    assert_eq!(body["status"], "rejected");
+    assert_eq!(body["reason"], "blocked");
+
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM transactions \
+         WHERE user_id = ? AND note LIKE 'door:%'",
+    )
+    .bind(app.staff_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(n, 0, "blocked staff must not get a door transaction row");
+}
+
 #[tokio::test]
 async fn hardware_failure_rolls_back_no_tx_written() {
     let app = TestApp::with_door_mode("offline").await;
