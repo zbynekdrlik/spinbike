@@ -110,6 +110,7 @@ use crate::pages::my_bookings::MyBookingsPage;
 use crate::pages::reports::ReportsPage;
 use crate::pages::schedule::SchedulePage;
 use crate::pages::staff_dashboard::StaffDashboardPage;
+use crate::pages::welcome::WelcomePage;
 
 #[component]
 pub fn App() -> impl IntoView {
@@ -146,6 +147,9 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/") view=RootRoute />
                         <Route path=path!("/login") view=LoginPage />
                         <Route path=path!("/register") view=RegisterPage />
+                        // Magic-link landing page — public, the token itself
+                        // is the authentication (see pages/welcome.rs).
+                        <Route path=path!("/welcome") view=WelcomePage />
                         <Route path=path!("/my/bookings") view=MyBookingsPage />
                         <Route path=path!("/my/balance") view=MyBalancePage />
                         // Door page — minimal UI for admin/staff/customers

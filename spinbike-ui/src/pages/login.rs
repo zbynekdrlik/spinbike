@@ -20,6 +20,11 @@ struct RegisterReq {
     phone: Option<String>,
 }
 
+#[derive(serde::Serialize)]
+struct RequestLoginLinkReq {
+    email: String,
+}
+
 #[derive(serde::Deserialize)]
 struct AuthResp {
     token: String,
@@ -72,6 +77,13 @@ pub fn LoginPage() -> impl IntoView {
     let pass_ref = NodeRef::<leptos::html::Input>::new();
     let (error, set_error) = signal(String::new());
     let (loading, set_loading) = signal(false);
+
+    // Customer login-link section (below the password form) — its own
+    // signals, independent of the password-form ones above.
+    let customer_email_ref = NodeRef::<leptos::html::Input>::new();
+    let (customer_sent, set_customer_sent) = signal(false);
+    let (customer_error, set_customer_error) = signal(String::new());
+    let (customer_loading, set_customer_loading) = signal(false);
 
     let on_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
@@ -131,6 +143,67 @@ pub fn LoginPage() -> impl IntoView {
             <p class="text-center text-muted mt-2">
                 {move || i18n::t(lang.get(), "dont_have_account")} <a href="/register">{move || i18n::t(lang.get(), "register")}</a>
             </p>
+
+            <hr class="mt-3" />
+
+            <h2 class="page-title mt-3" data-testid="customer-login-heading">
+                {move || i18n::t(lang.get(), "customer_login_heading")}
+            </h2>
+            {move || {
+                if customer_sent.get() {
+                    view! {
+                        <div class="alert alert-success" data-testid="login-link-sent">
+                            {move || i18n::t(lang.get(), "login_link_sent")}
+                        </div>
+                    }
+                    .into_any()
+                } else {
+                    let on_customer_submit = move |ev: web_sys::SubmitEvent| {
+                        ev.prevent_default();
+                        let email = customer_email_ref
+                            .get()
+                            .map(|el| {
+                                let el: &HtmlInputElement = &el;
+                                el.value()
+                            })
+                            .unwrap_or_default();
+                        set_customer_loading.set(true);
+                        set_customer_error.set(String::new());
+                        spawn_local(async move {
+                            match api::post::<RequestLoginLinkReq, serde_json::Value>(
+                                "/api/auth/request-login-link",
+                                &RequestLoginLinkReq { email },
+                            )
+                            .await
+                            {
+                                Ok(_) => set_customer_sent.set(true),
+                                Err(e) => set_customer_error.set(e),
+                            }
+                            set_customer_loading.set(false);
+                        });
+                    };
+                    view! {
+                        <form on:submit=on_customer_submit data-testid="login-link-form">
+                            {move || {
+                                let e = customer_error.get();
+                                if e.is_empty() {
+                                    view! {}.into_any()
+                                } else {
+                                    view! { <div class="alert alert-error">{e}</div> }.into_any()
+                                }
+                            }}
+                            <div class="form-group">
+                                <label>{move || i18n::t(lang.get(), "email")}</label>
+                                <input type="email" class="form-control" node_ref=customer_email_ref required data-testid="login-link-email" />
+                            </div>
+                            <button type="submit" class="btn btn--ghost btn--block" disabled=move || customer_loading.get() data-testid="login-link-submit">
+                                {move || i18n::t(lang.get(), "send_login_link")}
+                            </button>
+                        </form>
+                    }
+                    .into_any()
+                }
+            }}
         </div>
     }
 }
