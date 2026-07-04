@@ -31,6 +31,16 @@ aes = "0.8"
 cbc = { version = "0.1", features = ["std"] }
 urlencoding = "2"
 base64 = "0.22"
+# NO native-tls (musl/CI-friendly, consistent with reqwest/tokio-tungstenite
+# above): tokio1-rustls-tls = tokio1 async + rustls + ring crypto backend +
+# webpki-roots (bundled Mozilla CA roots — lettre 0.11 has no separate
+# native-cert-store feature; webpki-roots is the portable/hermetic choice
+# for a public SMTP relay like Gmail).
+lettre = { version = "0.11", default-features = false, features = [
+    "tokio1-rustls-tls",
+    "smtp-transport",
+    "builder",
+] }
 
 [profile.release]
 lto = true
