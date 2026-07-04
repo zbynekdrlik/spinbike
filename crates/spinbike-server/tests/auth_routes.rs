@@ -48,24 +48,38 @@ async fn login_unknown_email_unauthorized() {
 
 // ── register removed (#108) ──────────────────────────────────────────────
 
-/// Public self-registration is gone: the route no longer exists, so any POST
-/// to it must be rejected by the router (404 Not Found), never handled.
+/// Public self-registration is gone: the register handler no longer exists, so
+/// a POST creates no account and never issues a JWT. (Unmatched `/api/*` paths
+/// fall through to the SPA static fallback, which answers 200 with index.html —
+/// so the meaningful proof of removal is behavioral, not a router 404.)
 #[tokio::test]
 async fn register_endpoint_is_removed() {
     let app = TestApp::new().await;
     let body = serde_json::json!({
-        "email": "someone@example.com",
+        "email": "someone-new@example.com",
         "password": "12345678",
         "name": "Nope",
     });
-    let (status, _) = app
+    let (status, resp) = app
         .request(post_json("/api/auth/register", "", &body))
         .await;
-    assert_eq!(
+    // No register handler → never a 201 Created and never a JWT in the body.
+    assert_ne!(
         status,
-        StatusCode::NOT_FOUND,
-        "POST /api/auth/register must be removed (404), got {status}"
+        StatusCode::CREATED,
+        "register must not create (201), got {status}"
     );
+    assert!(
+        resp.get("token").is_none(),
+        "removed register must not issue a JWT, got {resp:?}"
+    );
+    // And crucially: no account was created.
+    let created: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE email = 'someone-new@example.com'")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(created, 0, "removed register must not create a user account");
 }
 
 // ── invite (POST /api/users/{id}/invite) ─────────────────────────────────
