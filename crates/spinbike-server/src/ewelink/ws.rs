@@ -339,12 +339,18 @@ async fn connect_loop_with_url_inner(
                     return ConnectOutcome::ChannelClosed;
                 };
                 let sequence = chrono::Utc::now().timestamp_millis().to_string();
+                // MINI-D is a multi-outlet SONOFF product and only acks the
+                // multi-outlet `switches` array form. The legacy single-channel
+                // `{"switch":"on"}` is silently dropped (no ack → door route
+                // times out). Outlet 0 is the dry-contact relay; the device's
+                // on-board Inching Mode (2000 ms, configured once in the eWeLink
+                // app) turns it back off — we only ever send "on".
                 let frame = json!({
                     "action": "update",
                     "deviceid": device_id,
                     "apikey": apikey,
                     "sequence": sequence,
-                    "params": { "switch": "on" },
+                    "params": { "switches": [{ "outlet": 0, "switch": "on" }] },
                     "selfApikey": apikey,
                 });
                 tracing::debug!(%sequence, %device_id, "ewelink: press sent");
