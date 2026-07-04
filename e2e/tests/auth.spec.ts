@@ -18,9 +18,12 @@ test.describe('Authentication flows', () => {
         // register is gone in #108).
         await page.goto('/login');
         await page.waitForSelector('h1.page-title');
-        await page.fill('input[type="email"]', 'customer@test.com');
+        // /login now has a SECOND type="email" input + submit button (the
+        // customer login-link section, #109) below this password form —
+        // `.first()` pins these to the password form.
+        await page.locator('input[type="email"]').first().fill('customer@test.com');
         await page.fill('input[type="password"]', 'password123');
-        await page.click('button[type="submit"]');
+        await page.locator('button[type="submit"]').first().click();
         await page.waitForURL('/', { timeout: 10000 });
 
         // Verify logged in
@@ -60,9 +63,12 @@ test.describe('Authentication flows', () => {
         await page.waitForSelector('h1.page-title');
         expect(await page.textContent('h1.page-title')).toBe('Login');
 
-        await page.fill('input[type="email"]', 'customer@test.com');
+        // /login now has a SECOND type="email" input + submit button (the
+        // customer login-link section, #109) below this password form —
+        // `.first()` pins these to the password form.
+        await page.locator('input[type="email"]').first().fill('customer@test.com');
         await page.fill('input[type="password"]', 'password123');
-        await page.click('button[type="submit"]');
+        await page.locator('button[type="submit"]').first().click();
 
         await page.waitForURL('/', { timeout: 10000 });
 
@@ -80,9 +86,9 @@ test.describe('Authentication flows', () => {
         await page.goto('/login');
         await page.waitForSelector('h1.page-title');
 
-        await page.fill('input[type="email"]', 'customer@test.com');
+        await page.locator('input[type="email"]').first().fill('customer@test.com');
         await page.fill('input[type="password"]', 'wrongpassword');
-        await page.click('button[type="submit"]');
+        await page.locator('button[type="submit"]').first().click();
 
         // Should show error, not redirect
         await page.waitForSelector('.alert.alert-error', { timeout: 5000 });

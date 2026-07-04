@@ -70,6 +70,35 @@ pub async fn post<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Re
     resp.json::<T>().await.map_err(|e| e.to_string())
 }
 
+/// Like [`post`], but for PUBLIC endpoints where a non-2xx response is an
+/// expected, benign outcome — never triggers the "session expired, redirect
+/// to /login" handling that [`post`] applies to any 401 while a token is
+/// stored. Needed for magic-link redemption (`/api/auth/token-login`): an
+/// already-used/expired token legitimately 401s, and that must NOT clear an
+/// unrelated, still-valid session the browser happens to already hold (e.g.
+/// re-opening an old invite email after already being logged in permanently
+/// — see #109). Also skips attaching the Authorization header: these
+/// endpoints never read it server-side.
+pub async fn post_public<B: Serialize, T: DeserializeOwned>(
+    path: &str,
+    body: &B,
+) -> Result<T, String> {
+    let url = format!("{}{}", base_url(), path);
+    let req = RequestBuilder::new(&url)
+        .method(gloo_net::http::Method::POST)
+        .json(body)
+        .map_err(|e| e.to_string())?;
+
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+
+    if !resp.ok() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(extract_error(&text, resp.status()));
+    }
+
+    resp.json::<T>().await.map_err(|e| e.to_string())
+}
+
 pub async fn put<B: Serialize>(path: &str, body: &B) -> Result<(), String> {
     let url = format!("{}{}", base_url(), path);
     let req = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::PUT))

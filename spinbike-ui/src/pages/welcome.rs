@@ -70,7 +70,7 @@ pub fn WelcomePage() -> impl IntoView {
         match token {
             Some(t) => {
                 spawn_local(async move {
-                    match api::post::<TokenLoginReq, AuthResp>(
+                    match api::post_public::<TokenLoginReq, AuthResp>(
                         "/api/auth/token-login",
                         &TokenLoginReq { token: t },
                     )
@@ -150,7 +150,7 @@ pub fn WelcomePage() -> impl IntoView {
                                         set_email_loading.set(true);
                                         set_email_error.set(String::new());
                                         spawn_local(async move {
-                                            match api::post::<RequestLoginLinkReq, serde_json::Value>(
+                                            match api::post_public::<RequestLoginLinkReq, serde_json::Value>(
                                                 "/api/auth/request-login-link",
                                                 &RequestLoginLinkReq { email },
                                             )

@@ -170,7 +170,7 @@ pub fn LoginPage() -> impl IntoView {
                         set_customer_loading.set(true);
                         set_customer_error.set(String::new());
                         spawn_local(async move {
-                            match api::post::<RequestLoginLinkReq, serde_json::Value>(
+                            match api::post_public::<RequestLoginLinkReq, serde_json::Value>(
                                 "/api/auth/request-login-link",
                                 &RequestLoginLinkReq { email },
                             )

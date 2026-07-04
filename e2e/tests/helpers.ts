@@ -87,9 +87,12 @@ export async function loginViaUI(page: Page, email: string, password: string) {
     await setEnglishLanguage(page);
     await page.goto('/login');
     await page.waitForSelector('h1.page-title');
-    await page.fill('input[type="email"]', email);
+    // /login now has a SECOND type="email" input + submit button (the
+    // customer login-link section, #109) below this password form — `.first()`
+    // pins these to the password form, which renders first in the DOM.
+    await page.locator('input[type="email"]').first().fill(email);
     await page.fill('input[type="password"]', password);
-    await page.click('button[type="submit"]');
+    await page.locator('button[type="submit"]').first().click();
     // After login, the app redirects to / via location.href
     await page.waitForURL('/', { timeout: 10000 });
 }

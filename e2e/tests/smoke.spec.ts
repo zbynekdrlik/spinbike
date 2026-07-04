@@ -25,7 +25,11 @@ test.describe('@smoke post-deploy', () => {
         const consoleMessages = setupConsoleCheck(page);
         await page.goto(`${BASE}/login`);
         await page.waitForSelector('input[type="email"]', { timeout: 15000 });
-        await expect(page.locator('input[type="email"]')).toBeVisible();
+        // The page now has TWO type="email" inputs: the admin/staff password
+        // form and the customer login-link section below it (#109). `.first()`
+        // pins this to the password form's email field (it renders first in
+        // the DOM), which is what this test is actually checking.
+        await expect(page.locator('input[type="email"]').first()).toBeVisible();
         await expect(page.locator('input[type="password"]')).toBeVisible();
         assertCleanConsole(consoleMessages);
     });
