@@ -64,6 +64,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "users.allow_self_entry + services.kind='single_entry' retag",
         V16_DOOR_SELF_ENTRY,
     ),
+    (
+        17,
+        "login_tokens: invite+login magic-link tokens",
+        V17_LOGIN_TOKENS,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -633,6 +638,30 @@ CREATE UNIQUE INDEX idx_services_monthly_pass
 UPDATE services
    SET kind = 'single_entry'
  WHERE name_sk = 'Fitness';
+"#;
+
+// V17: magic-link tokens for passwordless customer onboarding + recovery (#108).
+//
+// One row per issued token. The RAW token (32 random bytes, base64url) is sent
+// only inside the emailed link; the DB stores ONLY its SHA-256 hex, so a DB
+// read never exposes a usable token. `token_hash` is UNIQUE (a hash collision
+// or a duplicate insert is rejected). `purpose` is CHECK-constrained to the two
+// flows: 'invite' (14-day onboarding link) and 'login' (24-hour recovery link).
+// Single-use is enforced at redemption time by the atomic
+// `UPDATE ... SET used_at = datetime('now') WHERE used_at IS NULL ...` in
+// db::login_tokens::redeem. Idempotent (IF NOT EXISTS) like every migration.
+const V17_LOGIN_TOKENS: &str = r#"
+CREATE TABLE IF NOT EXISTS login_tokens (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    token_hash  TEXT    NOT NULL UNIQUE,
+    purpose     TEXT    NOT NULL CHECK (purpose IN ('invite','login')),
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    expires_at  TEXT    NOT NULL,
+    used_at     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_login_tokens_user ON login_tokens(user_id);
 "#;
 
 #[cfg(test)]
@@ -2236,5 +2265,126 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(n, 1, "still exactly one single_entry row after re-run");
+    }
+
+    // V17 — login_tokens (magic-link) ---------------------------------
+
+    #[tokio::test]
+    async fn v17_creates_login_tokens_table_with_expected_columns() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let cols: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('login_tokens')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let names: Vec<&str> = cols.iter().map(|(n,)| n.as_str()).collect();
+        for c in [
+            "id",
+            "user_id",
+            "token_hash",
+            "purpose",
+            "created_at",
+            "expires_at",
+            "used_at",
+        ] {
+            assert!(
+                names.contains(&c),
+                "login_tokens missing column {c}: {names:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn v17_purpose_check_rejects_unknown_value() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        // Seed a user so the FK is satisfied — isolates the CHECK failure.
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v17-check@x', 'V17', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let res = sqlx::query(
+            "INSERT INTO login_tokens (user_id, token_hash, purpose, expires_at)
+             VALUES (?, 'hash-a', 'reset', datetime('now', '+1 day'))",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await;
+        let msg = format!("{:?}", res.expect_err("unknown purpose must be rejected"));
+        assert!(
+            msg.to_uppercase().contains("CHECK"),
+            "expected CHECK violation, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v17_token_hash_is_unique() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v17-uniq@x', 'V17', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO login_tokens (user_id, token_hash, purpose, expires_at)
+             VALUES (?, 'dup-hash', 'invite', datetime('now', '+1 day'))",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .expect("first insert must succeed");
+        let res = sqlx::query(
+            "INSERT INTO login_tokens (user_id, token_hash, purpose, expires_at)
+             VALUES (?, 'dup-hash', 'login', datetime('now', '+1 day'))",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await;
+        let msg = format!(
+            "{:?}",
+            res.expect_err("duplicate token_hash must be rejected")
+        )
+        .to_lowercase();
+        assert!(
+            msg.contains("unique") || msg.contains("constraint"),
+            "expected UNIQUE violation, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v17_creates_user_index() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let idx: Vec<(String,)> = sqlx::query_as(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='login_tokens'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(
+            idx.iter().any(|(n,)| n == "idx_login_tokens_user"),
+            "idx_login_tokens_user missing; found: {idx:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v17_is_idempotent() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        // Second run must not error — schema_version gates V17 to a no-op.
+        run_migrations(&pool).await.unwrap();
+        let tbl: Option<(String,)> = sqlx::query_as(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='login_tokens'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(tbl.is_some(), "login_tokens must still exist after re-run");
     }
 }

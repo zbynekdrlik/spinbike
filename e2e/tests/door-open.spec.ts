@@ -23,17 +23,18 @@ async function createSelfEntryCustomer(
     const email = `${prefix}-${suffix}@test.local`;
     const password = `Pw-${suffix}`;
 
-    // Register via the public endpoint so the user has a password hash.
-    const regResp = await fetch(`${BASE_URL}/api/auth/register`, {
+    // Seed the customer (with a password hash) via the test-only fixture —
+    // public register was removed in #108.
+    const regResp = await fetch(`${BASE_URL}/api/test/seed-account`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, name: `${prefix} ${suffix}` }),
+        body: JSON.stringify({ email, password, name: `${prefix} ${suffix}`, role: 'customer' }),
     });
     if (!regResp.ok) {
-        throw new Error(`register failed: ${regResp.status} ${await regResp.text()}`);
+        throw new Error(`seed-account failed: ${regResp.status} ${await regResp.text()}`);
     }
     const regData = await regResp.json();
-    const user_id: number = regData.user.id;
+    const user_id: number = regData.user_id;
 
     // Grant allow_self_entry via admin PUT (requires admin role).
     const putResp = await fetch(`${BASE_URL}/api/users/${user_id}`, {
@@ -159,12 +160,12 @@ test.describe('Door self-entry (#92)', () => {
         ).join('');
         const email = `NE-${suffix}@test.local`;
         const password = `Pw-${suffix}`;
-        const regResp = await fetch(`${BASE_URL}/api/auth/register`, {
+        const regResp = await fetch(`${BASE_URL}/api/test/seed-account`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email, password, name: `NE ${suffix}` }),
+            body: JSON.stringify({ email, password, name: `NE ${suffix}`, role: 'customer' }),
         });
-        if (!regResp.ok) throw new Error(`register failed: ${regResp.status}`);
+        if (!regResp.ok) throw new Error(`seed-account failed: ${regResp.status}`);
 
         await page.evaluate(() => { localStorage.clear(); });
         await loginViaAPI(page, baseURL!, email, password);

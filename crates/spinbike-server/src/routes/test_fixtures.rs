@@ -2,12 +2,21 @@ use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
 use serde::Deserialize;
 
 use crate::AppState;
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, hash_password};
 use crate::db::users;
 
 // ---------------------------------------------------------------------------
 // Request types
 // ---------------------------------------------------------------------------
+
+#[derive(Deserialize)]
+pub struct SeedAccountRequest {
+    pub email: String,
+    pub password: String,
+    pub name: String,
+    #[serde(default = "default_seed_role")]
+    pub role: String,
+}
 
 #[derive(Deserialize)]
 pub struct SeedUserRequest {
@@ -59,6 +68,7 @@ pub struct SeedEntry {
 pub fn routes() -> Router<AppState> {
     // Only registered when SPINBIKE_TEST_MODE=1.
     Router::new()
+        .route("/api/test/seed-account", post(seed_account))
         .route("/api/test/seed-expired-pass", post(seed_expired_pass))
         .route("/api/test/seed-transactions", post(seed_transactions))
         .route("/api/test/seed-user", post(seed_user))
@@ -109,6 +119,54 @@ async fn find_or_create_user_by_card_code(
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
+
+fn default_seed_role() -> String {
+    "customer".to_string()
+}
+
+/// Bootstrap account for E2E: create a user WITH a password + role from an
+/// UNAUTHENTICATED state. This is the test-only replacement for the removed
+/// public `POST /api/auth/register` (#108) — E2E `global-setup` used register
+/// to seed the customer/admin/staff accounts it then logs in as. Only mounted
+/// under `SPINBIKE_TEST_MODE=1`, so it is never reachable in production.
+/// Returns 201 `{"user_id": N}`, or 409 when the email already exists (so
+/// global-setup's re-run idempotency, which treats 409 as "already there",
+/// keeps working).
+async fn seed_account(
+    State(state): State<AppState>,
+    Json(body): Json<SeedAccountRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+    let hash = hash_password(&body.password)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    match users::create_user(
+        &state.pool,
+        Some(&body.email),
+        Some(&hash),
+        &body.name,
+        None,
+        None,
+        None,
+        &body.role,
+        None,
+        None,
+        None,
+    )
+    .await
+    {
+        Ok(user_id) => Ok((
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "user_id": user_id })),
+        )),
+        Err(e) => {
+            let chain = format!("{e:#}");
+            if chain.contains("UNIQUE") || chain.contains("unique") {
+                Err((StatusCode::CONFLICT, "account already exists".into()))
+            } else {
+                Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+            }
+        }
+    }
+}
 
 /// Create a user with optional initial credit. Returns `{"user_id": N}`.
 async fn seed_user(

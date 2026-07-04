@@ -21,10 +21,19 @@ pub struct AppState {
     pub jwt_secret: String,
     pub ewelink: crate::ewelink::EwelinkHandle,
     pub mail: crate::mail::MailHandle,
+    /// Base URL used to compose magic-link emails, e.g.
+    /// `https://spinbike.newlevel.media`. Read from `PUBLIC_BASE_URL` at
+    /// startup; empty when unset (invite/login-link then compose a relative
+    /// `/welcome?t=...` link and a boot-time warn is logged).
+    pub public_base_url: String,
     /// In-memory door-route rate-limit state. Per-AppState so concurrent
     /// integration tests don't share throttle windows across separate
     /// TestApp instances.
     pub door_rate_limit: std::sync::Arc<std::sync::Mutex<crate::routes::door::RateLimiter>>,
+    /// In-memory rate-limit for the public `/api/auth/request-login-link`
+    /// endpoint (email-keyed). Separate from `door_rate_limit`.
+    pub login_link_rate_limit:
+        std::sync::Arc<std::sync::Mutex<crate::routes::auth::LoginLinkRateLimiter>>,
 }
 
 /// Build the CORS layer by reading the CORS_ORIGIN environment variable.
@@ -66,14 +75,28 @@ pub fn is_test_mode_from_env(raw: Option<&str>) -> bool {
 pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Result<()> {
     let (event_tx, _) = broadcast::channel(256);
 
+    let public_base_url = std::env::var("PUBLIC_BASE_URL").unwrap_or_default();
+    if public_base_url.is_empty() {
+        warn!(
+            "PUBLIC_BASE_URL not set — magic-link emails will use relative /welcome links. \
+             Set it (e.g. https://spinbike.newlevel.media) when configuring mail."
+        );
+    } else {
+        info!(%public_base_url, "PUBLIC_BASE_URL configured for magic-link emails");
+    }
+
     let state = AppState {
         pool,
         event_tx,
         jwt_secret,
         ewelink: crate::ewelink::EwelinkHandle::spawn(),
         mail: crate::mail::MailHandle::spawn(),
+        public_base_url,
         door_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
             crate::routes::door::RateLimiter::new(),
+        )),
+        login_link_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+            crate::routes::auth::LoginLinkRateLimiter::new(),
         )),
     };
 

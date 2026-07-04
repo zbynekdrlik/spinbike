@@ -6,51 +6,26 @@ test.describe('Authentication flows', () => {
         await setEnglishLanguage(page);
     });
 
-    test('register a new user via UI', async ({ page }) => {
-        const consoleMessages = setupConsoleCheck(page);
-
-        await page.goto('/register');
-        await page.waitForSelector('h1.page-title');
-        expect(await page.textContent('h1.page-title')).toBe('Register');
-
-        // Fill the registration form
-        // Name field is first text input
-        const nameInput = page.locator('input[type="text"]').first();
-        await nameInput.fill('New User');
-        await page.fill('input[type="email"]', 'newuser@test.com');
-        await page.fill('input[type="password"]', 'newpass123');
-        await page.click('button[type="submit"]');
-
-        // After register, app redirects to /
-        await page.waitForURL('/', { timeout: 10000 });
-
-        // Verify logged-in state: nav should show "My Bookings" and "Balance"
-        const nav = page.locator('.navbar-links');
-        await expect(nav.locator('a[href="/my/bookings"]')).toBeVisible();
-        await expect(nav.locator('a[href="/my/balance"]')).toBeVisible();
-
-        // Verify user name appears in nav
-        await expect(nav.locator('.navbar-user')).toContainText('New User');
-
-        assertCleanConsole(consoleMessages);
-    });
+    // NOTE: public self-registration was removed in #108 (invite-only
+    // onboarding). The former "register a new user via UI" test is gone with
+    // the feature; onboarding is now covered by the invite → /welcome flow
+    // (tested under #109). Logout coverage below bootstraps via login instead.
 
     test('logout and verify nav reverts', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
 
-        // First register/login to get a session
-        await page.goto('/register');
+        // Bootstrap a session by logging in as the seeded customer (public
+        // register is gone in #108).
+        await page.goto('/login');
         await page.waitForSelector('h1.page-title');
-        const nameInput = page.locator('input[type="text"]').first();
-        await nameInput.fill('Logout Tester');
-        await page.fill('input[type="email"]', 'logout-tester@test.com');
-        await page.fill('input[type="password"]', 'logout123');
+        await page.fill('input[type="email"]', 'customer@test.com');
+        await page.fill('input[type="password"]', 'password123');
         await page.click('button[type="submit"]');
         await page.waitForURL('/', { timeout: 10000 });
 
         // Verify logged in
         const nav = page.locator('.navbar-links');
-        await expect(nav.locator('.navbar-user')).toContainText('Logout Tester');
+        await expect(nav.locator('.navbar-user')).toContainText('Test Customer');
 
         // Click Logout button (clears localStorage, bumps auth signal, then navigates to /)
         await nav.locator('button', { hasText: 'Logout' }).click();

@@ -1,4 +1,5 @@
 pub mod classes;
+pub mod login_tokens;
 pub mod migrations;
 pub mod persistent_bookings;
 pub mod reports;
@@ -169,11 +170,14 @@ mod tests {
         .unwrap();
 
         // V13 dropped the `cards` table and promoted its columns into `users`.
+        // V17 added `login_tokens` (magic-link tokens) — sorts after
+        // `instructors`, before `persistent_bookings`.
         let expected = vec![
             "bookings",
             "class_cancellations",
             "class_templates",
             "instructors",
+            "login_tokens",
             "persistent_bookings",
             "schema_version",
             "services",

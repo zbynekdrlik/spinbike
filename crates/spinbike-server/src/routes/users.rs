@@ -13,7 +13,8 @@ use spinbike_core::stats::{MonthlyBucket, PeriodAgg, PeriodTotals, StatsResponse
 use crate::AppState;
 use crate::auth::AuthUser;
 use crate::db::transactions::NOTE_MAX_CHARS;
-use crate::db::{transactions, users as db};
+use crate::db::{login_tokens, transactions, users as db};
+use crate::mail::MailError;
 use crate::routes::internal_error;
 
 #[derive(Serialize, Clone)]
@@ -215,6 +216,7 @@ pub fn routes() -> Router<AppState> {
             "/api/users/{id}",
             put(update_user).delete(delete_user_route),
         )
+        .route("/api/users/{id}/invite", post(invite_user))
         .route("/api/users/{id}/transactions", get(user_transactions))
         .route("/api/users/{id}/stats", get(user_stats))
         .route("/api/my/balance", get(my_balance))
@@ -385,6 +387,115 @@ async fn create_user(
                 .map_err(internal_error)?,
         ),
     ))
+}
+
+#[derive(Serialize)]
+struct InviteResponse {
+    sent_to: String,
+    /// Present only in `SMTP_TEST_MODE=capture` so E2E can drive the welcome
+    /// flow without a real mailbox. Never populated with a real SMTP relay.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    test_link: Option<String>,
+}
+
+/// Compose the unaccented-Slovak invite email. Returns (subject, text, html).
+fn invite_email(link: &str) -> (String, String, String) {
+    let subject = "Vitaj v SpinBike".to_string();
+    let text = format!(
+        "Ahoj,\n\nSpinBike je nasa aplikacia na rezervacie spinningu a spravu kreditu. \
+         Klikni na odkaz a aktivuj si pristup:\n{link}\n\nOdkaz plati 14 dni."
+    );
+    let html = format!(
+        "<p>Ahoj,</p>\
+         <p>SpinBike je nasa aplikacia na rezervacie spinningu a spravu kreditu.</p>\
+         <p>Klikni na odkaz a aktivuj si pristup:</p>\
+         <p><a href=\"{link}\">Aktivovat pristup</a></p>\
+         <p>Odkaz plati 14 dni.</p>"
+    );
+    (subject, text, html)
+}
+
+/// Admin/staff-only: email a magic invite link to the given user. Requires the
+/// user to have an email. Returns 503 `mail_not_configured` when the mail
+/// module is Disabled (missing SMTP env).
+async fn invite_user(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(id): Path<i64>,
+) -> Result<Json<InviteResponse>, (StatusCode, Json<serde_json::Value>)> {
+    if !claims.role.can_manage_cards() {
+        return Err((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"error": "Staff access required"})),
+        ));
+    }
+
+    let user = db::get_user_by_id(&state.pool, id)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(serde_json::json!({"error": "User not found"})),
+            )
+        })?;
+    if user.deleted_at.is_some() {
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({"error": "User not found"})),
+        ));
+    }
+
+    let email = match user
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        Some(e) => e.to_string(),
+        None => {
+            return Err(super::bad_request(
+                "User has no email address to send an invite to",
+            ));
+        }
+    };
+
+    let raw = login_tokens::create_token(
+        &state.pool,
+        id,
+        login_tokens::PURPOSE_INVITE,
+        login_tokens::INVITE_TTL_SECS,
+    )
+    .await
+    .map_err(internal_error)?;
+
+    let link = format!(
+        "{}/welcome?t={}",
+        state.public_base_url.trim_end_matches('/'),
+        raw
+    );
+    let (subject, text, html) = invite_email(&link);
+
+    match state.mail.send(&email, &subject, &text, &html).await {
+        Ok(()) => {}
+        Err(MailError::Disabled) => {
+            tracing::warn!(user_id = id, "invite: mail is disabled — returning 503");
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({"error": "mail_not_configured"})),
+            ));
+        }
+        Err(e) => return Err(internal_error(e)),
+    }
+
+    // last_captured() is Some only in capture test mode — use it as the
+    // capture-mode detector, then echo the freshly-composed link.
+    let test_link = state.mail.last_captured().map(|_| link);
+    tracing::info!(user_id = id, %email, "invite: sent");
+    Ok(Json(InviteResponse {
+        sent_to: email,
+        test_link,
+    }))
 }
 
 async fn lookup_user(
