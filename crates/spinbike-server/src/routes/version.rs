@@ -49,8 +49,12 @@ mod tests {
             jwt_secret: "test-jwt".to_string(),
             ewelink: crate::ewelink::EwelinkHandle::spawn(),
             mail: crate::mail::MailHandle::spawn(),
+            public_base_url: String::new(),
             door_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::routes::door::RateLimiter::new(),
+            )),
+            login_link_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::auth::LoginLinkRateLimiter::new(),
             )),
         };
         let app = Router::new().merge(routes()).with_state(state);

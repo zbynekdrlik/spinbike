@@ -1,4 +1,5 @@
 pub mod classes;
+pub mod login_tokens;
 pub mod migrations;
 pub mod persistent_bookings;
 pub mod reports;

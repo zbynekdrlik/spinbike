@@ -16,6 +16,7 @@ use spinbike_core::auth::Role;
 use spinbike_server::AppState;
 use spinbike_server::auth::{create_token, hash_password};
 use spinbike_server::db::{self, users};
+use spinbike_server::mail::MailHandle;
 use spinbike_server::routes;
 use sqlx::SqlitePool;
 use tokio::sync::broadcast;
@@ -23,12 +24,20 @@ use tower::util::ServiceExt;
 
 pub const JWT_SECRET: &str = "test-secret-for-integration";
 
+/// Base URL threaded into the test AppState so composed magic-link
+/// `test_link`s (invite endpoint) are well-formed and assertable.
+pub const TEST_BASE_URL: &str = "https://test.spinbike.local";
+
 /// Process-wide lock guarding mutations to the EWELINK_TEST_MODE env var.
 /// Tests in this crate run as a single binary per file, but multiple #[tokio::test]
 /// futures execute concurrently — without this lock, two TestApp::with_door_mode
 /// constructions could race on the env var and pick up the wrong value when
 /// EwelinkHandle::spawn() reads it.
 static EWELINK_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Same idea as EWELINK_ENV_LOCK, for SMTP_TEST_MODE: guards the window where
+/// `with_mail_mode` mutates the env var while `MailHandle::spawn()` reads it.
+static MAIL_ENV_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 pub struct TestApp {
     pub router: Router,
@@ -43,11 +52,22 @@ pub struct TestApp {
     /// This field retains its old name so existing tests continue to compile
     /// without mechanical renaming — semantically it is the customer's user_id.
     pub customer_card_id: i64,
+    /// The same MailHandle wired into the AppState — lets tests read
+    /// `mail.last_captured()` after driving an endpoint in capture mode.
+    pub mail: MailHandle,
 }
 
 impl TestApp {
     pub async fn new() -> Self {
-        Self::new_inner(None).await
+        Self::new_inner(None, None).await
+    }
+
+    /// Construct a TestApp whose mail module runs in the given `SMTP_TEST_MODE`
+    /// (e.g. "capture"). Mirrors `with_door_mode`: the env var is set under a
+    /// process-wide lock only while `MailHandle::spawn()` reads it, then
+    /// restored. Read captured messages via `app.mail.last_captured()`.
+    pub async fn with_mail_mode(mode: &str) -> Self {
+        Self::new_inner(None, Some(mode)).await
     }
 
     /// Construct a TestApp with `EWELINK_TEST_MODE` set to the given mode
@@ -58,10 +78,10 @@ impl TestApp {
     /// The mode is held under a process-wide lock so concurrent tests don't
     /// race on the global EWELINK_TEST_MODE env var while constructing.
     pub async fn with_door_mode(mode: &str) -> Self {
-        Self::new_inner(Some(mode)).await
+        Self::new_inner(Some(mode), None).await
     }
 
-    async fn new_inner(door_mode: Option<&str>) -> Self {
+    async fn new_inner(door_mode: Option<&str>, mail_mode: Option<&str>) -> Self {
         let pool = db::create_memory_pool().await.unwrap();
         db::run_migrations(&pool).await.unwrap();
 
@@ -154,21 +174,42 @@ impl TestApp {
             h
         };
 
-        // No test currently drives mail behavior (that lands with the
-        // invite/token endpoints in a later ticket) — SMTP_TEST_MODE /
-        // SMTP_* stay unset here, so this is always the harmless Disabled
-        // fast-path. Unlike ewelink's door_mode, there's no per-test
-        // env-mode knob to thread through yet.
-        let mail = spinbike_server::mail::MailHandle::spawn();
+        // Build the mail handle under a process-wide lock so concurrent tests
+        // don't race on SMTP_TEST_MODE. `with_mail_mode("capture")` sets it for
+        // the spawn(); default (None) leaves it unset → harmless Disabled path.
+        let mail = {
+            let _guard = MAIL_ENV_LOCK.lock().await;
+            let prior = std::env::var("SMTP_TEST_MODE").ok();
+            // SAFETY: process-wide lock held → no other test races this env var.
+            unsafe {
+                if let Some(m) = mail_mode {
+                    std::env::set_var("SMTP_TEST_MODE", m);
+                } else {
+                    std::env::remove_var("SMTP_TEST_MODE");
+                }
+            }
+            let h = spinbike_server::mail::MailHandle::spawn();
+            unsafe {
+                match prior {
+                    Some(v) => std::env::set_var("SMTP_TEST_MODE", v),
+                    None => std::env::remove_var("SMTP_TEST_MODE"),
+                }
+            }
+            h
+        };
 
         let state = AppState {
             pool: pool.clone(),
             event_tx,
             jwt_secret: JWT_SECRET.to_string(),
             ewelink,
-            mail,
+            mail: mail.clone(),
+            public_base_url: TEST_BASE_URL.to_string(),
             door_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 spinbike_server::routes::door::RateLimiter::new(),
+            )),
+            login_link_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                spinbike_server::routes::auth::LoginLinkRateLimiter::new(),
             )),
         };
         // TestApp always merges test_fixtures regardless of SPINBIKE_TEST_MODE —
@@ -188,6 +229,7 @@ impl TestApp {
             staff_id,
             customer_id,
             customer_card_id,
+            mail,
         }
     }
 

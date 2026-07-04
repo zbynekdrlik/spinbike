@@ -34,16 +34,30 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
         .is_ok()
 }
 
-/// Create a JWT token with 90-day expiry.
-/// Long-lived sessions are acceptable for this app — it's a small fitness-center
-/// management tool, not a banking system. Users should stay logged in across visits.
+/// Customer sessions are permanent (#108): the magic email link IS the auth,
+/// so re-authing every 90 days ("vela neštastnych ludi") is unacceptable. exp =
+/// iat + ~100 years. 36500 days ignores leap days — irrelevant for a session
+/// meant to never expire in practice.
+pub const CUSTOMER_SESSION_SECS: i64 = 100 * 365 * 24 * 60 * 60;
+/// Admin/staff keep the original 90-day expiry (they authenticate with a
+/// password; a shorter session is the safer default for privileged accounts).
+pub const STAFF_SESSION_SECS: i64 = 90 * 24 * 60 * 60;
+
+/// Create a JWT token with a role-based expiry.
+/// `Role::Customer` → permanent (~100 years); everyone else (admin/staff and
+/// the forward-compat `Unknown` fallback) → 90 days. See the SESSION_SECS
+/// constants above.
 pub fn create_token(secret: &str, user_id: i64, email: &str, role: &Role) -> Result<String> {
     let now = chrono::Utc::now().timestamp();
+    let ttl_secs = match role {
+        Role::Customer => CUSTOMER_SESSION_SECS,
+        _ => STAFF_SESSION_SECS,
+    };
     let claims = Claims {
         sub: user_id,
         email: email.to_string(),
         role: role.clone(),
-        exp: now + 90 * 24 * 60 * 60,
+        exp: now + ttl_secs,
         iat: now,
     };
     let token = jsonwebtoken::encode(
@@ -173,18 +187,37 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// Pin the JWT expiry to exactly 90 days so any arithmetic drift
-    /// (e.g. 90*24*60*60 becoming 90+24*60*60) fails this test.
+    /// Customer sessions are permanent (#108): exp - iat must be ~100 years,
+    /// NOT the old flat 90 days. Pins CUSTOMER_SESSION_SECS so any drift
+    /// (e.g. a stray 90-day fallback for customers) fails here.
     #[test]
-    fn jwt_expiry_is_exactly_90_days() {
+    fn jwt_expiry_customer_is_100_years() {
         let secret = "expiry-check";
         let token = create_token(secret, 1, "a@b.com", &Role::Customer).unwrap();
         let claims = validate_token(secret, &token).unwrap();
-        let ninety_days_secs: i64 = 90 * 24 * 60 * 60;
-        assert_eq!(claims.exp - claims.iat, ninety_days_secs);
-        // Also verify absolute magnitude: must be larger than ~89 days and
-        // smaller than ~91 days, which rules out swapping the arithmetic ops.
-        assert!(claims.exp - claims.iat > 89 * 24 * 60 * 60);
-        assert!(claims.exp - claims.iat < 91 * 24 * 60 * 60);
+        assert_eq!(claims.exp - claims.iat, CUSTOMER_SESSION_SECS);
+        // Sanity band: > 99 years, < 101 years — rules out an accidental
+        // 90-day (or arithmetic-swapped) value for customers.
+        assert!(claims.exp - claims.iat > 99 * 365 * 24 * 60 * 60);
+        assert!(claims.exp - claims.iat < 101 * 365 * 24 * 60 * 60);
+    }
+
+    /// Admin/staff keep the 90-day expiry (they still use passwords). Pins
+    /// STAFF_SESSION_SECS and guards the customer→100y branch from leaking
+    /// into privileged accounts.
+    #[test]
+    fn jwt_expiry_admin_and_staff_are_90_days() {
+        let secret = "expiry-check";
+        let ninety: i64 = 90 * 24 * 60 * 60;
+        for role in [Role::Admin, Role::Staff] {
+            let token = create_token(secret, 1, "a@b.com", &role).unwrap();
+            let claims = validate_token(secret, &token).unwrap();
+            assert_eq!(
+                claims.exp - claims.iat,
+                STAFF_SESSION_SECS,
+                "role {role:?} must get the 90-day expiry"
+            );
+            assert_eq!(claims.exp - claims.iat, ninety);
+        }
     }
 }
