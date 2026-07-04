@@ -239,10 +239,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     );
 
     // Magic-link onboarding (/welcome + login-page customer section, #109)
-    m.insert(
-        "welcome_loading",
-        ("Prihlasujem...", "Signing you in..."),
-    );
+    m.insert("welcome_loading", ("Prihlasujem...", "Signing you in..."));
     m.insert("welcome_title", ("Vitaj v SpinBike", "Welcome to SpinBike"));
     m.insert(
         "welcome_message",
@@ -251,7 +248,10 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "You're logged in. Find your balance and door access here:",
         ),
     );
-    m.insert("welcome_cta", ("Prejst na moj zostatok", "Go to my balance"));
+    m.insert(
+        "welcome_cta",
+        ("Prejst na moj zostatok", "Go to my balance"),
+    );
     m.insert(
         "welcome_invalid_title",
         ("Odkaz nie je platny", "This link isn't valid"),
