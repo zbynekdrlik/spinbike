@@ -215,6 +215,19 @@ async fn request_login_link_unknown_email_is_ok_but_sends_nothing() {
     );
 }
 
+/// Poll `last_captured` up to ~2 s (the send is fired off the response path via
+/// tokio::spawn, so it may land just after the 200 returns). Terminates on
+/// success OR timeout — never hangs.
+async fn wait_for_captured(app: &TestApp) -> spinbike_server::mail::CapturedMail {
+    for _ in 0..200 {
+        if let Some(c) = app.mail.last_captured() {
+            return c;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("mail was not captured within ~2s");
+}
+
 #[tokio::test]
 async fn request_login_link_existing_customer_creates_token_and_captures_mail() {
     let app = TestApp::with_mail_mode("capture").await;
@@ -227,9 +240,57 @@ async fn request_login_link_existing_customer_creates_token_and_captures_mail() 
         .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(resp["status"].as_str().unwrap(), "ok");
+    // Token row is committed synchronously before the 200 returns.
     assert_eq!(login_token_count(&app, app.customer_id).await, 1);
-    let captured = app.mail.last_captured().expect("mail must be captured");
+    // The send is spawned off the response path — wait (bounded) for capture.
+    let captured = wait_for_captured(&app).await;
     assert_eq!(captured.to, "user@test.com");
+    assert!(
+        captured.text.contains("/welcome?t="),
+        "captured login-link mail must contain the magic link"
+    );
+}
+
+#[tokio::test]
+async fn request_login_link_non_customer_email_sends_nothing() {
+    // Magic link is customers-only: an admin/staff email must NOT get a token
+    // or a send (still a uniform 200 — no enumeration).
+    let app = TestApp::with_mail_mode("capture").await;
+    let (status, resp) = app
+        .request(post_json(
+            "/api/auth/request-login-link",
+            "",
+            &serde_json::json!({"email": "admin@test.com"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resp["status"].as_str().unwrap(), "ok");
+    assert_eq!(login_token_count(&app, app.admin_id).await, 0);
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM login_tokens")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(total, 0, "admin email must create no login token");
+}
+
+#[tokio::test]
+async fn request_login_link_empty_email_is_ok_and_sends_nothing() {
+    let app = TestApp::with_mail_mode("capture").await;
+    let (status, resp) = app
+        .request(post_json(
+            "/api/auth/request-login-link",
+            "",
+            &serde_json::json!({"email": "   "}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resp["status"].as_str().unwrap(), "ok");
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM login_tokens")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(total, 0, "empty email must create no login token");
+    assert!(app.mail.last_captured().is_none());
 }
 
 #[tokio::test]

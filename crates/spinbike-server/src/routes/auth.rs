@@ -84,6 +84,14 @@ impl LoginLinkRateLimiter {
                 break;
             }
         }
+        // Evict stale per-email entries. The key is an attacker-controllable
+        // email string (unlike the door limiter's bounded i64 keys), so without
+        // this the map would grow unbounded under probing. Any entry older than
+        // the 60 s window can never change the decision below, so dropping it is
+        // safe and bounds the map to the active window.
+        self.per_email
+            .retain(|_, last| now.duration_since(*last) < Duration::from_secs(60));
+
         if self.global.len() >= 10 {
             return Err("global_cap");
         }
@@ -235,13 +243,22 @@ async fn request_login_link(
         raw
     );
     let (subject, text, html) = login_link_email(&link);
-    if let Err(e) = state.mail.send(&email, &subject, &text, &html).await {
-        // Disabled (dev) or transient failure — logged, but the response stays
-        // 200 ok so nothing about the account or mail config is leaked.
-        tracing::warn!(error = %e, user_id = user.id, "request-login-link: mail send failed");
-    } else {
-        tracing::info!(user_id = user.id, "request-login-link: sent");
-    }
+
+    // Fire the SMTP send OFF the response path. The relay dial can take up to
+    // 10 s (mail module timeout); awaiting it here would make an existing
+    // customer's response measurably slower than a non-customer's fast return —
+    // a timing side-channel that partially undermines the no-enumeration
+    // property. The token row is already committed synchronously above (so the
+    // capability is durable); the delivery is best-effort and only logged.
+    let mail = state.mail.clone();
+    let user_id = user.id;
+    tokio::spawn(async move {
+        if let Err(e) = mail.send(&email, &subject, &text, &html).await {
+            tracing::warn!(error = %e, user_id, "request-login-link: mail send failed");
+        } else {
+            tracing::info!(user_id, "request-login-link: sent");
+        }
+    });
 
     ok()
 }
@@ -392,6 +409,51 @@ mod tests {
             rl.check_and_record_at("late@x.com", t0 + Duration::from_secs(90))
                 .is_ok(),
             "global cap must clear after the 60 s window slides"
+        );
+    }
+
+    /// Global prune at EXACTLY 60 s uses strict `>`, so a 60-s-old entry is
+    /// KEPT (elapsed of 60 s is not > 60 s). Catches the `>` → `>=` mutation on
+    /// the global-window prune.
+    #[test]
+    fn login_link_global_keeps_entry_at_exactly_60s() {
+        let mut rl = LoginLinkRateLimiter::new();
+        let t0 = Instant::now();
+        for i in 0..10 {
+            rl.check_and_record_at(&format!("u{i}@x.com"), t0).unwrap();
+        }
+        // At t0 + exactly 60 s the 10 entries are exactly 60 s old → strict `>`
+        // keeps them → the deque is still full → 11th hits global_cap.
+        assert_eq!(
+            rl.check_and_record_at("late@x.com", t0 + Duration::from_secs(60)),
+            Err("global_cap"),
+            "at exactly 60 s the strict `>` prune must keep global entries"
+        );
+    }
+
+    /// The per-email map must not grow without bound: stale entries (older than
+    /// the 60 s window) are evicted on each call. Locks the `retain` prune.
+    #[test]
+    fn login_link_per_email_map_is_bounded_to_window() {
+        let mut rl = LoginLinkRateLimiter::new();
+        let t0 = Instant::now();
+        for i in 0..5 {
+            rl.check_and_record_at(&format!("u{i}@x.com"), t0 + Duration::from_millis(i as u64))
+                .unwrap();
+        }
+        assert_eq!(
+            rl.per_email.len(),
+            5,
+            "five distinct emails within the window"
+        );
+        // Advance well past the 60 s window and record one more: the five stale
+        // entries must be evicted, leaving only the fresh one.
+        rl.check_and_record_at("late@x.com", t0 + Duration::from_secs(120))
+            .unwrap();
+        assert_eq!(
+            rl.per_email.len(),
+            1,
+            "stale per-email entries must be evicted, leaving only the recent one"
         );
     }
 }

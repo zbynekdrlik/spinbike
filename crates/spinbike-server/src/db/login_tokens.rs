@@ -243,4 +243,30 @@ mod tests {
         let scoped_in = redeem(&pool, &raw, &[PURPOSE_INVITE]).await.unwrap();
         assert_eq!(scoped_in, Some(uid));
     }
+
+    #[tokio::test]
+    async fn redeem_with_empty_allowed_purposes_returns_none() {
+        // The empty-slice guard prevents building an invalid `purpose IN ()`
+        // clause — an empty allow-list can redeem nothing.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "empty-scope@x").await;
+
+        let raw = create_token(&pool, uid, PURPOSE_INVITE, INVITE_TTL_SECS)
+            .await
+            .unwrap();
+        let redeemed = redeem(&pool, &raw, &[]).await.unwrap();
+        assert_eq!(redeemed, None, "empty allow-list must redeem nothing");
+        // The token must remain unused (the empty-list path never marked it).
+        let used: Option<String> =
+            sqlx::query_scalar("SELECT used_at FROM login_tokens WHERE token_hash = ?")
+                .bind(hash_token(&raw))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            used.is_none(),
+            "token must stay unused after empty-scope redeem"
+        );
+    }
 }

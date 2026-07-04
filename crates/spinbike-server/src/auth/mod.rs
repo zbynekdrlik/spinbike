@@ -38,15 +38,23 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
 /// so re-authing every 90 days ("vela neštastnych ludi") is unacceptable. exp =
 /// iat + ~100 years. 36500 days ignores leap days — irrelevant for a session
 /// meant to never expire in practice.
+///
+/// Revocation: a permanent JWT is NOT invalidated when a customer is later
+/// blocked/deleted (token-leak risk accepted for MVP, per the spec). This is
+/// bounded because every security-critical action re-checks `blocked` from the
+/// DB at action time (door.rs, payments.rs) and `token-login` re-checks
+/// blocked/deleted before issuing a session — so a stale JWT cannot bypass a
+/// block for hardware or money.
 pub const CUSTOMER_SESSION_SECS: i64 = 100 * 365 * 24 * 60 * 60;
 /// Admin/staff keep the original 90-day expiry (they authenticate with a
 /// password; a shorter session is the safer default for privileged accounts).
 pub const STAFF_SESSION_SECS: i64 = 90 * 24 * 60 * 60;
 
-/// Create a JWT token with a role-based expiry.
-/// `Role::Customer` → permanent (~100 years); everyone else (admin/staff and
-/// the forward-compat `Unknown` fallback) → 90 days. See the SESSION_SECS
-/// constants above.
+/// Create a JWT token with a role-based expiry: `Role::Customer` → permanent
+/// (~100 years), every other role → 90 days. NB `parse_role` maps any DB role
+/// string that isn't `admin`/`staff` to `Role::Customer`, so in practice only
+/// admin/staff receive the 90-day tier; the `Role::Unknown` serde fallback only
+/// arises from decoding a JWT, never from `parse_role`.
 pub fn create_token(secret: &str, user_id: i64, email: &str, role: &Role) -> Result<String> {
     let now = chrono::Utc::now().timestamp();
     let ttl_secs = match role {
