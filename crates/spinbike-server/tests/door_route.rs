@@ -472,6 +472,13 @@ async fn blocked_admin_is_rejected_despite_role_bypass() {
     .await
     .unwrap();
     assert_eq!(n, 0, "blocked admin must not get a door transaction row");
+
+    // The relay must never have been pressed — last_ack_ms_ago stays null.
+    let (_, health) = app.request(get("/api/door/health", &app.admin_token)).await;
+    assert!(
+        health["last_ack_ms_ago"].is_null(),
+        "relay must not be pressed for a rejected blocked admin, got {health:?}"
+    );
 }
 
 #[tokio::test]
@@ -508,6 +515,13 @@ async fn blocked_staff_is_rejected_despite_role_bypass() {
     .await
     .unwrap();
     assert_eq!(n, 0, "blocked staff must not get a door transaction row");
+
+    // The relay must never have been pressed — last_ack_ms_ago stays null.
+    let (_, health) = app.request(get("/api/door/health", &app.admin_token)).await;
+    assert!(
+        health["last_ack_ms_ago"].is_null(),
+        "relay must not be pressed for a rejected blocked staff account, got {health:?}"
+    );
 }
 
 #[tokio::test]

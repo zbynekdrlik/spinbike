@@ -141,6 +141,12 @@ async fn open(
     // blocked staff account must not be able to actuate hardware. Checked
     // BEFORE the allow_self_entry role bypass below so it can never be
     // skipped by that bypass (#106).
+    //
+    // Reason tag is "blocked" (not the `{"error": "User is blocked"}` shape
+    // used by payments.rs/users.rs) — intentional: this route's own envelope
+    // is already `{"status":"rejected","reason":"<tag>"}` (see "not_allowed"
+    // and "rate_limited" below), so this stays consistent with the OTHER
+    // rejections in this same file rather than mixing two response shapes.
     if blocked {
         tracing::warn!(user_id, %role, "door: rejected — user is blocked");
         return Ok((
