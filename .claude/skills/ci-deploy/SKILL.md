@@ -140,3 +140,48 @@ over the whole `tool_input.command`), so `git commit --allow-empty -m "..." &&
 git push origin dev` gets blocked BEFORE either half runs — the commit never
 happens, and the error looks identical to a real Gate 2 block, which is
 confusing. Always split: one Bash call to commit, a SEPARATE Bash call to push.
+
+## Removing an API route → SPA static fallback returns 200, NOT a router 404
+
+`all_routes()` ends with `.fallback(static_files::static_handler)`, and
+`static_handler` serves `index.html` (200) for any **dotless** path (SPA
+routing). So a DELETED API route like `POST /api/auth/register` does **not**
+404 — it falls through to the SPA fallback and returns 200 with the HTML shell.
+Do NOT assert `404`/`405` for a removed endpoint. Assert the removed
+**capability** behaviorally instead: no `201`, no JWT in the body, and no row
+created (`SELECT COUNT(*) FROM users WHERE email=...` is 0). Same on live
+dev/prod (`curl -X POST /api/auth/register` returns 200 but creates no account).
+
+## E2E account seeding: use the `SPINBIKE_TEST_MODE`-gated `/api/test/seed-account`
+
+`e2e/global-setup.ts` (customer/admin/staff) and `door-open.spec.ts` used the
+public `POST /api/auth/register` to seed accounts WITH passwords from an
+unauthenticated state. Register is gone (#108), so that bootstrap moved to
+`POST /api/test/seed-account` `{email,password,name,role}` in
+`routes/test_fixtures.rs` — unauthenticated, mounted only under
+`SPINBIKE_TEST_MODE=1` (the E2E server sets it), returns `201 {"user_id"}` or
+`409` on a duplicate email (global-setup treats 409 as "already seeded"). When
+you remove a public endpoint the E2E harness used for seeding, re-point the
+seed to a test-fixture route — don't just delete the E2E test.
+
+## Diff-scoped mutation gate (`mutation-test` job, PR-only, `--in-diff`)
+
+- Runs on `pull_request` only; **~70 min** on a large auth diff (105 mutants ×
+  ~60-100 s each). Budget the wait — it is the long pole after every push to a
+  big-diff PR. It re-runs on EVERY PR push (even a docs-only push re-tests the
+  same Rust mutants), so avoid superfluous pushes once the Rust is final.
+- **A memory-prune window must be strictly WIDER than the decision window**, or
+  the decision boundary is unobservable → an unkillable/equivalent mutant. The
+  `LoginLinkRateLimiter` `retain`-prune at the SAME 60 s as the `too_fast`
+  decision masked the `< → <=` boundary (retain evicted the entry before the
+  decision saw it). Fix: widen the prune window (120 s) so the 60 s decision
+  boundary is testable, and add an exact-boundary test at each window.
+- **Pin numeric constants to LITERALS in a test** (`assert_eq!(INVITE_TTL_SECS,
+  1_209_600)`) — `cargo-mutants` mutates the `*`/`+` in a constant's arithmetic
+  definition (`14*24*60*60`), and nothing catches it unless a test asserts the
+  exact value. Use a literal on the RHS so the test itself has no `*` to mutate.
+- Test-fixture defaults + error-mapping branches (`default_seed_role`, the
+  `contains("UNIQUE") || contains("unique")` dup-check) need their own tests —
+  the `||→&&` and default-return mutants survive otherwise.
+- `cargo-mutants` does NOT mutate `#[cfg(test)]` code or `tests/` integration
+  binaries, so new tests never add survivors — only changed `src/` lines do.
