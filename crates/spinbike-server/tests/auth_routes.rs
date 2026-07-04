@@ -85,6 +85,84 @@ async fn register_endpoint_is_removed() {
     );
 }
 
+// ── seed-account test fixture (register's E2E-seed replacement) ───────────
+
+/// Omitting `role` must default the seeded account to `customer`.
+#[tokio::test]
+async fn seed_account_defaults_role_to_customer() {
+    let app = TestApp::new().await;
+    let (status, resp) = app
+        .request(post_json(
+            "/api/test/seed-account",
+            "",
+            &serde_json::json!({
+                "email": "seed-default@test.com",
+                "password": "pw12345678",
+                "name": "Seed Default",
+            }),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let uid = resp["user_id"].as_i64().expect("user_id in response");
+    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
+        .bind(uid)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(role, "customer", "omitted role must default to customer");
+}
+
+/// The seeded role is honoured when provided (admin here).
+#[tokio::test]
+async fn seed_account_honours_explicit_role() {
+    let app = TestApp::new().await;
+    let (status, resp) = app
+        .request(post_json(
+            "/api/test/seed-account",
+            "",
+            &serde_json::json!({
+                "email": "seed-admin@test.com",
+                "password": "pw12345678",
+                "name": "Seed Admin",
+                "role": "admin",
+            }),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let uid = resp["user_id"].as_i64().expect("user_id in response");
+    let role: String = sqlx::query_scalar("SELECT role FROM users WHERE id = ?")
+        .bind(uid)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(role, "admin");
+}
+
+/// A duplicate email must map to 409 (so E2E global-setup's re-run idempotency
+/// — which treats 409 as "already seeded" — keeps working).
+#[tokio::test]
+async fn seed_account_duplicate_email_conflicts() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({
+        "email": "seed-dup@test.com",
+        "password": "pw12345678",
+        "name": "Dup",
+        "role": "customer",
+    });
+    let (s1, _) = app
+        .request(post_json("/api/test/seed-account", "", &body))
+        .await;
+    assert_eq!(s1, StatusCode::CREATED);
+    let (s2, _) = app
+        .request(post_json("/api/test/seed-account", "", &body))
+        .await;
+    assert_eq!(
+        s2,
+        StatusCode::CONFLICT,
+        "duplicate email must 409, not 500"
+    );
+}
+
 // ── invite (POST /api/users/{id}/invite) ─────────────────────────────────
 
 async fn invite_token_count(app: &TestApp, user_id: i64) -> i64 {

@@ -137,6 +137,16 @@ mod tests {
     }
 
     #[test]
+    fn ttl_constants_are_exactly_14_days_and_24_hours() {
+        // Pin the business requirement (invite = 14 days, login-link = 24 hours)
+        // to literal seconds so any arithmetic drift in the constant definitions
+        // is caught. Literals (not products) so the test itself has nothing to
+        // mutate.
+        assert_eq!(INVITE_TTL_SECS, 1_209_600, "invite TTL must be 14 days");
+        assert_eq!(LOGIN_TTL_SECS, 86_400, "login-link TTL must be 24 hours");
+    }
+
+    #[test]
     fn hash_is_deterministic_sha256_hex() {
         // Known SHA-256("abc") vector — pins the algorithm + hex encoding.
         assert_eq!(

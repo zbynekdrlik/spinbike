@@ -86,11 +86,13 @@ impl LoginLinkRateLimiter {
         }
         // Evict stale per-email entries. The key is an attacker-controllable
         // email string (unlike the door limiter's bounded i64 keys), so without
-        // this the map would grow unbounded under probing. Any entry older than
-        // the 60 s window can never change the decision below, so dropping it is
-        // safe and bounds the map to the active window.
+        // this the map would grow unbounded under probing. The memory window is
+        // deliberately WIDER than the 60 s decision window below (120 s): an
+        // entry between 60 s and 120 s old no longer throttles but is still kept,
+        // which keeps the too-fast decision boundary observable (and bounds the
+        // map to the last 120 s of activity).
         self.per_email
-            .retain(|_, last| now.duration_since(*last) < Duration::from_secs(60));
+            .retain(|_, last| now.duration_since(*last) < Duration::from_secs(120));
 
         if self.global.len() >= 10 {
             return Err("global_cap");
@@ -431,8 +433,9 @@ mod tests {
         );
     }
 
-    /// The per-email map must not grow without bound: stale entries (older than
-    /// the 60 s window) are evicted on each call. Locks the `retain` prune.
+    /// The per-email map must not grow without bound: entries older than the
+    /// 120 s memory window are evicted on each call. Locks the `retain` prune
+    /// (a removed prune would leave all six entries).
     #[test]
     fn login_link_per_email_map_is_bounded_to_window() {
         let mut rl = LoginLinkRateLimiter::new();
@@ -446,14 +449,33 @@ mod tests {
             5,
             "five distinct emails within the window"
         );
-        // Advance well past the 60 s window and record one more: the five stale
-        // entries must be evicted, leaving only the fresh one.
-        rl.check_and_record_at("late@x.com", t0 + Duration::from_secs(120))
+        // Advance well past the 120 s memory window and record one more: the five
+        // stale entries must be evicted, leaving only the fresh one.
+        rl.check_and_record_at("late@x.com", t0 + Duration::from_secs(200))
             .unwrap();
         assert_eq!(
             rl.per_email.len(),
             1,
             "stale per-email entries must be evicted, leaving only the recent one"
+        );
+    }
+
+    /// At EXACTLY the 120 s memory-window boundary the strict `<` evicts the
+    /// old entry (120 s is not < 120 s). Catches the `<` → `<=` mutation on the
+    /// `retain` prune.
+    #[test]
+    fn login_link_per_email_evicts_at_exactly_120s() {
+        let mut rl = LoginLinkRateLimiter::new();
+        let t0 = Instant::now();
+        rl.check_and_record_at("old@x.com", t0).unwrap();
+        // A different email exactly 120 s later: `old` is exactly 120 s old, so
+        // strict `<` drops it → only `new` remains. `<=` would keep both.
+        rl.check_and_record_at("new@x.com", t0 + Duration::from_secs(120))
+            .unwrap();
+        assert_eq!(
+            rl.per_email.len(),
+            1,
+            "the exactly-120s-old entry must be evicted (strict `<`)"
         );
     }
 }
