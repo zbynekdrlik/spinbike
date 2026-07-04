@@ -209,9 +209,12 @@ jobs:
           # (the `spinbike=info` directive in main.rs only matches the
           # exact target "spinbike", not "spinbike_server::routes::*").
           # SMTP_TEST_MODE=capture: mail is not actually sent, but the mail
-          # module goes Active (not Disabled) so invite/request-login-link
-          # endpoints echo `test_link` in their JSON response — the seam the
-          # /welcome + login-link E2E specs need to drive the flow (#109).
+          # module goes Active (not Disabled). Without it, POST
+          # /api/users/{id}/invite 503s with mail_not_configured (mail
+          # Disabled) — welcome.spec.ts needs invite's `test_link` field
+          # (only invite echoes it; request-login-link never does, by
+          # design — it always returns a uniform 200 to avoid leaking
+          # whether an email exists) to drive the /welcome flow (#109).
           RUST_LOG=spinbike_server=info,spinbike=info \
             PORT=8099 DATABASE_PATH=/tmp/spinbike-e2e.db JWT_SECRET=ci-test \
             SPINBIKE_TEST_MODE=1 EWELINK_TEST_MODE=success SMTP_TEST_MODE=capture \

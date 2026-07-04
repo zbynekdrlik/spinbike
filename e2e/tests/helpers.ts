@@ -81,18 +81,30 @@ export async function setEnglishLanguage(page: Page) {
 }
 
 /**
+ * The admin/staff password-login `<form>` on /login, scoped by the ONE
+ * attribute only it has: a `type="password"` input. /login also has a
+ * SECOND `type="email"` input + submit button — the customer login-link
+ * section below this form (#109) — so a bare `input[type="email"]` /
+ * `button[type="submit"]` is ambiguous. Scoping by "contains the password
+ * input" (rather than `.first()`) stays correct even if the two sections
+ * are ever reordered on the page — DOM position isn't the real invariant,
+ * "has a password field" is.
+ */
+export function passwordLoginForm(page: Page) {
+    return page.locator('form:has(input[type="password"])');
+}
+
+/**
  * Login via the UI: navigate to /login, fill form, submit, wait for redirect.
  */
 export async function loginViaUI(page: Page, email: string, password: string) {
     await setEnglishLanguage(page);
     await page.goto('/login');
     await page.waitForSelector('h1.page-title');
-    // /login now has a SECOND type="email" input + submit button (the
-    // customer login-link section, #109) below this password form — `.first()`
-    // pins these to the password form, which renders first in the DOM.
-    await page.locator('input[type="email"]').first().fill(email);
-    await page.fill('input[type="password"]', password);
-    await page.locator('button[type="submit"]').first().click();
+    const form = passwordLoginForm(page);
+    await form.locator('input[type="email"]').fill(email);
+    await form.locator('input[type="password"]').fill(password);
+    await form.locator('button[type="submit"]').click();
     // After login, the app redirects to / via location.href
     await page.waitForURL('/', { timeout: 10000 });
 }
