@@ -79,7 +79,10 @@ async fn register_endpoint_is_removed() {
             .fetch_one(&app.pool)
             .await
             .unwrap();
-    assert_eq!(created, 0, "removed register must not create a user account");
+    assert_eq!(
+        created, 0,
+        "removed register must not create a user account"
+    );
 }
 
 // ── invite (POST /api/users/{id}/invite) ─────────────────────────────────
