@@ -57,3 +57,20 @@ The repo root regularly accumulates untracked artefacts that must NOT be committ
 **Always:** use explicit file paths (`git add path1 path2`) or `git add -u` (only modifies tracked files).
 
 **Before any commit:** run `git status --short` to audit what would be staged.
+
+## Push gate on docs-only branches (pre-push-test-check hook)
+
+The airuleset pre-push hook blocks `git push` when the branch (vs origin/main)
+contains any `fix(...)`-prefixed commit with no test commit before it — even
+when every change is docs/config (Gate 2 false positive; the block message
+goes to stdout, so the tool error shows only "No stderr output").
+
+Fix: the bypass marker is honored ONLY on the LATEST commit (never amend —
+project convention). Add an empty marker commit, then push:
+
+```bash
+git commit --allow-empty -m "chore: push gate [no-test: docs-only branch — no runtime code since main]"
+git push origin dev
+```
+
+Never use this for branches with real code fixes — those need RED→GREEN.

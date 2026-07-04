@@ -1,7 +1,8 @@
 //! Door self-entry routes.
 //!
 //! `POST /api/door/open` — authenticated customer opens the studio door:
-//!   * Pre-flight: role + `allow_self_entry` + per-user / global rate limits.
+//!   * Pre-flight: `blocked` (every role, no bypass) + role + `allow_self_entry`
+//!     + per-user / global rate limits.
 //!   * BEGIN tx → count today's `door:` rows → decide visit-or-charge for the
 //!     first press, or zero-amount label for the Nth.
 //!   * Call `state.ewelink.press()` (real cloud or test stub).
@@ -115,9 +116,9 @@ async fn open(
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
     let user_id = claims.sub;
 
-    // 1. Load user + role + allow_self_entry + credit.
-    let row: Option<(String, i64, f64)> = sqlx::query_as(
-        "SELECT role, allow_self_entry, credit FROM users \
+    // 1. Load user + role + allow_self_entry + credit + blocked.
+    let row: Option<(String, i64, f64, bool)> = sqlx::query_as(
+        "SELECT role, allow_self_entry, credit, blocked FROM users \
          WHERE id = ? AND deleted_at IS NULL",
     )
     .bind(user_id)
@@ -125,7 +126,7 @@ async fn open(
     .await
     .map_err(internal_error)?;
 
-    let (role, allow_self_entry, mut credit) = match row {
+    let (role, allow_self_entry, mut credit, blocked) = match row {
         Some(r) => r,
         None => {
             tracing::warn!(user_id, "door: rejected — user not found or deleted");
@@ -135,6 +136,24 @@ async fn open(
             ));
         }
     };
+
+    // Blocked-means-blocked for every role, including admin/staff — a
+    // blocked staff account must not be able to actuate hardware. Checked
+    // BEFORE the allow_self_entry role bypass below so it can never be
+    // skipped by that bypass (#106).
+    //
+    // Reason tag is "blocked" (not the `{"error": "User is blocked"}` shape
+    // used by payments.rs/users.rs) — intentional: this route's own envelope
+    // is already `{"status":"rejected","reason":"<tag>"}` (see "not_allowed"
+    // and "rate_limited" below), so this stays consistent with the OTHER
+    // rejections in this same file rather than mixing two response shapes.
+    if blocked {
+        tracing::warn!(user_id, %role, "door: rejected — user is blocked");
+        return Ok((
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({"status": "rejected", "reason": "blocked"})),
+        ));
+    }
 
     // Admin/staff bypass the allow_self_entry gate — they run the place,
     // they don't need their own opt-in toggle. Customers still need the CEO
