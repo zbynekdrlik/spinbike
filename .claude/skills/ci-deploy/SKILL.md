@@ -258,3 +258,85 @@ test.describe('...', () => {
 This still gives Chromium a real device UA/viewport/touch profile — enough
 for any UA-sniffing or viewport-dependent component logic — without the
 `defaultBrowserType` field that breaks describe-scoped `test.use()`.
+
+## Before starting new work: check for an orphaned unmerged PR blocking dev→main
+
+GitHub allows only ONE open PR per head/base pair. If a prior worker pushed
+to `dev` and opened the `dev`→`main` PR but died mid-CI-monitor (the
+dominant autopilot-worker failure — see `ci-monitoring.md`), that PR sits
+open, fully green, unmerged, and BLOCKS you from opening your own PR for an
+unrelated ticket (#111/#112 hit exactly this against an orphaned
+install-prompt fast-follow, itself a fast-follow on #110/#123's own
+worker-death — see the `docs/autopilot-log.md` #110 entry). Before doing
+anything else: `gh pr list --head dev --json number,title,url`. If one
+exists and isn't yours, finish monitoring its CI to terminal and merge it
+(it's unrelated, already-implemented work — merging it is NOT scope creep,
+it's unblocking your own branch) — THEN re-bump the version (main just
+advanced) and start your own ticket.
+
+## Live post-deploy Playwright verification against `spinbike-dev`/`spinbike.newlevel.media`
+
+Two gotchas, both hit during #111's live verification:
+
+**Stale service worker in your OWN test browser session.** This is a PWA
+with an aggressive `sw.js` cache. If your Playwright/MCP browser session
+previously visited spinbike-dev/prod at an older deploy, a fresh
+`browser_navigate` can render the SW's CACHED old bundle — old version
+label, old DOM (e.g. the removed `/register` link still showing) — even
+though the real deploy succeeded. Don't conclude the deploy failed from
+this alone: cross-check `curl -s <url>/api/version` (never cached) against
+the DOM label first. If they disagree, clear the browser's own cache
+before re-checking the DOM:
+```js
+const regs = await navigator.serviceWorker.getRegistrations();
+for (const r of regs) await r.unregister();
+for (const k of await caches.keys()) await caches.delete(k);
+```
+then re-navigate. If `/api/version` and the DOM STILL disagree after that, THEN it's a real deploy issue.
+
+**No CI-seed admin/staff account exists on the real deployments.**
+`admin@test.com`/`staff@test.com` only exist in the ephemeral CI test
+server (`SPINBIKE_TEST_MODE=1`); the real `dev`/`prod` DBs have only actual
+accounts (owner + a legacy admin), and `POST /api/test/seed-account` isn't
+mounted there. To drive an authenticated staff/admin flow live without
+touching those real accounts, mirror the project's own #106 precedent
+("synthetic test users created + JWT-signed + cleaned up, zero real
+customer data touched"):
+1. `sqlite3 /opt/spinbike/{dev,prod}/spinbike-{dev,}.db` — INSERT a
+   throwaway `role='staff'` row (`password_hash` can be `NULL`, you're not
+   logging in via password).
+2. Sign a JWT yourself with the SAME secret the server uses
+   (`JWT_SECRET` in `/etc/default/spinbike-dev` /
+   `/etc/default/spinbike`, read via `sudo -n cat` — local machine, no SSH)
+   and the exact `Claims{sub,email,role,exp,iat}` shape from
+   `crates/spinbike-server/src/auth/mod.rs` (`jsonwebtoken`, `HS256`,
+   default `Header`). Sanity-check it once with a `curl -H "Authorization:
+   Bearer $TOKEN"` call before using it in the browser.
+3. `page.evaluate` to set `spinbike_token`/`spinbike_user` in `localStorage`
+   (same shape `loginViaAPI` uses in the E2E helpers), then navigate.
+4. Clean up: `DELETE FROM users WHERE id=...` for BOTH the synthetic staff
+   row and anything it created (or a real `DELETE /api/users/{id}` call
+   with its own token first, since that's a soft-delete via the API vs a
+   hard-delete via SQL — either is fine for a throwaway synthetic row).
+
+## A 5xx response ALWAYS logs a browser console error — even when the app handles it gracefully, and CI structurally can't catch it for mail-related paths
+
+Chromium's DevTools logs `Failed to load resource: the server responded
+with a status of 5xx` for ANY fetch with a non-2xx status, INDEPENDENT of
+whether the calling JS catches/handles it — you cannot suppress this from
+app code. `e2e/tests/helpers.ts`'s `setupConsoleCheck` filters 4xx
+("tests intentionally trigger 401/403/409") but deliberately does NOT
+filter 5xx ("indicates real server bugs") — so any endpoint that returns a
+5xx for a KNOWN, STABLE (non-transient) state, not a transient failure,
+will read as a console error on a real deployment even though the UI
+behaves correctly. The invite endpoint's `503 mail_not_configured` (mail
+Disabled is dev's permanent, by-design state, not a fault) is exactly this
+case — filed as
+[#127](https://github.com/zbynekdrlik/spinbike/issues/127) rather than
+silently accepted, since changing an already-shipped status code is a
+contract decision. CI can never surface this on its own: the shared E2E
+server always runs `SMTP_TEST_MODE=capture` (mail forced Active) so the
+503 branch is unreachable there — this class of bug ONLY shows up on a
+real deployment with mail genuinely unconfigured. When you add a NEW
+5xx-returning path, ask whether the condition is really transient (keep
+5xx) or a stable config/precondition state (prefer a 4xx) BEFORE shipping.
