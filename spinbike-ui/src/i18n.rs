@@ -855,6 +855,16 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "Min 8 characters. Only admin can set another user's password.",
         ),
     );
+    // Plain-Slovak rendering of the server's email-uniqueness 409 (the raw
+    // server text is English). Shown in-sheet on a failed edit-save so the
+    // operator understands WHY the email did not save.
+    m.insert(
+        "email_already_used",
+        (
+            "Tento email uz pouziva iny ucet. Jeden email moze patrit len jednemu uctu.",
+            "This email is already used by another account. One email can belong to only one account.",
+        ),
+    );
 
     m
 });
