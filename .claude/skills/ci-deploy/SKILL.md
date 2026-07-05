@@ -332,6 +332,30 @@ customer data touched"):
    with its own token first, since that's a soft-delete via the API vs a
    hard-delete via SQL — either is fine for a throwaway synthetic row).
 
+## `cargo mutants --shard k/n` is 0-INDEXED — matrix values are `[0, n-1]`, not `[1, n]`
+
+An 8-way sharded matrix must be `shard: [0,1,2,3,4,5,6,7]` with `--shard
+${{ matrix.shard }}/8`. `[1..8]` looks natural but makes `8/8` invalid
+(shard index out of range) and silently drops shard `0` — cargo-mutants'
+own docs confirm `k` ranges `0..n-1`. Verified via an independent
+code-review pass before `.github/workflows/mutation-full.yml`'s first-ever
+run (#102) — this file is `workflow_dispatch`-only, so there is no green CI
+run to catch an off-by-one until someone actually fires it.
+
+## `--baseline=skip` is only safe when an upstream job in the SAME RUN already proved the tree green
+
+The PR-gated `mutation-test` job (`ci.yml`) can safely pass `--baseline=skip`
+because it has `needs: test` — the `test` job in the SAME workflow run just
+compiled and ran the suite. A **standalone** `workflow_dispatch` job (the
+full-tree sweep, `mutation-full.yml`) has no such guarantee: it can be fired
+against any ref, including a broken one. With `--baseline=skip`, a
+non-building tree makes cargo-mutants report "0 viable mutants tested" as
+**exit 0** (success) instead of the baseline-failure **exit 4** — a silently
+green job that tested nothing and filed no issue. Fix: don't skip the
+baseline in a job with no upstream green-tree guarantee; let cargo-mutants'
+own baseline check produce exit 4 on a broken tree. Cost is one redundant
+baseline run per shard — acceptable outside a time-boxed PR gate.
+
 ## A 5xx response ALWAYS logs a browser console error — even when the app handles it gracefully, and CI structurally can't catch it for mail-related paths
 
 Chromium's DevTools logs `Failed to load resource: the server responded
