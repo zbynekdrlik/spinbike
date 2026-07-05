@@ -21,24 +21,21 @@ async fn ws_loop(set_msg: WriteSignal<Option<ServerMsg>>) {
 
     loop {
         let ws_url = build_ws_url();
-        match WebSocket::open(&ws_url) {
-            Ok(ws) => {
-                delay_ms = 1000;
-                let (_write, mut read) = ws.split();
+        if let Ok(ws) = WebSocket::open(&ws_url) {
+            delay_ms = 1000;
+            let (_write, mut read) = ws.split();
 
-                while let Some(msg) = read.next().await {
-                    match msg {
-                        Ok(Message::Text(text)) => {
-                            if let Ok(server_msg) = serde_json::from_str::<ServerMsg>(&text) {
-                                set_msg.set(Some(server_msg));
-                            }
+            while let Some(msg) = read.next().await {
+                match msg {
+                    Ok(Message::Text(text)) => {
+                        if let Ok(server_msg) = serde_json::from_str::<ServerMsg>(&text) {
+                            set_msg.set(Some(server_msg));
                         }
-                        Ok(Message::Bytes(_)) => {}
-                        Err(_) => break,
                     }
+                    Ok(Message::Bytes(_)) => {}
+                    Err(_) => break,
                 }
             }
-            Err(_) => {}
         }
 
         gloo_timers::future::sleep(std::time::Duration::from_millis(u64::from(delay_ms))).await;

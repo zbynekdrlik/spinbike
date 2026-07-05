@@ -9,6 +9,7 @@ use spinbike_core::reports::{EventKind, ReportEvent, ReportResponse};
 use super::{FiltersState, RangeMode};
 
 #[component]
+#[allow(clippy::too_many_arguments)] // Leptos #[component] props; splitting into a struct would obscure signal wiring for a working component (#122)
 pub fn ActivityFeed(
     events: ReadSignal<Vec<ReportEvent>>,
     loading: ReadSignal<bool>,
@@ -39,10 +40,8 @@ pub fn ActivityFeed(
                             return false;
                         }
                     }
-                    Some("pass") => {
-                        if !matches!(e.kind(), EventKind::PassSale) {
-                            return false;
-                        }
+                    Some("pass") if !matches!(e.kind(), EventKind::PassSale) => {
+                        return false;
                     }
                     _ => {}
                 }
@@ -132,7 +131,7 @@ pub fn ActivityFeed(
             } else {
                 view! {
                     <div class="group" data-testid="activity-feed">
-                        {rows.into_iter().map(|e| render_row(e)).collect::<Vec<_>>()}
+                        {rows.into_iter().map(render_row).collect::<Vec<_>>()}
                     </div>
                 }.into_any()
             }

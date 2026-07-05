@@ -463,7 +463,6 @@ pub fn DashboardPage() -> impl IntoView {
                     view! {
                         <div
                             class={
-                                let credit_val = credit_val;
                                 move || {
                                     helpers::result_row_class(
                                         highlighted_idx.get() == idx,
@@ -482,7 +481,7 @@ pub fn DashboardPage() -> impl IntoView {
                                     {name}
                                     {if is_blocked {
                                         view! { <span class="badge badge--full badge--inline">{i18n::t(lang.get(), "blocked")}</span> }.into_any()
-                                    } else { view! {}.into_any() }}
+                                    } else { ().into_any() }}
                                 </div>
                                 <div class="search-result-meta">
                                     <code>{format!("…{tail_str}")}</code>

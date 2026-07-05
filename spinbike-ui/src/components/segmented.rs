@@ -37,7 +37,6 @@ pub fn Segmented(
             };
             let key_stored = StoredValue::new(key);
             let label_stored = StoredValue::new(label);
-            let on_change = on_change.clone();
 
             view! {
                 <button

@@ -45,7 +45,7 @@ struct Participant {
 
 fn current_week_range() -> (String, String) {
     let now = js_sys::Date::new_0();
-    let year = now.get_full_year() as u32;
+    let year = now.get_full_year();
     let month = now.get_month() as i32;
     let day = now.get_date() as i32;
     let dow = now.get_day();
@@ -53,7 +53,7 @@ fn current_week_range() -> (String, String) {
 
     let monday = js_sys::Date::new_with_year_month_day(year, month, day - days_since_monday);
     let sunday = js_sys::Date::new_with_year_month_day(
-        monday.get_full_year() as u32,
+        monday.get_full_year(),
         monday.get_month() as i32,
         monday.get_date() as i32 + 6,
     );

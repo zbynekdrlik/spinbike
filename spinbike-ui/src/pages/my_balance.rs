@@ -147,7 +147,7 @@ pub fn MyBalancePage() -> impl IntoView {
                                         let n = n.clone();
                                         view! { <span class="recent-visits__note">{n}</span> }.into_any()
                                     }
-                                    _ => view! {}.into_any(),
+                                    _ => ().into_any(),
                                 };
                                 view! {
                                     <li data-testid="recent-visit" class="recent-visits__row">

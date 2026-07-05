@@ -160,10 +160,10 @@ pub fn EditInfoForm(
             }
 
             let (loading, set_loading) = signal(false);
-            let on_close_cancel = on_close.clone();
-            let on_close_btn = on_close.clone();
-            let on_close_save = on_close.clone();
-            let on_close_invite = on_close.clone();
+            let on_close_cancel = on_close;
+            let on_close_btn = on_close;
+            let on_close_save = on_close;
+            let on_close_invite = on_close;
             let initial_allow_se_at_open = allow_self_entry.get_untracked();
 
             let on_submit = move |ev: web_sys::SubmitEvent| {
@@ -191,7 +191,7 @@ pub fn EditInfoForm(
                 set_msg.set(String::new());
                 set_err.set(String::new());
                 set_loading.set(true);
-                let on_close_inner = on_close_save.clone();
+                let on_close_inner = on_close_save;
                 spawn_local(async move {
                     #[derive(serde::Serialize)]
                     struct Req {
@@ -249,7 +249,7 @@ pub fn EditInfoForm(
                 set_msg.set(String::new());
                 set_err.set(String::new());
                 set_invite_loading.set(true);
-                let on_close_after_invite = on_close_invite.clone();
+                let on_close_after_invite = on_close_invite;
                 spawn_local(async move {
                     #[derive(serde::Deserialize)]
                     struct InviteResponse {
@@ -427,7 +427,7 @@ pub fn EditInfoForm(
                                 // above; same disposed-reactive-scope reason.
                                 disabled=move || loading.get() || invite_loading.get()
                                 on:click=move |_| {
-                                    let cb = on_close_btn.clone();
+                                    let cb = on_close_btn;
                                     spawn_local(async move {
                                         gloo_timers::future::TimeoutFuture::new(0).await;
                                         cb.run(());

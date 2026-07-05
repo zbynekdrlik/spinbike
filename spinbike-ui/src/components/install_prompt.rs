@@ -51,12 +51,11 @@ fn is_standalone() -> bool {
         return true;
     }
     let match_media = get_prop(&window, "matchMedia");
-    if let Some(func) = match_media.dyn_ref::<Function>() {
-        if let Ok(result) = func.call1(&window, &JsValue::from_str("(display-mode: standalone)")) {
-            if get_prop(&result, "matches").as_bool() == Some(true) {
-                return true;
-            }
-        }
+    if let Some(func) = match_media.dyn_ref::<Function>()
+        && let Ok(result) = func.call1(&window, &JsValue::from_str("(display-mode: standalone)"))
+        && get_prop(&result, "matches").as_bool() == Some(true)
+    {
+        return true;
     }
     false
 }
@@ -124,10 +123,10 @@ async fn trigger_install_prompt() {
         return;
     }
     let prompt_val = get_prop(&event, "prompt");
-    if let Some(prompt_fn) = prompt_val.dyn_ref::<Function>() {
-        if let Ok(result) = prompt_fn.call0(&event) {
-            let _ = JsFuture::from(Promise::resolve(&result)).await;
-        }
+    if let Some(prompt_fn) = prompt_val.dyn_ref::<Function>()
+        && let Ok(result) = prompt_fn.call0(&event)
+    {
+        let _ = JsFuture::from(Promise::resolve(&result)).await;
     }
     let user_choice = get_prop(&event, "userChoice");
     if !user_choice.is_undefined() {

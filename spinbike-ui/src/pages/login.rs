@@ -112,7 +112,7 @@ pub fn LoginPage() -> impl IntoView {
             {move || {
                 let e = error.get();
                 if e.is_empty() {
-                    view! {}.into_any()
+                    ().into_any()
                 } else {
                     view! { <div class="alert alert-error">{e}</div> }.into_any()
                 }

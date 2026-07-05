@@ -5,6 +5,14 @@ test names, decisions, and the shared PR #. Newest entries at the top.
 
 ---
 
+## 2026-07-05 — #98: typed Role migration (UserResponse + UserInfo)
+
+- #98 typed Role migration (UserResponse + UserInfo) — PR #135 merged 78d5168d, prod+dev v0.15.0-dev.22, wire-compat via green E2E role-gating (supervisor-completed after worker Monitor-death; logged retroactively here since the worker that implemented #98 died before writing its own log entry).
+
+## 2026-07-05 — #122: spinbike-ui fmt+clippy CI gate
+
+- #122 spinbike-ui fmt+clippy CI gate — added `cargo fmt --manifest-path spinbike-ui/Cargo.toml` + `cargo clippy --manifest-path spinbike-ui/Cargo.toml --target wasm32-unknown-unknown -- -D warnings` to the `build-wasm` CI job (already had the wasm32 target + a spinbike-ui-scoped rust-cache); pre-fixed the one predicted clippy hit (`ActivityFeed` 8 props, `too_many_arguments`, scoped `#[allow]`). Enabling clippy for the first time on this workspace then surfaced 44 real pre-existing warnings across 19 files — fixed all of them mechanically in commit `f675f5d`, applying clippy's own suggested rewrites verbatim (zero behavior change): `view!{}.into_any()` → `().into_any()` (unit-arg), `X.clone()` → `X` for Copy `Callback<T>` (+ 2 now-redundant `let x = x;` self-rebinds removed), nested if/match collapsed via Rust-2024 let-chains, `*d = *d - X` → `*d -= X` compound-assign, unnecessary `as u32` cast removal (`get_full_year()` already returns `u32`), one dead `let kind = ...` removed, one `wasm_bindgen::prelude::*` import cfg-gated to its use site, one redundant closure → bare fn ref. Reviewed clean by 3 parallel targeted agents (Callback-Copy/closure-capture semantics, control-flow-collapsing correctness, CI-config+misc) plus a deep `requesting-code-review` pass — all green, CI green (lint/fmt/clippy/test/test-ui/build-wasm/e2e/mutation/deploy-dev/smoke-dev). PR [#136](https://github.com/zbynekdrlik/spinbike/pull/136), v0.15.0-dev.23 (merge commit SHA unknowable at commit time since this line ships inside the same PR it documents — see the PR page).
+
 ## 2026-07-05 — #126: dashboard errors rendered in the green success alert
 
 - **Issue:** [#126](https://github.com/zbynekdrlik/spinbike/issues/126) — the dashboard's `set_msg` channel (green `.alert-success`) was overloaded for BOTH success and error text in `block_button.rs`/`edit_info_form.rs`/`transactions_list.rs`, so a failed block/save/invite/void could read as a confirmation. Validated STILL_VALID (grepped the current code, confirmed `err`/`set_err` existed but wasn't wired to these 3 components).

@@ -27,7 +27,7 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
     let template_id = slot.template_id;
     let date = slot.date.clone();
     let booking_id = slot.user_booking_id;
-    let on_change_book = on_change.clone();
+    let on_change_book = on_change;
     let date_book = date.clone();
 
     let time_str = slot.start_time.clone();
@@ -37,7 +37,7 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
 
     let on_book = move |_| {
         let date = date_book.clone();
-        let on_change = on_change_book.clone();
+        let on_change = on_change_book;
         set_loading.set(true);
         set_error.set(String::new());
         spawn_local(async move {
@@ -59,7 +59,6 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
     };
 
     let on_cancel = move |_| {
-        let on_change = on_change.clone();
         if let Some(bid) = booking_id {
             set_loading.set(true);
             set_error.set(String::new());
