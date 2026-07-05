@@ -10,6 +10,78 @@ use crate::components::Sheet;
 use crate::i18n::{self, Lang};
 
 use super::CardInfo;
+use super::helpers::event_target_value;
+
+/// Non-empty-after-trim → `Some`, else `None` (name/email field semantics).
+fn nz_trim(s: String) -> Option<String> {
+    if s.trim().is_empty() { None } else { Some(s) }
+}
+
+/// Non-empty (no trim) → `Some`, else `None` (company/phone/password semantics —
+/// preserves the exact per-field behavior the Save handler always had).
+fn nz(s: String) -> Option<String> {
+    if s.is_empty() { None } else { Some(s) }
+}
+
+/// PUT the edit-form fields to `/api/users/{id}`. Shared by Save AND by the
+/// save-then-invite path so both persist IDENTICAL field semantics — the invite
+/// endpoint reads the committed DB row, so the email must be saved before it can
+/// be invited against.
+async fn save_user_fields(
+    card_id: i64,
+    name: String,
+    email: String,
+    company: String,
+    phone: String,
+    allow_self_entry: Option<bool>,
+    password: String,
+) -> Result<CardInfo, api::ApiError> {
+    #[derive(serde::Serialize)]
+    struct Req {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        email: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        company: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        phone: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        allow_self_entry: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        password: Option<String>,
+    }
+    let req = Req {
+        name: nz_trim(name),
+        email: nz_trim(email),
+        company: nz(company),
+        phone: nz(phone),
+        allow_self_entry,
+        password: nz(password),
+    };
+    api::put_json::<Req, CardInfo>(&format!("/api/users/{card_id}"), &req).await
+}
+
+/// Format a save/PUT error for the IN-SHEET red alert (shared by Save and by the
+/// save step of save-then-invite). Names the colliding account for staff/admin
+/// (the server withholds that identity from a self-editing customer).
+fn save_error_text(lang: Lang, e: api::ApiError) -> String {
+    if let Some(name) = e.conflict_name {
+        let who = match e.conflict_card {
+            Some(card) if !card.trim().is_empty() => format!("{name} ({card})"),
+            _ => name,
+        };
+        i18n::tf(lang, "email_already_used_by", &[&who])
+    } else if e.message.contains("email already exists") {
+        // Generic (no-name) collision — the branch a CUSTOMER self-edit hits.
+        // Couples to the server's English 409 text; falls through to the raw
+        // formatted server text below if that wording ever changes (never a
+        // break, just less specific).
+        i18n::t(lang, "email_already_used").to_string()
+    } else {
+        i18n::tf(lang, "error_format", &[&e.message])
+    }
+}
 
 /// Admin user-edit form. Refreshes its inputs on EVERY reopen from the
 /// authoritative server state via `GET /api/users/lookup/{card_code}` and
@@ -57,11 +129,15 @@ pub fn EditInfoForm(
     let (initial_email, _) = signal(card.email.clone().unwrap_or_default());
     let (initial_company, _) = signal(card.company.clone().unwrap_or_default());
     let (initial_phone, _) = signal(card.phone.clone().unwrap_or_default());
-    // Tracks the LAST-SAVED email (not the unsaved draft in the input) — the
-    // "Poslat pozvanku" button is enabled only against this, per #111. Starts
-    // from the card's current persisted email; updated from the fresh
-    // `CardInfo` the save handler gets back on success (see on_submit below).
-    let (saved_email, set_saved_email) = signal(card.email.clone());
+    // Reactive mirror of the CURRENT email field (typed OR saved) — the
+    // "Poslat pozvanku" button is enabled whenever this is non-empty, so a
+    // freshly typed email enables it immediately (no pre-save/reopen, #141).
+    // Kept in sync by `on:input` on the email input and by the refresh Effect's
+    // smart-overwrite below (which writes via NodeRef and so must sync this
+    // signal explicitly — `set_value()` emits no `input` event). Seeded from
+    // the card's persisted email. Save/invite are still mutually exclusive
+    // while in flight (both gate on the other's loading flag, #111).
+    let (email_sig, set_email_sig) = signal(card.email.clone().unwrap_or_default());
 
     // NodeRefs declared at the function-body level so the refresh Effect
     // can write to them directly when fetch completes. They're populated
@@ -123,7 +199,21 @@ pub fn EditInfoForm(
                             }
                         };
                     smart_set(&name_ref, &initial_name, &c.name);
-                    smart_set(&email_ref, &initial_email, c.email.as_deref().unwrap_or(""));
+                    // Email: smart-overwrite the DOM value AND keep the reactive
+                    // gate signal (`email_sig`) in sync — but ONLY when the user
+                    // hasn't typed (cur == initial), mirroring smart_set. This
+                    // is what re-enables the invite button after a
+                    // Cancel-then-reopen against an out-of-band email change:
+                    // `set_value()` fires no `input` event, so `on:input` won't
+                    // run — sync `email_sig` explicitly here.
+                    if let Some(el) = email_ref.get_untracked() {
+                        let input: &HtmlInputElement = &el;
+                        if input.value() == initial_email {
+                            let new_email = c.email.as_deref().unwrap_or("");
+                            input.set_value(new_email);
+                            set_email_sig.set(new_email.to_string());
+                        }
+                    }
                     smart_set(
                         &company_ref,
                         &initial_company,
@@ -139,14 +229,8 @@ pub fn EditInfoForm(
                     if target_is_customer {
                         set_allow_self_entry.set(c.allow_self_entry);
                     }
-                    // Re-sync the invite button's gating value too — otherwise
-                    // a Cancel-then-reopen of the SAME still-mounted sheet
-                    // (no remount, so `saved_email` would otherwise hold
-                    // whatever it was at the last save/mount) would leave the
-                    // button's enabled state stale relative to an email
-                    // change made out-of-band (another staff terminal, an
-                    // import) between the two opens.
-                    set_saved_email.set(c.email.clone());
+                    // (The invite button's gating value — `email_sig` — is
+                    // re-synced in the email smart-overwrite block above.)
                 }
             });
         }
@@ -176,113 +260,63 @@ pub fn EditInfoForm(
             let on_close_invite = on_close;
             let initial_allow_se_at_open = allow_self_entry.get_untracked();
 
+            // Read a NodeRef input's current DOM value — shared by Save and by
+            // the save-then-invite click so both collect identical field values.
+            let read = |n: &NodeRef<leptos::html::Input>| {
+                n.get()
+                    .map(|el| {
+                        let el: &HtmlInputElement = &el;
+                        el.value()
+                    })
+                    .unwrap_or_default()
+            };
+            // The admin-only `allow_self_entry` payload: only sent when changed
+            // AND the target is a customer (admin/staff bypass the flag, and the
+            // row is hidden for them — #94). Shared by Save + save-then-invite.
+            let allow_se_req = move || {
+                let allow_se = allow_self_entry.get_untracked();
+                if is_admin && target_is_customer && allow_se != initial_allow_se_at_open {
+                    Some(allow_se)
+                } else {
+                    None
+                }
+            };
+
             let on_submit = move |ev: web_sys::SubmitEvent| {
                 ev.prevent_default();
-                let read = |n: &NodeRef<leptos::html::Input>| {
-                    n.get()
-                        .map(|el| {
-                            let el: &HtmlInputElement = &el;
-                            el.value()
-                        })
-                        .unwrap_or_default()
-                };
                 let name = read(&name_ref);
                 let email = read(&email_ref);
                 let company = read(&company_ref);
                 let phone = read(&phone_ref);
                 let password = read(&password_ref);
-                let allow_se = allow_self_entry.get_untracked();
+                let allow_self_entry = allow_se_req();
 
-                // Clear any stale alert from a previous action before this
-                // one resolves — otherwise a stale red error (or green
-                // success) from an earlier action can still be showing
-                // when this one completes, stacking two conflicting
-                // alerts (#126 follow-up).
+                // Clear any stale alert from a previous action before this one
+                // resolves — otherwise a stale red error (or green success) from
+                // an earlier action can still be showing when this one completes,
+                // stacking two conflicting alerts (#126 follow-up).
                 set_msg.set(String::new());
                 set_err.set(String::new());
                 set_save_err.set(String::new());
                 set_loading.set(true);
                 let on_close_inner = on_close_save;
                 spawn_local(async move {
-                    #[derive(serde::Serialize)]
-                    struct Req {
-                        #[serde(skip_serializing_if = "Option::is_none")]
-                        name: Option<String>,
-                        #[serde(skip_serializing_if = "Option::is_none")]
-                        email: Option<String>,
-                        #[serde(skip_serializing_if = "Option::is_none")]
-                        company: Option<String>,
-                        #[serde(skip_serializing_if = "Option::is_none")]
-                        phone: Option<String>,
-                        #[serde(skip_serializing_if = "Option::is_none")]
-                        allow_self_entry: Option<bool>,
-                        #[serde(skip_serializing_if = "Option::is_none")]
-                        password: Option<String>,
-                    }
-                    let req = Req {
-                        name: if name.trim().is_empty() { None } else { Some(name) },
-                        email: if email.trim().is_empty() { None } else { Some(email) },
-                        company: if company.is_empty() { None } else { Some(company) },
-                        phone: if phone.is_empty() { None } else { Some(phone) },
-                        // Admin-only field, only sent when changed AND the
-                        // target user is a customer (admin/staff bypass the
-                        // flag, and the row is hidden for them — #94).
-                        allow_self_entry: if is_admin
-                            && target_is_customer
-                            && allow_se != initial_allow_se_at_open
-                        {
-                            Some(allow_se)
-                        } else {
-                            None
-                        },
-                        password: if password.is_empty() { None } else { Some(password) },
-                    };
-                    match api::put_json::<Req, CardInfo>(&format!("/api/users/{card_id}"), &req).await {
+                    match save_user_fields(
+                        card_id, name, email, company, phone, allow_self_entry, password,
+                    )
+                    .await
+                    {
                         Ok(c) => {
-                            set_saved_email.set(c.email.clone());
+                            set_email_sig.set(c.email.clone().unwrap_or_default());
                             set_selected.set(Some(c));
                             set_msg.set(i18n::t(lang.get_untracked(), "saved").to_string());
                             on_close_inner.run(());
                         }
                         Err(e) => {
-                            // Route to the IN-SHEET channel (not the shared
-                            // dashboard alert, which hides behind the sheet
-                            // backdrop). When the server named the colliding
-                            // account (staff/admin only), show WHO holds the
-                            // email so the operator can go fix it. Otherwise
-                            // fall back to the generic collision message, then
-                            // to the raw formatted server text.
-                            let text = if let Some(name) = e.conflict_name {
-                                let who = match e.conflict_card {
-                                    Some(card) if !card.trim().is_empty() => {
-                                        format!("{name} ({card})")
-                                    }
-                                    _ => name,
-                                };
-                                i18n::tf(
-                                    lang.get_untracked(),
-                                    "email_already_used_by",
-                                    &[&who],
-                                )
-                            } else if e.message.contains("email already exists") {
-                                // Generic (no-name) collision — the branch a
-                                // CUSTOMER self-edit hits, since the server
-                                // withholds the conflicting identity from them.
-                                // NOTE: this couples to the server's English
-                                // 409 text ("A user with this email already
-                                // exists"). If that wording ever changes this
-                                // falls through to `error_format` below — still
-                                // informative (raw server text), never a break.
-                                i18n::t(lang.get_untracked(), "email_already_used")
-                                    .to_string()
-                            } else {
-                                i18n::tf(
-                                    lang.get_untracked(),
-                                    "error_format",
-                                    &[&e.message],
-                                )
-                            };
-                            set_save_err.set(text);
+                            // In-sheet red alert (the shared dashboard alert is
+                            // occluded by this sheet's backdrop). Names the
+                            // colliding account for staff/admin.
+                            set_save_err.set(save_error_text(lang.get_untracked(), e));
                         }
                     }
                     set_loading.set(false);
@@ -291,6 +325,17 @@ pub fn EditInfoForm(
 
             let (invite_loading, set_invite_loading) = signal(false);
             let on_invite_click = move |_: web_sys::MouseEvent| {
+                // ONE click = persist the current field values (incl. a freshly
+                // typed email) FIRST, then invite. The invite endpoint reads the
+                // committed DB row, so without the save it would 400 (no email)
+                // or invite against a stale address (#141).
+                let name = read(&name_ref);
+                let email = read(&email_ref);
+                let company = read(&company_ref);
+                let phone = read(&phone_ref);
+                let password = read(&password_ref);
+                let allow_self_entry = allow_se_req();
+
                 // Same stale-alert clear as on_submit above (#126 follow-up).
                 set_msg.set(String::new());
                 set_err.set(String::new());
@@ -298,6 +343,25 @@ pub fn EditInfoForm(
                 set_invite_loading.set(true);
                 let on_close_after_invite = on_close_invite;
                 spawn_local(async move {
+                    // Step 1 — persist. A save failure (e.g. the 409
+                    // email-already-used conflict) STOPS here: show the in-sheet
+                    // error and keep the sheet OPEN to fix inline (exactly like
+                    // Save). Do NOT invite, do NOT close.
+                    let saved = match save_user_fields(
+                        card_id, name, email, company, phone, allow_self_entry, password,
+                    )
+                    .await
+                    {
+                        Ok(c) => c,
+                        Err(e) => {
+                            set_save_err.set(save_error_text(lang.get_untracked(), e));
+                            set_invite_loading.set(false);
+                            return;
+                        }
+                    };
+                    set_email_sig.set(saved.email.clone().unwrap_or_default());
+
+                    // Step 2 — invite against the now-committed email.
                     #[derive(serde::Deserialize)]
                     struct InviteResponse {
                         sent_to: String,
@@ -326,14 +390,17 @@ pub fn EditInfoForm(
                             }
                         }
                     }
+
+                    // Reflect the persisted user to the parent, then close on
+                    // EITHER invite outcome so the shared status line (parent
+                    // dashboard) is visible — this sheet's own `position: fixed;
+                    // z-index: 200` backdrop blur sits above an in-body alert
+                    // while the sheet is open. `set_selected` runs LAST (not
+                    // before the invite await) so it can't remount this
+                    // component mid-request. Unlike Save, invite has no
+                    // fix-inline retry, so closing is correct.
+                    set_selected.set(Some(saved));
                     set_invite_loading.set(false);
-                    // Close the sheet on EITHER outcome so the status line
-                    // (rendered by the parent dashboard, outside this
-                    // component) is actually visible — the sheet's own
-                    // backdrop is a full-viewport `position: fixed; z-index:
-                    // 200` blur that sits above it while the sheet stays
-                    // open. Unlike Save, Invite has no "fix inline and
-                    // retry" flow, so there's nothing gained by staying open.
                     on_close_after_invite.run(());
                 });
             };
@@ -380,6 +447,7 @@ pub fn EditInfoForm(
                                 class="form-control"
                                 node_ref=email_ref
                                 value=initial_email.get_untracked()
+                                on:input=move |ev| set_email_sig.set(event_target_value(&ev))
                             />
                         </div>
                         <div class="form-group">
@@ -388,23 +456,17 @@ pub fn EditInfoForm(
                                 class="btn btn--ghost"
                                 data-testid="user-edit-send-invite"
                                 disabled=move || {
-                                    // Also gated on the SAVE form's own
-                                    // `loading` (not just `invite_loading`):
-                                    // without it, a user could click Save
-                                    // (new email typed) then immediately
-                                    // click Send before the PUT resolves —
-                                    // `saved_email` wouldn't reflect the new
-                                    // value yet, but the invite would still
-                                    // fire (the server reads the CURRENT
-                                    // DB row at request time, independent of
-                                    // this signal — see #111).
+                                    // Enabled as soon as the CURRENT email field
+                                    // is non-empty — the click saves that email
+                                    // before inviting (#141), so no pre-save is
+                                    // needed. Still blocked while a Save OR an
+                                    // invite is in flight: mutually exclusive
+                                    // with the Save button (both gate on the
+                                    // other's loading flag), so two overlapping
+                                    // PUTs can't race (#111).
                                     invite_loading.get()
                                         || loading.get()
-                                        || saved_email
-                                            .get()
-                                            .as_deref()
-                                            .filter(|s| !s.trim().is_empty())
-                                            .is_none()
+                                        || email_sig.get().trim().is_empty()
                                 }
                                 on:click=on_invite_click
                             >
