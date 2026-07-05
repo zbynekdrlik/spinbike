@@ -27,8 +27,31 @@ async function openEditInfoSheet(page: import('@playwright/test').Page, searchTe
     await clickEditInfo(page);
 }
 
-test.describe('Staff "Send invite" button in edit-info form (#111)', () => {
-    test('disabled for a card with no saved email', async ({ page }) => {
+const randomEmail = (prefix: string) => {
+    const suffix = Array.from({ length: 8 }, () =>
+        String.fromCharCode(97 + Math.floor(Math.random() * 26)),
+    ).join('');
+    return `${prefix}-${suffix}@test.local`;
+};
+
+// Fetch a card's currently-persisted state (proves the SAVE half of
+// save-then-invite actually committed the email, not just that an invite fired).
+async function lookupCard(token: string, cardCode: string) {
+    const r = await fetch(`${BASE_URL}/api/users/lookup/${cardCode}`, {
+        headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!r.ok) throw new Error(`lookup ${cardCode}: ${r.status} ${await r.text()}`);
+    return (await r.json()) as { email?: string | null };
+}
+
+// #141: sending an invite from the edit sheet used to take multiple steps —
+// type the email, Save (sheet closes), REOPEN, only then is the invite button
+// enabled. The fix makes the button (a) enable the instant a valid email is
+// typed, and (b) on click, PERSIST the typed email first and THEN invite, in a
+// single click. A save-step failure (e.g. the 409 email-uniqueness conflict)
+// stops before inviting and shows the in-sheet error, sheet staying open.
+test.describe('Staff "Send invite" button in edit-info form (#111, #141)', () => {
+    test('disabled when the email field is empty', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
         const adminToken = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
 
@@ -42,16 +65,82 @@ test.describe('Staff "Send invite" button in edit-info form (#111)', () => {
         assertCleanConsole(consoleMessages);
     });
 
-    test('enabled for a card with a saved email; click sends the invite and closes the sheet', async ({
+    test('typing an email ENABLES the button on the SAME open — no pre-save/reopen (#141)', async ({
         page,
     }) => {
         const consoleMessages = setupConsoleCheck(page);
         const adminToken = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
 
-        const suffix = Array.from({ length: 8 }, () =>
-            String.fromCharCode(97 + Math.floor(Math.random() * 26)),
-        ).join('');
-        const email = `hasemail-${suffix}@test.local`;
+        const user = await createUniqueUser(adminToken, 0, 'TypeEnable');
+        await openEditInfoSheet(page, user.name);
+
+        const inviteButton = page.locator('[data-testid="user-edit-send-invite"]');
+        await expect(inviteButton).toBeDisabled();
+
+        // Type an email — the button must enable on THIS open, with no Save and
+        // no reopen (the whole point of #141). RED before the fix (the gate was
+        // keyed on the last-SAVED email, not the typed value).
+        await page
+            .locator('[data-testid="sheet-edit-info"] input[type="email"]')
+            .fill(randomEmail('typeenable'));
+        await expect(inviteButton).toBeEnabled();
+
+        // Clearing it again disables the button (the gate tracks the live value).
+        await page.locator('[data-testid="sheet-edit-info"] input[type="email"]').fill('');
+        await expect(inviteButton).toBeDisabled();
+
+        assertCleanConsole(consoleMessages);
+    });
+
+    test('one click on a freshly-typed email PERSISTS it AND sends the invite — no separate Save (#141)', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        const adminToken = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+
+        const user = await createUniqueUser(adminToken, 0, 'OneClick');
+        await openEditInfoSheet(page, user.name);
+
+        // Confirm the user starts with NO email persisted.
+        expect((await lookupCard(adminToken, user.card_code)).email ?? '').toBe('');
+
+        const typedEmail = randomEmail('oneclick');
+        await page
+            .locator('[data-testid="sheet-edit-info"] input[type="email"]')
+            .fill(typedEmail);
+
+        const inviteButton = page.locator('[data-testid="user-edit-send-invite"]');
+        await expect(inviteButton).toBeEnabled();
+        await inviteButton.click();
+
+        // The sheet closes on invite completion so the confirmation isn't stuck
+        // behind the sheet's own full-viewport backdrop blur.
+        await expect(page.locator('[data-testid="sheet-edit-info"]')).not.toBeVisible({
+            timeout: 5000,
+        });
+
+        const success = page.locator('.alert-success');
+        await expect(success).toBeVisible({ timeout: 10000 });
+        await expect(success).toContainText(typedEmail);
+
+        // The SAVE half must have committed the typed email — this is the part
+        // that previously required a separate Save + reopen.
+        await expect
+            .poll(async () => (await lookupCard(adminToken, user.card_code)).email ?? '', {
+                timeout: 5000,
+            })
+            .toBe(typedEmail);
+
+        assertCleanConsole(consoleMessages);
+    });
+
+    test('card with a saved email: click sends the invite and closes the sheet', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        const adminToken = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+
+        const email = randomEmail('hasemail');
         const user = await createUniqueUser(adminToken, 0, 'HasEmail', email);
         await openEditInfoSheet(page, user.name);
 
@@ -61,11 +150,6 @@ test.describe('Staff "Send invite" button in edit-info form (#111)', () => {
 
         await inviteButton.click();
 
-        // The sheet closes on invite completion (success or error) — see
-        // edit_info_form.rs — specifically so this confirmation is NOT stuck
-        // behind the sheet's own full-viewport backdrop blur (z-index above
-        // the alert), which would make it invisible to a real user even
-        // though it's technically present in the DOM.
         await expect(page.locator('[data-testid="sheet-edit-info"]')).not.toBeVisible({
             timeout: 5000,
         });
@@ -77,38 +161,43 @@ test.describe('Staff "Send invite" button in edit-info form (#111)', () => {
         assertCleanConsole(consoleMessages);
     });
 
-    test('typing an email and saving enables the invite button on the next open', async ({
+    test('a colliding typed email: one-click invite shows the in-sheet 409 error, stays open, sends nothing', async ({
         page,
     }) => {
         const consoleMessages = setupConsoleCheck(page);
         const adminToken = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
 
-        const user = await createUniqueUser(adminToken, 0, 'TypeSave');
-        await openEditInfoSheet(page, user.name);
-        await expect(page.locator('[data-testid="user-edit-send-invite"]')).toBeDisabled();
+        // A holder account that already OWNS an email (and has a card_code, so
+        // the staff-visible 409 names both).
+        const holderEmail = randomEmail('holder');
+        const holder = await createUniqueUser(adminToken, 0, 'Holder', holderEmail);
 
-        const suffix = Array.from({ length: 8 }, () =>
-            String.fromCharCode(97 + Math.floor(Math.random() * 26)),
-        ).join('');
-        const typedEmail = `typesave-${suffix}@test.local`;
+        // The victim we try to invite using the already-taken email.
+        const victim = await createUniqueUser(adminToken, 0, 'Victim');
+        await openEditInfoSheet(page, victim.name);
+
         await page
             .locator('[data-testid="sheet-edit-info"] input[type="email"]')
-            .fill(typedEmail);
-        await page
-            .locator('[data-testid="sheet-edit-info"] button[type="submit"]')
-            .click();
+            .fill(holderEmail);
 
-        // Save success closes the sheet (existing behavior).
-        await expect(page.locator('[data-testid="sheet-edit-info"]')).not.toBeVisible({
-            timeout: 5000,
-        });
+        const inviteButton = page.locator('[data-testid="user-edit-send-invite"]');
+        await expect(inviteButton).toBeEnabled();
+        await inviteButton.click();
 
-        // Reopen for the SAME user — the acceptance criterion from #111:
-        // "after the owner saves a newly-typed email, the button becomes
-        // available".
-        await openEditInfoSheet(page, user.name);
-        await expect(page.locator('[data-testid="user-edit-send-invite"]')).toBeEnabled();
+        // The SAVE step 409s → in-sheet error, naming the colliding account, and
+        // the sheet MUST stay open (fix inline). The invite must NOT fire.
+        const sheet = page.locator('[data-testid="sheet-edit-info"]');
+        const inSheetError = sheet.locator('[data-testid="edit-info-error"]');
+        await expect(inSheetError).toBeVisible({ timeout: 5000 });
+        await expect(inSheetError).toContainText(holder.name);
+        await expect(sheet).toBeVisible();
+        await expect(page.locator('.alert-success')).toHaveCount(0);
 
+        // The victim must NOT have been given the colliding email.
+        expect((await lookupCard(adminToken, victim.card_code)).email ?? '').toBe('');
+
+        // The 409 logs a browser-level 4xx "Failed to load resource" that the
+        // shared helper already filters — nothing else should appear.
         assertCleanConsole(consoleMessages);
     });
 
@@ -123,10 +212,9 @@ test.describe('Staff "Send invite" button in edit-info form (#111)', () => {
         await expect(page.locator('[data-testid="user-edit-send-invite"]')).toBeDisabled();
 
         // Close via Cancel — the sheet hides but the EditInfoForm component
-        // itself stays mounted (only a remount, e.g. after a save that
-        // changes `selected`, would otherwise re-seed the saved-email state;
-        // Cancel does neither). This is the scenario the refresh Effect's
-        // `set_saved_email` sync (added in review) specifically covers.
+        // itself stays mounted (only a remount, e.g. after a save that changes
+        // `selected`, would re-seed field state; Cancel does neither). This is
+        // the scenario the refresh Effect's `email_sig` sync specifically covers.
         await page
             .locator('[data-testid="sheet-edit-info"] button')
             .filter({ hasText: /zrusit|cancel/i })
@@ -135,12 +223,9 @@ test.describe('Staff "Send invite" button in edit-info form (#111)', () => {
             timeout: 2000,
         });
 
-        // Simulate a DIFFERENT staff terminal adding the email directly via
-        // the API, bypassing this browser's form entirely.
-        const suffix = Array.from({ length: 8 }, () =>
-            String.fromCharCode(97 + Math.floor(Math.random() * 26)),
-        ).join('');
-        const outOfBandEmail = `outofband-${suffix}@test.local`;
+        // A DIFFERENT staff terminal adds the email directly via the API,
+        // bypassing this browser's form entirely.
+        const outOfBandEmail = randomEmail('outofband');
         const putResp = await fetch(`${BASE_URL}/api/users/${user.user_id}`, {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
@@ -150,12 +235,10 @@ test.describe('Staff "Send invite" button in edit-info form (#111)', () => {
             throw new Error(`out-of-band PUT failed: ${putResp.status} ${await putResp.text()}`);
         }
 
-        // Reopen the SAME still-mounted EditInfoForm — NOT via a fresh
-        // page.goto/search (that would reload the whole app and trivially
-        // re-seed everything, masking the bug this test targets). The action
-        // panel for this card is still showing after Cancel; just re-click
-        // "Edit Info" so the show=false→true refresh Effect fires against
-        // the SAME component instance.
+        // Reopen the SAME still-mounted EditInfoForm (NOT a fresh page.goto/search,
+        // which would reload the app and trivially re-seed everything). The
+        // show=false→true refresh Effect fires and its email smart-overwrite must
+        // sync `email_sig`, re-enabling the button.
         await clickEditInfo(page);
         await expect(page.locator('[data-testid="user-edit-send-invite"]')).toBeEnabled({
             timeout: 5000,
