@@ -1,16 +1,26 @@
 name: CI
 
 on:
+  # Single trigger: push only. Dropping the pull_request trigger eliminates the
+  # push+pull_request double-fire (#103) — a dev commit updated the open
+  # dev→main PR and fired a SECOND full run for the same commit. Now one push =
+  # one run. The dev→main PR is still gated by the push run on dev's HEAD (same
+  # SHA), and the two jobs that were pull_request-only (mutation-test,
+  # check-version-bump) are re-gated to run on the dev push instead — see their
+  # `if:` below.
   push:
     branches: [main, dev]
-  pull_request:
-    branches: [main]
 
 concurrency:
-  # Keep push and pull_request concurrency separate so a PR run from the same
-  # branch doesn't swallow the push run that carries the deploy job.
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.head_ref || github.ref_name }}
-  cancel-in-progress: ${{ github.event_name == 'push' }}
+  # Per-branch group. cancel-in-progress cancels a superseded run when a newer
+  # commit lands on the same branch — identical semantics to the prior
+  # event-scoped group (`cancel-in-progress: ${{ github.event_name == 'push' }}`)
+  # since only push events remain. The deploy-dev / deploy-prod jobs keep their
+  # OWN cancel-in-progress:false concurrency so deploys serialize; a rare cancel
+  # of an in-progress DEV deploy self-heals on the next deploy (dev only — main
+  # pushes never overlap, so prod is unaffected).
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test-integrity:
@@ -258,12 +268,14 @@ jobs:
   mutation-test:
     name: Mutation Testing
     runs-on: ubuntu-latest
-    # Generous timeout — public-repo CI is unmetered. The initial PR mutates
-    # the entire codebase against near-empty main (~269 mutants × ~30s each).
-    # Follow-up PRs only mutate diffed lines and finish in minutes.
-    timeout-minutes: 240
+    # HARD CAP per mutation-testing.md (≤20 min). The gate is diff-scoped
+    # (--in-diff), so it only mutates lines changed since main and finishes fast;
+    # the whole tree is swept on-demand by .github/workflows/mutation-full.yml (#102).
+    timeout-minutes: 20
     needs: test
-    if: github.event_name == 'pull_request'
+    # Re-gated for the single-trigger model (#103): runs on the dev push (was
+    # pull_request-only). --in-diff compares dev's HEAD against origin/main.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -275,10 +287,10 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: Install cargo-mutants
+      - name: Install cargo-mutants + cargo-nextest
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-mutants
+          tool: cargo-mutants,cargo-nextest
 
       - name: Create placeholder dist for rust-embed
         run: |
@@ -287,12 +299,19 @@ jobs:
           # the handler returns content (distinguishing from Default::default()).
           echo "<!doctype html><title>spinbike-test</title>" > spinbike-ui/dist/index.html
 
-      - name: Compute PR diff vs base
-        run: git diff origin/${{ github.base_ref }}...HEAD > pr.diff
+      - name: Compute diff vs main
+        # On a dev push github.base_ref is empty, so pin the base to origin/main
+        # (available because checkout uses fetch-depth: 0). origin/main...HEAD is
+        # the dev→main diff — exactly the set of lines this PR introduces (#103).
+        run: git diff origin/main...HEAD > pr.diff
 
       - name: Run cargo-mutants on diff
         run: |
           # Mutate only PR-changed lines in the Rust crates.
+          # --baseline=skip: the `test` job (needs: test) already proved the
+          #   unmutated tree green, so skip re-running the baseline here (#102).
+          # --test-tool=nextest: run each mutant's tests under cargo-nextest
+          #   (per-test process isolation, faster) instead of `cargo test` (#102).
           # --no-shuffle keeps output deterministic for log readability.
           # Exclude one-off CLI tools and the trivial server main() — these are
           # entry points that would need full E2E harnesses to mutate usefully.
@@ -301,6 +320,8 @@ jobs:
           # normal variance. 180s leaves room without masking real hangs.
           cargo mutants \
             --in-diff pr.diff \
+            --baseline=skip \
+            --test-tool=nextest \
             --timeout 180 \
             --no-shuffle \
             --exclude 'crates/spinbike-server/src/bin/*' \
@@ -568,7 +589,10 @@ jobs:
     name: Version Bump Check
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    if: github.event_name == 'pull_request'
+    # Re-gated for the single-trigger model (#103): runs on the dev push (was
+    # pull_request-only). It still compares VERSION against origin/main, which
+    # works identically on a dev push (fetch-depth: 0 makes origin/main available).
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
     steps:
       - uses: actions/checkout@v4
         with:
