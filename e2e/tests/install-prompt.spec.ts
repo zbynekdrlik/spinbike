@@ -65,6 +65,54 @@ test.describe('Install-to-home-screen component — iOS Safari guide', () => {
     });
 });
 
+// Real iPads since iPadOS 13 default to "Request Desktop Website", so
+// navigator.userAgent reports as a plain Mac with NO "iPad" substring at
+// all — a bare UA-substring check misses every stock-configured iPad. The
+// component disambiguates via navigator.platform === "MacIntel" combined
+// with navigator.maxTouchPoints > 1 (a real Mac has none). Emulated here
+// with a genuine desktop-Safari-on-Mac userAgent plus a JS override of
+// platform/maxTouchPoints, since Playwright's device descriptors don't
+// model this iPadOS-specific quirk.
+test.describe('Install-to-home-screen component — iPadOS (desktop-spoofed UA)', () => {
+    test.use({
+        userAgent:
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_6) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Safari/605.1.15',
+        viewport: { width: 1024, height: 1366 },
+    });
+
+    test('renders the iOS guide via the maxTouchPoints disambiguator', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await page.addInitScript(() => {
+            Object.defineProperty(window.navigator, 'platform', { get: () => 'MacIntel' });
+            Object.defineProperty(window.navigator, 'maxTouchPoints', { get: () => 5 });
+        });
+        await loginViaAPI(page, BASE_URL, 'customer@test.com', 'password123');
+        await page.goto('/my/balance');
+        await page.waitForSelector('[data-testid="door-open-button"]', { timeout: 10000 });
+
+        await expect(page.locator('[data-testid="install-prompt-ios"]')).toBeVisible();
+        await expect(page.locator('[data-testid="install-prompt-android"]')).toHaveCount(0);
+
+        assertCleanConsole(consoleMessages);
+    });
+
+    test('a real Mac (maxTouchPoints = 0) shows neither install surface', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await page.addInitScript(() => {
+            Object.defineProperty(window.navigator, 'platform', { get: () => 'MacIntel' });
+            Object.defineProperty(window.navigator, 'maxTouchPoints', { get: () => 0 });
+        });
+        await loginViaAPI(page, BASE_URL, 'customer@test.com', 'password123');
+        await page.goto('/my/balance');
+        await page.waitForSelector('[data-testid="door-open-button"]', { timeout: 10000 });
+
+        await expect(page.locator('[data-testid="install-prompt-ios"]')).toHaveCount(0);
+        await expect(page.locator('[data-testid="install-prompt-android"]')).toHaveCount(0);
+
+        assertCleanConsole(consoleMessages);
+    });
+});
+
 // Desktop Chromium (the default project browser, no device override): no
 // beforeinstallprompt is fired by a normal desktop tab and the UA isn't
 // iPhone/iPad, so neither install surface should render.

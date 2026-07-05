@@ -72,7 +72,12 @@ fn has_deferred_prompt() -> bool {
 }
 
 /// iOS Safari has no `beforeinstallprompt` event at all, so eligibility is
-/// UA-sniffed: `navigator.userAgent` containing `iPhone`/`iPad`.
+/// UA-sniffed: `navigator.userAgent` containing `iPhone`/`iPad`. This alone
+/// misses real iPads: since iPadOS 13, Safari defaults to "Request Desktop
+/// Website", so `navigator.userAgent` reports as a plain Mac
+/// (`Macintosh; Intel Mac OS X ...`) with no `iPad` substring at all. The
+/// standard disambiguator: a genuine Mac reports zero touch points, while an
+/// iPad — even UA-spoofed as a Mac — reports `navigator.maxTouchPoints > 1`.
 fn is_ios_ua() -> bool {
     let Some(window) = window_value() else {
         return false;
@@ -81,7 +86,16 @@ fn is_ios_ua() -> bool {
     let ua = get_prop(&navigator, "userAgent")
         .as_string()
         .unwrap_or_default();
-    ua.contains("iPhone") || ua.contains("iPad")
+    if ua.contains("iPhone") || ua.contains("iPad") {
+        return true;
+    }
+    let platform = get_prop(&navigator, "platform")
+        .as_string()
+        .unwrap_or_default();
+    let max_touch_points = get_prop(&navigator, "maxTouchPoints")
+        .as_f64()
+        .unwrap_or(0.0);
+    platform == "MacIntel" && max_touch_points > 1.0
 }
 
 fn detect_kind() -> PromptKind {
