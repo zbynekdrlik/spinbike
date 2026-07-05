@@ -162,6 +162,49 @@ alert is in the DOM, just covered), so an E2E test asserting the shared
 `data-testid` inside the open sheet instead — that only exists once the error
 renders in-sheet.
 
+## Leptos disposal-ordering trap: write LOCAL signals BEFORE any disposal trigger
+
+`reactive_graph` (0.1.8) **panics** — `"Tried to access a reactive value that
+has already been disposed"` → a WASM `RuntimeError: unreachable` — when a
+LOCAL/component-owned signal is `.set()` AFTER something that synchronously
+disposes the component. In `edit_info_form` the disposal triggers are:
+
+- `set_selected.set(Some(c))` — the parent (`mod.rs`) tracks `selected` and
+  synchronously **rebuilds/disposes** the edit sheet subtree when it changes.
+- `on_close.run(())` / `show=false` — also tears the sheet down.
+
+So in a submit/invite handler, once you fire one of those, the component's own
+signals (`set_loading`, `set_invite_loading`, a local `set_email_sig`, a local
+error signal) are **already disposed** — writing them panics. The nasty part:
+the panic fires AFTER the user-visible effects (the sheet has already closed and
+shown its success alert), so it's **invisible in production** but shows up as
+console errors that fail every clean-console Playwright assertion.
+
+**Rule — order every outcome handler as:**
+
+1. Write ALL local/component-owned signals FIRST (`set_loading.set(false)`,
+   local email mirror, local error signal), THEN
+2. fire the disposal triggers LAST (`set_selected.set(...)`, then `set_msg`/
+   `set_err` which are PARENT-owned props → safe, then `on_close.run(())`).
+
+Only **parent-owned signals passed in as props** (`set_msg`, `set_err`) and
+**callbacks** (`on_close`) are safe to touch after disposal — they live in the
+parent, which is not being disposed. A local signal is NOT.
+
+```rust
+// Ok arm of on_invite_click — LOCAL first, disposal LAST:
+set_email_sig.set(saved.email.clone().unwrap_or_default()); // local
+set_invite_loading.set(false);                              // local  ← BEFORE
+set_selected.set(Some(saved));      // parent-tracked → DISPOSES this component
+set_msg.set(t.invite_sent.into()); // parent-owned prop → safe after disposal
+on_close_after_invite.run(());     // callback → safe
+```
+
+A reviewer may claim "setting a disposed signal is a silent no-op" — it is
+**not**, it panics `unreachable`. Verify with an E2E test that clicks the
+action and asserts `expect(consoleMessages).toEqual([])` AFTER the sheet closes
+(found + fixed while shipping #141's one-click save-then-invite).
+
 ## Manifest PNG icons: root `.gitignore` silently drops them
 
 The repo's root `.gitignore` has `*.png` with an exception only for
