@@ -5,6 +5,17 @@ test names, decisions, and the shared PR #. Newest entries at the top.
 
 ---
 
+## 2026-07-05 — #117 + #120: kill preload integrity console warning + e2e @types/node
+
+- **Issues:** [#117](https://github.com/zbynekdrlik/spinbike/issues/117) — Chromium logs "The `integrity` attribute is currently ignored for preload destinations..." (crbug.com/981419) on every page load, from Trunk's default `data-integrity=sha384` on the `rust` link; [#120](https://github.com/zbynekdrlik/spinbike/issues/120) — `e2e/` had no `@types/node`, so local `npx tsc --noEmit` errored on `process` (CI has no tsc step — local-dev-quality gap only). Both validated STILL_VALID + bundle-safe (disjoint files, tiny).
+- **Version:** bump `34dbcd1` (0.15.0-dev.13 → dev.14).
+- **#117:** `spinbike-ui/index.html:19` — added `data-integrity="none"` to the `rust` link, stopping Trunk from stamping `integrity=` on the JS modulepreload + WASM preload hints (CSS link's own `integrity` untouched — SRI still honored there). Removed the 3 `e2e/tests/helpers.ts` console-filter lines that were whitelisting this exact warning, so the ~50 existing `assertCleanConsole` specs become the permanent regression guard.
+- **#120:** `e2e/package.json` + `package-lock.json` — added `@types/node@^20` (matches CI's `actions/setup-node node-version: 20`); `e2e/tsconfig.json` — added `"types": ["node"]`. `npx tsc --noEmit` now exits 0.
+- **Commits:** `34dbcd1` (version) → `edacf27` (#117) → `259470d` (#120).
+- **PR:** [#128](https://github.com/zbynekdrlik/spinbike/pull/128), merged `0c310ec`.
+- **Verification:** CI E2E job green WITH the filter removed = proof the warning is gone at the source. Live post-deploy: fresh `browser_navigate` (default scope, no `all: true`) to both `spinbike-dev.newlevel.media` and `spinbike.newlevel.media` shows 0 console errors and the integrity warning gone (dev retains only the pre-existing, already-filtered wasm-bindgen deprecation warning — unrelated, tracked separately). DOM version `v0.15.0-dev.14` matches `/api/version` on both.
+- **Playbook gotcha found:** `browser_console_messages({ all: true })` returns the WHOLE persistent MCP session's history, not just the current page — cross-checking with `all: true` initially looked like the warning was still present because it surfaced 14 old messages from unrelated past-ticket navigations. Documented in the ci-deploy skill's live-verification section.
+
 ## 2026-07-05 — #111 + #112: staff invite button + remove public registration
 
 - **Issues:** [#111](https://github.com/zbynekdrlik/spinbike/issues/111) — "Poslat pozvanku" button in the staff edit-info form; [#112](https://github.com/zbynekdrlik/spinbike/issues/112) — remove the public `/register` page + all links (invite-only accounts). Bundled: disjoint files except `i18n.rs` (#111 adds keys, #112 removes different keys).

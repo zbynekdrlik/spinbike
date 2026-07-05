@@ -294,6 +294,19 @@ for (const k of await caches.keys()) await caches.delete(k);
 ```
 then re-navigate. If `/api/version` and the DOM STILL disagree after that, THEN it's a real deploy issue.
 
+**`browser_console_messages({ all: true })` returns the WHOLE MCP session's
+history, not just the current page.** The Playwright MCP browser session is
+persistent across tickets — `all: true` dumps every console message since
+the session began, including navigations from a PAST ticket's verification
+(different URLs, different deploys, even a different day). Cross-checking
+#117 (does the integrity warning still appear?) with `all: true` returned
+14 old messages from unrelated `/register`/`/staff`/`/login` navigations
+done during earlier tickets, making it LOOK like the just-fixed warning was
+still present. The correct check is the **default** (no `all` flag) right
+after a fresh `browser_navigate` — that scopes to messages since the last
+navigation only. Only reach for `all: true` when you deliberately want the
+full session log for some other reason.
+
 **No CI-seed admin/staff account exists on the real deployments.**
 `admin@test.com`/`staff@test.com` only exist in the ephemeral CI test
 server (`SPINBIKE_TEST_MODE=1`); the real `dev`/`prod` DBs have only actual
