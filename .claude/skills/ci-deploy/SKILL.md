@@ -45,6 +45,30 @@ When dispatching subagents to implement SpinBike Rust/Leptos tasks, the prompt m
 
 Skip the compile-and-verify step. If a step genuinely requires a local build (e.g. verify a new WASM signature compiles before handing off), note it explicitly and justify — never include it as a default TDD step.
 
+## `spinbike-ui` is a SEPARATE cargo workspace — root `cargo fmt --check` never sees it
+
+`spinbike-ui/Cargo.toml` is its own workspace; root `Cargo.toml` has
+`exclude = ["spinbike-ui"]`. So the project's mandated local check
+(`cargo fmt --all --check`, run from the repo root per `CLAUDE.md`) — and
+CI's `Lint` job, which also runs from the root — **structurally never
+touches `spinbike-ui/`**. A real `cargo fmt` violation in
+`spinbike-ui/src/*.rs` ships completely undetected until a manual/deep
+review happens to run `cd spinbike-ui && cargo fmt --all --check` (this bit
+#109 — two mis-formatted `i18n.rs` inserts landed and passed every gate).
+
+**Whenever you touch a `spinbike-ui/src/*.rs` file, run the fmt check
+TWICE** — once from the root (covers the server crates), once from inside
+`spinbike-ui/`:
+
+```bash
+cargo fmt --all --check                              # root workspace
+cd spinbike-ui && cargo fmt --all --check && cd ..   # separate workspace — NOT covered by the line above
+```
+
+Tracked as a CI gap in [#122](https://github.com/zbynekdrlik/spinbike/issues/122)
+(add a `spinbike-ui`-scoped fmt/clippy step to CI) — not yet fixed, so the
+manual double-check above is the only guard until then.
+
 ## Adding a crate dependency: regenerate + commit `Cargo.lock`
 
 `Cargo.lock` is tracked but CI runs **no** `--locked`/`--frozen` — so it
@@ -163,6 +187,25 @@ unauthenticated state. Register is gone (#108), so that bootstrap moved to
 `409` on a duplicate email (global-setup treats 409 as "already seeded"). When
 you remove a public endpoint the E2E harness used for seeding, re-point the
 seed to a test-fixture route — don't just delete the E2E test.
+
+## Adding a second same-type input to a page breaks bare-attribute E2E selectors
+
+When #109 added a customer login-link section to `/login` (a SECOND
+`type="email"` input + `type="submit"` button below the existing password
+form), every existing test/helper using a bare `page.fill('input[type="email"]',
+...)` / `page.click('button[type="submit"]')` became ambiguous under
+Playwright's strict mode (`resolved to 2 elements`) — 5 call sites across
+`auth.spec.ts`, `smoke.spec.ts`, and `helpers.ts`'s own `loginViaUI`.
+
+**Fix pattern: scope by the actual invariant, not DOM order.** `.first()`
+"works" but silently breaks if the two sections are ever reordered — the
+real invariant is "the password form is the one WITH a password input".
+`e2e/tests/helpers.ts` exports `passwordLoginForm(page)` =
+`page.locator('form:has(input[type="password"])')`; every password-form
+interaction goes through it: `passwordLoginForm(page).locator('input[type="email"]').fill(...)`.
+When you add a new same-type form control to an existing page, grep the
+whole `e2e/tests/` tree for bare attribute selectors that might now be
+ambiguous — don't assume only the test you're writing is affected.
 
 ## Diff-scoped mutation gate (`mutation-test` job, PR-only, `--in-diff`)
 

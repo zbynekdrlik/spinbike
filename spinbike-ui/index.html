@@ -12,6 +12,10 @@
     <link data-trunk rel="copy-file" href="manifest.json" />
     <link data-trunk rel="copy-file" href="sw.js" />
     <link data-trunk rel="copy-file" href="favicon.svg" />
+    <link data-trunk rel="copy-file" href="icon-192.png" />
+    <link data-trunk rel="copy-file" href="icon-512.png" />
+    <link data-trunk rel="copy-file" href="icon-192-maskable.png" />
+    <link data-trunk rel="copy-file" href="icon-512-maskable.png" />
     <link data-trunk rel="rust" data-wasm-opt="z" />
 </head>
 <body>
@@ -20,6 +24,18 @@
         if ('serviceWorker' in navigator) {
             navigator.serviceWorker.register('/sw.js').catch(() => {});
         }
+        // Capture the Chromium/Android install prompt so our own UI can
+        // trigger it later (#110). The event has no typed web-sys binding,
+        // so the Rust side reads window.__deferredInstallPrompt via
+        // js_sys::Reflect. preventDefault() suppresses the browser's own
+        // mini-infobar; we show our own "Pridat na plochu" button instead.
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            window.__deferredInstallPrompt = e;
+        });
+        window.addEventListener('appinstalled', () => {
+            window.__deferredInstallPrompt = null;
+        });
     </script>
 </body>
 </html>

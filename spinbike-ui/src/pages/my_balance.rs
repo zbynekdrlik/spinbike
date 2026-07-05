@@ -8,7 +8,7 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
-use crate::components::DoorButton;
+use crate::components::{DoorButton, InstallPrompt};
 use crate::i18n::{self, Lang, fmt_date_short, tf};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -110,6 +110,10 @@ pub fn MyBalancePage() -> impl IntoView {
         // refreshing the parent's `data` signal does NOT remount the button,
         // so the Success banner stays on screen until the auto-reset timer.
         <DoorButton allowed=allowed_signal on_success=on_door_success />
+
+        // Install-to-home-screen nudge (#110) — renders nothing once
+        // installed or on a browser offering neither install path.
+        <InstallPrompt />
 
         // Loading spinner / error banner / recent visits — these update
         // reactively on data changes.
