@@ -217,6 +217,31 @@ pub fn DashboardPage() -> impl IntoView {
         }
     });
 
+    // Structural backstop for #126's follow-up (deep code review on PR
+    // #132): msg (green) and err (red) must never both be visible at once.
+    // Every known writer of these two signals already clears its OWN
+    // sibling call site defensively (block/edit/invite/void/note-save, plus
+    // clear_selection / pick_card / the search effect above and the
+    // delete-user close path in card_panel.rs) — but that is a whack-a-mole
+    // guarantee: any writer we didn't catch (ActionForm's own successes,
+    // which write this SHARED set_msg on top-up/charge/visit-log; any
+    // future component) can still leave a stale alert stacked or dangling.
+    // This effect makes the invariant hold structurally: whichever signal
+    // just changed to a fresh value wins and clears the other, no matter
+    // which component set it.
+    Effect::new(move |prev: Option<(String, String)>| {
+        let m = msg.get();
+        let e = err.get();
+        if let Some((prev_m, prev_e)) = prev {
+            if m != prev_m && !m.is_empty() && !e.is_empty() {
+                set_err.set(String::new());
+            } else if e != prev_e && !e.is_empty() && !m.is_empty() {
+                set_msg.set(String::new());
+            }
+        }
+        (m, e)
+    });
+
     // Parse query params used by the Reports → row click jump.
     //
     // * `?card=<card_code>` — exact lookup via /api/users/lookup/{code};

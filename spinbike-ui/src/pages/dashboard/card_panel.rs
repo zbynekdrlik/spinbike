@@ -184,6 +184,7 @@ pub fn CardActionPanel(
             <div class="action-row stack-12">
                 <button
                     class="btn btn--ghost"
+                    data-testid="edit-info-button"
                     on:click=move |_| set_show_edit.update(|v| *v = !*v)
                 >
                     {move || i18n::t(lang.get(), "edit_info")}
@@ -255,6 +256,13 @@ pub fn CardActionPanel(
             active_pass_end=delete_user_pass_end
             on_saved=Callback::new(move |()| {
                 set_selected.set(None);
+                // Deep-review follow-up on #126: this is a SECOND panel-close
+                // path (besides mod.rs's clear_selection, wired to the ×
+                // button) that was bypassing the msg/err clear entirely — a
+                // stale red error from an earlier failed action (block/edit/
+                // void) would survive a successful delete-and-close.
+                set_msg.set(String::new());
+                set_err.set(String::new());
             })
         />
         </>

@@ -104,7 +104,7 @@ test.describe('Dashboard error alert styling (#126)', () => {
 
         // 2. Stop failing the API, then successfully save an edit.
         await page.unroute('**/api/users/block');
-        await page.locator('button', { hasText: 'Edit info' }).click();
+        await page.locator('[data-testid="edit-info-button"]').click();
         const sheet = page.locator('[data-testid="sheet-edit-info"]');
         await expect(sheet).toBeVisible();
         const saveResp = page.waitForResponse(
