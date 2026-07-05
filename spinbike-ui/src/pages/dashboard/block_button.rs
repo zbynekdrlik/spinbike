@@ -12,6 +12,9 @@ pub fn BlockButton(
     blocked: bool,
     set_selected: WriteSignal<Option<CardInfo>>,
     set_msg: WriteSignal<String>,
+    /// Red-alert channel (#126) — block/unblock failures render here, not
+    /// in the green success alert.
+    set_err: WriteSignal<String>,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (loading, set_loading) = signal(false);
@@ -47,7 +50,7 @@ pub fn BlockButton(
                     });
                     set_selected.set(Some(c));
                 }
-                Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
+                Err(e) => set_err.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
             }
             set_loading.set(false);
         });

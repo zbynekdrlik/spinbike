@@ -32,6 +32,11 @@ pub fn CardActionPanel(
     set_selected: WriteSignal<Option<CardInfo>>,
     msg: ReadSignal<String>,
     set_msg: WriteSignal<String>,
+    /// Red-alert channel (mod.rs:473-478) — errors from BlockButton,
+    /// TransactionsList and EditInfoForm route here instead of the green
+    /// `set_msg` success channel (#126). ActionForm/AddPersonForm keep
+    /// their own local red error signal and are NOT wired to this.
+    set_err: WriteSignal<String>,
     #[prop(into)] on_close: Callback<web_sys::MouseEvent>,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
@@ -183,7 +188,7 @@ pub fn CardActionPanel(
                 >
                     {move || i18n::t(lang.get(), "edit_info")}
                 </button>
-                <BlockButton card_id=card_id blocked=is_blocked set_selected=set_selected set_msg=set_msg />
+                <BlockButton card_id=card_id blocked=is_blocked set_selected=set_selected set_msg=set_msg set_err=set_err />
                 <button
                     class="btn btn--danger"
                     data-testid="delete-user-button"
@@ -208,7 +213,7 @@ pub fn CardActionPanel(
                                 <TransactionsList
                                     card_id=card_id
                                     txn_refresh=txn_refresh
-                                    set_msg=set_msg
+                                    set_err=set_err
                                 />
                             }.into_any(),
                             "upcoming" => view! {
@@ -238,6 +243,7 @@ pub fn CardActionPanel(
             card=card_for_edit.clone()
             set_selected=set_selected
             set_msg=set_msg
+            set_err=set_err
             show=Signal::derive(move || show_edit.get())
             on_close=Callback::new(move |()| set_show_edit.set(false))
         />

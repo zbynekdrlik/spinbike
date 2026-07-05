@@ -13,7 +13,10 @@ use super::TxnInfo;
 pub fn TransactionsList(
     card_id: i64,
     txn_refresh: RwSignal<u32>,
-    set_msg: WriteSignal<String>,
+    /// Red-alert channel (#126) — this component only ever uses the
+    /// message channel for errors (fetch/void/note-save failures), so it
+    /// takes `set_err` directly rather than the green `set_msg` channel.
+    set_err: WriteSignal<String>,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (txns, set_txns) = signal(Vec::<TxnInfo>::new());
@@ -38,7 +41,7 @@ pub fn TransactionsList(
                     set_has_more.set(t.len() >= l);
                     set_txns.set(t);
                 }
-                Err(e) => set_msg.set(i18n::tf(
+                Err(e) => set_err.set(i18n::tf(
                     lang_for_fetch.get_untracked(),
                     "error_format",
                     &[&e],
@@ -139,7 +142,7 @@ pub fn TransactionsList(
                     spawn_local(async move {
                         match api::delete_empty(&format!("/api/transactions/{tx_id}")).await {
                             Ok(()) => txn_refresh.update(|n| *n += 1),
-                            Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
+                            Err(e) => set_err.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                         }
                     });
                 };
@@ -182,7 +185,7 @@ pub fn TransactionsList(
                                                 set_editing.set(false);
                                                 txn_refresh.update(|n| *n += 1);
                                             }
-                                            Err(e) => set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
+                                            Err(e) => set_err.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
                                         }
                                     });
                                 };

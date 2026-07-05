@@ -508,6 +508,7 @@ pub fn DashboardPage() -> impl IntoView {
                     set_selected=set_selected
                     msg=msg
                     set_msg=set_msg
+                    set_err=set_err
                     on_close=Callback::new(clear_selection)
                 />
             }.into_any()

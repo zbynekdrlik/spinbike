@@ -25,6 +25,11 @@ pub fn EditInfoForm(
     card: CardInfo,
     set_selected: WriteSignal<Option<CardInfo>>,
     set_msg: WriteSignal<String>,
+    /// Red-alert channel (#126) — save/invite failures render here, not in
+    /// the green success alert. The mail_not_configured 503 counts as an
+    /// error (it means the invite was NOT sent) so it goes through this
+    /// channel too, alongside the generic invite-error case.
+    set_err: WriteSignal<String>,
     /// Signal controlling visibility — the parent sets it to false to hide.
     show: Signal<bool>,
     /// Called when the sheet should close (cancel or save success).
@@ -221,7 +226,7 @@ pub fn EditInfoForm(
                             set_msg.set(i18n::t(lang.get_untracked(), "saved").to_string());
                             on_close_inner.run(());
                         }
-                        Err(e) => set_msg.set(i18n::tf(
+                        Err(e) => set_err.set(i18n::tf(
                             lang.get_untracked(),
                             "error_format",
                             &[&e],
@@ -255,12 +260,12 @@ pub fn EditInfoForm(
                         }
                         Err(e) => {
                             if e == "mail_not_configured" {
-                                set_msg.set(
+                                set_err.set(
                                     i18n::t(lang.get_untracked(), "invite_mail_not_configured")
                                         .to_string(),
                                 );
                             } else {
-                                set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e]));
+                                set_err.set(i18n::tf(lang.get_untracked(), "error_format", &[&e]));
                             }
                         }
                     }
