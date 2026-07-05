@@ -117,9 +117,6 @@ test.describe('Edit-info form field fixes', () => {
     // customer self-editing their own row (it would turn the email field into a
     // name-enumeration oracle). API-level test of the server gate.
     test('the 409 email-conflict names the account for staff but NOT for a self-editing customer', async () => {
-        const TARGET_EMAIL = 'admin@test.com'; // held by the seeded "Test Admin"
-        const TARGET_NAME = 'Test Admin';
-
         const apiLogin = async (email: string, password: string) => {
             const r = await fetch(`${BASE_URL}/api/auth/login`, {
                 method: 'POST',
@@ -129,20 +126,31 @@ test.describe('Edit-info form field fixes', () => {
             if (!r.ok) throw new Error(`login ${email}: ${r.status} ${await r.text()}`);
             return (await r.json()) as { token: string; user: { id: number } };
         };
-        const putEmail = (token: string, id: number) =>
+        const putEmail = (token: string, id: number, email: string) =>
             fetch(`${BASE_URL}/api/users/${id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-                body: JSON.stringify({ email: TARGET_EMAIL }),
+                body: JSON.stringify({ email }),
             });
 
-        // --- STAFF caller: the 409 names the conflicting account. ---
         const staff = await apiLogin('staff@test.com', 'staff123');
+        // A holder account that OWNS the target email AND has a card_code, so
+        // we can pin BOTH conflict fields the server emits — asserting only
+        // conflict_name would let a rename/drop of conflict_card slip through
+        // with CI green while the staff UI silently loses the card.
+        const suffix = Array.from({ length: 8 }, () =>
+            String.fromCharCode(97 + Math.floor(Math.random() * 26)),
+        ).join('');
+        const holderEmail = `holder-${suffix}@test.com`;
+        const holder = await createUniqueUser(staff.token, 0, 'HN', holderEmail);
+
+        // --- STAFF caller: the 409 names the conflicting account (name + card). ---
         const victim = await createUniqueUser(staff.token, 0, 'CN');
-        const staffResp = await putEmail(staff.token, victim.user_id);
+        const staffResp = await putEmail(staff.token, victim.user_id, holderEmail);
         expect(staffResp.status).toBe(409);
         const staffBody = await staffResp.json();
-        expect(staffBody.conflict_name).toBe(TARGET_NAME);
+        expect(staffBody.conflict_name).toBe(holder.name);
+        expect(staffBody.conflict_card).toBe(holder.card_code);
 
         // --- CUSTOMER self-edit: the SAME collision must NOT reveal identity. ---
         // Seed a dedicated password-bearing customer (idempotent; 409 = already
@@ -158,7 +166,7 @@ test.describe('Edit-info form field fixes', () => {
             }),
         });
         const cust = await apiLogin('pii-cust@test.com', 'piipass123');
-        const custResp = await putEmail(cust.token, cust.user.id);
+        const custResp = await putEmail(cust.token, cust.user.id, holderEmail);
         expect(custResp.status).toBe(409);
         const custBody = await custResp.json();
         expect(custBody.conflict_name).toBeUndefined();
