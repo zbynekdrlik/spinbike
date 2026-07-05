@@ -40,10 +40,8 @@ pub fn ActivityFeed(
                             return false;
                         }
                     }
-                    Some("pass") => {
-                        if !matches!(e.kind(), EventKind::PassSale) {
-                            return false;
-                        }
+                    Some("pass") if !matches!(e.kind(), EventKind::PassSale) => {
+                        return false;
                     }
                     _ => {}
                 }
@@ -133,7 +131,7 @@ pub fn ActivityFeed(
             } else {
                 view! {
                     <div class="group" data-testid="activity-feed">
-                        {rows.into_iter().map(|e| render_row(e)).collect::<Vec<_>>()}
+                        {rows.into_iter().map(render_row).collect::<Vec<_>>()}
                     </div>
                 }.into_any()
             }

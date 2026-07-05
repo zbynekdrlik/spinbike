@@ -65,11 +65,11 @@ pub fn DateInput(
     let on_input = move |ev: ev::Event| {
         let s = event_target_value(&ev);
         set_text.set(s.clone());
-        if let Some(d) = parse_user_date(&s) {
-            if d != value.get_untracked() {
-                set_value.set(d);
-                set_last_synced.set(d);
-            }
+        if let Some(d) = parse_user_date(&s)
+            && d != value.get_untracked()
+        {
+            set_value.set(d);
+            set_last_synced.set(d);
         }
     };
 
@@ -80,10 +80,10 @@ pub fn DateInput(
     };
 
     let prev_day = move |_| {
-        set_value.update(|d| *d = *d - chrono::Duration::days(1));
+        set_value.update(|d| *d -= chrono::Duration::days(1));
     };
     let next_day = move |_| {
-        set_value.update(|d| *d = *d + chrono::Duration::days(1));
+        set_value.update(|d| *d += chrono::Duration::days(1));
     };
     let set_today = move |_| {
         set_value.set(crate::relative_date::today_local());

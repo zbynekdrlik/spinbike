@@ -26,7 +26,7 @@ pub struct ClassSlot {
 /// Compute current week (Mon-Sun) as Vec<(year, month, day)> and date strings.
 fn current_week_dates() -> (Vec<(i32, u32, u32)>, Vec<String>) {
     let now = js_sys::Date::new_0();
-    let year = now.get_full_year() as u32;
+    let year = now.get_full_year();
     let month = now.get_month() as i32; // 0-based
     let day = now.get_date() as i32;
     let dow = now.get_day(); // 0=Sun
@@ -39,7 +39,7 @@ fn current_week_dates() -> (Vec<(i32, u32, u32)>, Vec<String>) {
     let mut date_strs = Vec::with_capacity(7);
     for i in 0..7i32 {
         let d = js_sys::Date::new_with_year_month_day(
-            monday.get_full_year() as u32,
+            monday.get_full_year(),
             monday.get_month() as i32,
             monday.get_date() as i32 + i,
         );

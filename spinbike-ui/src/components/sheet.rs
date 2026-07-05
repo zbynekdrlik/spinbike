@@ -40,8 +40,8 @@ pub fn Sheet(
     testid: Option<String>,
     children: Children,
 ) -> impl IntoView {
-    let on_close_backdrop = on_close.clone();
-    let on_close_keyboard = on_close.clone();
+    let on_close_backdrop = on_close;
+    let on_close_keyboard = on_close;
     let testid_value = testid.unwrap_or_default();
 
     // Defer on_close to next macrotask so the click / keydown event finishes
@@ -50,7 +50,7 @@ pub fn Sheet(
     // on_close.run(()) here used to emit "closure invoked recursively or
     // after being dropped" via Leptos. See #89.
     let close_backdrop = move |_| {
-        let cb = on_close_backdrop.clone();
+        let cb = on_close_backdrop;
         spawn_local(async move {
             gloo_timers::future::TimeoutFuture::new(0).await;
             cb.run(());
@@ -58,7 +58,7 @@ pub fn Sheet(
     };
     let close_keyboard = move |ev: ev::KeyboardEvent| {
         if ev.key() == "Escape" {
-            let cb = on_close_keyboard.clone();
+            let cb = on_close_keyboard;
             spawn_local(async move {
                 gloo_timers::future::TimeoutFuture::new(0).await;
                 cb.run(());

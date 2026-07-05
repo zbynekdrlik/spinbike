@@ -156,7 +156,7 @@ pub fn ReportsPage() -> impl IntoView {
                             <button class="seg__item" data-testid="date-prev"
                                     on:click=move |_| {
                                         set_mode.set(RangeMode::Day);
-                                        set_anchor.update(|d| *d = *d - chrono::Duration::days(1));
+                                        set_anchor.update(|d| *d -= chrono::Duration::days(1));
                                     }>
                                 "‹"
                             </button>
@@ -167,7 +167,7 @@ pub fn ReportsPage() -> impl IntoView {
                             <button class="seg__item" data-testid="date-next"
                                     on:click=move |_| {
                                         set_mode.set(RangeMode::Day);
-                                        set_anchor.update(|d| *d = *d + chrono::Duration::days(1));
+                                        set_anchor.update(|d| *d += chrono::Duration::days(1));
                                     }>
                                 "›"
                             </button>

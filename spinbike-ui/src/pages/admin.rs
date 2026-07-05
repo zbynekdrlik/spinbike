@@ -557,7 +557,6 @@ fn ServicesTab() -> impl IntoView {
             let list = items.get();
             let rows: Vec<_> = list.iter().map(|s| {
                 let sid = s.id;
-                let kind = s.kind.clone();
                 let name_sk = s.name_sk.clone();
                 let name_en = s.name_en.clone();
                 let price = format!("{:.2}", s.default_price);

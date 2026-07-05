@@ -124,7 +124,7 @@ pub fn UsersByMovement() -> impl IntoView {
                     <button class="btn btn--ghost"
                             data-testid="users-by-movement-show-more"
                             disabled=move || loading.get()
-                            on:click=on_show_more.clone()>
+                            on:click=on_show_more>
                         {move || i18n::t(lang.get(), "show_more")}
                     </button>
                 }.into_any()

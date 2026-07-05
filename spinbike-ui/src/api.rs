@@ -189,10 +189,10 @@ fn extract_error(body: &str, status: u16) -> String {
     struct ErrBody {
         error: Option<String>,
     }
-    if let Ok(e) = serde_json::from_str::<ErrBody>(body) {
-        if let Some(msg) = e.error {
-            return msg;
-        }
+    if let Ok(e) = serde_json::from_str::<ErrBody>(body)
+        && let Some(msg) = e.error
+    {
+        return msg;
     }
     format!("Request failed (HTTP {status})")
 }
