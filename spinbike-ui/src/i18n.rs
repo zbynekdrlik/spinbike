@@ -263,6 +263,33 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "This link is invalid, expired, or already used. Enter your email and we'll send you a new one.",
         ),
     );
+
+    // Install-to-home-screen prompt (#110)
+    m.insert(
+        "install_prompt_cta",
+        ("Pridat na plochu", "Add to home screen"),
+    );
+    m.insert(
+        "install_prompt_ios_title",
+        (
+            "Pridaj SpinBike na plochu",
+            "Add SpinBike to your home screen",
+        ),
+    );
+    m.insert(
+        "install_prompt_ios_step1",
+        (
+            "Tukni na Zdielat (ikona so sipkou)",
+            "Tap Share (the arrow icon)",
+        ),
+    );
+    m.insert(
+        "install_prompt_ios_step2",
+        (
+            "Vyber \"Pridat na plochu\"",
+            "Choose \"Add to Home Screen\"",
+        ),
+    );
     m.insert(
         "customer_login_heading",
         ("Prihlasenie pre klientov", "Customer login"),

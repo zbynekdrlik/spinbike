@@ -14,7 +14,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
 use crate::auth::{self, AuthData};
-use crate::components::LoginLinkForm;
+use crate::components::{InstallPrompt, LoginLinkForm};
 use crate::i18n::{self, Lang};
 
 #[derive(serde::Serialize)]
@@ -96,6 +96,7 @@ pub fn WelcomePage() -> impl IntoView {
                         <a href=cta_href class="btn btn--primary btn--hero btn--block" data-testid="welcome-cta">
                             {move || i18n::t(lang.get(), "welcome_cta")}
                         </a>
+                        <InstallPrompt />
                     </div>
                 }
                 .into_any(),
