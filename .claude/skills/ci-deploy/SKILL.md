@@ -331,6 +331,14 @@ customer data touched"):
    row and anything it created (or a real `DELETE /api/users/{id}` call
    with its own token first, since that's a soft-delete via the API vs a
    hard-delete via SQL — either is fine for a throwaway synthetic row).
+   **Clicking "Send invite" persists a `login_tokens` row (`kind='invite'`)
+   BEFORE it attempts to send the email** — so even an invite that FAILS
+   (e.g. dev's `mail_not_configured` 503, used to verify #126 live) leaves
+   an orphaned token row once you delete the synthetic user (this DB has
+   `PRAGMA foreign_keys` OFF, so the delete succeeds silently and just
+   leaves the dangling row). Also run
+   `DELETE FROM login_tokens WHERE user_id=...` for every synthetic id you
+   created, not just `users`.
 
 ## `cargo mutants --shard k/n` is 0-INDEXED — matrix values are `[0, n-1]`, not `[1, n]`
 

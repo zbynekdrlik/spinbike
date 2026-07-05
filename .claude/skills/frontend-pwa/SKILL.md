@@ -94,6 +94,47 @@ Always pair it with a **negative** test (`maxTouchPoints: 0`, i.e. a real
 Mac) asserting neither install surface renders — the disambiguator is easy
 to get backwards and silently show the guide to real Mac desktop users.
 
+## Splitting a shared status signal into two (success/error) needs a structural mutual-exclusion Effect, not point-fixes
+
+`#126` split the dashboard's single `msg`/`set_msg` status channel into
+`msg` (green `.alert-success`) + `err` (red `.alert-error`) so errors would
+stop rendering as green successes. The naive fix — repoint each error
+branch's `set_msg.set(...)` to `set_err.set(...)` — is correct but
+INCOMPLETE by construction: with two independent signals, nothing stops a
+stale alert in one channel from surviving (or stacking with) a fresh value
+in the other, and every writer of either signal (including ones outside the
+files you're allowed to touch, e.g. `action_form.rs`'s own success calls
+into the SHARED `set_msg`) is a place the bug can leak from. Three review
+rounds on PR #132 kept finding one more leaking call site each time
+(block/edit/transactions → panel-close/pick-card/search-effect →
+`DeleteUserSheet`'s second close path) before landing on the actual fix: a
+single reactive **mutual-exclusion `Effect`** at the top of the component
+that owns both signals:
+
+```rust
+Effect::new(move |prev: Option<(String, String)>| {
+    let m = msg.get();
+    let e = err.get();
+    if let Some((prev_m, prev_e)) = prev {
+        if m != prev_m && !m.is_empty() && !e.is_empty() {
+            set_err.set(String::new());
+        } else if e != prev_e && !e.is_empty() && !m.is_empty() {
+            set_msg.set(String::new());
+        }
+    }
+    (m, e)
+});
+```
+
+This makes "at most one alert visible" hold for EVERY writer — including
+ones you're told not to touch — because the effect watches the signals
+themselves, not the call sites. It converges in ≤2 re-runs per transition
+(the `.set()` inside the effect re-triggers it once more, which then sees
+the just-cleared value and no-ops) — safe, no infinite loop. **When
+splitting any shared Leptos status/alert signal into two, write this
+effect FIRST, then the point-fixes become defense-in-depth rather than the
+whole fix.**
+
 ## Manifest PNG icons: root `.gitignore` silently drops them
 
 The repo's root `.gitignore` has `*.png` with an exception only for
