@@ -281,15 +281,23 @@ pub fn EditInfoForm(
                     None
                 }
             };
+            // Collect the whole form in one place so Save and save-then-invite
+            // can never drift as fields are added/removed. Returns
+            // (name, email, company, phone, password, allow_self_entry).
+            let collect = move || {
+                (
+                    read(&name_ref),
+                    read(&email_ref),
+                    read(&company_ref),
+                    read(&phone_ref),
+                    read(&password_ref),
+                    allow_se_req(),
+                )
+            };
 
             let on_submit = move |ev: web_sys::SubmitEvent| {
                 ev.prevent_default();
-                let name = read(&name_ref);
-                let email = read(&email_ref);
-                let company = read(&company_ref);
-                let phone = read(&phone_ref);
-                let password = read(&password_ref);
-                let allow_self_entry = allow_se_req();
+                let (name, email, company, phone, password, allow_self_entry) = collect();
 
                 // Clear any stale alert from a previous action before this one
                 // resolves — otherwise a stale red error (or green success) from
@@ -342,12 +350,7 @@ pub fn EditInfoForm(
                 // typed email) FIRST, then invite. The invite endpoint reads the
                 // committed DB row, so without the save it would 400 (no email)
                 // or invite against a stale address (#141).
-                let name = read(&name_ref);
-                let email = read(&email_ref);
-                let company = read(&company_ref);
-                let phone = read(&phone_ref);
-                let password = read(&password_ref);
-                let allow_self_entry = allow_se_req();
+                let (name, email, company, phone, password, allow_self_entry) = collect();
 
                 // Same stale-alert clear as on_submit above (#126 follow-up).
                 set_msg.set(String::new());
