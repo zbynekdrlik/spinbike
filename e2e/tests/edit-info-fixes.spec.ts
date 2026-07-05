@@ -223,4 +223,45 @@ test.describe('Edit-info form field fixes', () => {
         expect(custBody.conflict_name).toBeUndefined();
         expect(custBody.conflict_card).toBeUndefined();
     });
+
+    // A successful Save takes the on_submit Ok branch, which calls
+    // `set_selected` (the parent tracks `selected`, so this REBUILDS/disposes
+    // the EditInfoForm) and `on_close`. If a local/component signal (`loading`)
+    // is written AFTER that disposal trigger, reactive_graph 0.1.8 panics
+    // ("access a reactive value that has already been disposed") — a WASM
+    // RuntimeError. It fires after the sheet has already closed, so the UI looks
+    // fine and it only shows as a console error. This guards the write-local-
+    // before-dispose ordering (the same trap that broke save-then-invite).
+    test('a successful Save closes the sheet with a clean console (no disposed-signal panic)', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+
+        const adminToken = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+        const user = await createUniqueUser(adminToken, 0, 'SaveOk');
+
+        await page.goto('/staff');
+        await page.waitForSelector('input[type="search"]');
+        await page.fill('input[type="search"]', user.card_code);
+        const result = page.locator('[data-testid="search-result"]').first();
+        await expect(result).toBeVisible({ timeout: 3000 });
+        await result.click();
+        await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+
+        await page.locator('[data-testid="edit-info-button"]').click();
+        const sheet = page.locator('[data-testid="sheet-edit-info"]');
+        await expect(sheet).toBeVisible();
+
+        // Edit the name and Save (the first text input is the name field).
+        await sheet.locator('input[type="text"]').first().fill(`${user.name} Edited`);
+        await sheet.locator('button[type="submit"]').click();
+
+        // Save success closes the sheet and shows the shared success alert.
+        await expect(sheet).not.toBeVisible({ timeout: 5000 });
+        await expect(page.locator('.alert-success')).toBeVisible({ timeout: 10000 });
+
+        // The whole point: no WASM panic reached the console during the
+        // set_selected → on_close disposal.
+        expect(consoleMessages).toEqual([]);
+    });
 });
