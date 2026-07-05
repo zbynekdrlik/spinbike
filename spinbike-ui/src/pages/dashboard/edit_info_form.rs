@@ -52,6 +52,11 @@ pub fn EditInfoForm(
     let (initial_email, _) = signal(card.email.clone().unwrap_or_default());
     let (initial_company, _) = signal(card.company.clone().unwrap_or_default());
     let (initial_phone, _) = signal(card.phone.clone().unwrap_or_default());
+    // Tracks the LAST-SAVED email (not the unsaved draft in the input) — the
+    // "Poslat pozvanku" button is enabled only against this, per #111. Starts
+    // from the card's current persisted email; updated from the fresh
+    // `CardInfo` the save handler gets back on success (see on_submit below).
+    let (saved_email, set_saved_email) = signal(card.email.clone());
 
     // NodeRefs declared at the function-body level so the refresh Effect
     // can write to them directly when fetch completes. They're populated
@@ -202,6 +207,7 @@ pub fn EditInfoForm(
                     };
                     match api::put_json::<Req, CardInfo>(&format!("/api/users/{card_id}"), &req).await {
                         Ok(c) => {
+                            set_saved_email.set(c.email.clone());
                             set_selected.set(Some(c));
                             set_msg.set(i18n::t(lang.get_untracked(), "saved").to_string());
                             on_close_inner.run(());
@@ -213,6 +219,42 @@ pub fn EditInfoForm(
                         )),
                     }
                     set_loading.set(false);
+                });
+            };
+
+            let (invite_loading, set_invite_loading) = signal(false);
+            let on_invite_click = move |_: web_sys::MouseEvent| {
+                set_invite_loading.set(true);
+                spawn_local(async move {
+                    #[derive(serde::Deserialize)]
+                    struct InviteResponse {
+                        sent_to: String,
+                    }
+                    match api::post::<(), InviteResponse>(
+                        &format!("/api/users/{card_id}/invite"),
+                        &(),
+                    )
+                    .await
+                    {
+                        Ok(resp) => {
+                            set_msg.set(i18n::tf(
+                                lang.get_untracked(),
+                                "invite_sent",
+                                &[&resp.sent_to],
+                            ));
+                        }
+                        Err(e) => {
+                            if e == "mail_not_configured" {
+                                set_msg.set(
+                                    i18n::t(lang.get_untracked(), "invite_mail_not_configured")
+                                        .to_string(),
+                                );
+                            } else {
+                                set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e]));
+                            }
+                        }
+                    }
+                    set_invite_loading.set(false);
                 });
             };
 
@@ -240,6 +282,25 @@ pub fn EditInfoForm(
                                 node_ref=email_ref
                                 value=initial_email.get_untracked()
                             />
+                        </div>
+                        <div class="form-group">
+                            <button
+                                type="button"
+                                class="btn btn--ghost"
+                                data-testid="user-edit-send-invite"
+                                disabled=move || {
+                                    invite_loading.get()
+                                        || saved_email
+                                            .get()
+                                            .as_deref()
+                                            .map(str::trim)
+                                            .map(str::is_empty)
+                                            .unwrap_or(true)
+                                }
+                                on:click=on_invite_click
+                            >
+                                {move || i18n::t(lang.get(), "send_invite")}
+                            </button>
                         </div>
                         <div class="form-group">
                             <label>{i18n::t(lang.get(), "company")}</label>

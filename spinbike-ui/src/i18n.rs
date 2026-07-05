@@ -617,6 +617,20 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("close", ("Zatvorit", "Close"));
     m.insert("edit_info", ("Upravit udaje", "Edit info"));
     m.insert("customer_info", ("Udaje klienta", "Customer info"));
+
+    // Staff invite button in edit-info form (#111)
+    m.insert("send_invite", ("Poslat pozvanku", "Send invite"));
+    m.insert(
+        "invite_sent",
+        ("Pozvanka odoslana na {}", "Invite sent to {}"),
+    );
+    m.insert(
+        "invite_mail_not_configured",
+        (
+            "Odosielanie emailov nie je nakonfigurovane",
+            "Email sending is not configured",
+        ),
+    );
     m.insert(
         "sell_pass_label",
         ("Predat mesacny preukaz", "Sell monthly pass"),
