@@ -4,6 +4,7 @@ use web_sys::HtmlInputElement;
 
 use crate::api;
 use crate::auth::{self, AuthData, UserInfo};
+use crate::components::LoginLinkForm;
 use crate::i18n::{self, Lang};
 
 #[derive(serde::Serialize)]
@@ -94,8 +95,15 @@ pub fn LoginPage() -> impl IntoView {
         set_error.set(String::new());
 
         spawn_local(async move {
-            match api::post::<LoginReq, AuthResp>("/api/auth/login", &LoginReq { email, password })
-                .await
+            // post_public, not post: a wrong-password 401 must not clear a
+            // DIFFERENT, still-valid session this browser happens to hold
+            // (e.g. a shared kiosk already logged in as someone else) — see
+            // api::post_public's doc comment and #109.
+            match api::post_public::<LoginReq, AuthResp>(
+                "/api/auth/login",
+                &LoginReq { email, password },
+            )
+            .await
             {
                 Ok(resp) => save_and_redirect(resp),
                 Err(e) => set_error.set(e),
@@ -131,6 +139,13 @@ pub fn LoginPage() -> impl IntoView {
             <p class="text-center text-muted mt-2">
                 {move || i18n::t(lang.get(), "dont_have_account")} <a href="/register">{move || i18n::t(lang.get(), "register")}</a>
             </p>
+
+            <hr class="mt-3" />
+
+            <h2 class="page-title mt-3" data-testid="customer-login-heading">
+                {move || i18n::t(lang.get(), "customer_login_heading")}
+            </h2>
+            <LoginLinkForm />
         </div>
     }
 }

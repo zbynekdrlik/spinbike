@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole, setEnglishLanguage } from './helpers';
+import { setupConsoleCheck, assertCleanConsole, setEnglishLanguage, passwordLoginForm } from './helpers';
 
 test.describe('Authentication flows', () => {
     test.beforeEach(async ({ page }) => {
@@ -18,9 +18,13 @@ test.describe('Authentication flows', () => {
         // register is gone in #108).
         await page.goto('/login');
         await page.waitForSelector('h1.page-title');
-        await page.fill('input[type="email"]', 'customer@test.com');
-        await page.fill('input[type="password"]', 'password123');
-        await page.click('button[type="submit"]');
+        // /login now has a SECOND type="email" input + submit button (the
+        // customer login-link section, #109) below this password form —
+        // passwordLoginForm() scopes to the form that has a password input.
+        const form1 = passwordLoginForm(page);
+        await form1.locator('input[type="email"]').fill('customer@test.com');
+        await form1.locator('input[type="password"]').fill('password123');
+        await form1.locator('button[type="submit"]').click();
         await page.waitForURL('/', { timeout: 10000 });
 
         // Verify logged in
@@ -60,9 +64,13 @@ test.describe('Authentication flows', () => {
         await page.waitForSelector('h1.page-title');
         expect(await page.textContent('h1.page-title')).toBe('Login');
 
-        await page.fill('input[type="email"]', 'customer@test.com');
-        await page.fill('input[type="password"]', 'password123');
-        await page.click('button[type="submit"]');
+        // /login now has a SECOND type="email" input + submit button (the
+        // customer login-link section, #109) below this password form —
+        // passwordLoginForm() scopes to the form that has a password input.
+        const form2 = passwordLoginForm(page);
+        await form2.locator('input[type="email"]').fill('customer@test.com');
+        await form2.locator('input[type="password"]').fill('password123');
+        await form2.locator('button[type="submit"]').click();
 
         await page.waitForURL('/', { timeout: 10000 });
 
@@ -80,9 +88,10 @@ test.describe('Authentication flows', () => {
         await page.goto('/login');
         await page.waitForSelector('h1.page-title');
 
-        await page.fill('input[type="email"]', 'customer@test.com');
-        await page.fill('input[type="password"]', 'wrongpassword');
-        await page.click('button[type="submit"]');
+        const form3 = passwordLoginForm(page);
+        await form3.locator('input[type="email"]').fill('customer@test.com');
+        await form3.locator('input[type="password"]').fill('wrongpassword');
+        await form3.locator('button[type="submit"]').click();
 
         // Should show error, not redirect
         await page.waitForSelector('.alert.alert-error', { timeout: 5000 });

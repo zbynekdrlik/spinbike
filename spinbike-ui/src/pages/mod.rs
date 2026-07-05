@@ -7,6 +7,7 @@ pub mod my_bookings;
 pub mod reports;
 pub mod schedule;
 pub mod staff_dashboard;
+pub mod welcome;
 
 pub use admin::AdminPage as SettingsPage;
 pub use door::DoorPage;

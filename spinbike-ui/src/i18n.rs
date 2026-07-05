@@ -238,6 +238,47 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         ("Uz mate ucet? ", "Already have an account? "),
     );
 
+    // Magic-link onboarding (/welcome + login-page customer section, #109)
+    m.insert("welcome_loading", ("Prihlasujem...", "Signing you in..."));
+    m.insert("welcome_title", ("Vitaj v SpinBike", "Welcome to SpinBike"));
+    m.insert(
+        "welcome_message",
+        (
+            "Uspesne prihlaseny. Tvoj zostatok a otvaranie dveri najdes tu:",
+            "You're logged in. Find your balance and door access here:",
+        ),
+    );
+    m.insert(
+        "welcome_cta",
+        ("Prejst na moj zostatok", "Go to my balance"),
+    );
+    m.insert(
+        "welcome_invalid_title",
+        ("Odkaz nie je platny", "This link isn't valid"),
+    );
+    m.insert(
+        "welcome_invalid_message",
+        (
+            "Odkaz je bud neplatny, expirovany, alebo uz bol pouzity. Zadaj svoj email a poslime ti novy.",
+            "This link is invalid, expired, or already used. Enter your email and we'll send you a new one.",
+        ),
+    );
+    m.insert(
+        "customer_login_heading",
+        ("Prihlasenie pre klientov", "Customer login"),
+    );
+    m.insert(
+        "send_login_link",
+        ("Poslat prihlasovaci link", "Send login link"),
+    );
+    m.insert(
+        "login_link_sent",
+        (
+            "Ak email existuje, poslali sme prihlasovaci odkaz",
+            "If that email exists, we sent a login link",
+        ),
+    );
+
     // Class card / schedule
     m.insert("book", ("Rezervovat", "BOOK"));
     m.insert("booked", ("REZERVOVANE", "BOOKED"));

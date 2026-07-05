@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole } from './helpers';
+import { setupConsoleCheck, assertCleanConsole, passwordLoginForm } from './helpers';
 
 // Read-only post-deploy smoke tests. Safe to run against production because
 // they never write data — they only verify that the freshly-deployed binary
@@ -25,8 +25,14 @@ test.describe('@smoke post-deploy', () => {
         const consoleMessages = setupConsoleCheck(page);
         await page.goto(`${BASE}/login`);
         await page.waitForSelector('input[type="email"]', { timeout: 15000 });
-        await expect(page.locator('input[type="email"]')).toBeVisible();
-        await expect(page.locator('input[type="password"]')).toBeVisible();
+        // The page now has TWO type="email" inputs: the admin/staff password
+        // form and the customer login-link section below it (#109).
+        // passwordLoginForm() scopes to the form that has a password input —
+        // the invariant this test is actually checking — regardless of DOM
+        // order between the two sections.
+        const form = passwordLoginForm(page);
+        await expect(form.locator('input[type="email"]')).toBeVisible();
+        await expect(form.locator('input[type="password"]')).toBeVisible();
         assertCleanConsole(consoleMessages);
     });
 
