@@ -64,12 +64,21 @@ jobs:
         shell: bash
         run: |
           set +e
-          # Full tree (no --in-diff). --baseline=skip because the sweep is fired
-          # when main is known-green; --test-tool=nextest matches the PR gate;
-          # --timeout 180 matches the per-mutant budget in ci.yml.
+          # Full tree (no --in-diff). Unlike the PR gate in ci.yml (which has
+          # needs: test proving the baseline green in the SAME run), this
+          # workflow_dispatch can be fired against ANY ref — nothing upstream
+          # guarantees the tree builds/tests clean. So the baseline is NOT
+          # skipped here: cargo-mutants runs it itself and returns exit 4 if
+          # the tree doesn't build/test, which is exactly the "fail on tooling
+          # failure" signal the exit-code handling below relies on. (With
+          # --baseline=skip a broken tree instead returns exit 0 — "0 viable
+          # mutants tested" reads as success — silently filing nothing.) The
+          # cost is a redundant baseline run per shard; acceptable for an
+          # unbounded on-demand sweep (this job isn't the 20-min PR-gate budget).
+          # --test-tool=nextest matches the PR gate; --timeout 180 matches the
+          # per-mutant budget in ci.yml.
           cargo mutants \
             --shard ${{ matrix.shard }}/8 \
-            --baseline=skip \
             --test-tool=nextest \
             --timeout 180 \
             --no-shuffle \
@@ -106,11 +115,14 @@ jobs:
           set -euo pipefail
           out="mutants.out"
           survivors=""
+          # Command substitution strips the trailing newline from printf, so the
+          # header literal is on its own line via $'\n' rather than piped through
+          # printf (otherwise "MISSED (survived):" would jam onto the first entry).
           if [ -s "$out/missed.txt" ]; then
-            survivors="$(printf 'MISSED (survived):\n')$(cat "$out/missed.txt")"$'\n\n'
+            survivors="MISSED (survived):"$'\n'"$(cat "$out/missed.txt")"$'\n\n'
           fi
           if [ -s "$out/timeout.txt" ]; then
-            survivors="${survivors}$(printf 'TIMEOUT:\n')$(cat "$out/timeout.txt")"$'\n'
+            survivors="${survivors}TIMEOUT:"$'\n'"$(cat "$out/timeout.txt")"$'\n'
           fi
           # Guard: findings exit code but no listed entries → nothing to file.
           if [ -z "$(printf '%s' "$survivors" | tr -d '[:space:]')" ]; then
