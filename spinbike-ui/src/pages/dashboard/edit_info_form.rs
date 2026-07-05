@@ -278,7 +278,19 @@ pub fn EditInfoForm(
 
             view! {
                 <Sheet
-                    on_close=Callback::new(move |()| on_close_cancel.run(()))
+                    on_close=Callback::new(move |()| {
+                        // Block backdrop-click / Escape while an invite is
+                        // in flight — closing here would tear down this
+                        // reactive scope (loading/invite_loading/on_submit/
+                        // on_invite_click are all created in the enclosing
+                        // `move ||`) out from under the pending spawn_local,
+                        // which is exactly the disposed-closure class of bug
+                        // this Sheet already hit once (see #89 in its own
+                        // doc comment on `close_backdrop`/`close_keyboard`).
+                        if !invite_loading.get_untracked() {
+                            on_close_cancel.run(());
+                        }
+                    })
                     title=i18n::t(lang.get(), "edit_info").to_string()
                     testid="sheet-edit-info"
                 >
@@ -395,7 +407,10 @@ pub fn EditInfoForm(
                             <button
                                 type="button"
                                 class="btn btn--ghost"
-                                disabled=move || loading.get()
+                                // Also blocked while an invite is in flight —
+                                // symmetric with the Sheet's own on_close gate
+                                // above; same disposed-reactive-scope reason.
+                                disabled=move || loading.get() || invite_loading.get()
                                 on:click=move |_| {
                                     let cb = on_close_btn.clone();
                                     spawn_local(async move {
@@ -409,7 +424,7 @@ pub fn EditInfoForm(
                             <button
                                 type="submit"
                                 class="btn btn--primary"
-                                disabled=move || loading.get()
+                                disabled=move || loading.get() || invite_loading.get()
                             >
                                 {i18n::t(lang.get(), "save")}
                             </button>
