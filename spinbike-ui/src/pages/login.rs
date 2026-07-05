@@ -13,14 +13,6 @@ struct LoginReq {
     password: String,
 }
 
-#[derive(serde::Serialize)]
-struct RegisterReq {
-    email: String,
-    password: String,
-    name: String,
-    phone: Option<String>,
-}
-
 #[derive(serde::Deserialize)]
 struct AuthResp {
     token: String,
@@ -136,9 +128,6 @@ pub fn LoginPage() -> impl IntoView {
                     {move || if loading.get() { i18n::t(lang.get(), "logging_in") } else { i18n::t(lang.get(), "login") }}
                 </button>
             </form>
-            <p class="text-center text-muted mt-2">
-                {move || i18n::t(lang.get(), "dont_have_account")} <a href="/register">{move || i18n::t(lang.get(), "register")}</a>
-            </p>
 
             <hr class="mt-3" />
 
@@ -146,113 +135,6 @@ pub fn LoginPage() -> impl IntoView {
                 {move || i18n::t(lang.get(), "customer_login_heading")}
             </h2>
             <LoginLinkForm />
-        </div>
-    }
-}
-
-#[component]
-pub fn RegisterPage() -> impl IntoView {
-    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
-    let name_ref = NodeRef::<leptos::html::Input>::new();
-    let email_ref = NodeRef::<leptos::html::Input>::new();
-    let pass_ref = NodeRef::<leptos::html::Input>::new();
-    let phone_ref = NodeRef::<leptos::html::Input>::new();
-    let (error, set_error) = signal(String::new());
-    let (loading, set_loading) = signal(false);
-
-    let on_submit = move |ev: web_sys::SubmitEvent| {
-        ev.prevent_default();
-        let name = name_ref
-            .get()
-            .map(|el| {
-                let el: &HtmlInputElement = &el;
-                el.value()
-            })
-            .unwrap_or_default();
-        let email = email_ref
-            .get()
-            .map(|el| {
-                let el: &HtmlInputElement = &el;
-                el.value()
-            })
-            .unwrap_or_default();
-        let password = pass_ref
-            .get()
-            .map(|el| {
-                let el: &HtmlInputElement = &el;
-                el.value()
-            })
-            .unwrap_or_default();
-        let phone_val = phone_ref
-            .get()
-            .map(|el| {
-                let el: &HtmlInputElement = &el;
-                el.value()
-            })
-            .unwrap_or_default();
-        let phone = if phone_val.is_empty() {
-            None
-        } else {
-            Some(phone_val)
-        };
-
-        set_loading.set(true);
-        set_error.set(String::new());
-
-        spawn_local(async move {
-            match api::post::<RegisterReq, AuthResp>(
-                "/api/auth/register",
-                &RegisterReq {
-                    email,
-                    password,
-                    name,
-                    phone,
-                },
-            )
-            .await
-            {
-                Ok(resp) => save_and_redirect(resp),
-                Err(e) => set_error.set(e),
-            }
-            set_loading.set(false);
-        });
-    };
-
-    view! {
-        <div class="page-form">
-            <h1 class="page-title">{move || i18n::t(lang.get(), "register")}</h1>
-            {move || {
-                let e = error.get();
-                if e.is_empty() {
-                    view! {}.into_any()
-                } else {
-                    view! { <div class="alert alert-error">{e}</div> }.into_any()
-                }
-            }}
-            <form on:submit=on_submit>
-                <div class="form-group">
-                    <label>{move || i18n::t(lang.get(), "name")}</label>
-                    <input type="text" class="form-control" node_ref=name_ref required />
-                </div>
-                <div class="form-group">
-                    <label>{move || i18n::t(lang.get(), "email")}</label>
-                    <input type="email" class="form-control" node_ref=email_ref required />
-                </div>
-                <div class="form-group">
-                    <label>{move || i18n::t(lang.get(), "password")}</label>
-                    <input type="password" class="form-control" node_ref=pass_ref required minlength="6" />
-                </div>
-                <div class="form-group">
-                    <label>{move || i18n::t(lang.get(), "phone_optional")}</label>
-                    <input type="tel" class="form-control" node_ref=phone_ref />
-                </div>
-                <button type="submit" class="btn btn--primary btn--hero btn--block" disabled=move || loading.get()>
-                    {move || if loading.get() { i18n::t(lang.get(), "creating_account") } else { i18n::t(lang.get(), "register") }}
-                </button>
-            </form>
-            <p class="text-center text-muted mt-2">
-                {move || i18n::t(lang.get(), "already_have_account")} <a href="/login">{move || i18n::t(lang.get(), "login")}</a>
-            </p>
         </div>
     }
 }

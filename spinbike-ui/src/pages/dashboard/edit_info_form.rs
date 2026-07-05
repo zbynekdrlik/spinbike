@@ -52,6 +52,11 @@ pub fn EditInfoForm(
     let (initial_email, _) = signal(card.email.clone().unwrap_or_default());
     let (initial_company, _) = signal(card.company.clone().unwrap_or_default());
     let (initial_phone, _) = signal(card.phone.clone().unwrap_or_default());
+    // Tracks the LAST-SAVED email (not the unsaved draft in the input) — the
+    // "Poslat pozvanku" button is enabled only against this, per #111. Starts
+    // from the card's current persisted email; updated from the fresh
+    // `CardInfo` the save handler gets back on success (see on_submit below).
+    let (saved_email, set_saved_email) = signal(card.email.clone());
 
     // NodeRefs declared at the function-body level so the refresh Effect
     // can write to them directly when fetch completes. They're populated
@@ -129,6 +134,14 @@ pub fn EditInfoForm(
                     if target_is_customer {
                         set_allow_self_entry.set(c.allow_self_entry);
                     }
+                    // Re-sync the invite button's gating value too — otherwise
+                    // a Cancel-then-reopen of the SAME still-mounted sheet
+                    // (no remount, so `saved_email` would otherwise hold
+                    // whatever it was at the last save/mount) would leave the
+                    // button's enabled state stale relative to an email
+                    // change made out-of-band (another staff terminal, an
+                    // import) between the two opens.
+                    set_saved_email.set(c.email.clone());
                 }
             });
         }
@@ -145,6 +158,7 @@ pub fn EditInfoForm(
             let on_close_cancel = on_close.clone();
             let on_close_btn = on_close.clone();
             let on_close_save = on_close.clone();
+            let on_close_invite = on_close.clone();
             let initial_allow_se_at_open = allow_self_entry.get_untracked();
 
             let on_submit = move |ev: web_sys::SubmitEvent| {
@@ -202,6 +216,7 @@ pub fn EditInfoForm(
                     };
                     match api::put_json::<Req, CardInfo>(&format!("/api/users/{card_id}"), &req).await {
                         Ok(c) => {
+                            set_saved_email.set(c.email.clone());
                             set_selected.set(Some(c));
                             set_msg.set(i18n::t(lang.get_untracked(), "saved").to_string());
                             on_close_inner.run(());
@@ -216,9 +231,66 @@ pub fn EditInfoForm(
                 });
             };
 
+            let (invite_loading, set_invite_loading) = signal(false);
+            let on_invite_click = move |_: web_sys::MouseEvent| {
+                set_invite_loading.set(true);
+                let on_close_after_invite = on_close_invite.clone();
+                spawn_local(async move {
+                    #[derive(serde::Deserialize)]
+                    struct InviteResponse {
+                        sent_to: String,
+                    }
+                    match api::post::<(), InviteResponse>(
+                        &format!("/api/users/{card_id}/invite"),
+                        &(),
+                    )
+                    .await
+                    {
+                        Ok(resp) => {
+                            set_msg.set(i18n::tf(
+                                lang.get_untracked(),
+                                "invite_sent",
+                                &[&resp.sent_to],
+                            ));
+                        }
+                        Err(e) => {
+                            if e == "mail_not_configured" {
+                                set_msg.set(
+                                    i18n::t(lang.get_untracked(), "invite_mail_not_configured")
+                                        .to_string(),
+                                );
+                            } else {
+                                set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e]));
+                            }
+                        }
+                    }
+                    set_invite_loading.set(false);
+                    // Close the sheet on EITHER outcome so the status line
+                    // (rendered by the parent dashboard, outside this
+                    // component) is actually visible — the sheet's own
+                    // backdrop is a full-viewport `position: fixed; z-index:
+                    // 200` blur that sits above it while the sheet stays
+                    // open. Unlike Save, Invite has no "fix inline and
+                    // retry" flow, so there's nothing gained by staying open.
+                    on_close_after_invite.run(());
+                });
+            };
+
             view! {
                 <Sheet
-                    on_close=Callback::new(move |()| on_close_cancel.run(()))
+                    on_close=Callback::new(move |()| {
+                        // Block backdrop-click / Escape while an invite is
+                        // in flight — closing here would tear down this
+                        // reactive scope (loading/invite_loading/on_submit/
+                        // on_invite_click are all created in the enclosing
+                        // `move ||`) out from under the pending spawn_local,
+                        // which is exactly the disposed-closure class of bug
+                        // this Sheet already hit once (see #89 in its own
+                        // doc comment on `close_backdrop`/`close_keyboard`).
+                        if !invite_loading.get_untracked() {
+                            on_close_cancel.run(());
+                        }
+                    })
                     title=i18n::t(lang.get(), "edit_info").to_string()
                     testid="sheet-edit-info"
                 >
@@ -240,6 +312,35 @@ pub fn EditInfoForm(
                                 node_ref=email_ref
                                 value=initial_email.get_untracked()
                             />
+                        </div>
+                        <div class="form-group">
+                            <button
+                                type="button"
+                                class="btn btn--ghost"
+                                data-testid="user-edit-send-invite"
+                                disabled=move || {
+                                    // Also gated on the SAVE form's own
+                                    // `loading` (not just `invite_loading`):
+                                    // without it, a user could click Save
+                                    // (new email typed) then immediately
+                                    // click Send before the PUT resolves —
+                                    // `saved_email` wouldn't reflect the new
+                                    // value yet, but the invite would still
+                                    // fire (the server reads the CURRENT
+                                    // DB row at request time, independent of
+                                    // this signal — see #111).
+                                    invite_loading.get()
+                                        || loading.get()
+                                        || saved_email
+                                            .get()
+                                            .as_deref()
+                                            .filter(|s| !s.trim().is_empty())
+                                            .is_none()
+                                }
+                                on:click=on_invite_click
+                            >
+                                {move || i18n::t(lang.get(), "send_invite")}
+                            </button>
                         </div>
                         <div class="form-group">
                             <label>{i18n::t(lang.get(), "company")}</label>
@@ -306,7 +407,10 @@ pub fn EditInfoForm(
                             <button
                                 type="button"
                                 class="btn btn--ghost"
-                                disabled=move || loading.get()
+                                // Also blocked while an invite is in flight —
+                                // symmetric with the Sheet's own on_close gate
+                                // above; same disposed-reactive-scope reason.
+                                disabled=move || loading.get() || invite_loading.get()
                                 on:click=move |_| {
                                     let cb = on_close_btn.clone();
                                     spawn_local(async move {
@@ -320,7 +424,7 @@ pub fn EditInfoForm(
                             <button
                                 type="submit"
                                 class="btn btn--primary"
-                                disabled=move || loading.get()
+                                disabled=move || loading.get() || invite_loading.get()
                             >
                                 {i18n::t(lang.get(), "save")}
                             </button>

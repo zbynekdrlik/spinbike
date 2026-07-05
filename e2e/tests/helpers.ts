@@ -167,30 +167,33 @@ export async function createUniqueUser(
     token: string,
     initialCredit: number,
     prefix: string = 'AF',
-): Promise<{ user_id: number; name: string; card_code: string }> {
+    email?: string,
+): Promise<{ user_id: number; name: string; card_code: string; email?: string }> {
     const BASE_URL = 'http://localhost:8099';
     const suffix = Array.from({ length: 8 }, () =>
         String.fromCharCode(97 + Math.floor(Math.random() * 26)),
     ).join('');
     const cardCode = `${prefix}-${suffix}`;
     const name = `${prefix} ${prefix}${suffix}`;
+    const body: Record<string, unknown> = {
+        name,
+        initial_credit: initialCredit,
+        card_code: cardCode,
+    };
+    if (email) body.email = email;
     const resp = await fetch(`${BASE_URL}/api/users`, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({
-            name,
-            initial_credit: initialCredit,
-            card_code: cardCode,
-        }),
+        body: JSON.stringify(body),
     });
     if (!resp.ok) {
         throw new Error(`createUniqueUser failed: ${resp.status} ${await resp.text()}`);
     }
     const json = await resp.json();
-    return { user_id: json.id as number, name, card_code: cardCode };
+    return { user_id: json.id as number, name, card_code: cardCode, email };
 }
 
 /**

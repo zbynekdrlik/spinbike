@@ -228,3 +228,33 @@ ambiguous — don't assume only the test you're writing is affected.
   the `||→&&` and default-return mutants survive otherwise.
 - `cargo-mutants` does NOT mutate `#[cfg(test)]` code or `tests/` integration
   binaries, so new tests never add survivors — only changed `src/` lines do.
+
+## `test.use({ ...devices[...] })` inside a `describe` block fails CI
+
+Playwright's device descriptors (`devices['iPhone 13']` etc.) include
+`defaultBrowserType` (e.g. `'webkit'`). Spreading the WHOLE descriptor into
+`test.use()` **inside a `test.describe()` block** fails immediately:
+`Cannot use({ defaultBrowserType }) in a describe group, because it forces a
+new worker. Make it top-level in the test file or put in the configuration
+file.` (#110, `install-prompt.spec.ts`) — this project's default project is
+Chromium only, so you never actually want a real WebKit launch anyway.
+
+**Fix: spread only the context-option fields you need**, not the whole
+descriptor:
+
+```ts
+const iPhone = devices['iPhone 13'];
+test.describe('...', () => {
+    test.use({
+        userAgent: iPhone.userAgent,
+        viewport: iPhone.viewport,
+        isMobile: iPhone.isMobile,
+        hasTouch: iPhone.hasTouch,
+    });
+    // ...
+});
+```
+
+This still gives Chromium a real device UA/viewport/touch profile — enough
+for any UA-sniffing or viewport-dependent component logic — without the
+`defaultBrowserType` field that breaks describe-scoped `test.use()`.
