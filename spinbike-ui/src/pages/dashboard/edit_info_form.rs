@@ -247,14 +247,32 @@ pub fn EditInfoForm(
                         Err(e) => {
                             // Route to the IN-SHEET channel (not the shared
                             // dashboard alert, which hides behind the sheet
-                            // backdrop). Map the known email-uniqueness 409 to
-                            // a plain-Slovak message; anything else falls back
+                            // backdrop). When the server named the colliding
+                            // account (staff/admin only), show WHO holds the
+                            // email so the operator can go fix it. Otherwise
+                            // fall back to the generic collision message, then
                             // to the raw formatted server text.
-                            let text = if e.contains("email already exists") {
+                            let text = if let Some(name) = e.conflict_name {
+                                let who = match e.conflict_card {
+                                    Some(card) if !card.trim().is_empty() => {
+                                        format!("{name} ({card})")
+                                    }
+                                    _ => name,
+                                };
+                                i18n::tf(
+                                    lang.get_untracked(),
+                                    "email_already_used_by",
+                                    &[&who],
+                                )
+                            } else if e.message.contains("email already exists") {
                                 i18n::t(lang.get_untracked(), "email_already_used")
                                     .to_string()
                             } else {
-                                i18n::tf(lang.get_untracked(), "error_format", &[&e])
+                                i18n::tf(
+                                    lang.get_untracked(),
+                                    "error_format",
+                                    &[&e.message],
+                                )
                             };
                             set_save_err.set(text);
                         }

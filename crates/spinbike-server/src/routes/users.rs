@@ -304,14 +304,20 @@ async fn create_user(
         if !email.contains('@') || !email.contains('.') {
             return Err(super::bad_request("Invalid email address"));
         }
-        if db::get_user_by_email(&state.pool, email)
+        // Name the colliding account. This endpoint is staff/admin-only
+        // (can_manage_cards guard above), so there is no customer to leak an
+        // identity to — the name/card always go out.
+        if let Some(existing) = db::get_user_by_email(&state.pool, email)
             .await
             .map_err(internal_error)?
-            .is_some()
         {
             return Err((
                 StatusCode::CONFLICT,
-                Json(serde_json::json!({"error": "A user with this email already exists"})),
+                Json(serde_json::json!({
+                    "error": "A user with this email already exists",
+                    "conflict_name": existing.name,
+                    "conflict_card": existing.card_code,
+                })),
             ));
         }
     }
@@ -771,10 +777,21 @@ async fn update_user(
             .map_err(internal_error)?
             && existing.id != id
         {
-            return Err((
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({"error": "A user with this email already exists"})),
-            ));
+            // Name the colliding account so a STAFF/ADMIN operator can go find
+            // and fix it (the reported need: the CEO just wants to see "email
+            // is already used by so-and-so", then he sorts it out himself).
+            // SECURITY: never leak another account's identity to a CUSTOMER
+            // self-editing their own row — that would turn the email field
+            // into a name-enumeration oracle. Customers get only the generic
+            // message; the name/card go out solely to staff/admin.
+            let mut err = serde_json::json!({
+                "error": "A user with this email already exists"
+            });
+            if is_staff_or_admin {
+                err["conflict_name"] = serde_json::json!(existing.name);
+                err["conflict_card"] = serde_json::json!(existing.card_code);
+            }
+            return Err((StatusCode::CONFLICT, Json(err)));
         }
     }
 

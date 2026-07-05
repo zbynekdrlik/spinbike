@@ -865,6 +865,16 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "This email is already used by another account. One email can belong to only one account.",
         ),
     );
+    // Named variant: {} is the colliding account's name (+ card code), which
+    // the server returns only to staff/admin. Lets the operator go find and
+    // fix that account.
+    m.insert(
+        "email_already_used_by",
+        (
+            "Tento email uz pouziva ucet: {}. Jeden email moze patrit len jednemu uctu.",
+            "This email is already used by account: {}. One email can belong to only one account.",
+        ),
+    );
 
     m
 });
