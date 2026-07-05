@@ -308,6 +308,18 @@ pub fn EditInfoForm(
                     {
                         Ok(c) => {
                             set_email_sig.set(c.email.clone().unwrap_or_default());
+                            // ORDER MATTERS (reactive_graph 0.1.8): write the
+                            // LOCAL `loading` signal BEFORE any disposal trigger.
+                            // `set_selected` rebuilds this component (parent
+                            // tracks `selected`) and `on_close` hides the sheet —
+                            // both dispose this scope synchronously, and touching
+                            // a local/component signal AFTERWARD panics ("access a
+                            // reactive value that has already been disposed"). The
+                            // panic fires after the sheet has already closed, so
+                            // it's invisible in prod but shows up as a WASM
+                            // RuntimeError in the browser console (a Playwright
+                            // clean-console failure). Local first, dispose last.
+                            set_loading.set(false);
                             set_selected.set(Some(c));
                             set_msg.set(i18n::t(lang.get_untracked(), "saved").to_string());
                             on_close_inner.run(());
@@ -315,11 +327,12 @@ pub fn EditInfoForm(
                         Err(e) => {
                             // In-sheet red alert (the shared dashboard alert is
                             // occluded by this sheet's backdrop). Names the
-                            // colliding account for staff/admin.
+                            // colliding account for staff/admin. Sheet stays open,
+                            // so no disposal — order is not sensitive here.
                             set_save_err.set(save_error_text(lang.get_untracked(), e));
+                            set_loading.set(false);
                         }
                     }
-                    set_loading.set(false);
                 });
             };
 
@@ -391,16 +404,20 @@ pub fn EditInfoForm(
                         }
                     }
 
-                    // Reflect the persisted user to the parent, then close on
-                    // EITHER invite outcome so the shared status line (parent
-                    // dashboard) is visible — this sheet's own `position: fixed;
-                    // z-index: 200` backdrop blur sits above an in-body alert
-                    // while the sheet is open. `set_selected` runs LAST (not
-                    // before the invite await) so it can't remount this
-                    // component mid-request. Unlike Save, invite has no
-                    // fix-inline retry, so closing is correct.
-                    set_selected.set(Some(saved));
+                    // ORDER MATTERS (reactive_graph 0.1.8): write the LOCAL
+                    // `invite_loading` signal FIRST, then trigger disposal. Both
+                    // `set_selected` (rebuilds this component — parent tracks
+                    // `selected`) and `on_close` (hides the sheet) dispose this
+                    // scope synchronously; touching a local/component signal
+                    // AFTERWARD panics ("access a reactive value that has already
+                    // been disposed") — a WASM RuntimeError in the console. So:
+                    // local first, then set_selected → on_close with nothing
+                    // local after. (Reflecting the saved user to the parent so a
+                    // reopen shows the new email; closing on either invite
+                    // outcome so the shared status line clears this sheet's
+                    // z-index:200 backdrop. Invite has no fix-inline retry.)
                     set_invite_loading.set(false);
+                    set_selected.set(Some(saved));
                     on_close_after_invite.run(());
                 });
             };
