@@ -6,10 +6,12 @@ test.describe('Authentication flows', () => {
         await setEnglishLanguage(page);
     });
 
-    // NOTE: public self-registration was removed in #108 (invite-only
-    // onboarding). The former "register a new user via UI" test is gone with
-    // the feature; onboarding is now covered by the invite → /welcome flow
-    // (tested under #109). Logout coverage below bootstraps via login instead.
+    // NOTE: public self-registration was removed server-side in #108, and the
+    // `/register` page + all nav/login links were removed client-side in #112
+    // (invite-only onboarding). The former "register a new user via UI" test
+    // is gone with the feature; onboarding is now covered by the invite →
+    // /welcome flow (tested under #109). Logout coverage below bootstraps via
+    // login instead.
 
     test('logout and verify nav reverts', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
@@ -45,10 +47,12 @@ test.describe('Authentication flows', () => {
         const token = await page.evaluate(() => localStorage.getItem('spinbike_token'));
         expect(token).toBeNull();
 
-        // After reload with no token, nav shows Login/Register
+        // After reload with no token, nav shows Login
         const navAfter = page.locator('.navbar-links');
         await expect(navAfter.locator('a[href="/login"]')).toBeVisible({ timeout: 10000 });
-        await expect(navAfter.locator('a[href="/register"]')).toBeVisible();
+        // Public registration was removed (#112, invite-only) — the register
+        // link must be gone from the logged-out nav.
+        await expect(navAfter.locator('a[href="/register"]')).not.toBeVisible();
 
         // My Bookings link should not be visible
         await expect(navAfter.locator('a[href="/my/bookings"]')).not.toBeVisible();
@@ -104,16 +108,19 @@ test.describe('Authentication flows', () => {
         assertCleanConsole(consoleMessages);
     });
 
-    test('register link navigates from login page', async ({ page }) => {
+    test('/register no longer renders the registration form (#112)', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
 
-        await page.goto('/login');
-        await page.waitForSelector('h1.page-title');
+        await page.goto('/register');
+        await page.waitForSelector('.page');
 
-        // Click "Register" link
-        await page.click('a[href="/register"]');
-        await page.waitForSelector('h1.page-title');
-        expect(await page.textContent('h1.page-title')).toBe('Register');
+        // The server's SPA static fallback still serves index.html (200) for
+        // any dotless path — see ci-deploy skill — but the client-side router
+        // no longer has a /register <Route>, so its own `fallback` renders
+        // the "page not found" message instead of RegisterPage.
+        await expect(page.locator('.page')).toContainText(/not found/i);
+        await expect(page.locator('h1.page-title', { hasText: 'Register' })).toHaveCount(0);
+        await expect(page.locator('input[type="password"][minlength="6"]')).toHaveCount(0);
 
         assertCleanConsole(consoleMessages);
     });

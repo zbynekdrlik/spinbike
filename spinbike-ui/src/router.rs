@@ -104,7 +104,7 @@ use crate::i18n;
 use crate::pages::admin::AdminPage;
 use crate::pages::dashboard::DashboardPage;
 use crate::pages::door::DoorPage;
-use crate::pages::login::{LoginPage, RegisterPage};
+use crate::pages::login::LoginPage;
 use crate::pages::my_balance::MyBalancePage;
 use crate::pages::my_bookings::MyBookingsPage;
 use crate::pages::reports::ReportsPage;
@@ -146,7 +146,6 @@ pub fn App() -> impl IntoView {
                     <Routes fallback=move || view! { <p class="text-center text-muted mt-3">{move || i18n::t(lang_signal.get(), "page_not_found")}</p> }>
                         <Route path=path!("/") view=RootRoute />
                         <Route path=path!("/login") view=LoginPage />
-                        <Route path=path!("/register") view=RegisterPage />
                         // Magic-link landing page — public, the token itself
                         // is the authentication (see pages/welcome.rs).
                         <Route path=path!("/welcome") view=WelcomePage />

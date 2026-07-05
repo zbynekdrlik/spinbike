@@ -5,8 +5,8 @@ use crate::i18n::{self, Lang};
 
 /// Top header bar — logo, user name, logout, language toggle.
 /// Destination links live in `AdaptiveNav` (bottom tabs / sidebar) for
-/// admin/staff. Customer-facing links (login, register, my/bookings,
-/// my/balance) are still rendered here.
+/// admin/staff. Customer-facing links (login, my/bookings, my/balance)
+/// are still rendered here.
 #[component]
 pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
@@ -74,7 +74,6 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
                     } else {
                         view! {
                             <a href="/login">{move || i18n::t(lang.get(), "login")}</a>
-                            <a href="/register">{move || i18n::t(lang.get(), "register")}</a>
                         }.into_any()
                     }
                 }}

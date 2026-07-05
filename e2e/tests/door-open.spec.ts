@@ -8,8 +8,9 @@ const BASE_URL = 'http://localhost:8099';
 // ---------------------------------------------------------------------------
 
 /**
- * Register a unique customer (email + password) and return credentials.
- * Uses /api/auth/register so the user has a password from the start.
+ * Seed a unique customer (email + password) and return credentials.
+ * Uses the test-only /api/test/seed-account fixture so the user has a
+ * password from the start (public /api/auth/register was removed in #108).
  * Then sets allow_self_entry=true via admin PUT /api/users/{id}.
  */
 async function createSelfEntryCustomer(

@@ -191,7 +191,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     // Navigation
     m.insert("schedule", ("Rozvrh hodin", "Class Schedule"));
     m.insert("login", ("Prihlasenie", "Login"));
-    m.insert("register", ("Registracia", "Register"));
     m.insert("logout", ("Odhlasit", "Logout"));
     m.insert("my_bookings", ("Moje rezervacie", "My Bookings"));
     m.insert("balance", ("Zostatok", "Balance"));
@@ -206,10 +205,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("password", ("Heslo", "Password"));
     m.insert("name", ("Meno", "Name"));
     m.insert("phone", ("Telefon", "Phone"));
-    m.insert(
-        "phone_optional",
-        ("Telefon (volitelne)", "Phone (optional)"),
-    );
     m.insert("first_name", ("Meno", "First Name"));
     m.insert("last_name", ("Priezvisko", "Last Name"));
     m.insert("company", ("Firma", "Company"));
@@ -225,18 +220,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("date", ("Datum", "Date"));
     m.insert("action", ("Akcia", "Action"));
     m.insert("logging_in", ("Prihlasovanie...", "Logging in..."));
-    m.insert(
-        "creating_account",
-        ("Vytvaram ucet...", "Creating account..."),
-    );
-    m.insert(
-        "dont_have_account",
-        ("Nemate ucet? ", "Don't have an account? "),
-    );
-    m.insert(
-        "already_have_account",
-        ("Uz mate ucet? ", "Already have an account? "),
-    );
 
     // Magic-link onboarding (/welcome + login-page customer section, #109)
     m.insert("welcome_loading", ("Prihlasujem...", "Signing you in..."));
