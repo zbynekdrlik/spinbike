@@ -8,7 +8,7 @@ use sqlx::SqlitePool;
 
 /// Run one purge pass. Returns the number of rows removed.
 pub async fn tick(pool: &SqlitePool) -> Result<u64> {
-    Ok(crate::db::login_tokens::purge_expired_and_used(pool).await?)
+    crate::db::login_tokens::purge_expired_and_used(pool).await
 }
 
 #[cfg(test)]
