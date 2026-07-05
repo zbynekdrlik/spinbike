@@ -14,9 +14,6 @@ export function setupConsoleCheck(page: Page): string[] {
 
     const isFiltered = (text: string): boolean =>
         text.includes('SharedArrayBuffer') ||
-        text.includes('integrity') ||
-        text.includes('subresource integrity') ||
-        text.includes('crbug.com') ||
         // Trunk bootstrap calls wasm-bindgen init with the legacy
         // positional arg form; wasm-bindgen 0.2.x emits a deprecation
         // warning until Trunk migrates to the single-object form.
