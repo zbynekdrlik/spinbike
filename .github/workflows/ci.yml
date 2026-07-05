@@ -268,10 +268,10 @@ jobs:
   mutation-test:
     name: Mutation Testing
     runs-on: ubuntu-latest
-    # Generous timeout — public-repo CI is unmetered. The initial PR mutates
-    # the entire codebase against near-empty main (~269 mutants × ~30s each).
-    # Follow-up PRs only mutate diffed lines and finish in minutes.
-    timeout-minutes: 240
+    # HARD CAP per mutation-testing.md (≤20 min). The gate is diff-scoped
+    # (--in-diff), so it only mutates lines changed since main and finishes fast;
+    # the whole tree is swept on-demand by .github/workflows/mutation-full.yml (#102).
+    timeout-minutes: 20
     needs: test
     # Re-gated for the single-trigger model (#103): runs on the dev push (was
     # pull_request-only). --in-diff compares dev's HEAD against origin/main.
@@ -287,10 +287,10 @@ jobs:
         with:
           cache-on-failure: true
 
-      - name: Install cargo-mutants
+      - name: Install cargo-mutants + cargo-nextest
         uses: taiki-e/install-action@v2
         with:
-          tool: cargo-mutants
+          tool: cargo-mutants,cargo-nextest
 
       - name: Create placeholder dist for rust-embed
         run: |
@@ -308,6 +308,10 @@ jobs:
       - name: Run cargo-mutants on diff
         run: |
           # Mutate only PR-changed lines in the Rust crates.
+          # --baseline=skip: the `test` job (needs: test) already proved the
+          #   unmutated tree green, so skip re-running the baseline here (#102).
+          # --test-tool=nextest: run each mutant's tests under cargo-nextest
+          #   (per-test process isolation, faster) instead of `cargo test` (#102).
           # --no-shuffle keeps output deterministic for log readability.
           # Exclude one-off CLI tools and the trivial server main() — these are
           # entry points that would need full E2E harnesses to mutate usefully.
@@ -316,6 +320,8 @@ jobs:
           # normal variance. 180s leaves room without masking real hangs.
           cargo mutants \
             --in-diff pr.diff \
+            --baseline=skip \
+            --test-tool=nextest \
             --timeout 180 \
             --no-shuffle \
             --exclude 'crates/spinbike-server/src/bin/*' \

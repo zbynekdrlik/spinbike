@@ -1,0 +1,136 @@
+name: Mutation Testing (Full Tree)
+
+# On-demand full-tree mutation sweep (#102). Deliberately NOT on push / PR /
+# schedule: a multi-hour mutation run must never collide with active dev CI on
+# the self-hosted deploy runner (the user develops nonstop). It is fired MANUALLY
+# via the /mutation-sweep skill when there is capacity, runs on GitHub-HOSTED
+# runners (not the self-hosted deploy runner), and catches up everything the
+# diff-scoped PR gate in ci.yml skips.
+#
+# Surviving mutants become tracked issues (label: test-quality) — NOT a red CI.
+# The job FAILS only when cargo-mutants itself fails to run (usage / build /
+# baseline error); survivors and timeouts are findings that get filed.
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  # Only one full sweep of this repo at a time; a new dispatch supersedes an
+  # in-flight one.
+  group: mutation-full-${{ github.repository }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  mutants:
+    name: Full-tree mutants (shard ${{ matrix.shard }}/8)
+    runs-on: ubuntu-latest
+    # Full tree (~269 mutants) split 8 ways → ~35 mutants/shard × ~60-100s.
+    timeout-minutes: 360
+    strategy:
+      # One shard's tooling failure must not cancel the others.
+      fail-fast: false
+      matrix:
+        # cargo-mutants --shard is 0-indexed: k in [0, n-1].
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Install cargo-mutants + cargo-nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-mutants,cargo-nextest
+
+      - name: Create placeholder dist for rust-embed
+        run: |
+          mkdir -p spinbike-ui/dist
+          # Non-empty placeholder so static-file integration tests can assert
+          # the handler returns content (distinguishing from Default::default()).
+          echo "<!doctype html><title>spinbike-test</title>" > spinbike-ui/dist/index.html
+
+      - name: Run full-tree cargo-mutants (shard ${{ matrix.shard }}/8)
+        id: mutants
+        shell: bash
+        run: |
+          set +e
+          # Full tree (no --in-diff). --baseline=skip because the sweep is fired
+          # when main is known-green; --test-tool=nextest matches the PR gate;
+          # --timeout 180 matches the per-mutant budget in ci.yml.
+          cargo mutants \
+            --shard ${{ matrix.shard }}/8 \
+            --baseline=skip \
+            --test-tool=nextest \
+            --timeout 180 \
+            --no-shuffle \
+            --exclude 'crates/spinbike-server/src/bin/*' \
+            --package spinbike-core \
+            --package spinbike-server
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          echo "cargo-mutants exited with $code"
+          # cargo-mutants exit codes: 0=all caught / none, 1=usage error,
+          # 2=survivors (missed), 3=timeout, 4=baseline/build failed.
+          # 2 and 3 are FINDINGS → filed as issues in the next step (green CI).
+          # 1 and 4 are genuine tooling failures → fail the job.
+          case "$code" in
+            0 | 2 | 3) exit 0 ;;
+            *) echo "::error::cargo-mutants tooling failure (exit $code)"; exit "$code" ;;
+          esac
+
+      - name: Upload mutants.out artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-out-shard-${{ matrix.shard }}
+          path: mutants.out/
+          retention-days: 14
+          if-no-files-found: warn
+
+      - name: File surviving mutants as an issue
+        if: steps.mutants.outputs.exit_code == '2' || steps.mutants.outputs.exit_code == '3'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          out="mutants.out"
+          survivors=""
+          if [ -s "$out/missed.txt" ]; then
+            survivors="$(printf 'MISSED (survived):\n')$(cat "$out/missed.txt")"$'\n\n'
+          fi
+          if [ -s "$out/timeout.txt" ]; then
+            survivors="${survivors}$(printf 'TIMEOUT:\n')$(cat "$out/timeout.txt")"$'\n'
+          fi
+          # Guard: findings exit code but no listed entries → nothing to file.
+          if [ -z "$(printf '%s' "$survivors" | tr -d '[:space:]')" ]; then
+            echo "Exit code signalled findings but missed.txt/timeout.txt are empty — nothing to file."
+            exit 0
+          fi
+          # Ensure the label exists (idempotent — safe if it already does).
+          gh label create test-quality \
+            --repo "${{ github.repository }}" \
+            --color BFD4F2 \
+            --description "Surviving mutants / test-quality gaps (mutation sweep)" \
+            2>/dev/null || true
+          {
+            printf 'On-demand full-tree mutation sweep (shard %s/8) found mutants that survived the test suite.\n\n' "${{ matrix.shard }}"
+            printf 'Kill each by adding an assertion that fails on the mutation (see mutation-testing.md).\n\n'
+            printf '```\n%s```\n\n' "$survivors"
+            printf 'Sweep run: %s/%s/actions/runs/%s\n' "${{ github.server_url }}" "${{ github.repository }}" "${{ github.run_id }}"
+          } > /tmp/mutation-body.md
+          gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "Mutation sweep survivors — shard ${{ matrix.shard }}/8 ($(date +%Y-%m-%d))" \
+            --label test-quality \
+            --body-file /tmp/mutation-body.md
