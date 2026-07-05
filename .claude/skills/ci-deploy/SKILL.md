@@ -364,6 +364,29 @@ customer data touched"):
    `DELETE FROM login_tokens WHERE user_id=...` for every synthetic id you
    created, not just `users`.
 
+**Verifying a markup-only change (e.g. a new `data-testid`) landed live —
+without touching real prod data at all.** Not every post-deploy check needs
+a synthetic staff/admin session on prod (#133). A pure markup/attribute
+change (no logic change) that CI's own E2E suite already drove through a
+real Chromium browser doesn't need re-driving live to prove it's "working"
+— it needs proof the **exact bytes CI tested are the bytes now served**.
+Cheapest, safest way: read the compiled bundle's literal strings straight
+off the live host, no login, no synthetic rows, no prod-data risk:
+```bash
+# Find the current bundle hash from the page's own resource timings, or:
+curl -s https://spinbike.newlevel.media/ | grep -oE '/spinbike-ui-[a-f0-9]+_bg\.wasm'
+curl -s https://spinbike.newlevel.media/spinbike-ui-<hash>_bg.wasm -o /tmp/prod.wasm
+strings /tmp/prod.wasm | grep -F 'your-new-data-testid'
+```
+Leptos's `view!` macro compiles literal attribute strings straight into the
+wasm binary, so a hit proves the new code is genuinely deployed. Compare the
+`<hash>` between dev and prod (or diff the two `strings` outputs) to confirm
+both environments are running the identical build. Reach for a real
+synthetic-session E2E walkthrough only when the change actually alters
+runtime BEHAVIOR (a new API call, a changed branch condition) — this
+bundle-string check is for confirming byte-identical delivery of a
+zero-behavior-change markup/config tweak.
+
 ## `cargo mutants --shard k/n` is 0-INDEXED — matrix values are `[0, n-1]`, not `[1, n]`
 
 An 8-way sharded matrix must be `shard: [0,1,2,3,4,5,6,7]` with `--shard
