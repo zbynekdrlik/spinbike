@@ -9,6 +9,7 @@ use spinbike_core::reports::{EventKind, ReportEvent, ReportResponse};
 use super::{FiltersState, RangeMode};
 
 #[component]
+#[allow(clippy::too_many_arguments)] // Leptos #[component] props; splitting into a struct would obscure signal wiring for a working component (#122)
 pub fn ActivityFeed(
     events: ReadSignal<Vec<ReportEvent>>,
     loading: ReadSignal<bool>,

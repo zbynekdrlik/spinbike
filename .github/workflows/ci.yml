@@ -110,11 +110,23 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: wasm32-unknown-unknown
+          components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: spinbike-ui
           cache-on-failure: true
+
+      - name: Check UI formatting
+        # spinbike-ui is its own cargo workspace (root Cargo.toml excludes it),
+        # so the root Lint job's `cargo fmt --all -- --check` never sees it.
+        # See ~/devel/spinbike/.claude/skills/ci-deploy/SKILL.md and #122.
+        run: cargo fmt --manifest-path spinbike-ui/Cargo.toml --all -- --check
+
+      - name: Clippy (UI)
+        # Must run under the wasm32 target — spinbike-ui is Leptos CSR +
+        # web-sys/js-sys/gloo, which false-errors under the host target.
+        run: cargo clippy --manifest-path spinbike-ui/Cargo.toml --all-targets --target wasm32-unknown-unknown -- -D warnings
 
       - name: Install Trunk
         uses: jetli/trunk-action@v0.5.0
