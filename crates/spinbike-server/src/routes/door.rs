@@ -30,6 +30,7 @@ use crate::AppState;
 use crate::auth::AuthUser;
 use crate::ewelink::EwelinkState;
 use crate::routes::internal_error;
+use spinbike_core::auth::Role;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -159,7 +160,7 @@ async fn open(
     // they don't need their own opt-in toggle. Customers still need the CEO
     // to enable the flag. Billing logic below: admin/staff always log a
     // visit (no charge); customers follow pass / charge / Nth-of-day flow.
-    let is_staff_or_admin_role = role == "admin" || role == "staff";
+    let is_staff_or_admin_role = Role::from(role.as_str()).is_staff_or_admin();
     if !is_staff_or_admin_role && allow_self_entry == 0 {
         tracing::warn!(
             user_id,
@@ -343,10 +344,7 @@ async fn open(
 fn require_admin_or_staff(
     claims: &spinbike_core::auth::Claims,
 ) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
-    if matches!(
-        claims.role,
-        spinbike_core::auth::Role::Admin | spinbike_core::auth::Role::Staff
-    ) {
+    if claims.role.is_staff_or_admin() {
         Ok(())
     } else {
         Err((

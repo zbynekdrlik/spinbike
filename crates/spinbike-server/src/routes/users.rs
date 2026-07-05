@@ -7,6 +7,7 @@ use axum::{
 use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 
+use spinbike_core::auth::Role;
 use spinbike_core::services::CLASS_VISIT_NAMES_EN;
 use spinbike_core::stats::{MonthlyBucket, PeriodAgg, PeriodTotals, StatsResponse};
 
@@ -29,7 +30,11 @@ pub struct UserResponse {
     pub blocked: bool,
     pub allow_debit: bool,
     pub allow_self_entry: bool,
-    pub role: String,
+    /// Typed role. Serializes to the SAME lowercase string the raw DB role
+    /// produced (`Role`'s `#[serde(rename_all = "lowercase")]`), so the JSON
+    /// wire format is byte-identical; deserialization gains the `Unknown`
+    /// forward-compat fallback.
+    pub role: Role,
     pub last_visit_at: Option<String>,
     pub pass: Option<CardPass>,
 }
@@ -197,7 +202,7 @@ fn user_response_from_row_with_pass(
         blocked: u.blocked,
         allow_debit: u.allow_debit,
         allow_self_entry: u.allow_self_entry,
-        role: u.role.clone(),
+        role: Role::from(u.role.as_str()),
         last_visit_at,
         pass,
     }
@@ -1200,5 +1205,35 @@ mod tests {
         // Pinning this constant: the dashboard dropdown is designed around
         // 10 suggestions. Any drift (0, 1, -1, larger) changes UX noticeably.
         assert_eq!(default_search_limit(), 10);
+    }
+
+    /// Wire-compat guard (#98): the typed `role` field MUST serialize to the
+    /// exact lowercase string the previous `String` role produced, so the
+    /// `/api/users*` JSON payload is byte-identical after the migration.
+    #[test]
+    fn user_response_serializes_role_to_lowercase_string() {
+        for (role, expected) in [
+            (Role::Admin, "admin"),
+            (Role::Staff, "staff"),
+            (Role::Customer, "customer"),
+        ] {
+            let resp = UserResponse {
+                id: 1,
+                email: Some("a@b.com".into()),
+                name: "N".into(),
+                phone: None,
+                company: None,
+                card_code: None,
+                credit: 0.0,
+                blocked: false,
+                allow_debit: false,
+                allow_self_entry: false,
+                role,
+                last_visit_at: None,
+                pass: None,
+            };
+            let v = serde_json::to_value(&resp).unwrap();
+            assert_eq!(v["role"], expected, "role must serialize to {expected:?}");
+        }
     }
 }

@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use spinbike_core::auth::Role;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{HtmlInputElement, HtmlSelectElement};
 
@@ -41,7 +42,7 @@ struct UserRow {
     id: i64,
     email: Option<String>,
     name: String,
-    role: String,
+    role: Role,
     created_at: String,
 }
 
@@ -710,7 +711,7 @@ fn UsersTab() -> impl IntoView {
                 };
 
                 let role_options: Vec<_> = ["customer", "staff", "admin"].iter().map(|r| {
-                    let selected = *r == current_role.as_str();
+                    let selected = Role::from(*r) == current_role;
                     let val = r.to_string();
                     let label = r.to_string();
                     if selected {
