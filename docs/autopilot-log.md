@@ -11,7 +11,7 @@ test names, decisions, and the shared PR #. Newest entries at the top.
 
 ## 2026-07-05 — #122: spinbike-ui fmt+clippy CI gate
 
-- #122 spinbike-ui fmt+clippy CI gate — added `cargo fmt --manifest-path spinbike-ui/Cargo.toml` + `cargo clippy --manifest-path spinbike-ui/Cargo.toml --target wasm32-unknown-unknown -- -D warnings` to the `build-wasm` CI job (already had the wasm32 target + a spinbike-ui-scoped rust-cache); pre-fixed the one clippy hit (`ActivityFeed` 8 props, `too_many_arguments`, scoped `#[allow]`). v0.15.0-dev.23. See this ticket's PR for the exact merge commit SHA (unknowable at commit time since this line ships inside the same PR it documents).
+- #122 spinbike-ui fmt+clippy CI gate — added `cargo fmt --manifest-path spinbike-ui/Cargo.toml` + `cargo clippy --manifest-path spinbike-ui/Cargo.toml --target wasm32-unknown-unknown -- -D warnings` to the `build-wasm` CI job (already had the wasm32 target + a spinbike-ui-scoped rust-cache); pre-fixed the one clippy hit (`ActivityFeed` 8 props, `too_many_arguments`, scoped `#[allow]`). PR [#136](https://github.com/zbynekdrlik/spinbike/pull/136), v0.15.0-dev.23 (merge commit SHA unknowable at commit time since this line ships inside the same PR it documents — see the PR page).
 
 ## 2026-07-05 — #126: dashboard errors rendered in the green success alert
 
