@@ -163,7 +163,7 @@ pub fn AddPersonForm(
                 {move || i18n::t(lang.get(), "add_person_submit")}
             </button>
             {move || if !err.get().is_empty() {
-                view! { <p class="alert-error">{err.get()}</p> }.into_any()
+                view! { <p class="alert-error" data-testid="add-person-error">{err.get()}</p> }.into_any()
             } else {
                 view! { <span></span> }.into_any()
             }}
