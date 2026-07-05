@@ -159,4 +159,58 @@ test.describe('Dashboard error alert styling (#126)', () => {
         const filtered = consoleMessages.filter((m) => !m.includes('500 ('));
         expect(filtered).toEqual([]);
     });
+
+    /**
+     * Deep code-review follow-up on #126 (PR #132): DeleteUserSheet's
+     * on_saved callback (card_panel.rs) closes the panel via a SECOND path
+     * — a bare `set_selected.set(None)` — that bypassed mod.rs's
+     * clear_selection entirely, so it never got the msg/err clear that fix
+     * added for the × button's close path.
+     */
+    test('deleting a user closes the panel and dismisses a stale error alert', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+
+        const staffToken = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const user = await createUniqueUser(staffToken, 0, 'ED');
+
+        await page.goto('/staff');
+        await page.waitForSelector('input[type="search"]');
+        await page.fill('input[type="search"]', user.card_code);
+        const result = page.locator('[data-testid="search-result"]').first();
+        await expect(result).toBeVisible({ timeout: 3000 });
+        await result.click();
+        const panel = page.locator('[data-testid="action-panel"]');
+        await expect(panel).toBeVisible();
+
+        await page.route('**/api/users/block', (route) =>
+            route.fulfill({
+                status: 500,
+                contentType: 'application/json',
+                body: JSON.stringify({ error: 'boom_test_error' }),
+            }),
+        );
+        const failedBlockResp = page.waitForResponse(
+            (r) => r.url().includes('/api/users/block') && r.request().method() === 'POST',
+        );
+        await page.locator('[data-testid="block-button"]').click();
+        await failedBlockResp;
+        await expect(page.locator('.alert.alert-error')).toBeVisible({ timeout: 5000 });
+
+        // Delete the (throwaway, freshly-created, zero-balance) test user —
+        // the panel closes on success.
+        await page.locator('[data-testid="delete-user-button"]').click();
+        const sheet = page.locator('[data-testid="sheet-delete-user"]');
+        await expect(sheet).toBeVisible();
+        const deleteResp = page.waitForResponse(
+            (r) => r.url().includes(`/api/users/${user.user_id}`) && r.request().method() === 'DELETE',
+        );
+        await page.locator('[data-testid="delete-user-confirm"]').click();
+        await deleteResp;
+
+        await expect(panel).not.toBeVisible();
+        expect(await page.locator('.alert.alert-error').count()).toBe(0);
+
+        const filtered = consoleMessages.filter((m) => !m.includes('500 ('));
+        expect(filtered).toEqual([]);
+    });
 });
