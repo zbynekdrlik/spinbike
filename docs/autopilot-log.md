@@ -5,6 +5,14 @@ test names, decisions, and the shared PR #. Newest entries at the top.
 
 ---
 
+## 2026-07-05 — #98: typed Role migration (UserResponse + UserInfo)
+
+- #98 typed Role migration (UserResponse + UserInfo) — PR #135 merged 78d5168d, prod+dev v0.15.0-dev.22, wire-compat via green E2E role-gating (supervisor-completed after worker Monitor-death; logged retroactively here since the worker that implemented #98 died before writing its own log entry).
+
+## 2026-07-05 — #122: spinbike-ui fmt+clippy CI gate
+
+- #122 spinbike-ui fmt+clippy CI gate — added `cargo fmt --manifest-path spinbike-ui/Cargo.toml` + `cargo clippy --manifest-path spinbike-ui/Cargo.toml --target wasm32-unknown-unknown -- -D warnings` to the `build-wasm` CI job (already had the wasm32 target + a spinbike-ui-scoped rust-cache); pre-fixed the one clippy hit (`ActivityFeed` 8 props, `too_many_arguments`, scoped `#[allow]`). v0.15.0-dev.23. See this ticket's PR for the exact merge commit SHA (unknowable at commit time since this line ships inside the same PR it documents).
+
 ## 2026-07-05 — #126: dashboard errors rendered in the green success alert
 
 - **Issue:** [#126](https://github.com/zbynekdrlik/spinbike/issues/126) — the dashboard's `set_msg` channel (green `.alert-success`) was overloaded for BOTH success and error text in `block_button.rs`/`edit_info_form.rs`/`transactions_list.rs`, so a failed block/save/invite/void could read as a confirmation. Validated STILL_VALID (grepped the current code, confirmed `err`/`set_err` existed but wasn't wired to these 3 components).
