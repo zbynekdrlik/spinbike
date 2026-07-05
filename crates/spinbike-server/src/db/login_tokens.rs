@@ -107,14 +107,17 @@ pub async fn redeem(
     Ok(user_id)
 }
 
-/// Delete rows that can no longer redeem: already used, or past their
-/// expiry. Pure housekeeping — `redeem` already rejects both classes of row
-/// (`used_at IS NULL AND expires_at > datetime('now')`), so removing them
-/// changes no auth behavior, it only stops the table from growing unbounded.
-/// Returns the number of rows removed.
+/// Delete rows that can no longer redeem: already used, or expired.
+/// `redeem`'s validity check is `used_at IS NULL AND expires_at >
+/// datetime('now')` — this predicate is the exact logical negation
+/// (`used_at IS NOT NULL OR expires_at <= datetime('now')`), so it is
+/// mutually exclusive with "still redeemable": purging never removes a row
+/// `redeem` would still accept, and never leaves behind a row `redeem` would
+/// reject. Pure housekeeping; it only stops the table from growing
+/// unbounded. Returns the number of rows removed.
 pub async fn purge_expired_and_used(pool: &SqlitePool) -> Result<u64> {
     let result = sqlx::query(
-        "DELETE FROM login_tokens WHERE used_at IS NOT NULL OR expires_at < datetime('now')",
+        "DELETE FROM login_tokens WHERE used_at IS NOT NULL OR expires_at <= datetime('now')",
     )
     .execute(pool)
     .await

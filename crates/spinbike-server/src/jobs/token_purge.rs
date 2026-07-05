@@ -7,8 +7,12 @@ use anyhow::Result;
 use sqlx::SqlitePool;
 
 /// Run one purge pass. Returns the number of rows removed.
-pub async fn tick(pool: &SqlitePool) -> Result<u64> {
-    crate::db::login_tokens::purge_expired_and_used(pool).await
+///
+/// `usize` here (not the DB layer's native `u64`) to match the return type
+/// of the sibling job modules (`charger::tick`, `materialiser::sweep`).
+pub async fn tick(pool: &SqlitePool) -> Result<usize> {
+    let removed = crate::db::login_tokens::purge_expired_and_used(pool).await?;
+    Ok(removed as usize)
 }
 
 #[cfg(test)]
