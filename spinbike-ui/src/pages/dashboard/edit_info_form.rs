@@ -25,6 +25,11 @@ pub fn EditInfoForm(
     card: CardInfo,
     set_selected: WriteSignal<Option<CardInfo>>,
     set_msg: WriteSignal<String>,
+    /// Red-alert channel (#126) — save/invite failures render here, not in
+    /// the green success alert. The mail_not_configured 503 counts as an
+    /// error (it means the invite was NOT sent) so it goes through this
+    /// channel too, alongside the generic invite-error case.
+    set_err: WriteSignal<String>,
     /// Signal controlling visibility — the parent sets it to false to hide.
     show: Signal<bool>,
     /// Called when the sheet should close (cancel or save success).
@@ -178,6 +183,13 @@ pub fn EditInfoForm(
                 let password = read(&password_ref);
                 let allow_se = allow_self_entry.get_untracked();
 
+                // Clear any stale alert from a previous action before this
+                // one resolves — otherwise a stale red error (or green
+                // success) from an earlier action can still be showing
+                // when this one completes, stacking two conflicting
+                // alerts (#126 follow-up).
+                set_msg.set(String::new());
+                set_err.set(String::new());
                 set_loading.set(true);
                 let on_close_inner = on_close_save.clone();
                 spawn_local(async move {
@@ -221,7 +233,7 @@ pub fn EditInfoForm(
                             set_msg.set(i18n::t(lang.get_untracked(), "saved").to_string());
                             on_close_inner.run(());
                         }
-                        Err(e) => set_msg.set(i18n::tf(
+                        Err(e) => set_err.set(i18n::tf(
                             lang.get_untracked(),
                             "error_format",
                             &[&e],
@@ -233,6 +245,9 @@ pub fn EditInfoForm(
 
             let (invite_loading, set_invite_loading) = signal(false);
             let on_invite_click = move |_: web_sys::MouseEvent| {
+                // Same stale-alert clear as on_submit above (#126 follow-up).
+                set_msg.set(String::new());
+                set_err.set(String::new());
                 set_invite_loading.set(true);
                 let on_close_after_invite = on_close_invite.clone();
                 spawn_local(async move {
@@ -255,12 +270,12 @@ pub fn EditInfoForm(
                         }
                         Err(e) => {
                             if e == "mail_not_configured" {
-                                set_msg.set(
+                                set_err.set(
                                     i18n::t(lang.get_untracked(), "invite_mail_not_configured")
                                         .to_string(),
                                 );
                             } else {
-                                set_msg.set(i18n::tf(lang.get_untracked(), "error_format", &[&e]));
+                                set_err.set(i18n::tf(lang.get_untracked(), "error_format", &[&e]));
                             }
                         }
                     }

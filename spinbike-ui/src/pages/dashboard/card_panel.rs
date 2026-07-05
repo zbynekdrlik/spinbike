@@ -32,6 +32,11 @@ pub fn CardActionPanel(
     set_selected: WriteSignal<Option<CardInfo>>,
     msg: ReadSignal<String>,
     set_msg: WriteSignal<String>,
+    /// Red-alert channel (mod.rs:473-478) — errors from BlockButton,
+    /// TransactionsList and EditInfoForm route here instead of the green
+    /// `set_msg` success channel (#126). ActionForm/AddPersonForm keep
+    /// their own local red error signal and are NOT wired to this.
+    set_err: WriteSignal<String>,
     #[prop(into)] on_close: Callback<web_sys::MouseEvent>,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
@@ -179,11 +184,12 @@ pub fn CardActionPanel(
             <div class="action-row stack-12">
                 <button
                     class="btn btn--ghost"
+                    data-testid="edit-info-button"
                     on:click=move |_| set_show_edit.update(|v| *v = !*v)
                 >
                     {move || i18n::t(lang.get(), "edit_info")}
                 </button>
-                <BlockButton card_id=card_id blocked=is_blocked set_selected=set_selected set_msg=set_msg />
+                <BlockButton card_id=card_id blocked=is_blocked set_selected=set_selected set_msg=set_msg set_err=set_err />
                 <button
                     class="btn btn--danger"
                     data-testid="delete-user-button"
@@ -208,7 +214,7 @@ pub fn CardActionPanel(
                                 <TransactionsList
                                     card_id=card_id
                                     txn_refresh=txn_refresh
-                                    set_msg=set_msg
+                                    set_err=set_err
                                 />
                             }.into_any(),
                             "upcoming" => view! {
@@ -238,6 +244,7 @@ pub fn CardActionPanel(
             card=card_for_edit.clone()
             set_selected=set_selected
             set_msg=set_msg
+            set_err=set_err
             show=Signal::derive(move || show_edit.get())
             on_close=Callback::new(move |()| set_show_edit.set(false))
         />
@@ -249,6 +256,13 @@ pub fn CardActionPanel(
             active_pass_end=delete_user_pass_end
             on_saved=Callback::new(move |()| {
                 set_selected.set(None);
+                // Deep-review follow-up on #126: this is a SECOND panel-close
+                // path (besides mod.rs's clear_selection, wired to the ×
+                // button) that was bypassing the msg/err clear entirely — a
+                // stale red error from an earlier failed action (block/edit/
+                // void) would survive a successful delete-and-close.
+                set_msg.set(String::new());
+                set_err.set(String::new());
             })
         />
         </>

@@ -377,3 +377,31 @@ server always runs `SMTP_TEST_MODE=capture` (mail forced Active) so the
 real deployment with mail genuinely unconfigured. When you add a NEW
 5xx-returning path, ask whether the condition is really transient (keep
 5xx) or a stable config/precondition state (prefer a 4xx) BEFORE shipping.
+
+## `Ok(x.await?)` where `x`'s fn already returns the exact same `Result<T>` is a clippy CI failure, not a local one
+
+Since local `cargo clippy` is banned (only `cargo fmt --all --check` runs
+locally — see above), a thin wrapper fn that just delegates to another
+async fn of the SAME return type — e.g. `pub async fn tick(pool) ->
+Result<u64> { Ok(inner(pool).await?) }` — passes `fmt` clean and looks
+correct, but fails CI's `cargo clippy --all-targets -- -D warnings` on
+`needless_question_mark` (#119). Caught only after a push. When a wrapper
+has NO transformation between the inner call and the return, write
+`inner(pool).await` directly with no `Ok`/`?`; reserve `Ok(x.await?)` for
+when you actually transform the value first (e.g. `let n = x.await?; Ok(n
+as usize)`), which clippy does NOT flag.
+
+## Purging/negating an existing validity predicate — match the boundary EXACTLY, not just "the opposite direction"
+
+When a new query is meant to be the precise logical negation of an
+existing one (e.g. a housekeeping purge that should delete exactly the
+rows a sibling function's validity check rejects), copy the inequality
+direction AND strictness literally. `redeem()`'s validity check
+(`login_tokens.rs`) is `expires_at > datetime('now')` (strict); the first
+draft of the #119 purge used `expires_at < datetime('now')` (also
+strict) — off by the boundary instant `expires_at == now`, where the row
+was neither redeemable nor purge-eligible for one second. The exact
+negation of `A > B` is `A <= B`, not `A < B`. A second code-review pass
+caught it; write the negation formula out by hand (`NOT (a AND b) = (NOT
+a) OR (NOT b)`, then negate each comparison correctly) before trusting
+"looks like the opposite".

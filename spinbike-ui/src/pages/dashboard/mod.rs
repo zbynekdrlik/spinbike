@@ -217,6 +217,31 @@ pub fn DashboardPage() -> impl IntoView {
         }
     });
 
+    // Structural backstop for #126's follow-up (deep code review on PR
+    // #132): msg (green) and err (red) must never both be visible at once.
+    // Every known writer of these two signals already clears its OWN
+    // sibling call site defensively (block/edit/invite/void/note-save, plus
+    // clear_selection / pick_card / the search effect above and the
+    // delete-user close path in card_panel.rs) — but that is a whack-a-mole
+    // guarantee: any writer we didn't catch (ActionForm's own successes,
+    // which write this SHARED set_msg on top-up/charge/visit-log; any
+    // future component) can still leave a stale alert stacked or dangling.
+    // This effect makes the invariant hold structurally: whichever signal
+    // just changed to a fresh value wins and clears the other, no matter
+    // which component set it.
+    Effect::new(move |prev: Option<(String, String)>| {
+        let m = msg.get();
+        let e = err.get();
+        if let Some((prev_m, prev_e)) = prev {
+            if m != prev_m && !m.is_empty() && !e.is_empty() {
+                set_err.set(String::new());
+            } else if e != prev_e && !e.is_empty() && !m.is_empty() {
+                set_msg.set(String::new());
+            }
+        }
+        (m, e)
+    });
+
     // Parse query params used by the Reports → row click jump.
     //
     // * `?card=<card_code>` — exact lookup via /api/users/lookup/{code};
@@ -286,6 +311,11 @@ pub fn DashboardPage() -> impl IntoView {
     Effect::new(move |_| {
         let q = query.get();
         set_msg.set(String::new());
+        // Also clear any stale panel-action error (#126 follow-up) — err
+        // became reachable from inside the action panel (block/edit/void
+        // failures) once it stopped being search-only, so a new query must
+        // dismiss it exactly like it already dismisses msg above.
+        set_err.set(String::new());
         // Every new query resets the keyboard highlight to row 0. Without
         // this, a prior mouseenter or a stale `highlighted_idx` from the
         // last search can survive into the new dropdown.
@@ -333,6 +363,12 @@ pub fn DashboardPage() -> impl IntoView {
     let clear_selection = move |_| {
         set_selected.set(None);
         set_msg.set(String::new());
+        // #126 follow-up: err is now reachable from inside the panel
+        // (block/edit/void/invite failures) so closing the panel must
+        // dismiss a stale red alert exactly like it already dismisses msg —
+        // otherwise a past failure keeps showing on the idle/negative-
+        // balance screen after the staff member has moved on.
+        set_err.set(String::new());
         // Refresh the negative-balance list so any credit changes from the
         // just-closed action panel are reflected immediately.
         txn_refresh.update(|n| *n += 1);
@@ -349,6 +385,10 @@ pub fn DashboardPage() -> impl IntoView {
         set_query.set(String::new());
         set_results.set(Vec::new());
         set_err.set(String::new());
+        // Mirror the err clear above (#126 follow-up) — a stale success
+        // banner from a previous card must not carry over and appear to
+        // confirm an action against the newly-picked card.
+        set_msg.set(String::new());
         // Keep the keyboard-first workflow alive: the user should be able to
         // start typing the next card's name immediately without reaching for
         // the mouse.
@@ -508,6 +548,7 @@ pub fn DashboardPage() -> impl IntoView {
                     set_selected=set_selected
                     msg=msg
                     set_msg=set_msg
+                    set_err=set_err
                     on_close=Callback::new(clear_selection)
                 />
             }.into_any()
