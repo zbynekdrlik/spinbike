@@ -265,6 +265,14 @@ pub fn EditInfoForm(
                                     &[&who],
                                 )
                             } else if e.message.contains("email already exists") {
+                                // Generic (no-name) collision — the branch a
+                                // CUSTOMER self-edit hits, since the server
+                                // withholds the conflicting identity from them.
+                                // NOTE: this couples to the server's English
+                                // 409 text ("A user with this email already
+                                // exists"). If that wording ever changes this
+                                // falls through to `error_format` below — still
+                                // informative (raw server text), never a break.
                                 i18n::t(lang.get_untracked(), "email_already_used")
                                     .to_string()
                             } else {
@@ -333,15 +341,22 @@ pub fn EditInfoForm(
             view! {
                 <Sheet
                     on_close=Callback::new(move |()| {
-                        // Block backdrop-click / Escape while an invite is
-                        // in flight — closing here would tear down this
-                        // reactive scope (loading/invite_loading/on_submit/
-                        // on_invite_click are all created in the enclosing
-                        // `move ||`) out from under the pending spawn_local,
-                        // which is exactly the disposed-closure class of bug
-                        // this Sheet already hit once (see #89 in its own
-                        // doc comment on `close_backdrop`/`close_keyboard`).
-                        if !invite_loading.get_untracked() {
+                        // Block backdrop-click / Escape while a save OR an
+                        // invite is in flight — closing here would tear down
+                        // this reactive scope (loading/invite_loading/
+                        // on_submit/on_invite_click are all created in the
+                        // enclosing `move ||`) out from under the pending
+                        // spawn_local, which is exactly the disposed-closure
+                        // class of bug this Sheet already hit once (see #89).
+                        // `loading` matters specifically for Save: a close
+                        // during the PUT window would dispose the scope, so a
+                        // 409's `set_save_err` would no-op on a disposed
+                        // signal and the failure would surface NOTHING (the
+                        // in-sheet error is now the only channel — the shared
+                        // dashboard alert is occluded by this backdrop).
+                        // Symmetric with the Cancel/Save buttons, both already
+                        // disabled on `loading`.
+                        if !invite_loading.get_untracked() && !loading.get_untracked() {
                             on_close_cancel.run(());
                         }
                     })
