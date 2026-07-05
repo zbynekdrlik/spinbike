@@ -183,6 +183,13 @@ pub fn EditInfoForm(
                 let password = read(&password_ref);
                 let allow_se = allow_self_entry.get_untracked();
 
+                // Clear any stale alert from a previous action before this
+                // one resolves — otherwise a stale red error (or green
+                // success) from an earlier action can still be showing
+                // when this one completes, stacking two conflicting
+                // alerts (#126 follow-up).
+                set_msg.set(String::new());
+                set_err.set(String::new());
                 set_loading.set(true);
                 let on_close_inner = on_close_save.clone();
                 spawn_local(async move {
@@ -238,6 +245,9 @@ pub fn EditInfoForm(
 
             let (invite_loading, set_invite_loading) = signal(false);
             let on_invite_click = move |_: web_sys::MouseEvent| {
+                // Same stale-alert clear as on_submit above (#126 follow-up).
+                set_msg.set(String::new());
+                set_err.set(String::new());
                 set_invite_loading.set(true);
                 let on_close_after_invite = on_close_invite.clone();
                 spawn_local(async move {

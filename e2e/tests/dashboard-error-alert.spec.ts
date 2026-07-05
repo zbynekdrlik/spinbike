@@ -43,7 +43,7 @@ test.describe('Dashboard error alert styling (#126)', () => {
         const blockResp = page.waitForResponse(
             (r) => r.url().includes('/api/users/block') && r.request().method() === 'POST',
         );
-        await page.getByRole('button', { name: 'Block', exact: true }).click();
+        await page.locator('[data-testid="block-button"]').click();
         await blockResp;
 
         // The error must appear in the RED alert — exactly once — carrying
@@ -98,7 +98,7 @@ test.describe('Dashboard error alert styling (#126)', () => {
         const failedBlockResp = page.waitForResponse(
             (r) => r.url().includes('/api/users/block') && r.request().method() === 'POST',
         );
-        await page.getByRole('button', { name: 'Block', exact: true }).click();
+        await page.locator('[data-testid="block-button"]').click();
         await failedBlockResp;
         await expect(page.locator('.alert.alert-error')).toBeVisible({ timeout: 5000 });
 
@@ -146,7 +146,7 @@ test.describe('Dashboard error alert styling (#126)', () => {
         const failedBlockResp = page.waitForResponse(
             (r) => r.url().includes('/api/users/block') && r.request().method() === 'POST',
         );
-        await page.getByRole('button', { name: 'Block', exact: true }).click();
+        await page.locator('[data-testid="block-button"]').click();
         await failedBlockResp;
         await expect(page.locator('.alert.alert-error')).toBeVisible({ timeout: 5000 });
 

@@ -25,6 +25,13 @@ pub fn BlockButton(
     };
 
     let on_click = move |_| {
+        // Clear any stale alert from a PREVIOUS action (in this or a
+        // sibling component sharing the panel's msg/err channels) before
+        // starting a new one — otherwise a stale red error from an earlier
+        // failure can still be showing when this action succeeds (or vice
+        // versa), rendering both alerts at once (#126 follow-up).
+        set_msg.set(String::new());
+        set_err.set(String::new());
         set_loading.set(true);
         let new_blocked = !blocked;
         spawn_local(async move {
@@ -57,7 +64,7 @@ pub fn BlockButton(
     };
 
     view! {
-        <button class=btn_class disabled=move || loading.get() on:click=on_click>
+        <button class=btn_class data-testid="block-button" disabled=move || loading.get() on:click=on_click>
             {move || if blocked { i18n::t(lang.get(), "unblock") } else { i18n::t(lang.get(), "block") }}
         </button>
     }
