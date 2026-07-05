@@ -134,6 +134,14 @@ pub fn EditInfoForm(
                     if target_is_customer {
                         set_allow_self_entry.set(c.allow_self_entry);
                     }
+                    // Re-sync the invite button's gating value too — otherwise
+                    // a Cancel-then-reopen of the SAME still-mounted sheet
+                    // (no remount, so `saved_email` would otherwise hold
+                    // whatever it was at the last save/mount) would leave the
+                    // button's enabled state stale relative to an email
+                    // change made out-of-band (another staff terminal, an
+                    // import) between the two opens.
+                    set_saved_email.set(c.email.clone());
                 }
             });
         }
@@ -150,6 +158,7 @@ pub fn EditInfoForm(
             let on_close_cancel = on_close.clone();
             let on_close_btn = on_close.clone();
             let on_close_save = on_close.clone();
+            let on_close_invite = on_close.clone();
             let initial_allow_se_at_open = allow_self_entry.get_untracked();
 
             let on_submit = move |ev: web_sys::SubmitEvent| {
@@ -225,6 +234,7 @@ pub fn EditInfoForm(
             let (invite_loading, set_invite_loading) = signal(false);
             let on_invite_click = move |_: web_sys::MouseEvent| {
                 set_invite_loading.set(true);
+                let on_close_after_invite = on_close_invite.clone();
                 spawn_local(async move {
                     #[derive(serde::Deserialize)]
                     struct InviteResponse {
@@ -255,6 +265,14 @@ pub fn EditInfoForm(
                         }
                     }
                     set_invite_loading.set(false);
+                    // Close the sheet on EITHER outcome so the status line
+                    // (rendered by the parent dashboard, outside this
+                    // component) is actually visible — the sheet's own
+                    // backdrop is a full-viewport `position: fixed; z-index:
+                    // 200` blur that sits above it while the sheet stays
+                    // open. Unlike Save, Invite has no "fix inline and
+                    // retry" flow, so there's nothing gained by staying open.
+                    on_close_after_invite.run(());
                 });
             };
 
@@ -289,13 +307,23 @@ pub fn EditInfoForm(
                                 class="btn btn--ghost"
                                 data-testid="user-edit-send-invite"
                                 disabled=move || {
+                                    // Also gated on the SAVE form's own
+                                    // `loading` (not just `invite_loading`):
+                                    // without it, a user could click Save
+                                    // (new email typed) then immediately
+                                    // click Send before the PUT resolves —
+                                    // `saved_email` wouldn't reflect the new
+                                    // value yet, but the invite would still
+                                    // fire (the server reads the CURRENT
+                                    // DB row at request time, independent of
+                                    // this signal — see #111).
                                     invite_loading.get()
+                                        || loading.get()
                                         || saved_email
                                             .get()
                                             .as_deref()
-                                            .map(str::trim)
-                                            .map(str::is_empty)
-                                            .unwrap_or(true)
+                                            .filter(|s| !s.trim().is_empty())
+                                            .is_none()
                                 }
                                 on:click=on_invite_click
                             >
