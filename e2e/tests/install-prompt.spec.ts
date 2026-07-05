@@ -33,11 +33,21 @@ test.describe('Install-to-home-screen manifest eligibility (#110)', () => {
 });
 
 // iOS Safari: no `beforeinstallprompt` event exists there at all, so the
-// component must fall back to the UA-sniffed 2-step Share guide. Emulated
-// via Playwright's real iPhone device descriptor — its userAgent string
-// contains "iPhone", matching the same check the component runs.
+// component must fall back to the UA-sniffed 2-step Share guide. Emulated by
+// applying the iPhone 13 device descriptor's context options (userAgent,
+// viewport, isMobile, hasTouch) WITHOUT its `defaultBrowserType: 'webkit'` —
+// spreading the whole descriptor forces a new worker mid-describe-block
+// (Playwright only allows `defaultBrowserType` at file/config top level), and
+// we don't need real WebKit here — only a userAgent containing "iPhone",
+// which is exactly what the component's UA sniff checks.
+const iPhone = devices['iPhone 13'];
 test.describe('Install-to-home-screen component — iOS Safari guide', () => {
-    test.use({ ...devices['iPhone 13'] });
+    test.use({
+        userAgent: iPhone.userAgent,
+        viewport: iPhone.viewport,
+        isMobile: iPhone.isMobile,
+        hasTouch: iPhone.hasTouch,
+    });
 
     test('renders the 2-step Share -> Add to Home Screen guide on /my/balance', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
