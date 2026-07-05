@@ -3,6 +3,8 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+- #133 data-testid on local form-validation error divs (distinguishable from shared dashboard error channel) — commit `0f35565`, PR [#137](https://github.com/zbynekdrlik/spinbike/pull/137), v0.15.0-dev.25 (merge SHA unknowable at commit time since this line ships inside the same PR it documents — see the PR page).
+
 ---
 
 ## 2026-07-05 — #98: typed Role migration (UserResponse + UserInfo)

@@ -91,7 +91,8 @@ pub fn EditPassDateSheet(
                         if e.is_empty() {
                             view! { <div></div> }.into_any()
                         } else {
-                            view! { <div class="alert alert-error">{e}</div> }.into_any()
+                            view! { <div class="alert alert-error" data-testid="edit-pass-date-error">{e}</div> }
+                                .into_any()
                         }
                     }}
                     <div class="sheet__actions">

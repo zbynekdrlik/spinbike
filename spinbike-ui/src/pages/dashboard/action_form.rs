@@ -548,7 +548,12 @@ pub fn ActionForm(
             }}
 
             {move || if !err.get().is_empty() {
-                view! { <div class="alert alert-error">{move || err.get()}</div> }.into_any()
+                view! {
+                    <div class="alert alert-error" data-testid="action-form-error">
+                        {move || err.get()}
+                    </div>
+                }
+                    .into_any()
             } else {
                 view! { <div></div> }.into_any()
             }}
