@@ -137,26 +137,49 @@ pub async fn patch<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> R
     resp.json::<T>().await.map_err(|e| e.to_string())
 }
 
+/// Error from [`put_json`]. Beyond the display `message`, it optionally carries
+/// the identity of a colliding account when the server rejects a value as
+/// already-in-use (409). The server fills these ONLY for staff/admin callers,
+/// so a self-editing customer never learns another account's identity — the UI
+/// simply shows the generic message in that case.
+#[derive(Default, Clone, PartialEq, Debug)]
+pub struct ApiError {
+    pub message: String,
+    pub conflict_name: Option<String>,
+    pub conflict_card: Option<String>,
+}
+
+impl ApiError {
+    fn msg(message: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            ..Default::default()
+        }
+    }
+}
+
 pub async fn put_json<B: Serialize, T: DeserializeOwned>(
     path: &str,
     body: &B,
-) -> Result<T, String> {
+) -> Result<T, ApiError> {
     let url = format!("{}{}", base_url(), path);
     let req = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::PUT))
         .json(body)
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| ApiError::msg(e.to_string()))?;
 
-    let resp = req.send().await.map_err(|e| e.to_string())?;
+    let resp = req.send().await.map_err(|e| ApiError::msg(e.to_string()))?;
 
     if !resp.ok() {
         if handle_unauthorized(resp.status(), get_token().is_some()) {
-            return Err("Session expired, redirecting to login...".into());
+            return Err(ApiError::msg("Session expired, redirecting to login..."));
         }
         let text = resp.text().await.unwrap_or_default();
-        return Err(extract_error(&text, resp.status()));
+        return Err(extract_api_error(&text, resp.status()));
     }
 
-    resp.json::<T>().await.map_err(|e| e.to_string())
+    resp.json::<T>()
+        .await
+        .map_err(|e| ApiError::msg(e.to_string()))
 }
 
 pub async fn delete(path: &str) -> Result<(), String> {
@@ -195,4 +218,26 @@ fn extract_error(body: &str, status: u16) -> String {
         return msg;
     }
     format!("Request failed (HTTP {status})")
+}
+
+/// Like [`extract_error`] but also pulls the optional `conflict_name` /
+/// `conflict_card` fields the server attaches to a 409 email-collision for
+/// staff/admin callers, so the UI can name the account that holds the email.
+fn extract_api_error(body: &str, status: u16) -> ApiError {
+    #[derive(serde::Deserialize)]
+    struct ErrBody {
+        error: Option<String>,
+        conflict_name: Option<String>,
+        conflict_card: Option<String>,
+    }
+    if let Ok(e) = serde_json::from_str::<ErrBody>(body) {
+        return ApiError {
+            message: e
+                .error
+                .unwrap_or_else(|| format!("Request failed (HTTP {status})")),
+            conflict_name: e.conflict_name,
+            conflict_card: e.conflict_card,
+        };
+    }
+    ApiError::msg(format!("Request failed (HTTP {status})"))
 }

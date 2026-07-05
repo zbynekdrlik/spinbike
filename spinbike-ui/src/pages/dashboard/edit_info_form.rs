@@ -160,6 +160,16 @@ pub fn EditInfoForm(
             }
 
             let (loading, set_loading) = signal(false);
+            // Local, IN-SHEET save-error channel. The dashboard's shared red
+            // alert (mod.rs) renders BEHIND this sheet's `z-index: 200` blur
+            // backdrop, so a save error routed there is invisible while the
+            // sheet stays open — which is exactly what happened: a rejected
+            // save (e.g. the 409 email-uniqueness conflict) set the shared
+            // channel, the operator saw nothing, and it read as "it just
+            // didn't save". Save keeps the sheet open (to fix inline), so its
+            // error MUST live inside the sheet. (Invite closes the sheet on
+            // error, so it can use the shared channel — see on_invite_click.)
+            let (save_err, set_save_err) = signal(String::new());
             let on_close_cancel = on_close;
             let on_close_btn = on_close;
             let on_close_save = on_close;
@@ -190,6 +200,7 @@ pub fn EditInfoForm(
                 // alerts (#126 follow-up).
                 set_msg.set(String::new());
                 set_err.set(String::new());
+                set_save_err.set(String::new());
                 set_loading.set(true);
                 let on_close_inner = on_close_save;
                 spawn_local(async move {
@@ -233,11 +244,38 @@ pub fn EditInfoForm(
                             set_msg.set(i18n::t(lang.get_untracked(), "saved").to_string());
                             on_close_inner.run(());
                         }
-                        Err(e) => set_err.set(i18n::tf(
-                            lang.get_untracked(),
-                            "error_format",
-                            &[&e],
-                        )),
+                        Err(e) => {
+                            // Route to the IN-SHEET channel (not the shared
+                            // dashboard alert, which hides behind the sheet
+                            // backdrop). When the server named the colliding
+                            // account (staff/admin only), show WHO holds the
+                            // email so the operator can go fix it. Otherwise
+                            // fall back to the generic collision message, then
+                            // to the raw formatted server text.
+                            let text = if let Some(name) = e.conflict_name {
+                                let who = match e.conflict_card {
+                                    Some(card) if !card.trim().is_empty() => {
+                                        format!("{name} ({card})")
+                                    }
+                                    _ => name,
+                                };
+                                i18n::tf(
+                                    lang.get_untracked(),
+                                    "email_already_used_by",
+                                    &[&who],
+                                )
+                            } else if e.message.contains("email already exists") {
+                                i18n::t(lang.get_untracked(), "email_already_used")
+                                    .to_string()
+                            } else {
+                                i18n::tf(
+                                    lang.get_untracked(),
+                                    "error_format",
+                                    &[&e.message],
+                                )
+                            };
+                            set_save_err.set(text);
+                        }
                     }
                     set_loading.set(false);
                 });
@@ -248,6 +286,7 @@ pub fn EditInfoForm(
                 // Same stale-alert clear as on_submit above (#126 follow-up).
                 set_msg.set(String::new());
                 set_err.set(String::new());
+                set_save_err.set(String::new());
                 set_invite_loading.set(true);
                 let on_close_after_invite = on_close_invite;
                 spawn_local(async move {
@@ -398,25 +437,55 @@ pub fn EditInfoForm(
                             } else {
                                 ().into_any()
                             };
+                            // Password is a LOGIN credential. Customers are
+                            // passwordless (magic-link only, per the onboarding
+                            // design) — a "set new password" field on a customer
+                            // target is meaningless and confused the operator.
+                            // Only admin/staff targets (who sign in via
+                            // /api/auth/login) get the field. admin/staff targets
+                            // have target_is_customer == false, so they keep it;
+                            // the allow_self_entry row is the customer-only
+                            // counterpart, so the two never show together.
+                            let password_field = if target_is_customer {
+                                ().into_any()
+                            } else {
+                                view! {
+                                    <div class="form-group">
+                                        <label>{move || i18n::t(lang.get(), "user_edit_new_password")}</label>
+                                        <input
+                                            type="password"
+                                            class="form-control"
+                                            data-testid="user-edit-password"
+                                            node_ref=password_ref
+                                            placeholder=move || i18n::t(lang.get(), "user_edit_new_password_placeholder")
+                                            autocomplete="new-password"
+                                        />
+                                        <small class="form-help">
+                                            {move || i18n::t(lang.get(), "user_edit_new_password_help")}
+                                        </small>
+                                    </div>
+                                }.into_any()
+                            };
                             view! {
-                                <div class="form-group">
-                                    <label>{move || i18n::t(lang.get(), "user_edit_new_password")}</label>
-                                    <input
-                                        type="password"
-                                        class="form-control"
-                                        data-testid="user-edit-password"
-                                        node_ref=password_ref
-                                        placeholder=move || i18n::t(lang.get(), "user_edit_new_password_placeholder")
-                                        autocomplete="new-password"
-                                    />
-                                    <small class="form-help">
-                                        {move || i18n::t(lang.get(), "user_edit_new_password_help")}
-                                    </small>
-                                </div>
+                                {password_field}
                                 {allow_se_row}
                             }.into_any()
                         } else {
                             ().into_any()
+                        }}
+                        {move || {
+                            // In-sheet save error (bug: was invisible behind
+                            // the sheet backdrop when routed to the shared
+                            // dashboard alert). Rendered as part of the sheet
+                            // content, so it sits ABOVE the backdrop.
+                            let e = save_err.get();
+                            if e.is_empty() {
+                                ().into_any()
+                            } else {
+                                view! {
+                                    <div class="alert alert-error" data-testid="edit-info-error">{e}</div>
+                                }.into_any()
+                            }
                         }}
                         <div class="sheet__actions">
                             <button
