@@ -112,6 +112,57 @@ test.describe('Edit-info form field fixes', () => {
         expect(consoleMessages).toEqual([]);
     });
 
+    test('the edit sheet cannot be dismissed by Escape while a save is in flight', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+
+        const staffToken = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const user = await createUniqueUser(staffToken, 0, 'MS');
+
+        await page.goto('/staff');
+        await page.waitForSelector('input[type="search"]');
+        await page.fill('input[type="search"]', user.card_code);
+        const result = page.locator('[data-testid="search-result"]').first();
+        await expect(result).toBeVisible({ timeout: 3000 });
+        await result.click();
+        await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+
+        await page.locator('[data-testid="edit-info-button"]').click();
+        const sheet = page.locator('[data-testid="sheet-edit-info"]');
+        await expect(sheet).toBeVisible();
+
+        // Delay the PUT so the save stays in flight long enough to attempt a
+        // close, and fail it so the error must surface in-sheet afterwards.
+        await page.route(`**/api/users/${user.user_id}`, async (route) => {
+            if (route.request().method() === 'PUT') {
+                await new Promise((r) => setTimeout(r, 1000));
+                return route.fulfill({
+                    status: 409,
+                    contentType: 'application/json',
+                    body: JSON.stringify({ error: 'A user with this email already exists' }),
+                });
+            }
+            return route.continue();
+        });
+
+        await sheet.locator('input[type="email"]').fill('someone@example.com');
+        await sheet.locator('button[type="submit"]').click();
+        // Save is now in flight. Escape must NOT dismiss the sheet — closing
+        // mid-save tears down the reactive scope and the pending 409 error
+        // would then no-op on a disposed signal, surfacing NOTHING.
+        await page.keyboard.press('Escape');
+        await expect(sheet).toBeVisible();
+
+        // Once the save resolves, the error surfaces in the still-open sheet.
+        await expect(sheet.locator('[data-testid="edit-info-error"]')).toBeVisible({
+            timeout: 5000,
+        });
+        await expect(sheet).toBeVisible();
+
+        expect(consoleMessages).toEqual([]);
+    });
+
     // SECURITY: the 409 email-conflict names the colliding account so a
     // staff/admin operator can go fix it — but that identity must NEVER reach a
     // customer self-editing their own row (it would turn the email field into a

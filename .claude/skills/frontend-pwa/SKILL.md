@@ -135,6 +135,33 @@ splitting any shared Leptos status/alert signal into two, write this
 effect FIRST, then the point-fixes become defense-in-depth rather than the
 whole fix.**
 
+## An error for an action inside a `Sheet` MUST render INSIDE the sheet — the shared dashboard alert is occluded by the sheet backdrop
+
+The dashboard's shared red/green alerts (`mod.rs`, the `err`/`msg` signals)
+render in the page body. A `Sheet` is a full-viewport `position: fixed;
+z-index: 200` blur backdrop laid OVER that body. So any alert routed to the
+shared channel while a sheet is OPEN renders BEHIND the backdrop and is
+invisible — the operator sees the action "do nothing" with no reason. This
+bit `edit_info_form`'s Save: a rejected save (e.g. the 409 email-uniqueness
+conflict) set `set_err` on the shared channel, the sheet stayed open, and the
+error was never seen.
+
+Two correct patterns, pick by whether the sheet stays open:
+- **Sheet closes on the action's outcome** (like Invite): route to the shared
+  channel AND close the sheet on either outcome, so the now-visible body shows
+  it. `on_close.run(())` in both Ok and Err arms.
+- **Sheet stays open to fix inline** (like Save): give the form its OWN local
+  error signal and render it as `<div class="alert alert-error"
+  data-testid="…">` INSIDE the sheet's `<form>` (it's sheet content, so it's
+  above the backdrop). Clear it at submit-start and when switching to another
+  in-sheet action. Do NOT rely on the shared channel — it's occluded.
+
+Playwright's `toBeVisible()` does NOT detect z-index occlusion (the shared
+alert is in the DOM, just covered), so an E2E test asserting the shared
+`.alert-error` PASSES against this bug. Assert a sheet-scoped
+`data-testid` inside the open sheet instead — that only exists once the error
+renders in-sheet.
+
 ## Manifest PNG icons: root `.gitignore` silently drops them
 
 The repo's root `.gitignore` has `*.png` with an exception only for
