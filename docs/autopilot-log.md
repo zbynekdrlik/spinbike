@@ -47,3 +47,4 @@ test names, decisions, and the shared PR #. Newest entries at the top.
 - **PR:** [#114](https://github.com/zbynekdrlik/spinbike/pull/114), merged `68d37b3`.
 - **Follow-up filed:** [#113](https://github.com/zbynekdrlik/spinbike/issues/113) — pre-existing Trunk-generated console warning (preload `integrity` attribute), unrelated to this fix, found during post-deploy verification.
 - **Deployed:** v0.15.0-dev.7, confirmed on both `https://spinbike-dev.newlevel.media` and `https://spinbike.newlevel.media` DOM version labels.
+- #110 install-to-home-screen prompt + manifest PNG icons — PR #123 merged 674f0c13, main CI 28724973486 green, prod+dev v0.15.0-dev.11, 4 PNG icons live 200 (supervisor completed merge after worker Monitor-death)
