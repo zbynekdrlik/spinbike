@@ -92,6 +92,7 @@ Load the skill for the area you're working in — each contains the full HOW-TO:
 | CI / deploy workflows | `.claude/skills/ci-deploy/SKILL.md` | Writing CI YAML, subagent prompts, or staging commits |
 | Domain / design | `.claude/skills/domain/SKILL.md` | Any design, spec, brainstorm, or feature touching roles/users/cards |
 | Door unlock / eWeLink / Sonoff | `.claude/skills/ewelink-door/SKILL.md` | Any work on `ewelink/*`, `routes/door.rs`, `/api/door/*`, or door credentials |
+| Frontend PWA / JS interop | `.claude/skills/frontend-pwa/SKILL.md` | Untyped browser API access (`js_sys::Reflect`), UA sniffing, manifest icons |
 | Auth / client onboarding | `.claude/skills/auth-onboarding/SKILL.md` | Magic-link tokens (`login_tokens`), `/api/auth/*`, `/welcome`, login/invite UI, register removal |
 
 ## Project-wide always-apply rules

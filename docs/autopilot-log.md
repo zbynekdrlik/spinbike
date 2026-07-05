@@ -5,6 +5,19 @@ test names, decisions, and the shared PR #. Newest entries at the top.
 
 ---
 
+## 2026-07-05 — #110: install-to-home-screen prompt + manifest PNG icons
+
+- **Issue:** [#110](https://github.com/zbynekdrlik/spinbike/issues/110) — `components::InstallPrompt` (Chromium/Android `beforeinstallprompt` capture-and-replay via `js_sys::Reflect`, no typed web-sys binding existed for it; iOS Safari static 2-step Share guide), manifest PNG icons rasterized from `favicon.svg`, mounted on `/welcome` Success block + `/my/balance`.
+- **Version:** bump `2239840` (0.15.0-dev.10 → 0.15.0-dev.11).
+- **Commits (PR #123):** `2239840` (version) → `0ad1cea` (feature: component + icons + i18n + E2E) → `050c769` (fix: `test.use({...devices['iPhone 13']})` inside a `describe` forces a new worker via `defaultBrowserType: 'webkit'` — scope to context-option fields only).
+- **Coordination gap (read before trusting "supervisor completed"):** the worker's own CI-wait + independent-review-agent wait ran long; the supervisor concluded the worker had died (`Monitor-death`) and completed the merge itself on `050c769` — **before** the worker's independent review agent returned. The review agent (dispatched before the premature merge) then found a real bug in already-merged/deployed code. Lesson: a worker doing a genuine multi-stage wait (CI + independent review) can look dead to the supervisor; if you're re-dispatched onto a ticket that's already closed, check `dev` for unmerged commits ahead of `main` before assuming there's nothing left to do.
+- **Post-merge review finding, shipped as a fast-follow (PR #124, no separate issue — the fix was already fully implemented+tested, not deferred):** `is_ios_ua()` only substring-matched `"iPhone"`/`"iPad"` in `navigator.userAgent`. Since iPadOS 13, Safari defaults to "Request Desktop Website" — a real iPad reports as a plain Mac (`Macintosh; Intel Mac OS X...`) with **no** `"iPad"` substring, so the install guide never rendered on a stock-configured iPad. Fix: standard disambiguator `navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1` (a genuine Mac has no touch points). New E2E coverage: iPadOS-spoofed-UA renders the guide; a real-Mac UA (`maxTouchPoints: 0`) renders neither surface (no false positive).
+- **Version:** bump `fa6a093` (0.15.0-dev.11 → 0.15.0-dev.12).
+- **Review:** self + one independent `general-purpose` review agent covering JS-interop correctness, `detect_kind()` precedence, double-fire protection, `/welcome` mount-timing race, E2E test isolation, UA-emulation correctness, and CSS/theme consistency — only the iPadOS gap was real; everything else confirmed correct.
+- **Mutation gate:** diff-scoped `cargo-mutants` — 0 survivors on both PR #123 and PR #124.
+- **PRs:** [#123](https://github.com/zbynekdrlik/spinbike/pull/123) merged `674f0c13` (closed #110); [#124](https://github.com/zbynekdrlik/spinbike/pull/124) merged `586531b` (follow-up fix, no issue reference — already-done work, not deferred).
+- **Deployed:** v0.15.0-dev.12, confirmed on both `https://spinbike-dev.newlevel.media` and `https://spinbike.newlevel.media` DOM version labels + `/api/version`; manifest.json + all 4 PNG icons (`icon-192.png`, `icon-512.png`, `icon-192-maskable.png`, `icon-512-maskable.png`) live 200 with `image/png` content-type on both; live dev `/login` console log confirmed the real browser fires `beforeinstallprompt` and our script's `preventDefault()` correctly suppresses the native banner.
+
 ## 2026-07-05 — #109: /welcome magic-link page + customer login-link form
 
 - **Issue:** [#109](https://github.com/zbynekdrlik/spinbike/issues/109) — client-facing UI for the onboarding flow (#107 mail + #108 tokens/auth, both merged/live). Validated still valid before work (mail + token endpoints confirmed live via `crates/spinbike-server/src/routes/auth.rs`; no `/welcome` route or customer login-link section existed yet).
