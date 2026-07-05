@@ -107,6 +107,24 @@ pub async fn redeem(
     Ok(user_id)
 }
 
+/// Delete rows that can no longer redeem: already used, or expired.
+/// `redeem`'s validity check is `used_at IS NULL AND expires_at >
+/// datetime('now')` — this predicate is the exact logical negation
+/// (`used_at IS NOT NULL OR expires_at <= datetime('now')`), so it is
+/// mutually exclusive with "still redeemable": purging never removes a row
+/// `redeem` would still accept, and never leaves behind a row `redeem` would
+/// reject. Pure housekeeping; it only stops the table from growing
+/// unbounded. Returns the number of rows removed.
+pub async fn purge_expired_and_used(pool: &SqlitePool) -> Result<u64> {
+    let result = sqlx::query(
+        "DELETE FROM login_tokens WHERE used_at IS NOT NULL OR expires_at <= datetime('now')",
+    )
+    .execute(pool)
+    .await
+    .context("Failed to purge login tokens")?;
+    Ok(result.rows_affected())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,5 +296,57 @@ mod tests {
             used.is_none(),
             "token must stay unused after empty-scope redeem"
         );
+    }
+
+    #[tokio::test]
+    async fn purge_removes_used_and_expired_but_keeps_live_token() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "purge@x").await;
+
+        // Used: create + redeem so used_at gets stamped.
+        let used_raw = create_token(&pool, uid, PURPOSE_LOGIN, LOGIN_TTL_SECS)
+            .await
+            .unwrap();
+        redeem(&pool, &used_raw, &[PURPOSE_LOGIN]).await.unwrap();
+
+        // Expired: negative TTL puts expires_at in the past, never redeemed.
+        create_token(&pool, uid, PURPOSE_INVITE, -10).await.unwrap();
+
+        // Live: unused, future expiry — must survive the purge.
+        let live_raw = create_token(&pool, uid, PURPOSE_INVITE, INVITE_TTL_SECS)
+            .await
+            .unwrap();
+
+        let removed = purge_expired_and_used(&pool).await.unwrap();
+        assert_eq!(removed, 2, "used + expired rows must be removed");
+
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM login_tokens")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(remaining, 1, "only the live token should remain");
+
+        // The purge must not have touched redeem behavior: the live token
+        // still redeems successfully afterwards.
+        let redeemed = redeem(&pool, &live_raw, &[PURPOSE_INVITE]).await.unwrap();
+        assert_eq!(
+            redeemed,
+            Some(uid),
+            "live token must still redeem after a purge"
+        );
+    }
+
+    #[tokio::test]
+    async fn purge_is_a_noop_when_nothing_qualifies() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "purge-noop@x").await;
+        create_token(&pool, uid, PURPOSE_INVITE, INVITE_TTL_SECS)
+            .await
+            .unwrap();
+
+        let removed = purge_expired_and_used(&pool).await.unwrap();
+        assert_eq!(removed, 0, "a live-only table must purge nothing");
     }
 }

@@ -53,6 +53,14 @@ async fn main() -> Result<()> {
         Err(e) => tracing::error!("startup charger tick failed: {e}"),
     }
 
+    // Run the login_tokens purge once at startup too — cheap, and gives an
+    // observable log line right after a deploy instead of waiting a full day.
+    match spinbike_server::jobs::token_purge::tick(&pool).await {
+        Ok(n) if n > 0 => tracing::info!("login_tokens purge removed {n} rows at startup"),
+        Ok(_) => {}
+        Err(e) => tracing::error!("startup login_tokens purge failed: {e}"),
+    }
+
     // Charger: every 60s. `Delay` skips back-to-back catch-up ticks if a tick
     // runs long, preventing the same bookings from being reprocessed rapidly.
     {
@@ -81,6 +89,25 @@ async fn main() -> Result<()> {
                 interval.tick().await;
                 if let Err(e) = spinbike_server::jobs::materialiser::sweep(&pool).await {
                     tracing::error!("materialiser sweep failed: {e}");
+                }
+            }
+        });
+    }
+
+    // login_tokens purge: daily. Pure housekeeping (#119) — no need to run
+    // more often than that at fitness-center scale.
+    {
+        let pool = pool.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(86400));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            interval.tick().await; // first tick fires immediately; ignore (startup already ran it above).
+            loop {
+                interval.tick().await;
+                match spinbike_server::jobs::token_purge::tick(&pool).await {
+                    Ok(n) if n > 0 => tracing::info!("login_tokens purge removed {n} rows"),
+                    Ok(_) => {}
+                    Err(e) => tracing::error!("login_tokens purge failed: {e}"),
                 }
             }
         });
