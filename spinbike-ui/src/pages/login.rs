@@ -1,4 +1,5 @@
 use leptos::prelude::*;
+use spinbike_core::auth::Role;
 use wasm_bindgen_futures::spawn_local;
 use web_sys::HtmlInputElement;
 
@@ -24,15 +25,16 @@ struct UserInfoResp {
     id: i64,
     email: String,
     name: String,
-    role: String,
+    role: Role,
 }
 
-fn navigate_role_home(role: &str) {
+fn navigate_role_home(role: &Role) {
     // Staff/admin spend all their time on the card dashboard — land them there
     // directly. Customers still get the schedule.
-    let target = match role {
-        "staff" | "admin" => "/staff",
-        _ => "/",
+    let target = if role.is_staff_or_admin() {
+        "/staff"
+    } else {
+        "/"
     };
     if let Some(w) = web_sys::window() {
         let _ = w.location().set_href(target);

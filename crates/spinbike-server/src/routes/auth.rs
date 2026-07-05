@@ -12,6 +12,7 @@ use crate::AppState;
 use crate::auth::{self, AuthUser, parse_role};
 use crate::db::{login_tokens, users};
 use crate::routes::internal_error;
+use spinbike_core::auth::Role;
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -40,7 +41,10 @@ pub struct UserInfo {
     pub id: i64,
     pub email: String,
     pub name: String,
-    pub role: String,
+    /// Typed role. Serializes to the same lowercase string as the raw DB role
+    /// (wire-compat, #98) — this is the payload the frontend stores in
+    /// localStorage, so the stored shape is unchanged.
+    pub role: Role,
 }
 
 // ---------------------------------------------------------------------------
@@ -162,7 +166,7 @@ async fn login(
             id: user.id,
             email: user.email.unwrap_or_default(),
             name: user.name,
-            role: user.role,
+            role: Role::from(user.role.as_str()),
         },
     }))
 }
@@ -207,8 +211,10 @@ async fn request_login_link(
     };
 
     // Magic link is customers-only; blocked accounts get nothing. (deleted_at
-    // is already filtered by get_user_by_email.)
-    if user.role != "customer" || user.blocked {
+    // is already filtered by get_user_by_email.) `Role::from` (not `parse_role`)
+    // so a non-customer/unknown role is NOT treated as a customer — an unknown
+    // legacy role must not be able to request a login link.
+    if Role::from(user.role.as_str()) != Role::Customer || user.blocked {
         return ok();
     }
 
@@ -312,7 +318,7 @@ async fn token_login(
             id: user.id,
             email: user.email.unwrap_or_default(),
             name: user.name,
-            role: user.role,
+            role: Role::from(user.role.as_str()),
         },
     }))
 }
@@ -329,6 +335,28 @@ async fn me(AuthUser(claims): AuthUser) -> Json<serde_json::Value> {
 mod tests {
     use super::LoginLinkRateLimiter;
     use std::time::{Duration, Instant};
+
+    /// Wire-compat guard (#98): the `AuthResponse.user.role` (the payload the
+    /// frontend persists in localStorage) serializes to the same lowercase
+    /// string as the previous `String` field, so stored sessions are unchanged.
+    #[test]
+    fn user_info_serializes_role_to_lowercase_string() {
+        use super::UserInfo;
+        use spinbike_core::auth::Role;
+        for (role, expected) in [
+            (Role::Admin, "admin"),
+            (Role::Staff, "staff"),
+            (Role::Customer, "customer"),
+        ] {
+            let ui = UserInfo {
+                id: 1,
+                email: "a@b.com".into(),
+                name: "N".into(),
+                role,
+            };
+            assert_eq!(serde_json::to_value(&ui).unwrap()["role"], expected);
+        }
+    }
 
     #[test]
     fn login_link_first_send_allowed() {

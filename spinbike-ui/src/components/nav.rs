@@ -45,7 +45,7 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
                 href=move || {
                     let _ = auth_ver.get();
                     match auth::get_user() {
-                        Some(u) if u.role == "admin" || u.role == "staff" => "/staff",
+                        Some(u) if u.role.is_staff_or_admin() => "/staff",
                         _ => "/",
                     }
                 }
@@ -56,7 +56,7 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
             <div class="navbar-links">
                 {move || {
                     if let Some(u) = user() {
-                        let is_staff = u.role == "staff" || u.role == "admin";
+                        let is_staff = u.role.is_staff_or_admin();
                         view! {
                             // Customer-only links: only show for true customers
                             // (admin/staff get these views via different paths).

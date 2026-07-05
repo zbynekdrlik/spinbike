@@ -62,9 +62,10 @@ pub fn WelcomePage() -> impl IntoView {
                     .await
                     {
                         Ok(data) => {
-                            let cta_href = match data.user.role.as_str() {
-                                "staff" | "admin" => "/staff",
-                                _ => "/my/balance",
+                            let cta_href = if data.user.role.is_staff_or_admin() {
+                                "/staff"
+                            } else {
+                                "/my/balance"
                             };
                             auth::set_auth(&data);
                             if let Some(set_ver) = use_context::<WriteSignal<u32>>() {

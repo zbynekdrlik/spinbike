@@ -23,11 +23,11 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
     view! {
         {move || {
             let Some(u) = user() else { return ().into_any(); };
-            let is_staff_or_admin = u.role == "admin" || u.role == "staff";
+            let is_staff_or_admin = u.role.is_staff_or_admin();
             if !is_staff_or_admin {
                 return ().into_any();
             }
-            let is_admin = u.role == "admin";
+            let is_admin = u.role.is_admin();
             let path = current_path();
             let desk_active = path.starts_with("/staff");
             let schedule_active = path.starts_with("/schedule");

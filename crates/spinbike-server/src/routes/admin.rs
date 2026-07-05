@@ -10,6 +10,7 @@ use crate::AppState;
 use crate::auth::AuthUser;
 use crate::db::{classes, settings, users};
 use crate::routes::internal_error;
+use spinbike_core::auth::Role;
 use spinbike_core::ws::ServerMsg;
 
 // ---------- Templates ----------
@@ -106,7 +107,9 @@ pub struct UserResponse {
     pub email: Option<String>,
     pub name: String,
     pub phone: Option<String>,
-    pub role: String,
+    /// Typed role; serializes to the same lowercase string as the raw DB role
+    /// (wire-compat, #98).
+    pub role: Role,
     pub created_at: String,
 }
 
@@ -642,7 +645,7 @@ async fn list_users_handler(
                 email: u.email,
                 name: u.name,
                 phone: u.phone,
-                role: u.role,
+                role: Role::from(u.role.as_str()),
                 created_at: u.created_at,
             })
             .collect(),
@@ -662,8 +665,11 @@ async fn update_user_role(
         ));
     }
 
-    // I6: Validate role string before writing to DB.
-    if !["admin", "staff", "customer"].contains(&body.role.as_str()) {
+    // I6: Validate the role before writing to DB. `Role::from` maps any
+    // string that isn't a known lowercase role to `Role::Unknown`, so
+    // rejecting `Unknown` is exactly the old `["admin","staff","customer"]`
+    // allowlist — now driven by the single typed conversion.
+    if Role::from(body.role.as_str()) == Role::Unknown {
         return Err(super::bad_request(
             "Invalid role. Must be admin, staff, or customer",
         ));
@@ -674,4 +680,42 @@ async fn update_user_role(
         .map_err(internal_error)?;
 
     Ok(StatusCode::NO_CONTENT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Wire-compat guard (#98): the admin `UserResponse.role` serializes to
+    /// the same lowercase string as the previous `String` field.
+    #[test]
+    fn admin_user_response_serializes_role_to_lowercase() {
+        for (role, expected) in [
+            (Role::Admin, "admin"),
+            (Role::Staff, "staff"),
+            (Role::Customer, "customer"),
+        ] {
+            let resp = UserResponse {
+                id: 1,
+                email: None,
+                name: "N".into(),
+                phone: None,
+                role,
+                created_at: "2026-01-01".into(),
+            };
+            assert_eq!(serde_json::to_value(&resp).unwrap()["role"], expected);
+        }
+    }
+
+    /// The role-update validation accepts exactly the three assignable roles
+    /// and rejects everything else — matching the old string allowlist.
+    #[test]
+    fn update_role_validation_accepts_known_rejects_unknown() {
+        for good in ["admin", "staff", "customer"] {
+            assert_ne!(Role::from(good), Role::Unknown, "{good} must be accepted");
+        }
+        for bad in ["trainer", "superadmin", "", "Admin", "unknown"] {
+            assert_eq!(Role::from(bad), Role::Unknown, "{bad} must be rejected");
+        }
+    }
 }

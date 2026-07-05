@@ -75,7 +75,7 @@ pub fn EditInfoForm(
     let (allow_self_entry, set_allow_self_entry) = signal(initial_allow_se);
 
     // Read the caller's role to gate the admin-only fields client-side.
-    let is_admin = auth::get_user().map(|u| u.role == "admin").unwrap_or(false);
+    let is_admin = auth::get_user().map(|u| u.role.is_admin()).unwrap_or(false);
 
     // Refresh from server every time show transitions false→true. Sets the
     // input values via NodeRef + HtmlInputElement::set_value, so the latest

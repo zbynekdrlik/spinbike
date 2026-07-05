@@ -33,7 +33,7 @@ fn ScheduleRoute() -> impl IntoView {
             let user = crate::auth::get_user();
             let is_staff = user
                 .as_ref()
-                .map(|u| u.role == "staff" || u.role == "admin")
+                .map(|u| u.role.is_staff_or_admin())
                 .unwrap_or(false);
             if is_staff {
                 StaffDashboardPage().into_any()
@@ -53,11 +53,11 @@ fn RootRoute() -> impl IntoView {
         {move || {
             let _ = auth_ver.get();
             let user = crate::auth::get_user();
-            match user.as_ref().map(|u| u.role.as_str()) {
-                Some("staff") | Some("admin") => {
+            match user.as_ref().map(|u| u.role.is_staff_or_admin()) {
+                Some(true) => {
                     view! { <RedirectTo to="/staff".to_string()/> }.into_any()
                 }
-                Some(_) => {
+                Some(false) => {
                     view! { <RedirectTo to="/my/balance".to_string()/> }.into_any()
                 }
                 None => SchedulePage().into_any(),
@@ -71,7 +71,7 @@ fn RootRoute() -> impl IntoView {
 fn is_staff_or_admin(auth_ver: ReadSignal<u32>) -> bool {
     let _ = auth_ver.get();
     crate::auth::get_user()
-        .map(|u| u.role == "staff" || u.role == "admin")
+        .map(|u| u.role.is_staff_or_admin())
         .unwrap_or(false)
 }
 

@@ -88,12 +88,23 @@ pub fn validate_token(secret: &str, token: &str) -> Result<Claims> {
     Ok(data.claims)
 }
 
-/// Parse a role string from the DB into a Role enum.
+/// Parse a DB role string into a `Role` for the AUTH/session-TTL path.
+///
+/// This deliberately differs from the general `Role::from(&str)` boundary
+/// conversion in ONE way: an unrecognised DB role collapses to
+/// `Role::Customer` (not `Role::Unknown`). That is intentional here — the
+/// only consumer is `create_token`, where the role selects the session
+/// lifetime, and treating an unknown legacy DB role as a customer gives it the
+/// permanent-session tier without any privilege (all `can_*` checks still
+/// require an explicit `Admin`/`Staff`). For faithful String↔Role round-trips
+/// at wire boundaries (`UserResponse`, `UserInfo`) use `Role::from` instead,
+/// which mirrors serde's `#[serde(other)]` and maps unknowns to
+/// `Role::Unknown`. The known-role mapping is shared via `Role::from` so the
+/// two conversions can never drift on `admin`/`staff`/`customer`.
 pub fn parse_role(role_str: &str) -> Role {
-    match role_str {
-        "admin" => Role::Admin,
-        "staff" => Role::Staff,
-        _ => Role::Customer,
+    match Role::from(role_str) {
+        Role::Unknown => Role::Customer,
+        known => known,
     }
 }
 
@@ -186,6 +197,22 @@ mod tests {
         assert_eq!(claims.sub, 42);
         assert_eq!(claims.email, "test@example.com");
         assert_eq!(claims.role, Role::Customer);
+    }
+
+    /// `parse_role` (auth/session-TTL path) maps the three known roles like
+    /// `Role::from`, but collapses any unknown DB role to `Customer` (NOT
+    /// `Unknown`) so a legacy/unexpected role still gets a valid, unprivileged
+    /// session tier. This intentional divergence from `Role::from` is pinned
+    /// here.
+    #[test]
+    fn parse_role_maps_known_and_collapses_unknown_to_customer() {
+        assert_eq!(parse_role("admin"), Role::Admin);
+        assert_eq!(parse_role("staff"), Role::Staff);
+        assert_eq!(parse_role("customer"), Role::Customer);
+        // Divergence from Role::from: unknown → Customer, not Unknown.
+        assert_eq!(parse_role("trainer"), Role::Customer);
+        assert_eq!(parse_role(""), Role::Customer);
+        assert_eq!(Role::from("trainer"), Role::Unknown);
     }
 
     #[test]
