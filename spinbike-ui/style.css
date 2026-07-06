@@ -1647,14 +1647,6 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
     color: var(--text, #111827);
     margin: 1.25rem 0 0.5rem;
 }
+/* Rows use the shared, theme-aware `.list-row` primitive (#144); the old
+   `.recent-visits__*` row rules were hardcoded light-mode hex and are retired. */
 .recent-visits { list-style: none; padding: 0; }
-.recent-visits__row {
-    display: flex;
-    gap: 0.5rem;
-    padding: 0.5rem 0;
-    border-bottom: 1px solid #e5e7eb;
-}
-.recent-visits__date { color: #6b7280; min-width: 4rem; }
-.recent-visits__action { flex: 1; }
-.recent-visits__amount { font-variant-numeric: tabular-nums; white-space: nowrap; }
-.recent-visits__note { color: #6b7280; font-size: 0.85rem; }

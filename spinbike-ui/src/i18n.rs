@@ -50,6 +50,21 @@ pub fn t(lang: Lang, key: &str) -> &'static str {
     }
 }
 
+/// The i18n key for a transaction's `EventKind` label. Single source of the
+/// mapping shared by the admin transactions list and the customer movements
+/// list, so both surfaces show the same label for the same kind. Adding an
+/// `EventKind` variant is a compile error here (exhaustive match).
+pub fn tx_label_key(kind: spinbike_core::reports::EventKind) -> &'static str {
+    use spinbike_core::reports::EventKind;
+    match kind {
+        EventKind::PassSale => "tx_label_pass",
+        EventKind::Visit => "tx_label_visit",
+        EventKind::Charge => "tx_label_charge",
+        EventKind::TopUp => "tx_label_topup",
+        EventKind::Other => "event_other",
+    }
+}
+
 /// Format a `NaiveDate` for display, locale-aware.
 /// Slovak: `DD.MM.YYYY` (e.g. `25.04.2026`). English: `YYYY-MM-DD` (ISO).
 /// API request bodies and `<input type="date">` values must continue to use
@@ -811,6 +826,12 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         ("Oslov recepciu pre vstup", "Ask reception for entry"),
     );
     m.insert("door_lock_icon_aria", ("Ikona zamku", "Lock icon"));
+    // Customer movements: localized display of the stored English "door: Nth" note.
+    m.insert("door_note_reentry", ("Vstup c. {}", "Entry #{}"));
+    m.insert(
+        "version_footer_aria",
+        ("Verzia aplikacie", "Application version"),
+    );
     m.insert(
         "monthly_pass_active_until",
         (
@@ -825,8 +846,8 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("my_balance_hello", ("Ahoj, {}", "Hello, {}"));
     m.insert("my_balance_credit", ("Zostatok", "Credit"));
     m.insert(
-        "my_balance_recent_visits",
-        ("Posledne navstevy", "Recent visits"),
+        "my_balance_recent_movements",
+        ("Posledne pohyby", "Recent activity"),
     );
     m.insert(
         "admin_allow_self_entry",

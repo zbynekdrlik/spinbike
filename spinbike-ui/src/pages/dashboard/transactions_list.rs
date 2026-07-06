@@ -63,14 +63,7 @@ pub fn TransactionsList(
             let rows: Vec<_> = t.iter().map(|tx| {
                 let date = i18n::fmt_datetime_str(&tx.created_at, l);
                 let kind = tx.kind();
-                let action_key = match kind {
-                    spinbike_core::reports::EventKind::PassSale => "tx_label_pass",
-                    spinbike_core::reports::EventKind::Visit    => "tx_label_visit",
-                    spinbike_core::reports::EventKind::Charge   => "tx_label_charge",
-                    spinbike_core::reports::EventKind::TopUp    => "tx_label_topup",
-                    spinbike_core::reports::EventKind::Other    => "event_other",
-                };
-                let action = i18n::t(l, action_key).to_string();
+                let action = i18n::t(l, i18n::tx_label_key(kind)).to_string();
                 let until_suffix = tx
                     .valid_until
                     .map(|d| format!(" · {} {}", i18n::t(l, "tx_until_short"), i18n::fmt_date_short(d, l)))

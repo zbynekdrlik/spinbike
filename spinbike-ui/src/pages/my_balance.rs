@@ -7,6 +7,8 @@
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
+use spinbike_core::reports::{EventKind, classify};
+
 use crate::api;
 use crate::components::{DoorButton, InstallPrompt};
 use crate::i18n::{self, Lang, fmt_date_short, tf};
@@ -31,7 +33,6 @@ struct RecentTx {
     created_at: String,
     action: String,
     amount: f64,
-    #[allow(dead_code)]
     valid_until: Option<String>,
     note: Option<String>,
 }
@@ -131,30 +132,70 @@ pub fn MyBalancePage() -> impl IntoView {
                     let recent_rows = b.recent.clone();
                     let lang_now = lang.get();
                     view! {
-                        <h2 class="recent-visits__heading">{i18n::t(lang_now, "my_balance_recent_visits")}</h2>
+                        <h2 class="recent-visits__heading">{i18n::t(lang_now, "my_balance_recent_movements")}</h2>
                         <ul class="recent-visits">
                             {recent_rows.into_iter().map(|t| {
                                 let date_label = parse_visit_date(&t.created_at)
                                     .map(|d| fmt_date_short(d, lang_now))
                                     .unwrap_or_else(|| t.created_at.clone());
+
+                                // Derive the movement kind from the SAME shared
+                                // classifier the admin uses, so the customer sees
+                                // the SAME Slovak labels instead of the raw DB token.
+                                let valid_until = t.valid_until.as_deref().and_then(parse_pass_date);
+                                let kind = classify(&t.action, t.amount, valid_until);
+                                let action_label = i18n::t(lang_now, i18n::tx_label_key(kind)).to_string();
+
+                                // Pass-sale rows show the expiry date, like the admin row.
+                                let until_suffix = if matches!(kind, EventKind::PassSale) {
+                                    valid_until
+                                        .map(|d| format!(" \u{b7} {} {}", i18n::t(lang_now, "tx_until_short"), fmt_date_short(d, lang_now)))
+                                        .unwrap_or_default()
+                                } else {
+                                    String::new()
+                                };
+
+                                // Signed + coloured amount (matches admin `{:+.2}`),
+                                // so a top-up and a spend are distinguishable. €0 rows
+                                // (visits) show no amount — the label carries the meaning.
                                 let amount_label = if t.amount.abs() < 0.005 {
                                     String::new()
                                 } else {
-                                    format!("\u{20ac}{:.2}", t.amount)
+                                    format!("{:+.2}", t.amount)
                                 };
-                                let note_view = match &t.note {
-                                    Some(n) if !n.is_empty() => {
-                                        let n = n.clone();
-                                        view! { <span class="recent-visits__note">{n}</span> }.into_any()
+                                let amount_class = if t.amount >= 0.0 {
+                                    "list-row__amount list-row__amount--pos"
+                                } else {
+                                    "list-row__amount list-row__amount--neg"
+                                };
+
+                                // Door-entry notes are stored as English "door: Nth"
+                                // (door.rs). Localize the DISPLAY only — the stored value
+                                // stays intact (door.rs's `note LIKE 'door:%'` same-day
+                                // count query AND the admin note view depend on it).
+                                let sub_note = match &t.note {
+                                    Some(n) if n.starts_with("door: ") => {
+                                        let count: String = n["door: ".len()..]
+                                            .chars()
+                                            .take_while(|c| c.is_ascii_digit())
+                                            .collect();
+                                        if count.is_empty() {
+                                            format!(" \u{b7} {n}")
+                                        } else {
+                                            format!(" \u{b7} {}", tf(lang_now, "door_note_reentry", &[&count]))
+                                        }
                                     }
-                                    _ => ().into_any(),
+                                    Some(n) if !n.is_empty() => format!(" \u{b7} {n}"),
+                                    _ => String::new(),
                                 };
+
                                 view! {
-                                    <li data-testid="recent-visit" class="recent-visits__row">
-                                        <span class="recent-visits__date">{date_label}</span>
-                                        <span class="recent-visits__action">{t.action.clone()}</span>
-                                        <span class="recent-visits__amount">{amount_label}</span>
-                                        {note_view}
+                                    <li data-testid="recent-visit" class="list-row">
+                                        <div class="list-row__main">
+                                            <div class="list-row__title">{action_label}{until_suffix}</div>
+                                            <div class="list-row__sub">{date_label}{sub_note}</div>
+                                        </div>
+                                        <div class=amount_class>{amount_label}</div>
                                     </li>
                                 }
                             }).collect_view()}
