@@ -144,14 +144,7 @@ pub fn MyBalancePage() -> impl IntoView {
                                 // the SAME Slovak labels instead of the raw DB token.
                                 let valid_until = t.valid_until.as_deref().and_then(parse_pass_date);
                                 let kind = classify(&t.action, t.amount, valid_until);
-                                let action_key = match kind {
-                                    EventKind::PassSale => "tx_label_pass",
-                                    EventKind::Visit => "tx_label_visit",
-                                    EventKind::Charge => "tx_label_charge",
-                                    EventKind::TopUp => "tx_label_topup",
-                                    EventKind::Other => "event_other",
-                                };
-                                let action_label = i18n::t(lang_now, action_key).to_string();
+                                let action_label = i18n::t(lang_now, i18n::tx_label_key(kind)).to_string();
 
                                 // Pass-sale rows show the expiry date, like the admin row.
                                 let until_suffix = if matches!(kind, EventKind::PassSale) {

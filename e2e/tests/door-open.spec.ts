@@ -153,6 +153,38 @@ test.describe('Door self-entry (#92)', () => {
         assertCleanConsole(messages);
     });
 
+    test('door entry note renders localized in Slovak — "Vstup c. 1" (#144)', async ({ page, baseURL }) => {
+        const messages = setupConsoleCheck(page);
+        const adminToken = await loginViaAPI(page, baseURL!, 'admin@test.com', 'admin123');
+        const customer = await createSelfEntryCustomer(adminToken, 'SK');
+
+        const cardCode = `SK-pass-${customer.user_id}`;
+        await assignCardCode(adminToken, customer.user_id, cardCode);
+        await seedActiveMonthlyPass(adminToken, cardCode);
+
+        await page.evaluate(() => { localStorage.clear(); });
+        await loginViaAPI(page, baseURL!, customer.email, customer.password);
+        // Override the EN default set by loginViaAPI: the real customer is Slovak.
+        await page.addInitScript(() => {
+            try { localStorage.setItem('spinbike_lang', 'sk'); } catch { /* storage not ready */ }
+        });
+
+        await page.goto('/my/balance');
+        const btn = page.locator('[data-testid="door-open-button"]');
+        await expect(btn).toBeVisible();
+
+        await btn.dispatchEvent('pointerdown');
+        await page.waitForTimeout(2200);
+        await btn.dispatchEvent('pointerup');
+
+        // The stored note is "door: 1st"; in Slovak the customer row shows it via
+        // door_note_reentry → "Vstup c. 1" (the SK branch, EN "Entry #1" above).
+        const recent = page.locator('[data-testid="recent-visit"]');
+        await expect(recent.first()).toContainText('Vstup c. 1', { timeout: 5000 });
+
+        assertCleanConsole(messages);
+    });
+
     test('button is disabled with "Ask reception" label when allow_self_entry=false', async ({ page, baseURL }) => {
         const messages = setupConsoleCheck(page);
         const adminToken = await loginViaAPI(page, baseURL!, 'admin@test.com', 'admin123');

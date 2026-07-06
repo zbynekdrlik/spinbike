@@ -50,6 +50,21 @@ pub fn t(lang: Lang, key: &str) -> &'static str {
     }
 }
 
+/// The i18n key for a transaction's `EventKind` label. Single source of the
+/// mapping shared by the admin transactions list and the customer movements
+/// list, so both surfaces show the same label for the same kind. Adding an
+/// `EventKind` variant is a compile error here (exhaustive match).
+pub fn tx_label_key(kind: spinbike_core::reports::EventKind) -> &'static str {
+    use spinbike_core::reports::EventKind;
+    match kind {
+        EventKind::PassSale => "tx_label_pass",
+        EventKind::Visit => "tx_label_visit",
+        EventKind::Charge => "tx_label_charge",
+        EventKind::TopUp => "tx_label_topup",
+        EventKind::Other => "event_other",
+    }
+}
+
 /// Format a `NaiveDate` for display, locale-aware.
 /// Slovak: `DD.MM.YYYY` (e.g. `25.04.2026`). English: `YYYY-MM-DD` (ISO).
 /// API request bodies and `<input type="date">` values must continue to use
