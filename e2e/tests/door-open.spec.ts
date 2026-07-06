@@ -145,8 +145,10 @@ test.describe('Door self-entry (#92)', () => {
         );
 
         // Recent visits list refreshes — the new door entry should appear.
+        // The stored note is "door: 1st"; the customer row now shows it
+        // localized (#144) — EN "Entry #1".
         const recent = page.locator('[data-testid="recent-visit"]');
-        await expect(recent.first()).toContainText('door: 1st', { timeout: 5000 });
+        await expect(recent.first()).toContainText('Entry #1', { timeout: 5000 });
 
         assertCleanConsole(messages);
     });

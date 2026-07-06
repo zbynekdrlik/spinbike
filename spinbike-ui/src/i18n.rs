@@ -811,6 +811,12 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         ("Oslov recepciu pre vstup", "Ask reception for entry"),
     );
     m.insert("door_lock_icon_aria", ("Ikona zamku", "Lock icon"));
+    // Customer movements: localized display of the stored English "door: Nth" note.
+    m.insert("door_note_reentry", ("Vstup c. {}", "Entry #{}"));
+    m.insert(
+        "version_footer_aria",
+        ("Verzia aplikacie", "Application version"),
+    );
     m.insert(
         "monthly_pass_active_until",
         (
@@ -825,8 +831,8 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("my_balance_hello", ("Ahoj, {}", "Hello, {}"));
     m.insert("my_balance_credit", ("Zostatok", "Credit"));
     m.insert(
-        "my_balance_recent_visits",
-        ("Posledne navstevy", "Recent visits"),
+        "my_balance_recent_movements",
+        ("Posledne pohyby", "Recent activity"),
     );
     m.insert(
         "admin_allow_self_entry",
