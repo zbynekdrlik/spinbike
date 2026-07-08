@@ -298,7 +298,9 @@ exists and isn't yours, finish monitoring its CI to terminal and merge it
 it's unblocking your own branch) — THEN re-bump the version (main just
 advanced) and start your own ticket.
 
-## Live post-deploy Playwright verification against `spinbike-dev`/`spinbike.newlevel.media`
+## Live post-deploy Playwright verification against `spinbike-dev`/`spinbike.sk`
+
+**Prod app is served at `https://spinbike.sk`** (primary, since 2026-07-08). `https://spinbike.newlevel.media` still works (same Cloudflare tunnel, same origin :8080) — both are fine to verify against; prefer `spinbike.sk`. Dev stays `https://spinbike-dev.newlevel.media`. All three are Cloudflare-tunnel hostnames → `localhost:8080/8081` (ingress in `/home/newlevel/.cloudflared/config.yml`, tunnel `4093c494-…`; no local nginx/caddy).
 
 Two gotchas, both hit during #111's live verification:
 

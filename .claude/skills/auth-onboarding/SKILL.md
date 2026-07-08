@@ -56,7 +56,7 @@ Invites/login-links send on **prod** (dev stays Disabled → 503 `mail_not_confi
 - `SMTP_HOST=smtp.resend.com`, `SMTP_PORT=587` — the mail module uses lettre `starttls_relay`, i.e. **STARTTLS on 587**. Port 465 (implicit TLS) is NOT supported — don't switch to it.
 - `SMTP_USERNAME=resend` (the literal string), `SMTP_PASSWORD` = a **Resend API key** (`re_...`). The key lives ONLY in the prod env file — never git/dev/logs.
 - `SMTP_FROM="SpinBike <spinbike@spinbike.sk>"`. Resend accepts a From only on a **verified** domain; no `SMTP_USERNAME`=From match requirement (unlike Gmail).
-- `PUBLIC_BASE_URL=https://spinbike.newlevel.media` (read in `lib.rs`) builds the magic-link URL — still the app host, NOT the mail domain.
+- `PUBLIC_BASE_URL=https://spinbike.sk` (read in `lib.rs`) builds the magic-link URL — the app's own domain (cutover from `spinbike.newlevel.media` 2026-07-08; the old host still resolves via the same Cloudflare tunnel, both serve the app, but new invite/login links use `spinbike.sk`).
 - Startup proof: journal logs `mail: SMTP transport configured host=smtp.resend.com port=587`. A successful send logs `mail: sent to=<..>` + `invite: sent user_id=<N>` — fires only after lettre's `send()` returns Ok (Resend accepted / 250), real send-verification.
 - **Verified 2026-07-07:** app invite → mail-tester scored **10/10, "properly authenticated"** (SPF+DKIM+DMARC pass), From `spinbike@spinbike.sk`. NO code change — the switch was purely these env vars + a restart.
 
