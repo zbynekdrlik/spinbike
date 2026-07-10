@@ -523,3 +523,75 @@ genuine foreground blocking call. Re-invoke the same shaped Bash call again
 a single CI run can need 2-3 of these back to back. (A prior version of this
 entry recommended writing the poll into a temp script FILE instead — that
 still works but is unnecessary; the inline loop above is simpler.)
+
+## `cargo-deny` advisory gate (#162): expect REAL findings the first time it runs
+
+Adding a `cargo-deny check advisories` CI job to a repo that has never had
+one WILL surface real, previously-invisible advisories beyond whatever
+single known issue prompted adding the gate (this repo's known issue was
+RUSTSEC-2023-0071 / rsa, confirmed unreachable and allowlisted in
+`deny.toml`). The very first run also found two REAL, reachable ones:
+RUSTSEC-2026-0190 (`anyhow` 1.0.102, unsound `downcast_mut`) and
+RUSTSEC-2026-0097 (`rand` 0.8.5, unsound with a custom `log` logger). Per
+`mutation-testing.md`'s "overrun = fix the setup, never bump the timeout"
+spirit: **fix real findings, never blanket-ignore them** — the gate's whole
+value is catching exactly this class of drift.
+
+**Fixing a same-major-version-range advisory is a `cargo update --precise`,
+resolution-only (no compile, no `target/`):**
+```bash
+cargo update -p anyhow --precise 1.0.103        # single resolved version → unambiguous
+cargo update -p rand@0.8.5 --precise 0.8.6       # rand had TWO resolved majors (0.8.5 AND 0.9.2,
+                                                  # pulled by different transitive deps) — the
+                                                  # `@<current-version>` qualifier disambiguates
+                                                  # which instance to bump
+```
+When a crate name resolves to more than one version in `Cargo.lock` (grep
+`name = "<crate>"` — if it appears twice, you have two majors/minors
+coexisting), a bare `cargo update -p <crate>` is ambiguous about which
+instance moves. Use `-p <crate>@<current-version>` to target the exact one
+the advisory flagged. Don't assume a second same-named resolution is also
+vulnerable — cargo-deny evaluates the advisory's precise version-range
+against EACH resolved instance independently; if it doesn't emit a second
+`error[unsound]` block for the other instance, trust that (this repo's
+second `rand` resolution, 0.9.2, was left alone — cargo-deny's own match
+against RUSTSEC-2026-0097 didn't flag it, even though the human-readable
+"Solution:" line in the advisory text reads ambiguously enough to suggest
+otherwise at a glance).
+
+**`EmbarkStudios/cargo-deny-action@v2` auto-injects `arguments: --all-features`**
+even when you don't set `arguments:` yourself (visible in the run log's own
+`with:` echo). Confirmed empirically this does NOT expand cargo-deny's
+resolved graph beyond this workspace's OWN crate features — it does not
+force-enable an upstream dependency's own opt-in features (e.g. sqlx's
+`mysql`/`postgres`), so `rsa` (pulled only via those) still reports
+"advisory not detected" (a harmless warning, not a failure) exactly as
+`cargo tree --all-features --target all -i rsa` predicts locally.
+
+## The secret-scan hook (`block-sensitive-staging.sh`) false-positives HARD on this codebase's own test-fixture literals and on `Cargo.lock` checksum diffs
+
+This is a **global airuleset hook**, not a project file — don't edit it —
+but this project trips it constantly enough to document the workaround.
+Two shapes, both blocked `git add`/`git commit` with "No stderr output":
+
+1. **Any NEW test code with `password: "<8+ char literal>"` or a struct
+   field/key containing the substring `secret` (no word-boundary — `jwt_secret:
+   "test-secret"` matches on `secret` alone) assigned an 8+ char quoted
+   literal.** This project's whole test harness is built on
+   `password`/`jwt_secret` test fixtures (see `tests/helpers/mod.rs`'s
+   `JWT_SECRET`/`hash_password("password")`), so any NEW test that
+   constructs its own `AppState`/request body inline (rather than reusing
+   `TestApp`) will very likely trip this. Fix: use a value matching the
+   hook's own placeholder allowlist — `"placeholder"` works (matches
+   `PLACEHOLDER` case-insensitively) — instead of anything that reads like a
+   real secret (`"whatever"`, `"test-secret"`, `"my-password"`).
+2. **A `Cargo.lock` diff that changes dependency `checksum = "<64-hex-char
+   sha256>"` lines** (i.e. any real version bump, not just a version-string
+   sync) — the hook's 40+-char-hex-blob check has no concept of "this is a
+   registry checksum, not a secret". Fix: bypass with a trailing shell
+   comment on the `git add`/`git commit` command itself (outside any quoted
+   string): `git add Cargo.lock # airuleset:secret-ok Cargo.lock diff only
+   changes crates.io sha256 checksums for a dependency bump — not secrets`.
+   Every bypass is logged to `~/devel/airuleset/audits/secret-scan-bypasses.log`
+   — legitimate here since it's genuinely not a secret, just don't reach for
+   it reflexively on a diff you haven't actually checked.
