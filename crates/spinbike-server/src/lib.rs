@@ -147,7 +147,7 @@ mod tests {
     use super::*;
     use axum::Router;
     use axum::body::Body;
-    use axum::http::{Method, Request};
+    use axum::http::{Method, Request, StatusCode};
     use axum::routing::get;
     use db::{create_memory_pool, run_migrations};
     use tower::ServiceExt;
@@ -295,5 +295,116 @@ mod tests {
         handle.abort();
         let _ = handle.await;
         assert!(connected, "start_server did not bind within 2s");
+    }
+
+    /// #161: the ONLY thing keeping the unauthenticated, arbitrary-role
+    /// `/api/test/*` fixture routes (`routes::test_fixtures`) out of
+    /// production is the `is_test_mode_from_env` merge gate in
+    /// `start_server()` above — `seed_account` (test_fixtures.rs) has no
+    /// auth guard at all and accepts a caller-supplied `role`. No existing
+    /// test exercised the negative wiring path: `TestApp`
+    /// (tests/helpers/mod.rs) always merges the fixtures regardless of the
+    /// env var, so the production router build was never actually driven by
+    /// any test. This test builds the router the EXACT way `start_server`
+    /// does when `SPINBIKE_TEST_MODE` is unset/not `"1"` —
+    /// `routes::all_routes()` with NO `test_fixtures::routes()` merge.
+    ///
+    /// Note on the assertion shape: an unmatched path here does NOT 404 —
+    /// `all_routes()` ends with `.fallback(static_files::static_handler)`,
+    /// which serves the SPA's `index.html` (200) for any dotless unmatched
+    /// path (the same behavior already locked in by
+    /// `tests/static_files.rs::unknown_spa_route_also_serves_index_html`,
+    /// and documented for the removed `/api/auth/register` route in the
+    /// ci-deploy skill). So the meaningful assertion is the removed
+    /// CAPABILITY, not a raw status code: no account is ever created, and
+    /// none of the fixture paths return their handler's own JSON response.
+    #[tokio::test]
+    async fn production_router_does_not_expose_test_fixtures() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (event_tx, _) = broadcast::channel(16);
+        let state = AppState {
+            pool: pool.clone(),
+            event_tx,
+            jwt_secret: "placeholder".to_string(),
+            ewelink: crate::ewelink::EwelinkHandle::spawn(),
+            mail: crate::mail::MailHandle::spawn(),
+            public_base_url: String::new(),
+            door_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::door::RateLimiter::new(),
+            )),
+            login_link_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::auth::LoginLinkRateLimiter::new(),
+            )),
+        };
+
+        // Exactly the router start_server() builds when SPINBIKE_TEST_MODE
+        // is unset/not "1" — never merged with test_fixtures::routes().
+        let app: Router = routes::all_routes().with_state(state);
+
+        // The security-critical case: an anonymous caller must not be able
+        // to mint an account (let alone role="admin") via seed_account's
+        // caller-supplied role field.
+        let exploit_email = "exploit-161@example.invalid";
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri("/api/test/seed-account")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "email": exploit_email,
+                    "password": "placeholder",
+                    "name": "Attacker",
+                    "role": "admin"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let resp = app.clone().oneshot(req).await.unwrap();
+        assert_ne!(
+            resp.status(),
+            StatusCode::CREATED,
+            "production router routed seed_account and returned its 201 Created — \
+             the SPINBIKE_TEST_MODE gate did not hold"
+        );
+        let created: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users WHERE email = ?")
+            .bind(exploit_email)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            created, 0,
+            "an anonymous request minted a user account on the production router — \
+             the SPINBIKE_TEST_MODE gate did not hold"
+        );
+
+        // The remaining fixture routes: none are reachable either — each
+        // falls through to the SPA fallback (200 index.html, text/html),
+        // never the fixture handler's own JSON success response.
+        for path in [
+            "/api/test/seed-expired-pass",
+            "/api/test/seed-transactions",
+            "/api/test/seed-user",
+            "/api/test/seed-credit",
+        ] {
+            let req = Request::builder()
+                .method(Method::POST)
+                .uri(path)
+                .header("content-type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap();
+            let resp = app.clone().oneshot(req).await.unwrap();
+            let content_type = resp
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("")
+                .to_string();
+            assert!(
+                !content_type.starts_with("application/json"),
+                "{path} returned a JSON response on the production router (content-type \
+                 was {content_type:?}) — it must not be reachable there"
+            );
+        }
     }
 }
