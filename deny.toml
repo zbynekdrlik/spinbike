@@ -1,0 +1,28 @@
+# Supply-chain advisory gate (#162).
+#
+# Scoped to ADVISORIES (+ yanked-crate detection) only — CI invokes exactly
+# `cargo deny check advisories`, never the bare `cargo deny check` that would
+# also evaluate licenses/bans/sources. Those three categories need curated
+# allowlists this project hasn't built yet and are out of scope for "guard
+# against known-vulnerable dependencies" — keep this file, and the ignore
+# list below, minimal.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — "Marvin Attack": potential key recovery through
+    # timing side-channels in the `rsa` crate. No fixed release exists
+    # upstream.
+    #
+    # This workspace never activates it: `rsa` is pulled in ONLY via
+    # sqlx's optional `mysql`/`postgres` backends, and this repo's sqlx
+    # dependency (root Cargo.toml) enables exactly
+    # `["runtime-tokio", "sqlite", "chrono"]` — no mysql/postgres feature.
+    # Confirmed outside the resolved build graph entirely (not merely
+    # runtime-unreachable):
+    #   cargo tree --all-features --target all -i rsa   =>  "nothing to print"
+    #
+    # Re-verify this ignore (and re-check the advisory) if sqlx's
+    # mysql/postgres features are ever enabled for this workspace, or once
+    # RUSTSEC-2023-0071 gets a fixed release.
+    "RUSTSEC-2023-0071",
+]

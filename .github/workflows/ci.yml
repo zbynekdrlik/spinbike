@@ -46,6 +46,23 @@ jobs:
             exit 1
           fi
 
+  supply-chain-audit:
+    name: Supply-Chain Advisories
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: test-integrity
+    steps:
+      - uses: actions/checkout@v4
+
+      # Downloads a prebuilt cargo-deny binary — no Rust toolchain / compile
+      # needed, reads Cargo.lock + deny.toml directly. Scoped to `advisories`
+      # only (see deny.toml) — never the bare `check` (licenses/bans/sources
+      # need allowlists this project hasn't built yet, out of scope for #162).
+      - name: cargo-deny (advisories)
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories
+
   lint:
     name: Lint
     runs-on: ubuntu-latest
@@ -170,7 +187,11 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [test, build-wasm]
+    # supply-chain-audit is included so a real advisory finding actually
+    # blocks deploy-dev/deploy-prod (both `needs: e2e` transitively) rather
+    # than merely racing it in parallel — cargo-deny is fast (no compile)
+    # so this adds negligible wall-clock time to the critical path (#162).
+    needs: [test, build-wasm, supply-chain-audit]
     steps:
       - uses: actions/checkout@v4
 
