@@ -46,3 +46,12 @@ lettre = { version = "0.11", default-features = false, features = [
 lto = true
 codegen-units = 1
 panic = "abort"
+
+# Build profile used by cargo-mutants (see .cargo/mutants.toml `profile`).
+# Inherits the test profile but drops debuginfo — each mutant is built + tested
+# in isolation, so faster builds directly shrink the per-mutant cost and keep
+# the diff-scoped PR gate inside its 20-min-per-shard budget (mutation-testing
+# skill: fix the setup, never raise the timeout).
+[profile.mutants]
+inherits = "test"
+debug = false

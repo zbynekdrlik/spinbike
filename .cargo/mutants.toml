@@ -7,3 +7,7 @@
 #
 # This file is reserved for project-wide exclusions that cannot be
 # expressed as attributes (e.g. exclude a whole binary). None at present.
+
+# Build each mutant under the dedicated [profile.mutants] (Cargo.toml) — same
+# as the test profile but without debuginfo, so per-mutant builds are faster.
+profile = "mutants"
