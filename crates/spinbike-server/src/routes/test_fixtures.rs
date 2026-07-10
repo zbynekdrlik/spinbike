@@ -2,7 +2,7 @@ use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
 use serde::Deserialize;
 
 use crate::AppState;
-use crate::auth::{AuthUser, hash_password};
+use crate::auth::{StaffUser, hash_password};
 use crate::db::users;
 
 // ---------------------------------------------------------------------------
@@ -171,14 +171,9 @@ async fn seed_account(
 /// Create a user with optional initial credit. Returns `{"user_id": N}`.
 async fn seed_user(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Json(body): Json<SeedUserRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
-    // Defence in depth: even though this route is env-gated, require staff role
-    // to guard against misconfiguration.
-    if !claims.role.can_process_payments() {
-        return Err((StatusCode::FORBIDDEN, "Staff required".into()));
-    }
     let user_id = users::create_user(
         &state.pool,
         body.email.as_deref(),
@@ -210,12 +205,9 @@ struct SeedCreditCompatRequest {
 
 async fn seed_credit_compat(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Json(body): Json<SeedCreditCompatRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    if !claims.role.can_process_payments() {
-        return Err((StatusCode::FORBIDDEN, "Staff required".into()));
-    }
     let user_id = find_or_create_user_by_card_code(&state.pool, &body.barcode).await?;
     sqlx::query("UPDATE users SET credit = ROUND(?, 2) WHERE id = ?")
         .bind(body.credit)
@@ -230,14 +222,9 @@ async fn seed_credit_compat(
 /// (= card_code). Creates a stub user if the card_code is unknown.
 async fn seed_expired_pass(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Json(body): Json<SeedExpiredPassRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    // Defence in depth: even though this route is env-gated, require staff role
-    // to guard against misconfiguration.
-    if !claims.role.can_process_payments() {
-        return Err((StatusCode::FORBIDDEN, "Staff required".into()));
-    }
     let user_id = find_or_create_user_by_card_code(&state.pool, &body.barcode).await?;
 
     // Look up the service id and its current default_price to avoid hardcoding.
@@ -268,13 +255,9 @@ async fn seed_expired_pass(
 /// `legacy_backfilled = 1` so they look like backfill output.
 async fn seed_transactions(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Json(body): Json<SeedTransactionsRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    if !claims.role.can_process_payments() {
-        return Err((StatusCode::FORBIDDEN, "Staff required".into()));
-    }
-
     let user_id = find_or_create_user_by_card_code(&state.pool, &body.barcode).await?;
 
     let count = body.entries.len();

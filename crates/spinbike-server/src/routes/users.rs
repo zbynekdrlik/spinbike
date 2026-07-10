@@ -12,7 +12,7 @@ use spinbike_core::services::CLASS_VISIT_NAMES_EN;
 use spinbike_core::stats::{MonthlyBucket, PeriodAgg, PeriodTotals, StatsResponse};
 
 use crate::AppState;
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, StaffUser};
 use crate::db::transactions::NOTE_MAX_CHARS;
 use crate::db::{login_tokens, transactions, users as db};
 use crate::error::ApiError;
@@ -231,11 +231,8 @@ pub fn routes() -> Router<AppState> {
 
 async fn list_users(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
 ) -> Result<Json<Vec<UserResponse>>, ApiError> {
-    if !claims.role.can_manage_cards() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
     let rows = db::list_all_users_with_pass(&state.pool)
         .await
         .map_err(internal_error)?;
@@ -248,12 +245,9 @@ async fn list_users(
 
 async fn search_users(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Query(params): Query<SearchQuery>,
 ) -> Result<Json<Vec<UserResponse>>, ApiError> {
-    if !claims.role.can_manage_cards() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
     let limit = params.limit.clamp(1, 50);
     let rows = db::search_users_with_pass(&state.pool, &params.q, limit)
         .await
@@ -267,13 +261,9 @@ async fn search_users(
 
 async fn create_user(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    StaffUser(claims): StaffUser,
     Json(body): Json<CreateUserRequest>,
 ) -> Result<(StatusCode, Json<UserResponse>), ApiError> {
-    if !claims.role.can_manage_cards() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
-
     let name = body.name.trim().to_owned();
     if name.is_empty() {
         return Err(super::bad_request("Name must not be empty"));
@@ -417,13 +407,9 @@ fn invite_email(link: &str) -> (String, String, String) {
 /// module is Disabled (missing SMTP env).
 async fn invite_user(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Path(id): Path<i64>,
 ) -> Result<Json<InviteResponse>, ApiError> {
-    if !claims.role.can_manage_cards() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
-
     let user = db::get_user_by_id(&state.pool, id)
         .await
         .map_err(internal_error)?
@@ -483,13 +469,9 @@ async fn invite_user(
 
 async fn lookup_user(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Path(code): Path<String>,
 ) -> Result<Json<UserResponse>, ApiError> {
-    if !claims.role.can_manage_cards() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
-
     let user = db::get_user_by_card_code(&state.pool, &code)
         .await
         .map_err(internal_error)?
@@ -504,13 +486,9 @@ async fn lookup_user(
 
 async fn topup_user(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    StaffUser(claims): StaffUser,
     Json(body): Json<TopupRequest>,
 ) -> Result<Json<UserResponse>, ApiError> {
-    if !claims.role.can_manage_cards() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
-
     if body.amount <= 0.0 {
         return Err(super::bad_request("Amount must be greater than zero"));
     }
@@ -564,13 +542,9 @@ async fn topup_user(
 
 async fn block_user(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Json(body): Json<BlockRequest>,
 ) -> Result<Json<UserResponse>, ApiError> {
-    if !claims.role.can_manage_cards() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
-
     // Verify user is active before mutating — soft-deleted users are
     // invariant-frozen (#56).
     let existing = db::get_user_by_id(&state.pool, body.user_id)
@@ -599,11 +573,8 @@ async fn block_user(
 
 async fn negative_balance(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
 ) -> Result<Json<Vec<NegativeBalanceUserResponse>>, ApiError> {
-    if !claims.role.can_manage_cards() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
     let rows = db::list_negative_balance(&state.pool)
         .await
         .map_err(internal_error)?;
@@ -782,6 +753,9 @@ async fn user_transactions(
     Query(params): Query<TransactionsQuery>,
 ) -> Result<Json<Vec<TransactionResponse>>, ApiError> {
     // Staff can see any user's transactions; a customer can only see their own.
+    // Ownership-mixed guard: staff can view anyone's transactions, a customer
+    // only their own (claims.sub == id). Needs both the role AND claims.sub, so
+    // it can't move to a pure role extractor and stays inline on AuthUser.
     if !claims.role.can_manage_cards() && claims.sub != id {
         return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
@@ -816,13 +790,9 @@ async fn user_transactions(
 
 async fn user_stats(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Path(id): Path<i64>,
 ) -> Result<Json<StatsResponse>, ApiError> {
-    if !claims.role.can_manage_cards() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
-
     // Build the IN-clause placeholders dynamically from the constants.
     let placeholders: String = std::iter::repeat_n("?", CLASS_VISIT_NAMES_EN.len())
         .collect::<Vec<_>>()
@@ -949,12 +919,9 @@ fn default_limit() -> i64 {
 
 async fn by_last_movement(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Query(q): Query<ByMovementQuery>,
 ) -> Result<Json<Vec<db::UserByMovementRow>>, ApiError> {
-    if !claims.role.can_manage_cards() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
     if !(1..=200).contains(&q.limit) || q.offset < 0 {
         return Err(super::bad_request("limit must be 1..=200, offset >= 0"));
     }
@@ -972,12 +939,9 @@ struct DeleteUserResp {
 
 async fn delete_user_route(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Path(id): Path<i64>,
 ) -> Result<Json<DeleteUserResp>, ApiError> {
-    if !claims.role.can_manage_cards() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
     match db::delete_user(&state.pool, id)
         .await
         .map_err(internal_error)?

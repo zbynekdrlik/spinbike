@@ -38,6 +38,23 @@ Design spec: `docs/superpowers/specs/2026-07-04-client-onboarding-design.md`. On
 
 Role-based expiry: `Role::Customer` → ~100 years (`CUSTOMER_SESSION_SECS`), admin/staff → 90 days. `parse_role` maps any non-`admin`/`staff` DB role string to `Role::Customer`, so in practice only admin/staff get the 90-day tier. A permanent JWT is NOT revoked on block/delete — that's bounded because the security-critical routes (door, payments) re-check `blocked` from the DB at action time, and `token-login` re-checks blocked/deleted before issuing a session.
 
+## Route authorization — use the role extractors, not inline guards (#160)
+
+Authorization is enforced at the **extraction boundary**, not re-authored in each handler body. Three extractors live in `auth/mod.rs`:
+
+- `AuthUser(pub Claims)` — authenticates the JWT only (no role check).
+- `StaffUser(pub Claims)` — authenticates **and** rejects `403 staff_required` unless `role.is_staff_or_admin()` (`Admin | Staff`).
+- `AdminUser(pub Claims)` — authenticates **and** rejects `403 admin_required` unless `role.is_admin()` (`Admin`).
+
+**Adding a protected route:** take the tier extractor in the handler signature — `_: StaffUser` (or `StaffUser(claims)` if you need `claims.sub` for logging/audit), `_: AdminUser` for admin-only. Do **NOT** write `if !claims.role.can_*() { return Err(ApiError::Forbidden(..)) }` in the body — that copy-paste is exactly what #160 removed (all the staff-tier `can_manage_cards`/`can_process_payments`/`can_book_for_others`/`can_cancel_any_booking`/`can_cancel_class` predicates are the same `Admin|Staff` check; `can_manage_users`/`is_admin` are the same `Admin` check).
+
+**Ownership-mixed guards STAY inline on `AuthUser`.** When a route is "staff **OR** the resource owner" (`!role.can_*() && claims.sub != id`), a pure role extractor can't see the resource id — keep the inline check and take `AuthUser(claims)`. The four such sites (`users::update_user`, `users::user_transactions`, `classes::create_booking`, `classes::cancel_booking`) carry an explanatory comment; follow that pattern for any new mixed guard.
+
+**Gotchas:**
+- The extractor rejection type is `axum::response::Response` (it composes `AuthUser`'s tuple-rejection with `ApiError::into_response()`); the 403 body is byte-identical to the old inline `ApiError::Forbidden(ErrorCode::StaffRequired|AdminRequired)` — existing 403 assertions on `error_code`/`error` stay green.
+- The extractor runs **before** body (`Json<_>`) extraction, so a malformed body + non-staff token now yields `403` (not `422`) — more secure, and no test asserted the old order.
+- The role predicates `is_staff_or_admin()`/`is_admin()` are unit-tested (incl. the `Role::Unknown` reject) in `spinbike-core/src/auth.rs`; tier behavior is locked end-to-end in `tests/api_error_codes.rs`. `Role::Unknown` is rejected by both extractors (JWTs are only ever minted with known roles).
+
 ## Public registration is removed (server side, #108)
 
 `POST /api/auth/register` (route + handler + `RegisterRequest`) is gone. Accounts are created only via the desk add-person form (`POST /api/users`) or the test-seed fixture. The `/register` UI page + nav links are removed separately in **#112** (its POST 404s in the interim — acceptable for invite-only MVP). See `ci-deploy` skill for the "removed route → SPA fallback 200" testing gotcha and the `seed-account` E2E-seed replacement.

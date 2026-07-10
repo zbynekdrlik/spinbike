@@ -2,7 +2,7 @@ use axum::{Json, Router, extract::State, routing::post};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::auth::AuthUser;
+use crate::auth::StaffUser;
 use crate::db::transactions::NOTE_MAX_CHARS;
 use crate::db::users;
 use crate::error::ApiError;
@@ -71,13 +71,9 @@ pub fn routes() -> Router<AppState> {
 
 async fn charge(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    StaffUser(claims): StaffUser,
     Json(body): Json<ChargeRequest>,
 ) -> Result<Json<PaymentResponse>, ApiError> {
-    if !claims.role.can_process_payments() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
-
     // #31: charge requires an explicit service_id (data integrity — untyped
     // charges pollute the activity feed and reports). Top-up stays
     // service-independent. UI also prevents this via removed empty <option>;
@@ -168,13 +164,9 @@ async fn charge(
 
 async fn storno(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    StaffUser(claims): StaffUser,
     Json(body): Json<StornoRequest>,
 ) -> Result<Json<PaymentResponse>, ApiError> {
-    if !claims.role.can_process_payments() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
-
     // C3: Validate amount is positive.
     if body.amount <= 0.0 {
         return Err(super::bad_request("Amount must be greater than zero"));
@@ -225,12 +217,9 @@ async fn storno(
 
 async fn sell_pass(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    StaffUser(claims): StaffUser,
     Json(body): Json<SellPassRequest>,
 ) -> Result<Json<SellPassResponse>, ApiError> {
-    if !claims.role.can_process_payments() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
     if body.price < 0.0 {
         return Err(super::bad_request("Price must be zero or greater"));
     }
@@ -302,13 +291,9 @@ async fn sell_pass(
 
 async fn log_visit(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    StaffUser(claims): StaffUser,
     Json(body): Json<LogVisitRequest>,
 ) -> Result<Json<LogVisitResponse>, ApiError> {
-    if !claims.role.can_process_payments() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
-
     let today = chrono::Local::now().date_naive();
     let valid_until = users::get_user_pass_valid_until(&state.pool, body.user_id)
         .await

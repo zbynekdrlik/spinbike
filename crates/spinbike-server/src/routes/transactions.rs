@@ -7,7 +7,7 @@ use axum::{
 use serde::Deserialize;
 
 use crate::AppState;
-use crate::auth::AuthUser;
+use crate::auth::StaffUser;
 use crate::db::transactions::NOTE_MAX_CHARS;
 use crate::error::ApiError;
 use crate::routes::internal_error;
@@ -70,13 +70,9 @@ struct PatchCreatedAtResp {
 
 async fn void_transaction(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Path(id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.role.can_process_payments() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
-
     let mut tx = state.pool.begin().await.map_err(internal_error)?;
 
     let row: Option<TxMini> = sqlx::query_as(
@@ -120,14 +116,10 @@ async fn void_transaction(
 
 async fn patch_valid_until(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Path(id): Path<i64>,
     Json(body): Json<PatchValidUntilReq>,
 ) -> Result<Json<PatchValidUntilResp>, ApiError> {
-    if !claims.role.can_process_payments() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
-
     let row: Option<TxMini> = sqlx::query_as(
         "SELECT amount, user_id, valid_until, deleted_at, created_at FROM transactions WHERE id = ?",
     )
@@ -160,14 +152,11 @@ async fn patch_valid_until(
 
 async fn patch_note(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Path(id): Path<i64>,
     Json(body): Json<PatchNoteReq>,
 ) -> Result<Json<PatchNoteResp>, ApiError> {
     // Same role gate as void / valid-until edit — staff only.
-    if !claims.role.can_manage_cards() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
 
     // 200-char cap, counted in characters (not bytes) so Slovak diacritics
     // don't count double. Empty/whitespace becomes NULL.
@@ -211,14 +200,10 @@ async fn patch_note(
 
 async fn patch_created_at(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Path(id): Path<i64>,
     Json(body): Json<PatchCreatedAtReq>,
 ) -> Result<Json<PatchCreatedAtResp>, ApiError> {
-    if !claims.role.can_manage_cards() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
-
     let row: Option<TxMini> = sqlx::query_as(
         "SELECT amount, user_id, deleted_at, valid_until, created_at FROM transactions WHERE id = ?",
     )

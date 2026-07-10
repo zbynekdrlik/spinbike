@@ -27,12 +27,11 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::AppState;
-use crate::auth::AuthUser;
+use crate::auth::{AuthUser, StaffUser};
 use crate::error::ApiError;
 use crate::ewelink::EwelinkState;
 use crate::routes::internal_error;
 use spinbike_core::auth::Role;
-use spinbike_core::errors::ErrorCode;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -341,22 +340,10 @@ async fn open(
 
 // ---------- GET /api/door/health ----------
 
-/// Require admin OR staff. Mirrors `admin::require_staff` but inlined to keep
-/// the door module self-contained.
-fn require_admin_or_staff(claims: &spinbike_core::auth::Claims) -> Result<(), ApiError> {
-    if claims.role.is_staff_or_admin() {
-        Ok(())
-    } else {
-        Err(ApiError::Forbidden(ErrorCode::StaffRequired))
-    }
-}
-
 async fn health(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    require_admin_or_staff(&claims)?;
-
     let ws_state = match state.ewelink.state() {
         EwelinkState::Connected => "connected",
         EwelinkState::Disconnected => "disconnected",
@@ -578,52 +565,8 @@ mod tests {
             .expect("independent user must not be affected by user 1's cap");
     }
 
-    // ─── role guard for /api/door/health ─────────────────────────────────────
-    //
-    // require_admin_or_staff is invoked from `health` and returns Ok / 403.
-    // L297 mutant: replace body with `Ok(())` — would let customers in.
-    // We assert all three role paths directly without going through axum.
-
-    #[test]
-    fn require_admin_or_staff_allows_admin() {
-        let claims = spinbike_core::auth::Claims {
-            sub: 1,
-            email: "a@x".to_string(),
-            role: spinbike_core::auth::Role::Admin,
-            exp: 0,
-            iat: 0,
-        };
-        assert!(require_admin_or_staff(&claims).is_ok());
-    }
-
-    #[test]
-    fn require_admin_or_staff_allows_staff() {
-        let claims = spinbike_core::auth::Claims {
-            sub: 1,
-            email: "s@x".to_string(),
-            role: spinbike_core::auth::Role::Staff,
-            exp: 0,
-            iat: 0,
-        };
-        assert!(require_admin_or_staff(&claims).is_ok());
-    }
-
-    #[test]
-    fn require_admin_or_staff_rejects_customer() {
-        let claims = spinbike_core::auth::Claims {
-            sub: 1,
-            email: "c@x".to_string(),
-            role: spinbike_core::auth::Role::Customer,
-            exp: 0,
-            iat: 0,
-        };
-        let result = require_admin_or_staff(&claims);
-        match result {
-            Err(ApiError::Forbidden(code)) => {
-                assert_eq!(code, spinbike_core::errors::ErrorCode::StaffRequired)
-            }
-            Ok(()) => panic!("customer must be rejected; L297 Ok(()) mutant"),
-            Err(other) => panic!("expected Forbidden(StaffRequired), got {other:?}"),
-        }
-    }
+    // The role guard for /api/door/health now lives in the `StaffUser`
+    // extractor (#160). Its Admin/Staff-allow, Customer/Unknown-reject logic is
+    // unit-tested on `Role::is_staff_or_admin()` in `spinbike-core::auth` and
+    // end-to-end in `tests/door_route.rs` (`door_health_403_for_customer`).
 }

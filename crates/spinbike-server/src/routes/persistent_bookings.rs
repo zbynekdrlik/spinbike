@@ -7,10 +7,9 @@ use axum::{
 use serde::Deserialize;
 
 use crate::AppState;
-use crate::auth::AuthUser;
+use crate::auth::StaffUser;
 use crate::error::ApiError;
 use crate::routes::internal_error;
-use spinbike_core::errors::ErrorCode;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -31,12 +30,9 @@ struct CreateReq {
 
 async fn list(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Path(user_id): Path<i64>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if !claims.role.can_book_for_others() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
     let rows = crate::db::persistent_bookings::list_for_user(&state.pool, user_id)
         .await
         .map_err(internal_error)?;
@@ -45,13 +41,10 @@ async fn list(
 
 async fn create(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Path(user_id): Path<i64>,
     Json(body): Json<CreateReq>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
-    if !claims.role.can_book_for_others() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
     let id = crate::db::persistent_bookings::create(&state.pool, user_id, body.template_id)
         .await
         .map_err(internal_error)?;
@@ -66,12 +59,9 @@ async fn create(
 
 async fn end_persistent(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Path((user_id, template_id)): Path<(i64, i64)>,
 ) -> Result<StatusCode, ApiError> {
-    if !claims.role.can_book_for_others() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
     crate::db::persistent_bookings::end(&state.pool, user_id, template_id)
         .await
         .map_err(internal_error)?;

@@ -8,11 +8,14 @@ use argon2::{
 use axum::{
     extract::{FromRef, FromRequestParts},
     http::{StatusCode, request::Parts},
+    response::{IntoResponse, Response},
 };
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
 use spinbike_core::auth::{Claims, Role};
+use spinbike_core::errors::ErrorCode;
 
 use crate::AppState;
+use crate::error::ApiError;
 
 /// Hash a password using Argon2id.
 pub fn hash_password(password: &str) -> Result<String> {
@@ -172,6 +175,66 @@ where
             .and_then(|token| validate_token(&app_state.jwt_secret, token).ok());
 
         Ok(OptionalAuthUser(claims))
+    }
+}
+
+/// Axum extractor that authenticates the JWT **and** enforces the staff tier
+/// (`Role::Admin | Role::Staff`). Rejects any other role with the typed
+/// `403 staff_required` body.
+///
+/// This is the extraction-boundary form of the copy-pasted inline guard
+/// `if !claims.role.can_manage_cards() { return Err(Forbidden(StaffRequired)) }`
+/// that used to open every staff handler body (#160). All the staff-tier
+/// capability predicates (`can_manage_cards`, `can_process_payments`,
+/// `can_book_for_others`, `can_cancel_any_booking`, `can_cancel_class`) are
+/// the same `Admin | Staff` check, expressed canonically here via
+/// `is_staff_or_admin()`. A handler that needs "staff OR the resource owner"
+/// (e.g. a user editing their own record) keeps its own inline guard and takes
+/// `AuthUser` instead, because a pure role extractor cannot see the resource id.
+pub struct StaffUser(pub Claims);
+
+impl<S> FromRequestParts<S> for StaffUser
+where
+    AppState: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let AuthUser(claims) = AuthUser::from_request_parts(parts, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        if !claims.role.is_staff_or_admin() {
+            return Err(ApiError::Forbidden(ErrorCode::StaffRequired).into_response());
+        }
+        Ok(StaffUser(claims))
+    }
+}
+
+/// Axum extractor that authenticates the JWT **and** enforces the admin tier
+/// (`Role::Admin`). Rejects any other role with the typed `403 admin_required`
+/// body.
+///
+/// Extraction-boundary form of the inline `if !claims.role.can_manage_users()`
+/// / `require_admin(&claims)?` guards (#160). `can_manage_users()` and
+/// `is_admin()` are both the same `Admin`-only check; `is_admin()` is used here.
+pub struct AdminUser(pub Claims);
+
+impl<S> FromRequestParts<S> for AdminUser
+where
+    AppState: FromRef<S>,
+    S: Send + Sync,
+{
+    type Rejection = Response;
+
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let AuthUser(claims) = AuthUser::from_request_parts(parts, state)
+            .await
+            .map_err(IntoResponse::into_response)?;
+        if !claims.role.is_admin() {
+            return Err(ApiError::Forbidden(ErrorCode::AdminRequired).into_response());
+        }
+        Ok(AdminUser(claims))
     }
 }
 

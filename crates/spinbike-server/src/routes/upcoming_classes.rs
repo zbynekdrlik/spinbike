@@ -6,10 +6,9 @@ use axum::{
 use serde::Deserialize;
 
 use crate::AppState;
-use crate::auth::AuthUser;
+use crate::auth::StaffUser;
 use crate::error::ApiError;
 use crate::routes::internal_error;
-use spinbike_core::errors::ErrorCode;
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/api/users/{user_id}/upcoming-classes", get(upcoming))
@@ -22,13 +21,10 @@ struct Qs {
 
 async fn upcoming(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Path(user_id): Path<i64>,
     Query(qs): Query<Qs>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
-    if !claims.role.can_book_for_others() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
     let days = qs.days.unwrap_or(14).clamp(1, 60);
     let today = chrono::Local::now().date_naive();
     let to = today + chrono::Duration::days(days);
