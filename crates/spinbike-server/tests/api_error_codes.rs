@@ -9,7 +9,7 @@
 mod helpers;
 
 use axum::http::StatusCode;
-use helpers::{TestApp, get, post_json};
+use helpers::{TestApp, delete, get, post_json};
 
 #[tokio::test]
 async fn forbidden_carries_staff_required_code() {
@@ -60,4 +60,49 @@ async fn bad_request_carries_generic_code_with_specific_message() {
             .contains("Amount"),
         "message must still carry the specifics, got: {resp}"
     );
+}
+
+#[tokio::test]
+async fn create_user_db_unique_fallback_returns_conflict_not_500() {
+    // The create_user pre-check for a duplicate email filters `deleted_at IS
+    // NULL`, but the `email UNIQUE` constraint covers ALL rows (incl.
+    // soft-deleted ones — delete only sets deleted_at, it keeps the email). So
+    // re-using a SOFT-DELETED user's email passes the pre-check yet hits the DB
+    // UNIQUE violation, which the map_err fallback must map to 409
+    // (email_or_card_conflict), NOT a generic 500. This covers that fallback
+    // arm — the only path where the "UNIQUE"/"unique" substring match (a
+    // case-insensitive OR, not AND) actually decides the response.
+    let app = TestApp::new().await;
+    let email = "dup-fallback@test.com";
+
+    let (status, body) = app
+        .request(post_json(
+            "/api/users",
+            &app.staff_token,
+            &serde_json::json!({ "name": "Fallback A", "email": email }),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::CREATED, "create A must succeed: {body}");
+    let id = body["id"].as_i64().expect("created user id");
+
+    let (status, _) = app
+        .request(delete(&format!("/api/users/{id}"), &app.staff_token))
+        .await;
+    assert_eq!(status, StatusCode::OK, "soft-delete A must succeed");
+
+    // Same email again: pre-check passes (A is soft-deleted), INSERT violates
+    // the email UNIQUE constraint → fallback conflict, not 500.
+    let (status, body) = app
+        .request(post_json(
+            "/api/users",
+            &app.staff_token,
+            &serde_json::json!({ "name": "Fallback B", "email": email }),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
+        "re-using a soft-deleted email must hit the DB-unique fallback (409), got {status}: {body}"
+    );
+    assert_eq!(body["error_code"], "email_or_card_conflict");
 }
