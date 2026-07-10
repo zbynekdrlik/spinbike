@@ -95,6 +95,27 @@ pub fn resolve_jwt_secret(raw: Option<&str>, test_mode: bool) -> Result<String, 
     }
 }
 
+/// Build the full application router, applying the `SPINBIKE_TEST_MODE`
+/// fixture-route gate. This is the SINGLE place that decides whether the
+/// unauthenticated, arbitrary-role `/api/test/*` fixtures
+/// (`routes::test_fixtures`) are mounted — `start_server()` (production)
+/// and the `production_router_does_not_expose_test_fixtures` test below
+/// both call THIS function, so a future regression that inverts or removes
+/// the gate is caught by the test regardless of which caller it's viewed
+/// through (#161: a prior version of that test hand-copied this logic
+/// instead of sharing it, so it could never have caught a real regression
+/// in `start_server` itself).
+pub fn build_router(test_mode: bool) -> axum::Router<AppState> {
+    let mut router = routes::all_routes();
+    if test_mode {
+        tracing::warn!(
+            "SPINBIKE_TEST_MODE=1 — test fixture endpoints are active. Do NOT use in production!"
+        );
+        router = router.merge(routes::test_fixtures::routes());
+    }
+    router
+}
+
 /// Build and start the Axum server.
 pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Result<()> {
     let (event_tx, _) = broadcast::channel(256);
@@ -124,14 +145,10 @@ pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Re
         )),
     };
 
-    let mut router = routes::all_routes();
-    if is_test_mode_from_env(std::env::var("SPINBIKE_TEST_MODE").ok().as_deref()) {
-        tracing::warn!(
-            "SPINBIKE_TEST_MODE=1 — test fixture endpoints are active. Do NOT use in production!"
-        );
-        router = router.merge(routes::test_fixtures::routes());
-    }
-    let app = router.layer(build_cors_layer()).with_state(state);
+    let test_mode = is_test_mode_from_env(std::env::var("SPINBIKE_TEST_MODE").ok().as_deref());
+    let app = build_router(test_mode)
+        .layer(build_cors_layer())
+        .with_state(state);
 
     let addr = format!("0.0.0.0:{port}");
     info!("Starting server on {addr}");
@@ -299,15 +316,24 @@ mod tests {
 
     /// #161: the ONLY thing keeping the unauthenticated, arbitrary-role
     /// `/api/test/*` fixture routes (`routes::test_fixtures`) out of
-    /// production is the `is_test_mode_from_env` merge gate in
-    /// `start_server()` above — `seed_account` (test_fixtures.rs) has no
+    /// production is the `is_test_mode_from_env` merge gate inside
+    /// `build_router()` above — `seed_account` (test_fixtures.rs) has no
     /// auth guard at all and accepts a caller-supplied `role`. No existing
     /// test exercised the negative wiring path: `TestApp`
     /// (tests/helpers/mod.rs) always merges the fixtures regardless of the
     /// env var, so the production router build was never actually driven by
-    /// any test. This test builds the router the EXACT way `start_server`
-    /// does when `SPINBIKE_TEST_MODE` is unset/not `"1"` —
-    /// `routes::all_routes()` with NO `test_fixtures::routes()` merge.
+    /// any test.
+    ///
+    /// This test calls `build_router(false)` — the SAME function
+    /// `start_server()` calls with the SAME `test_mode` value it computes
+    /// when `SPINBIKE_TEST_MODE` is unset/not `"1"`. A prior version of
+    /// this test hand-copied the router-building logic instead of sharing
+    /// it with `start_server`, which meant it could never have caught a
+    /// real regression in `start_server` itself (a future edit that
+    /// inverts or deletes the gate) — it would have kept passing
+    /// unconditionally either way. Routing both callers through one shared
+    /// function closes that gap: the gate now lives in exactly one place,
+    /// and this test exercises that exact place.
     ///
     /// Note on the assertion shape: an unmatched path here does NOT 404 —
     /// `all_routes()` ends with `.fallback(static_files::static_handler)`,
@@ -338,9 +364,10 @@ mod tests {
             )),
         };
 
-        // Exactly the router start_server() builds when SPINBIKE_TEST_MODE
-        // is unset/not "1" — never merged with test_fixtures::routes().
-        let app: Router = routes::all_routes().with_state(state);
+        // The SAME function start_server() calls, with the SAME test_mode
+        // value it computes when SPINBIKE_TEST_MODE is unset/not "1" — NOT
+        // a hand-copied reconstruction of start_server's router-building.
+        let app: Router = build_router(false).with_state(state);
 
         // The security-critical case: an anonymous caller must not be able
         // to mint an account (let alone role="admin") via seed_account's

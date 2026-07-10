@@ -187,7 +187,11 @@ jobs:
     name: E2E Tests
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    needs: [test, build-wasm]
+    # supply-chain-audit is included so a real advisory finding actually
+    # blocks deploy-dev/deploy-prod (both `needs: e2e` transitively) rather
+    # than merely racing it in parallel — cargo-deny is fast (no compile)
+    # so this adds negligible wall-clock time to the critical path (#162).
+    needs: [test, build-wasm, supply-chain-audit]
     steps:
       - uses: actions/checkout@v4
 
