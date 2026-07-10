@@ -106,3 +106,39 @@ async fn create_user_db_unique_fallback_returns_conflict_not_500() {
     );
     assert_eq!(body["error_code"], "email_or_card_conflict");
 }
+
+// ---- #160: role-enforcing extractors (StaffUser / AdminUser) ----
+//
+// The inline `if !claims.role.can_*() { return Err(Forbidden(..)) }` guards were
+// replaced by the `StaffUser` / `AdminUser` request extractors. These lock that
+// the extraction-boundary rejection produces the SAME typed 403 body the inline
+// guards did — for both role tiers.
+
+#[tokio::test]
+async fn staff_extractor_rejects_customer_with_staff_required() {
+    // `/api/users/{id}/persistent-bookings` (list) is now guarded by the
+    // `StaffUser` extractor, not an inline body check. A customer must still get
+    // the identical 403 `staff_required` body.
+    let app = TestApp::new().await;
+    let (status, body) = app
+        .request(get("/api/users/1/persistent-bookings", &app.customer_token))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error_code"], "staff_required");
+    assert_eq!(body["error"], "Staff access required");
+}
+
+#[tokio::test]
+async fn admin_extractor_rejects_staff_with_admin_required() {
+    // `/api/reports/day` is now guarded by the `AdminUser` extractor. A STAFF
+    // token (not admin) must be rejected with the typed 403 `admin_required`
+    // body — proving the admin tier is enforced at extraction, distinct from
+    // the staff tier.
+    let app = TestApp::new().await;
+    let (status, body) = app
+        .request(get("/api/reports/day?date=2026-01-01", &app.staff_token))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(body["error_code"], "admin_required");
+    assert_eq!(body["error"], "Admin access required");
+}

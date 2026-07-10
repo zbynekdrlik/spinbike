@@ -8,7 +8,7 @@ use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::auth::{AuthUser, OptionalAuthUser};
+use crate::auth::{AuthUser, OptionalAuthUser, StaffUser};
 use crate::db::classes as db;
 use crate::error::ApiError;
 use crate::routes::internal_error;
@@ -152,13 +152,9 @@ async fn list_classes(
 /// Staff-only endpoint: list participants for a specific class occurrence.
 async fn list_participants(
     State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
+    _: StaffUser,
     Path((template_id, date)): Path<(i64, String)>,
 ) -> Result<Json<Vec<ParticipantResponse>>, ApiError> {
-    if !claims.role.can_cancel_any_booking() {
-        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
-    }
-
     #[derive(sqlx::FromRow)]
     struct Row {
         booking_id: i64,
@@ -199,6 +195,10 @@ async fn create_booking(
     //   1. explicit body.user_id
     //   2. fall back to the caller (customer self-booking)
     let booking_user_id = if let Some(target_id) = body.user_id {
+        // Ownership-mixed guard: allowed if the caller books for THEMSELVES
+        // (target == claims.sub) OR holds the staff capability. A pure role
+        // extractor (StaffUser) can't express the "or owner" arm, so this one
+        // stays inline and takes AuthUser (needs both the role AND claims.sub).
         if target_id != claims.sub && !claims.role.can_book_for_others() {
             return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
         }
@@ -284,7 +284,9 @@ async fn cancel_booking(
     .map_err(internal_error)?
     .ok_or(ApiError::NotFound(ErrorCode::BookingNotFound))?;
 
-    // Check permission: own booking or staff.
+    // Ownership-mixed guard: own booking OR staff. Needs both the role AND
+    // claims.sub (the booking owner check), so it can't move to a pure role
+    // extractor and stays inline on AuthUser.
     if booking.user_id != claims.sub && !claims.role.can_cancel_any_booking() {
         return Err(ApiError::Forbidden(ErrorCode::BookingNotOwned));
     }
