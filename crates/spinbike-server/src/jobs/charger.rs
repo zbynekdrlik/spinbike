@@ -51,25 +51,46 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
             continue;
         }
 
-        // Load user state and latest pass valid_until (may be NULL).
-        // `date(valid_until)` coerces legacy datetime strings to YYYY-MM-DD so
-        // the lexicographic string comparison below stays correct even if an
-        // importer ever stores a time component.
-        let (_credit, pass_valid_until): (f64, Option<String>) = sqlx::query_as(
+        // Load user state and the expiry of the user's active monthly pass, if
+        // any. The pass is resolved through the canonical `user_active_pass`
+        // view (migration V18) — the SINGLE definition of "active pass" shared
+        // with my_balance, the user lists and get_user_pass_*. Crucially the
+        // view filters `deleted_at IS NULL`, so a VOIDED pass no longer reads as
+        // active here (the money defect fixed by #159: previously a voided pass
+        // gave a free visit with no credit debit). `date(valid_until)` coerces
+        // any legacy datetime string to YYYY-MM-DD so the comparison against the
+        // (already YYYY-MM-DD) booking date is a consistent calendar-date
+        // compare, never a raw datetime string compare.
+        let (credit, pass_valid_until): (f64, Option<String>) = sqlx::query_as(
             "SELECT u.credit,
-                    (SELECT MAX(date(valid_until)) FROM transactions
-                     WHERE user_id = u.id AND valid_until IS NOT NULL)
+                    (SELECT date(ap.valid_until) FROM user_active_pass ap
+                     WHERE ap.user_id = u.id)
              FROM users u WHERE u.id = ?",
         )
         .bind(user_id)
         .fetch_one(&mut *tx)
         .await?;
 
+        // A pass covers a booking when it is still valid ON the booking's date
+        // (valid_until is inclusive of the last day).
         let has_pass = match &pass_valid_until {
             Some(s) => s.as_str() >= date.as_str(),
             None => false,
         };
         let amount = if has_pass { 0.0 } else { -price };
+
+        // Log the money-relevant decision for every charged booking so a
+        // "free visit" dispute can be reconstructed from logs alone.
+        tracing::debug!(
+            user_id,
+            booking_id,
+            as_of_date = %date,
+            pass_valid_until = ?pass_valid_until,
+            has_pass,
+            credit,
+            amount,
+            "charger: pass decision"
+        );
 
         let txn_id: i64 = sqlx::query_scalar(
             "INSERT INTO transactions (user_id, staff_id, service_id, amount, action)

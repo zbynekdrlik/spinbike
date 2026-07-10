@@ -243,12 +243,17 @@ async fn negative_balance_endpoint_round_trips_pass_field() {
         .seed_card("NEG-NOPASS", -1.0, None, None, None, None)
         .await;
 
+    let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
     let valid_until = chrono::NaiveDate::from_ymd_opt(2026, 12, 31).unwrap();
     let pass_tx_id: i64 = sqlx::query_scalar(
-        "INSERT INTO transactions (user_id, amount, action, valid_until, created_at)
-         VALUES (?, -25.0, 'charge', ?, datetime('now')) RETURNING id",
+        "INSERT INTO transactions (user_id, service_id, amount, action, valid_until, created_at)
+         VALUES (?, ?, -25.0, 'charge', ?, datetime('now')) RETURNING id",
     )
     .bind(with_pass)
+    .bind(pass_svc)
     .bind(valid_until)
     .fetch_one(&app.pool)
     .await

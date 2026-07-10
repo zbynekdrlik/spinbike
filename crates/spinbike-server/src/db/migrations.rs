@@ -692,6 +692,16 @@ CREATE INDEX IF NOT EXISTS idx_login_tokens_user ON login_tokens(user_id);
 // already a monthly_pass charge, so switching the sibling queries onto this
 // view is behaviour-preserving; the only behaviour change is the charger now
 // correctly excludes voided passes.
+//
+// GOTCHA for future migrations: this view references `services` AND
+// `transactions`. SQLite validates a dependent view's stored SQL during
+// ALTER TABLE ... RENAME, so a FUTURE migration that needs the V8/V11/V16
+// DROP-TABLE + CREATE-new + INSERT + RENAME rebuild pattern on EITHER of
+// those two tables must `DROP VIEW user_active_pass` before the rebuild and
+// re-run this exact CREATE VIEW statement after, inside the same migration
+// transaction — otherwise the RENAME fails with "no such table: main.services"
+// (or `main.transactions`). See db::migrations::tests::
+// v8_drop_rename_pattern_works_with_fk_child_rows for a worked example.
 const V18_USER_ACTIVE_PASS_VIEW: &str = r#"
 CREATE VIEW IF NOT EXISTS user_active_pass AS
 SELECT user_id, pass_tx_id, valid_until
@@ -1158,6 +1168,19 @@ mod tests {
             .await
             .unwrap();
         let mut tx = conn.begin().await.unwrap();
+
+        // V18's `user_active_pass` VIEW references `services`. SQLite validates
+        // a dependent view's stored SQL during ALTER TABLE ... RENAME, so a
+        // DROP+RENAME rebuild of `services` fails once the view exists ("no
+        // such table: main.services") unless the view is dropped first and
+        // recreated after. Any FUTURE real migration that needs this same
+        // rebuild pattern on `services` (or `transactions`, which the view also
+        // references) MUST do the same — this test simulates that requirement.
+        sqlx::query("DROP VIEW user_active_pass")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+
         sqlx::query(
             "CREATE TABLE services_test_rebuild (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1183,6 +1206,12 @@ mod tests {
             .await
             .expect("DROP TABLE services must succeed with foreign_keys = OFF");
         sqlx::query("ALTER TABLE services_test_rebuild RENAME TO services")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        // Recreate the view dropped above, mirroring how a real future
+        // migration must re-attach it after rebuilding `services`.
+        sqlx::raw_sql(super::V18_USER_ACTIVE_PASS_VIEW)
             .execute(&mut *tx)
             .await
             .unwrap();

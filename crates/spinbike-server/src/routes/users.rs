@@ -1148,22 +1148,20 @@ async fn my_balance(
         }
     };
 
-    // 2. Active monthly-pass valid_until (max in case of overlapping passes).
+    // 2. Active monthly-pass valid_until, via the canonical `user_active_pass`
+    //    view (migration V18) — the SAME definition the charger and the staff
+    //    user lists use. The view already exposes the user's latest non-voided
+    //    monthly-pass purchase; here we surface it only while it is still in the
+    //    future (an expired pass shows as "no active pass").
     tracing::debug!(user_id, "my_balance: querying monthly_pass_active_until");
     let monthly_pass_active_until: Option<String> = sqlx::query_scalar(
-        "SELECT max(valid_until) \
-           FROM transactions \
-          WHERE user_id = ? \
-            AND action = 'charge' \
-            AND service_id = (SELECT id FROM services WHERE kind = 'monthly_pass') \
-            AND valid_until > datetime('now') \
-            AND deleted_at IS NULL",
+        "SELECT valid_until FROM user_active_pass \
+          WHERE user_id = ? AND valid_until > datetime('now')",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(internal_error)?
-    .flatten();
+    .map_err(internal_error)?;
 
     // 3. Last 20 transactions (newest first).
     tracing::debug!(user_id, "my_balance: querying recent transactions");
