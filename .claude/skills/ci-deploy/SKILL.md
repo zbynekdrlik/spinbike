@@ -45,6 +45,8 @@ When dispatching subagents to implement SpinBike Rust/Leptos tasks, the prompt m
 
 Skip the compile-and-verify step. If a step genuinely requires a local build (e.g. verify a new WASM signature compiles before handing off), note it explicitly and justify — never include it as a default TDD step.
 
+**Nuance (from #159): this bans making `cargo test` a routine/default TDD step in a DISPATCHED subagent's prompt — it does NOT ban the primary worker on a bug-fix ticket from using the airuleset Tier-0 bypass (`# airuleset:build-ok` inline, or `AIRULESET_ALLOW_LOCAL_BUILD=1`) for ONE scoped, targeted run to prove `regression-test-first.md`'s "watch RED fail, watch GREEN pass" requirement, when the fix is money-critical or the correctness risk is high enough that CI-only verification is not enough confidence before push.** That's a deliberate, justified, single-purpose exception — not a default habit: run the ONE specific new test (not `cargo test` unscoped), revert-to-buggy → confirm fail → restore-fix → confirm pass → move on. Never leave it running in a loop, never use it to avoid writing the fix, and always still let CI be the final authority (push and monitor the full suite regardless of what the local run showed).
+
 ## `spinbike-ui` is a SEPARATE cargo workspace — root `cargo fmt --check` never sees it
 
 `spinbike-ui/Cargo.toml` is its own workspace; root `Cargo.toml` has

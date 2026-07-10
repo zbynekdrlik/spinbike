@@ -60,6 +60,55 @@ Steps before sending the completion report:
 
 Both prod and dev run locally — no SSH needed. Run `sqlite3` / `systemctl` / `journalctl` directly via Bash.
 
+## Lighter validation for a READ-ONLY predicate/VIEW migration (no row mutation)
+
+The full stop-service snapshot dance above is for migrations that MUTATE rows or
+run a backfill. A migration that only ADDS a VIEW or changes a query's
+predicate (no `UPDATE`/`DELETE`, nothing that touches `dev`'s running service)
+needs a cheaper but still real validation: run the OLD predicate and the NEW
+predicate side-by-side as plain read-only `sqlite3` queries against the LIVE
+prod DB and diff the results — no service stop needed since nothing is
+written:
+
+```bash
+sqlite3 /opt/spinbike/prod/spinbike.db "
+SELECT count(*) FROM <old predicate rows>
+WHERE NOT (<new predicate>);
+"   # 0 = the two predicates agree on every real row today
+```
+
+Also check the TIE-BREAK, not just set membership — for any query with a
+"return the winner" comparator (a correlated subquery's `ORDER BY … LIMIT 1`,
+a window function's `PARTITION BY`), confirm the winning row is IDENTICAL
+between old and new for every group with more than one candidate row, not just
+that both narrow to the same overall set. Two predicates can agree on "does
+this row count" while still disagreeing on "which row wins" once ties are
+possible. This caught nothing wrong in #159, but it is the check that WOULD
+have caught it if the view's `ROW_NUMBER()` tie-break had drifted from the
+old `ORDER BY valid_until DESC, id DESC` convention.
+
+This is real evidence — CI's in-memory SQLite can't see production data
+quirks — without touching the running service, so it's safe to do for ANY
+predicate-only change, not just ones that pass the mutation trigger above.
+
+## GOTCHA: a VIEW referencing `services`/`transactions` breaks the V8/V11/V16 rebuild pattern
+
+If a migration adds a `CREATE VIEW` that references `services` or
+`transactions` (e.g. V18's `user_active_pass`), any FUTURE migration that needs
+the established DROP-TABLE + CREATE-new + INSERT + RENAME rebuild pattern on
+EITHER of those two tables (used by V8, V11, V16 to work around SQLite's
+"can't ALTER to add a CHECK constraint") will fail with `no such table:
+main.services` (or `main.transactions`) at the `ALTER TABLE … RENAME`
+step — SQLite validates a dependent view's stored SQL during the rename, and
+at that instant the table doesn't exist yet under its final name.
+
+**Fix pattern:** `DROP VIEW <name>` before the rebuild, re-run the exact
+`CREATE VIEW` statement after the `RENAME`, all inside the same migration
+transaction. Worked example:
+`db::migrations::tests::v8_drop_rename_pattern_works_with_fk_child_rows`
+(had to be updated when V18 landed — it manually re-simulates a future
+`services` rebuild and hit this exact failure).
+
 ## Dev CI must sync prod DB before install
 
 The `deploy-dev` job in `.github/workflows/ci.yml` MUST sync prod → dev BEFORE installing the new binary:
