@@ -3,6 +3,67 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-07-10 — #161 + #162: prod-router fixture-route regression test + cargo-deny gate
+
+- **Issues:** [#161](https://github.com/zbynekdrlik/spinbike/issues/161) —
+  no test ever exercised the production router build path to prove the
+  unauthenticated, arbitrary-role `/api/test/*` fixtures (`seed_account`
+  accepts a caller-supplied `role`, no auth guard) are unreachable when
+  `SPINBIKE_TEST_MODE` is unset. [#162](https://github.com/zbynekdrlik/spinbike/issues/162) —
+  zero supply-chain advisory tooling existed anywhere in the repo. Both
+  validated STILL_VALID, bundled (independent, disjoint-file changes).
+- **Version:** bump `7df557b` (0.15.0-dev.38 → 0.15.0-dev.39), synced
+  Cargo.toml/spinbike-ui/Cargo.toml + regenerated Cargo.lock
+  (`cargo metadata`, resolution-only).
+- **#161** (`42f7271`) — `production_router_does_not_expose_test_fixtures`
+  in `crates/spinbike-server/src/lib.rs`: builds the router with NO
+  `test_fixtures` merge, sends an anonymous `role="admin"` exploit payload
+  to `seed_account`, asserts no DB row is created + never the handler's
+  201; asserts the other 4 fixture routes never return JSON. Router
+  fallback returns 200/HTML (SPA) for unmatched paths, not 404 (matches
+  `tests/static_files.rs::unknown_spa_route_also_serves_index_html`) — so
+  assertions target the removed capability, not a status code. Posted the
+  404-vs-200 finding to the issue before implementing.
+- **#162** (`c4da6bd`) — `deny.toml` ([advisories] only) + new
+  `Supply-Chain Advisories` CI job (`EmbarkStudios/cargo-deny-action@v2`,
+  `check advisories`). First run surfaced 2 REAL advisories beyond the
+  already-known allowlisted RSA one: RUSTSEC-2026-0190 (anyhow, unsound
+  `downcast_mut`) and RUSTSEC-2026-0097 (rand 0.8.5, unsound with a custom
+  logger) — fixed via `cargo update --precise` (`be813f0`).
+- **Review-driven round 2** (`c324902`) — an independent review pass
+  caught that `rand` resolved to a SECOND Cargo.lock instance (0.9.2,
+  reachable via axum's `ws` feature → tokio-tungstenite 0.28 →
+  tungstenite 0.28) that cargo-deny's own scan silently did NOT flag,
+  even though the advisory's raw `patched` ranges prove it's vulnerable.
+  Fixed (`cargo update -p rand@0.9.2 --precise 0.9.3`); filed
+  [#185](https://github.com/zbynekdrlik/spinbike/issues/185) to track the
+  apparent cargo-deny detection gap itself.
+- **Review-driven round 3, Critical** (`ec5917f`) — the deep
+  `requesting-code-review` pass found #161's test hand-copied
+  `start_server`'s router-building logic instead of sharing it — a
+  regression that inverted/deleted the real gate inside `start_server`
+  would NOT have been caught. Fixed by extracting a shared
+  `build_router(test_mode)` function called by both `start_server()` and
+  the test; also added `supply-chain-audit` to `e2e`'s `needs:` so a real
+  advisory finding actually blocks deploy (was previously racing it in
+  parallel, per the same review's Important finding).
+- **PR:** [#184](https://github.com/zbynekdrlik/spinbike/pull/184), merged
+  `822d519`. CI green throughout (Test Integrity, Version Bump Check,
+  Supply-Chain Advisories, Lint, Test, Test (UI), Build WASM, E2E,
+  Mutation Testing 8/8 shards, Deploy, Smoke) on every push.
+- **Playbook:** `.claude/skills/ci-deploy/SKILL.md` gained a cargo-deny
+  section (the `cargo update --precise` disambiguation pattern, the
+  "don't trust cargo-deny's silence on a second same-named resolution —
+  cross-check the raw advisory + `cargo tree` yourself" lesson) and a
+  secret-scan-hook false-positive workaround (test literals, Cargo.lock
+  checksum diffs).
+- **Deployed:** v0.15.0-dev.39, confirmed on `https://spinbike.sk` — DOM
+  `[data-testid="version"]` == `/api/version` == `v0.15.0-dev.39`, 0
+  console errors/warnings. Live functional verification: `POST
+  /api/test/seed-account` with an anonymous `role="admin"` exploit payload
+  against real prod returns `200` HTML (SPA fallback), not a created
+  account — same behavior the new test proves.
+
 - #159 Unify "active monthly pass" behind one canonical query — the charger's
   copy omitted `deleted_at IS NULL` (`MAX(date(valid_until))`, no service/action
   filter), so a VOIDED pass still read as active there: zero-amount visit
