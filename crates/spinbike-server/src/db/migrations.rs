@@ -69,6 +69,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "login_tokens: invite+login magic-link tokens",
         V17_LOGIN_TOKENS,
     ),
+    (
+        18,
+        "user_active_pass view: one canonical active-monthly-pass definition",
+        V18_USER_ACTIVE_PASS_VIEW,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -664,6 +669,49 @@ CREATE TABLE IF NOT EXISTS login_tokens (
 CREATE INDEX IF NOT EXISTS idx_login_tokens_user ON login_tokens(user_id);
 "#;
 
+// V18: canonical "active monthly pass" definition (#159).
+//
+// "Does user X hold a monthly pass?" was re-implemented in 6+ places with THREE
+// incompatible predicates. The T-4h charger's copy (jobs/charger.rs) omitted
+// `deleted_at IS NULL`, so a VOIDED pass still read as active THERE — the
+// charger wrote a zero-amount visit and SKIPPED the credit debit, handing the
+// customer a free visit they should have paid for (a real money defect that
+// also disagreed with what my_balance showed the same customer).
+//
+// This view is the ONE canonical source of truth: per user, the LATEST
+// non-voided monthly-pass purchase (its transaction id + expiry date). Callers
+// apply their OWN as-of comparison against `valid_until` (the charger vs the
+// booking's date, my_balance vs now), so the "as-of" stays a caller concern
+// while the "which row even counts as a pass" predicate lives here exactly once.
+//
+// Predicate mirrors my_balance's strict form: action='charge' AND the row's
+// service is THE monthly_pass service (kind='monthly_pass') AND valid_until is
+// present AND the row is not voided. Ties are broken latest-first by
+// (valid_until DESC, id DESC) — identical to the `ORDER BY … LIMIT 1` the
+// previous correlated subqueries used. On real data every valid_until row is
+// already a monthly_pass charge, so switching the sibling queries onto this
+// view is behaviour-preserving; the only behaviour change is the charger now
+// correctly excludes voided passes.
+const V18_USER_ACTIVE_PASS_VIEW: &str = r#"
+CREATE VIEW IF NOT EXISTS user_active_pass AS
+SELECT user_id, pass_tx_id, valid_until
+FROM (
+    SELECT t.user_id     AS user_id,
+           t.id          AS pass_tx_id,
+           t.valid_until AS valid_until,
+           ROW_NUMBER() OVER (
+               PARTITION BY t.user_id
+               ORDER BY t.valid_until DESC, t.id DESC
+           ) AS rn
+    FROM transactions t
+    WHERE t.action = 'charge'
+      AND t.service_id = (SELECT id FROM services WHERE kind = 'monthly_pass')
+      AND t.valid_until IS NOT NULL
+      AND t.deleted_at IS NULL
+)
+WHERE rn = 1;
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::MIGRATIONS;
@@ -716,6 +764,110 @@ mod tests {
                 .await
                 .unwrap();
         assert_eq!(count, 1, "Monthly pass must be seeded exactly once");
+    }
+
+    /// V18 `user_active_pass` view is the canonical active-pass definition:
+    /// per user, the latest NON-VOIDED monthly_pass charge (id + expiry).
+    /// A voided pass, a non-pass service charge carrying a valid_until, and a
+    /// row with no valid_until must all be excluded.
+    #[tokio::test]
+    async fn v18_user_active_pass_view_is_canonical() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let pass_svc: i64 =
+            sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let spin_svc: i64 =
+            sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name) VALUES ('v18@x','v18') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // A non-pass (Spinning) charge that happens to carry a valid_until must
+        // NOT be treated as a monthly pass.
+        sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until)
+             VALUES (?, ?, -5.0, 'charge', date('now','+90 days'))",
+        )
+        .bind(uid)
+        .bind(spin_svc)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_active_pass WHERE user_id = ?")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "a non-monthly_pass charge must not count as a pass");
+
+        // Two real monthly-pass charges — the view exposes the LATEST one.
+        let older: i64 = sqlx::query_scalar(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until)
+             VALUES (?, ?, -35.0, 'charge', date('now','+10 days')) RETURNING id",
+        )
+        .bind(uid)
+        .bind(pass_svc)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let newer: i64 = sqlx::query_scalar(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until)
+             VALUES (?, ?, -35.0, 'charge', date('now','+40 days')) RETURNING id",
+        )
+        .bind(uid)
+        .bind(pass_svc)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let tx_id: i64 =
+            sqlx::query_scalar("SELECT pass_tx_id FROM user_active_pass WHERE user_id = ?")
+                .bind(uid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            tx_id, newer,
+            "view must expose the latest pass by valid_until"
+        );
+        assert_ne!(tx_id, older);
+
+        // Voiding the newer pass falls back to the older one...
+        sqlx::query("UPDATE transactions SET deleted_at = datetime('now') WHERE id = ?")
+            .bind(newer)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let tx_id: i64 =
+            sqlx::query_scalar("SELECT pass_tx_id FROM user_active_pass WHERE user_id = ?")
+                .bind(uid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(tx_id, older, "a voided pass must be excluded");
+
+        // ...and voiding both leaves the user with no active pass.
+        sqlx::query("UPDATE transactions SET deleted_at = datetime('now') WHERE id = ?")
+            .bind(older)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM user_active_pass WHERE user_id = ?")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "all passes voided => no active pass");
     }
 
     #[tokio::test]

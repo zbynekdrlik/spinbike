@@ -339,4 +339,93 @@ mod tests {
         let n = tick_as_of(&pool, &format!("{mon} 10:00:00")).await.unwrap();
         assert_eq!(n, 0);
     }
+
+    /// Regression test for #159 (real money defect): the charger's OLD
+    /// predicate (`valid_until IS NOT NULL`, no `deleted_at` filter) still
+    /// treated a VOIDED monthly pass as active, so a visit against a voided
+    /// pass wrote amount=0 and skipped the credit debit — a free visit the
+    /// customer should have paid for. After the fix, the charger resolves the
+    /// pass through the canonical `user_active_pass` view (migration V18),
+    /// which excludes voided rows, so a voided pass must be CHARGED like any
+    /// other uncovered visit.
+    #[tokio::test]
+    async fn charger_charges_when_pass_is_voided() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, credit) VALUES ('u@x','u',?) RETURNING id",
+        )
+        .bind(10.0)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind='monthly_pass'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let pass_tx_id: i64 = sqlx::query_scalar(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until)
+             VALUES (?, ?, -35.0, 'charge', date('now','+30 days')) RETURNING id",
+        )
+        .bind(uid)
+        .bind(pass_svc)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // Void the pass — sets deleted_at, KEEPS valid_until (the real void
+        // path: db::transactions::soft_delete, same as the staff-facing
+        // void_transaction handler).
+        crate::db::transactions::soft_delete(&pool, pass_tx_id)
+            .await
+            .unwrap();
+
+        let tid: i64 = sqlx::query_scalar(
+            "SELECT id FROM class_templates WHERE weekday=0 AND start_time='18:00'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let today = Local::now().date_naive();
+        let days_to_mon = (7 - today.weekday().num_days_from_monday() as i64) % 7;
+        let mon = today + Duration::days(days_to_mon);
+        let bid =
+            crate::db::classes::create_booking(&pool, tid, &mon.to_string(), uid, None, "manual")
+                .await
+                .unwrap();
+
+        let n = tick_as_of(&pool, &now_at_14()).await.unwrap();
+        assert_eq!(n, 1);
+
+        let (charged_at, txn_id): (Option<String>, Option<i64>) =
+            sqlx::query_as("SELECT charged_at, charge_transaction_id FROM bookings WHERE id = ?")
+                .bind(bid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(charged_at.is_some());
+
+        let amount: f64 = sqlx::query_scalar("SELECT amount FROM transactions WHERE id = ?")
+            .bind(txn_id.unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(
+            amount < 0.0,
+            "a VOIDED pass must NOT exempt the visit charge — amount must be a debit, got {amount}"
+        );
+        assert_eq!(amount, -5.0, "Spinning default_price is 5.0");
+
+        let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            credit, 5.0,
+            "credit must be debited when the pass is voided (10.0 - 5.0 price); a voided pass \
+             must never produce a free visit"
+        );
+    }
 }
