@@ -175,7 +175,8 @@ pub async fn update_user_role(pool: &SqlitePool, user_id: i64, role: &str) -> Re
 }
 
 /// User row + its current monthly-pass (id + end date) — populated by a single
-/// query with correlated subquery to pull the row with MAX(valid_until) per user.
+/// query LEFT JOINing the canonical `user_active_pass` view (migration V18),
+/// which already resolves the newest non-voided pass transaction per user.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct UserRowWithPass {
     pub id: i64,
@@ -235,8 +236,10 @@ impl UserRowWithPass {
 }
 
 /// Return all users with their current monthly-pass (tx id + end date) in a
-/// single query. Uses correlated subqueries to pick the newest non-voided pass
-/// transaction per user (ties broken by id DESC).
+/// single query. LEFT JOINs the canonical `user_active_pass` view (V18),
+/// which already picks the newest non-voided pass transaction per user
+/// (ties broken by id DESC) — see that view's own doc comment for the exact
+/// predicate.
 pub async fn list_all_users_with_pass(
     pool: &SqlitePool,
 ) -> Result<Vec<(UserRow, Option<(i64, chrono::NaiveDate)>, Option<String>)>> {
@@ -244,19 +247,15 @@ pub async fn list_all_users_with_pass(
         "SELECT u.id, u.email, u.name, u.password_hash, u.phone, u.company,
                 u.role, u.oauth_provider, u.oauth_id, u.credit, u.card_code,
                 u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at, u.allow_self_entry,
-                (SELECT MAX(valid_until) FROM transactions
-                 WHERE user_id = u.id AND valid_until IS NOT NULL AND deleted_at IS NULL
-                ) AS pass_valid_until,
-                (SELECT id FROM transactions
-                 WHERE user_id = u.id AND valid_until IS NOT NULL AND deleted_at IS NULL
-                 ORDER BY valid_until DESC, id DESC LIMIT 1
-                ) AS pass_tx_id,
+                ap.valid_until AS pass_valid_until,
+                ap.pass_tx_id AS pass_tx_id,
                 (SELECT MAX(created_at) FROM transactions
                  WHERE user_id = u.id
                    AND deleted_at IS NULL
                    AND service_id IN (SELECT id FROM services WHERE name_en IN (?, ?))
                 ) AS last_visit_at
          FROM users u
+         LEFT JOIN user_active_pass ap ON ap.user_id = u.id
          WHERE u.deleted_at IS NULL
          ORDER BY u.name",
     )
@@ -285,19 +284,15 @@ pub async fn search_users_with_pass(
         "SELECT u.id, u.email, u.name, u.password_hash, u.phone, u.company,
                 u.role, u.oauth_provider, u.oauth_id, u.credit, u.card_code,
                 u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at, u.allow_self_entry,
-                (SELECT MAX(valid_until) FROM transactions
-                 WHERE user_id = u.id AND valid_until IS NOT NULL AND deleted_at IS NULL
-                ) AS pass_valid_until,
-                (SELECT id FROM transactions
-                 WHERE user_id = u.id AND valid_until IS NOT NULL AND deleted_at IS NULL
-                 ORDER BY valid_until DESC, id DESC LIMIT 1
-                ) AS pass_tx_id,
+                ap.valid_until AS pass_valid_until,
+                ap.pass_tx_id AS pass_tx_id,
                 (SELECT MAX(created_at) FROM transactions
                  WHERE user_id = u.id
                    AND deleted_at IS NULL
                    AND service_id IN (SELECT id FROM services WHERE name_en IN (?, ?))
                 ) AS last_visit_at
          FROM users u
+         LEFT JOIN user_active_pass ap ON ap.user_id = u.id
          WHERE u.search_text LIKE ?
            AND u.deleted_at IS NULL
          ORDER BY
@@ -425,38 +420,35 @@ pub async fn update_user_password_hash(
     Ok(())
 }
 
-/// Return the latest `valid_until` across a user's transactions, or `None` if
-/// the user has never had a monthly-pass purchase. Callers compare against
+/// Return the expiry date of the user's active monthly pass, or `None` if the
+/// user holds no (non-voided) monthly-pass purchase. Resolved through the
+/// canonical `user_active_pass` view (migration V18). Callers compare against
 /// today's date to determine whether the pass is active or expired.
 pub async fn get_user_pass_valid_until(
     pool: &SqlitePool,
     user_id: i64,
 ) -> Result<Option<chrono::NaiveDate>> {
-    let row: Option<(Option<chrono::NaiveDate>,)> = sqlx::query_as(
-        "SELECT MAX(valid_until) FROM transactions
-         WHERE user_id = ? AND valid_until IS NOT NULL AND deleted_at IS NULL",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .context("Failed to compute pass valid_until")?;
-    Ok(row.and_then(|(d,)| d))
+    let row: Option<(chrono::NaiveDate,)> =
+        sqlx::query_as("SELECT valid_until FROM user_active_pass WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .context("Failed to compute pass valid_until")?;
+    Ok(row.map(|(d,)| d))
 }
 
-/// Return the latest non-voided pass transaction as (id, valid_until), or None.
+/// Return the latest non-voided monthly-pass transaction as (id, valid_until),
+/// or None. Resolved through the canonical `user_active_pass` view (V18).
 pub async fn get_user_pass_tx(
     pool: &SqlitePool,
     user_id: i64,
 ) -> Result<Option<(i64, chrono::NaiveDate)>> {
-    let row: Option<(i64, chrono::NaiveDate)> = sqlx::query_as(
-        "SELECT id, valid_until FROM transactions
-         WHERE user_id = ? AND valid_until IS NOT NULL AND deleted_at IS NULL
-         ORDER BY valid_until DESC, id DESC LIMIT 1",
-    )
-    .bind(user_id)
-    .fetch_optional(pool)
-    .await
-    .context("Failed to fetch latest pass transaction")?;
+    let row: Option<(i64, chrono::NaiveDate)> =
+        sqlx::query_as("SELECT pass_tx_id, valid_until FROM user_active_pass WHERE user_id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .context("Failed to fetch latest pass transaction")?;
     Ok(row)
 }
 
@@ -475,9 +467,9 @@ pub struct NegativeBalanceUserRow {
 }
 
 /// Users with `credit < 0`, sorted most-negative-first. Includes blocked
-/// users (still owe money). Three scalar subqueries on `transactions`
-/// run for each negative-credit user; at current data scale this is
-/// sub-millisecond.
+/// users (still owe money). One scalar subquery for `last_visit_at` plus a
+/// LEFT JOIN on the canonical `user_active_pass` view (V18) for the pass
+/// columns; at current data scale this is sub-millisecond.
 pub async fn list_negative_balance(pool: &SqlitePool) -> Result<Vec<NegativeBalanceUserRow>> {
     let rows = sqlx::query_as::<_, NegativeBalanceUserRow>(
         "SELECT
@@ -487,14 +479,10 @@ pub async fn list_negative_balance(pool: &SqlitePool) -> Result<Vec<NegativeBala
                   AND t.deleted_at IS NULL
                   AND t.service_id IN (SELECT id FROM services WHERE name_en IN (?, ?))
             ) AS last_visit_at,
-            (SELECT MAX(valid_until) FROM transactions
-                WHERE user_id = u.id AND valid_until IS NOT NULL AND deleted_at IS NULL
-            ) AS pass_valid_until,
-            (SELECT id FROM transactions
-                WHERE user_id = u.id AND valid_until IS NOT NULL AND deleted_at IS NULL
-                ORDER BY valid_until DESC, id DESC LIMIT 1
-            ) AS pass_tx_id
+            ap.valid_until AS pass_valid_until,
+            ap.pass_tx_id AS pass_tx_id
          FROM users u
+         LEFT JOIN user_active_pass ap ON ap.user_id = u.id
          WHERE u.credit < 0
            AND u.deleted_at IS NULL
          ORDER BY u.credit ASC",
@@ -910,13 +898,18 @@ mod tests {
         use crate::db::transactions::create_transaction_with_valid_until;
         let pool = setup().await;
         let user_id = make_user(&pool, None, "Multi Pass").await;
+        let pass_svc: i64 =
+            sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let d1 = chrono::NaiveDate::from_ymd_opt(2026, 5, 15).unwrap();
         let d2 = chrono::NaiveDate::from_ymd_opt(2026, 6, 15).unwrap();
         create_transaction_with_valid_until(
             &pool,
             Some(user_id),
             None,
-            Some(1),
+            Some(pass_svc),
             -35.0,
             "charge",
             Some(d1),
@@ -928,7 +921,7 @@ mod tests {
             &pool,
             Some(user_id),
             None,
-            Some(1),
+            Some(pass_svc),
             -35.0,
             "charge",
             Some(d2),
@@ -968,13 +961,18 @@ mod tests {
         use crate::db::transactions::create_transaction_with_valid_until;
         let pool = setup().await;
         let user_id = make_user(&pool, None, "PV Test").await;
+        let pass_svc: i64 =
+            sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let future = chrono::Local::now().date_naive() + chrono::Duration::days(10);
 
         let tx_id = create_transaction_with_valid_until(
             &pool,
             Some(user_id),
             None,
-            Some(1),
+            Some(pass_svc),
             -35.0,
             "charge",
             Some(future),
@@ -1053,12 +1051,18 @@ mod tests {
         .unwrap();
 
         // `mid` also has an active monthly pass.
+        let pass_svc: i64 =
+            sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let mid_pass_until = chrono::NaiveDate::from_ymd_opt(2026, 12, 31).unwrap();
         let mid_pass_tx_id: i64 = sqlx::query_scalar(
-            "INSERT INTO transactions (user_id, amount, action, valid_until, created_at)
-             VALUES (?, -25.0, 'charge', ?, '2026-04-01 10:00:00') RETURNING id",
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until, created_at)
+             VALUES (?, ?, -25.0, 'charge', ?, '2026-04-01 10:00:00') RETURNING id",
         )
         .bind(mid)
+        .bind(pass_svc)
         .bind(mid_pass_until)
         .fetch_one(&pool)
         .await

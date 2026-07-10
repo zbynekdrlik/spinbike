@@ -3,6 +3,22 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+- #157 `resolve_jwt_secret` fail-open → fail-closed (booted with the public
+  `dev-secret-change-in-production` default when `JWT_SECRET` was unset/empty
+  and not in test mode; forgeable HS256 admin JWT). Worker resumed mid-flight
+  from a durable state left by a prior worker that died before the GREEN
+  commit: version bump `8cbd412` and RED tests `0b8d990`
+  (`crates/spinbike-server/src/lib.rs:167+`, 5 tests) were already on `dev`;
+  `bin/server.rs` was already wired to call `resolve_jwt_secret(...)?`. This
+  cycle only wrote GREEN `056b218` (flip the match arm: `Some(non-empty)` →
+  configured value; unset/empty + `test_mode` → dev default; unset/empty +
+  `!test_mode` → `Err`). PR [#177](https://github.com/zbynekdrlik/spinbike/pull/177),
+  merged `6e3097c`. Deploy safety pre-confirmed by supervisor (both
+  `/etc/default/spinbike-dev` and `/etc/default/spinbike-prod` already set
+  `JWT_SECRET`) — prod (`spinbike.service`) restarted clean via the merge's
+  CI deploy job, no boot failure. Verified live on `https://spinbike.sk`:
+  DOM `[data-testid="version"]` reads `v0.15.0-dev.32`, 0 console errors.
+
 - #133 data-testid on local form-validation error divs (distinguishable from shared dashboard error channel) — commit `0f35565`, PR [#137](https://github.com/zbynekdrlik/spinbike/pull/137), v0.15.0-dev.25 (merge SHA unknowable at commit time since this line ships inside the same PR it documents — see the PR page).
 
 ---
