@@ -233,12 +233,39 @@ When you add a new same-type form control to an existing page, grep the
 whole `e2e/tests/` tree for bare attribute selectors that might now be
 ambiguous — don't assume only the test you're writing is affected.
 
-## Diff-scoped mutation gate (`mutation-test` job, PR-only, `--in-diff`)
+## Diff-scoped mutation gate (`mutation-test` job, `--in-diff`)
 
-- Runs on `pull_request` only; **~70 min** on a large auth diff (105 mutants ×
-  ~60-100 s each). Budget the wait — it is the long pole after every push to a
-  big-diff PR. It re-runs on EVERY PR push (even a docs-only push re-tests the
-  same Rust mutants), so avoid superfluous pushes once the Rust is final.
+- **Push-triggered, not PR-triggered** (since #103's single-trigger model):
+  `if: github.event_name == 'push' && github.ref == 'refs/heads/dev'`, diffed
+  against `origin/main`. It re-runs on EVERY push to `dev` (even a docs-only
+  push re-tests the same Rust mutants), so avoid superfluous pushes once the
+  Rust is final.
+- **Sharded 8 ways since #158** (`mutation-test` is a `strategy.matrix.shard:
+  [0..7]` job, `--shard k/8`, `fail-fast: false`), mirroring the on-demand
+  full-tree sweep's proven split. A normal small PR puts ~0 mutants in most
+  shards (each finishes in ~1-2 min); a wide diff spreads evenly across all 8.
+- **A WIDE mechanical refactor (many changed handler/function SIGNATURES, not
+  just bodies) can push `--in-diff` toward near-full-tree size and blow even
+  the sharded budget.** #158 (57 handler signatures + 86 error-body sites)
+  produced 236 mutants — ~88% of the whole tree's ~269 — because cargo-mutants
+  mutates the changed RETURN TYPE line itself (e.g. `replace fn -> Result<T,E>
+  with Ok(Default::default())`) for every touched signature, not just the
+  logic lines. **Before pushing a refactor that touches many function
+  signatures, check the actual scope locally (no build, parse-only):**
+  ```bash
+  git diff origin/main...HEAD > /tmp/pr.diff
+  cargo mutants --list --in-diff /tmp/pr.diff --package spinbike-core --package spinbike-server | wc -l
+  ```
+  Over ~35-40 (i.e. more than one shard's worth), don't just push and hope —
+  the 8-way shard already absorbs it, but a MUCH wider refactor (near-100%
+  of the tree) would need more shards; scale the matrix count for a diff that
+  size rather than letting a shard hit its own 20-min cap. Never raise
+  `timeout-minutes` — fix the sharding/scope instead (`mutation-testing`
+  skill's "budget overrun = setup bug").
+- Added `[profile.mutants]` in `Cargo.toml` (`inherits = "test"`, `debug =
+  false`) wired via `profile = "mutants"` in `.cargo/mutants.toml` — drops
+  debuginfo from every per-mutant build, a straightforward per-mutant-build
+  speed lever worth having regardless of diff size.
 - **A memory-prune window must be strictly WIDER than the decision window**, or
   the decision boundary is unobservable → an unkillable/equivalent mutant. The
   `LoginLinkRateLimiter` `retain`-prune at the SAME 60 s as the `too_fast`
