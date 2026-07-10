@@ -17,15 +17,11 @@ async fn main() -> Result<()> {
 
     let db_path = std::env::var("DATABASE_PATH").unwrap_or_else(|_| "spinbike.db".to_string());
 
-    let jwt_secret = match std::env::var("JWT_SECRET") {
-        Ok(s) if !s.is_empty() => s,
-        _ => {
-            tracing::warn!(
-                "JWT_SECRET not set — using insecure default. DO NOT use in production!"
-            );
-            "dev-secret-change-in-production".to_string()
-        }
-    };
+    let test_mode =
+        spinbike_server::is_test_mode_from_env(std::env::var("SPINBIKE_TEST_MODE").ok().as_deref());
+    let jwt_secret =
+        spinbike_server::resolve_jwt_secret(std::env::var("JWT_SECRET").ok().as_deref(), test_mode)
+            .map_err(|e| anyhow::anyhow!(e))?;
 
     let pool = db::create_pool(&PathBuf::from(&db_path)).await?;
     db::run_migrations(&pool).await?;

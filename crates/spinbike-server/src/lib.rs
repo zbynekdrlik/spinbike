@@ -71,6 +71,29 @@ pub fn is_test_mode_from_env(raw: Option<&str>) -> bool {
     raw == Some("1")
 }
 
+/// Pure, unit-testable JWT-secret resolver (#157).
+///
+/// `raw` is the current `JWT_SECRET` env value (`None` = unset); `test_mode`
+/// is `is_test_mode_from_env(SPINBIKE_TEST_MODE)`. Fails closed: when
+/// `JWT_SECRET` is unset/empty and NOT in test mode, refuses to start rather
+/// than falling back to the well-known dev default — that default signs
+/// forgeable HS256 admin JWTs (`auth::create_token`), letting anyone reach
+/// the door/payments/users routes if a redeploy drops the env var. The
+/// insecure default is allowed ONLY when `SPINBIKE_TEST_MODE=1`.
+pub fn resolve_jwt_secret(raw: Option<&str>, test_mode: bool) -> Result<String, String> {
+    match raw {
+        Some(s) if !s.is_empty() => {
+            info!("JWT_SECRET configured from environment");
+            Ok(s.to_string())
+        }
+        _ if test_mode => {
+            warn!("JWT_SECRET not set — using insecure default. DO NOT use in production!");
+            Ok("dev-secret-change-in-production".to_string())
+        }
+        _ => Err("JWT_SECRET must be set (or SPINBIKE_TEST_MODE=1 for local dev)".to_string()),
+    }
+}
+
 /// Build and start the Axum server.
 pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Result<()> {
     let (event_tx, _) = broadcast::channel(256);
@@ -135,6 +158,50 @@ mod tests {
         assert!(!is_test_mode_from_env(Some("true")));
         assert!(!is_test_mode_from_env(Some("")));
         assert!(!is_test_mode_from_env(None));
+    }
+
+    /// #157 RED: booting with no JWT_SECRET and not in test mode must refuse
+    /// to start, never fall back to the source-visible dev default — that
+    /// default signs forgeable admin JWTs (auth::create_token, HS256).
+    #[test]
+    fn resolve_jwt_secret_fails_closed_when_unset_and_not_test_mode() {
+        assert!(resolve_jwt_secret(None, false).is_err());
+    }
+
+    /// #157 RED: an empty JWT_SECRET (e.g. a systemd env file with a blank
+    /// value) must be treated the same as unset — fail closed.
+    #[test]
+    fn resolve_jwt_secret_fails_closed_when_empty_and_not_test_mode() {
+        assert!(resolve_jwt_secret(Some(""), false).is_err());
+    }
+
+    #[test]
+    fn resolve_jwt_secret_returns_configured_value() {
+        assert_eq!(
+            resolve_jwt_secret(Some("real-secret"), false).unwrap(),
+            "real-secret"
+        );
+    }
+
+    /// A real secret set alongside SPINBIKE_TEST_MODE=1 (CI's env, see
+    /// ci.yml:241-242) must win — never silently swap in the dev default when
+    /// a real secret is present.
+    #[test]
+    fn resolve_jwt_secret_returns_configured_value_even_in_test_mode() {
+        assert_eq!(
+            resolve_jwt_secret(Some("ci-test"), true).unwrap(),
+            "ci-test"
+        );
+    }
+
+    /// #157: the insecure dev default is allowed ONLY when SPINBIKE_TEST_MODE=1
+    /// (the existing convention already used at test_fixtures.rs and ci.yml).
+    #[test]
+    fn resolve_jwt_secret_falls_back_to_dev_default_only_in_test_mode() {
+        assert_eq!(
+            resolve_jwt_secret(None, true).unwrap(),
+            "dev-secret-change-in-production"
+        );
     }
 
     /// Build a tiny router with the CORS layer and a single GET / route, then

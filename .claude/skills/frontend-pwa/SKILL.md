@@ -205,6 +205,35 @@ A reviewer may claim "setting a disposed signal is a silent no-op" — it is
 action and asserts `expect(consoleMessages).toEqual([])` AFTER the sheet closes
 (found + fixed while shipping #141's one-click save-then-invite).
 
+## Transaction/movement rows: reuse the shared classifier, never render the raw DB `action`
+
+A transaction row's kind comes from `spinbike_core::reports::classify(action,
+amount, valid_until) -> EventKind`, mapped to an i18n key via
+`i18n::tx_label_key(kind)` (`tx_label_pass`/`tx_label_visit`/`tx_label_charge`/
+`tx_label_topup`/`event_other`). ANY surface that lists transactions MUST route
+through that — the DB stores raw English tokens (`topup`/`charge`/`visit`/
+`storno`), so rendering `{t.action}` directly leaks English into the Slovak UI
+(the exact `/my/balance` "nema slovencinu na pohyboch" bug, #144). The admin
+`dashboard/transactions_list.rs` and the customer `pages/my_balance.rs` now both
+call `tx_label_key` — add a new consumer the same way, don't re-inline the match.
+Amounts: signed `{:+.2}` + `list-row__amount--pos`/`--neg` (theme-aware colour),
+not an unsigned `€{:.2}` (which also misprints negatives as `€-5.00`). Pass-sale
+rows append the expiry via `tx_until_short` + `fmt_date_short`. Reuse the
+`.list-row`/`list-row__main`/`__title`/`__sub`/`__amount` primitive (theme vars,
+56px tap height) — bespoke per-page row CSS tends to hardcode light-mode hex and
+break dark mode.
+
+## Door notes are stored English (`door: Nth`) — localize on DISPLAY only
+
+`door.rs` writes the visit note as `"door: 1st"`/`"door: 2nd"` (English ordinals
+via `util::ordinal`). Do NOT change the stored value to localize it: `door.rs`'s
+same-day re-entry count query (`note LIKE 'door:%'`) AND the admin note view both
+depend on that literal format. Instead localize at render: match a note starting
+`"door: "`, take the leading digit run, and show it via the `door_note_reentry`
+i18n key (`"Vstup c. {}"` / `"Entry #{}"`), falling back to the raw note when
+there's no digit (`my_balance.rs`, #144). Same rule for any stored-English audit
+string a customer sees.
+
 ## Manifest PNG icons: root `.gitignore` silently drops them
 
 The repo's root `.gitignore` has `*.png` with an exception only for
