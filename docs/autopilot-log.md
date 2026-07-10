@@ -3,6 +3,65 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+- #159 Unify "active monthly pass" behind one canonical query — the charger's
+  copy omitted `deleted_at IS NULL` (`MAX(date(valid_until))`, no service/action
+  filter), so a VOIDED pass still read as active there: zero-amount visit
+  written, credit debit skipped, a real money defect (free visit) disagreeing
+  with what `my_balance` showed the same customer. 6 sites re-implemented the
+  predicate with 3 incompatible definitions. Fix: migration V18 adds a
+  canonical SQL view `user_active_pass(user_id, pass_tx_id, valid_until)` —
+  per user, the latest non-voided `monthly_pass` charge. All 6 named sites
+  (`jobs/charger.rs::tick_as_of`, `routes/users.rs::my_balance`,
+  `db/users.rs::get_user_pass_valid_until`/`get_user_pass_tx`/
+  `list_all_users_with_pass`/`search_users_with_pass`/`list_negative_balance`)
+  now resolve through it. Version bump `88f853e` (0.15.0-dev.33 →
+  0.15.0-dev.34). RED `5fcbdea`
+  (`crates/spinbike-server/src/jobs/charger.rs::charger_charges_when_pass_is_voided`
+  — confirmed FAILED via a scoped local `cargo test` run, Tier-0 bypass
+  justified as TDD debugging: amount=0, credit undebited) → GREEN `45da86d`
+  (charger switched to the view + structured logging of the pass decision;
+  4 test seeds fixed to carry the real monthly_pass service id since the
+  canonical predicate now requires it: `db/users.rs`
+  `pass_valid_until_returns_max_across_multiple_passes`,
+  `pass_validity_ignores_soft_deleted_pass`,
+  `list_negative_balance_returns_only_negatives_sorted`; `tests/users_routes.rs`
+  `negative_balance_endpoint_round_trips_pass_field` — confirmed PASSED, plus
+  the full `jobs::charger`/`db::migrations`/`db::users` unit suites and
+  `tests/monthly_pass`/`users_routes`/`door_route`/`reports`/
+  `transactions_note`/`transactions_routes`/`users_delete` integration suites,
+  `cargo fmt --all --check`, `cargo check --workspace`, `cargo clippy
+  --workspace --all-targets -- -D warnings`) → docs `4c6556f` (10-angle
+  `/code-review` fan-out found: 3 stale doc comments describing the
+  pre-migration subquery mechanism, fixed; the migration's "behaviour-
+  preserving" claim corrected to cite the empirical validation rather than
+  assert an unconditional guarantee). **Live prod-data validation** (this
+  repo's own db-migrations skill mandate — CI-green alone isn't sufficient
+  for a query-semantics change): 0/4671 `valid_until` rows diverge between the
+  old and new predicate, 0 tie-break "latest pass" winner mismatches across
+  every multi-pass user, the 6 customers holding a voided-but-future-dated
+  pass independently confirmed with zero pending charger-window bookings, and
+  post-deploy a direct query proved the view can never structurally resolve to
+  a voided transaction (`0` rows) — plus for those same 6 customers, each
+  turned out to also hold a LATER legitimate non-voided pass (staff had
+  voided a bad charge and immediately reissued), so the view correctly
+  resolved to the newer valid pass, not the voided one. Followup filed
+  [#179](https://github.com/zbynekdrlik/spinbike/issues/179) — genuinely
+  out-of-scope hardening the review surfaced: `routes/door.rs` still hand-
+  rolls its own 7th copy of the predicate (currently semantically identical,
+  found by 5 independent review angles, but an architecture-drift risk); a
+  pre-existing (byte-identical before this PR) date-vs-datetime boundary bug
+  where `my_balance`/`door.rs` treat a pass's expiry day as already expired
+  while the charger's inclusive semantics still cover it — 0 customers
+  currently at that exact boundary; plus two minor robustness notes
+  (`get_user_pass_valid_until`/`get_user_pass_tx` lack the charger's `date()`
+  coercion defense; the "valid_until implies monthly_pass" invariant is
+  application-level, not schema-enforced). PR
+  [#178](https://github.com/zbynekdrlik/spinbike/pull/178), merged `e5eec78`.
+  Deployed v0.15.0-dev.34, confirmed on `https://spinbike.sk`: DOM
+  `[data-testid="version"]` == `/api/version` == `v0.15.0-dev.34`, 0 console
+  errors, `schema_version` row 18 present, prod service active (clean
+  restart).
+
 - #157 `resolve_jwt_secret` fail-open → fail-closed (booted with the public
   `dev-secret-change-in-production` default when `JWT_SECRET` was unset/empty
   and not in test mode; forgeable HS256 admin JWT). Worker resumed mid-flight
