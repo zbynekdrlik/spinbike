@@ -542,22 +542,37 @@ resolution-only (no compile, no `target/`):**
 ```bash
 cargo update -p anyhow --precise 1.0.103        # single resolved version → unambiguous
 cargo update -p rand@0.8.5 --precise 0.8.6       # rand had TWO resolved majors (0.8.5 AND 0.9.2,
-                                                  # pulled by different transitive deps) — the
+cargo update -p rand@0.9.2 --precise 0.9.3       # pulled by different transitive deps) — the
                                                   # `@<current-version>` qualifier disambiguates
                                                   # which instance to bump
 ```
 When a crate name resolves to more than one version in `Cargo.lock` (grep
-`name = "<crate>"` — if it appears twice, you have two majors/minors
+`name = "<crate>"$` — if it appears twice, you have two majors/minors
 coexisting), a bare `cargo update -p <crate>` is ambiguous about which
 instance moves. Use `-p <crate>@<current-version>` to target the exact one
-the advisory flagged. Don't assume a second same-named resolution is also
-vulnerable — cargo-deny evaluates the advisory's precise version-range
-against EACH resolved instance independently; if it doesn't emit a second
-`error[unsound]` block for the other instance, trust that (this repo's
-second `rand` resolution, 0.9.2, was left alone — cargo-deny's own match
-against RUSTSEC-2026-0097 didn't flag it, even though the human-readable
-"Solution:" line in the advisory text reads ambiguously enough to suggest
-otherwise at a glance).
+you mean to bump.
+
+**Do NOT trust cargo-deny's silence on a second same-named resolution —
+independently re-check it yourself.** This exact case bit #162's own first
+PR: `rand` resolved to TWO instances (0.8.5 direct, 0.9.2 transitively via
+`axum`'s `ws` feature → `tokio-tungstenite 0.28` → `tungstenite 0.28`).
+cargo-deny's `check advisories` flagged ONLY the 0.8.5 instance for
+RUSTSEC-2026-0097 and printed a clean `advisories ok` with the 0.9.2
+instance never mentioned anywhere in the log. But the advisory's own
+machine-readable data (fetch it directly — don't rely on the human
+"Solution:" prose, which can round awkwardly:
+`curl -s https://raw.githubusercontent.com/rustsec/advisory-db/main/crates/<crate>/RUSTSEC-YYYY-NNNN.md`)
+gave `patched = [">= 0.10.1", "< 0.10.0, >= 0.9.3", "< 0.9.0, >= 0.8.6"]` —
+`0.9.2` satisfies NONE of those ranges, so it genuinely IS vulnerable, and
+`cargo tree -i rand@0.9.2` proved it's genuinely reachable (built into the
+shipped `spinbike-server` binary via the `ws` feature, not a dead
+lockfile-only edge like `rsa`). cargo-deny simply didn't report it — an
+apparent gap in how it handles an advisory matching more than one resolved
+version of the same crate. **Whenever a crate resolves to 2+ versions and
+ONE of them gets flagged, manually check every OTHER same-named resolution
+against the advisory's raw `patched`/`unaffected` ranges yourself
+(`cargo tree -i <crate>@<version>` for reachability, the raw advisory `.md`
+for the exact ranges) — do not assume cargo-deny's silence means safe.**
 
 **`EmbarkStudios/cargo-deny-action@v2` auto-injects `arguments: --all-features`**
 even when you don't set `arguments:` yourself (visible in the run log's own
