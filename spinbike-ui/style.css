@@ -335,21 +335,6 @@ a:hover { text-decoration: underline; }
     border-color: #1fb357;
 }
 
-.btn--pass {
-    background: var(--pass);
-    border-color: var(--pass);
-    color: #1a2906;
-    font-weight: 600;
-}
-/* Hover: darken background instead of `filter: brightness(...)` which washed
-   the dark text out (regression report from owner). Keep text deep-olive,
-   tighten background for clear contrast. */
-.btn--pass:hover:not(:disabled) {
-    background: #6aa414;
-    border-color: #6aa414;
-    color: #0e1804;
-}
-
 .btn--danger {
     background: transparent;
     border-color: var(--danger);
@@ -661,8 +646,6 @@ select.form-control {
     white-space: nowrap;
 }
 
-.badge--pass      { background: color-mix(in srgb, var(--pass) 16%, var(--surface)); color: var(--pass); }
-.badge--booked    { background: color-mix(in srgb, var(--info) 14%, var(--surface)); color: var(--info); }
 .badge--full      { background: rgba(248, 113, 113, 0.14); color: var(--danger); }
 .badge--cancelled { background: var(--surface-3); color: var(--text-dim); }
 .badge--voided    { background: rgba(248, 113, 113, 0.14); color: var(--danger); }
@@ -705,17 +688,13 @@ select.form-control {
    15. TABLES
    ======================================================================== */
 
-.table-wrap { overflow-x: auto; }
-
-table,
-.data-table {
+table {
     width: 100%;
     border-collapse: collapse;
     font-size: var(--fs-sm);
 }
 
-table th,
-.data-table th {
+table th {
     text-align: left;
     padding: var(--s-2) var(--s-3);
     background: var(--surface-2);
@@ -727,19 +706,16 @@ table th,
     text-transform: uppercase;
 }
 
-table td,
-.data-table td {
+table td {
     padding: var(--s-2) var(--s-3);
     border-bottom: 1px solid var(--border);
 }
 
-table tbody tr:hover,
-.data-table tr:hover {
+table tbody tr:hover {
     background: var(--surface-2);
 }
 
-table tbody tr:last-child td,
-.data-table tr:last-child td {
+table tbody tr:last-child td {
     border-bottom: none;
 }
 
@@ -837,17 +813,6 @@ table tbody tr:last-child td,
     border-radius: var(--r);
     overflow: hidden;
     margin-bottom: var(--s-4);
-}
-
-.group__head {
-    padding: var(--s-2) var(--s-4);
-    font-size: var(--fs-xs);
-    font-weight: 600;
-    color: var(--text-dim);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    border-bottom: 1px solid var(--border);
-    background: var(--surface-2);
 }
 
 /* .list-row: canonical flex row primitive. */
@@ -984,8 +949,6 @@ table tbody tr:last-child td,
 
 /* Soft-deleted (voided) transaction rows — token-based, no light-theme hacks */
 .txn-row--voided       { color: var(--text-dim); opacity: 0.75; }
-.txn-row--voided .txn-amount,
-.txn-row--voided .amount { text-decoration: line-through; }
 
 .txn-voided-tag {
     font-size: var(--fs-xs);
@@ -1061,14 +1024,9 @@ table tbody tr:last-child td,
 
 .flex            { display: flex; }
 .gap-1           { gap: var(--s-2); }
-.gap-2           { gap: var(--s-4); }
 .items-center    { align-items: center; }
 .justify-between { justify-content: space-between; }
-.flex-1          { flex: 1; }
 .hidden          { display: none; }
-
-.text-success { color: var(--brand); }
-.text-danger  { color: var(--danger); }
 
 /* ========================================================================
    26. RESPONSIVE
@@ -1140,7 +1098,6 @@ table tbody tr:last-child td,
 /* Vertical rhythm helpers — finer-grained than .mt-1/-2/-3 (which use s-2/4/5). */
 .stack-12 { margin-top: var(--s-3); }       /* 12px */
 .stack-16 { margin-top: var(--s-4); }       /* 16px */
-.stack-24 { margin-top: var(--s-5); }       /* 24px — same as .mt-3 */
 
 /* Chip / button row that wraps. */
 .chip-row { display: flex; flex-wrap: wrap; gap: var(--s-2); }
@@ -1152,19 +1109,6 @@ table tbody tr:last-child td,
     font-size: var(--fs-md);
     font-weight: 700;
     padding: var(--s-2) var(--s-4);
-}
-
-/* Inline form (custom-amount input + submit button side-by-side). */
-.inline-row { display: inline-flex; gap: var(--s-2); }
-
-/* Narrow numeric input for amount fields. */
-.input--narrow { width: 8em; }
-
-/* Subdued section label sitting above a chip-row of buttons. */
-.section-label {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
-    margin-bottom: var(--s-2);
 }
 
 /* Card header layout: title block grows, close button stays compact. */
@@ -1346,16 +1290,6 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
     flex: 0 0 auto;
 }
 
-/* Off-screen accessible / E2E-stable hidden hooks. */
-.visually-hidden {
-    position: absolute !important;
-    width: 1px; height: 1px;
-    padding: 0; margin: -1px;
-    overflow: hidden;
-    clip: rect(0, 0, 0, 0);
-    border: 0;
-}
-
 /* ─────────── Reports page layout ─────────── */
 .reports-page {
     padding: var(--s-4);
@@ -1370,16 +1304,6 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
     gap: var(--s-2);
     margin-bottom: var(--s-4);
 }
-
-.reports-date-strip__sub {
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
-    text-align: center;
-    padding: var(--s-2) 0;
-}
-
-.reports-range-buttons { display: flex; gap: var(--s-2); }
-.reports-range-buttons .btn--compact { flex: 1; }
 
 /* ─────────── KPI cards ─────────── */
 .kpi-grid {
