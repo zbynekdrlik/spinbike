@@ -1,7 +1,6 @@
 use axum::{
     Json, Router,
     extract::State,
-    http::StatusCode,
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
@@ -11,8 +10,10 @@ use std::time::{Duration, Instant};
 use crate::AppState;
 use crate::auth::{self, AuthUser, parse_role};
 use crate::db::{login_tokens, users};
+use crate::error::ApiError;
 use crate::routes::internal_error;
 use spinbike_core::auth::Role;
+use spinbike_core::errors::ErrorCode;
 
 #[derive(Deserialize)]
 pub struct LoginRequest {
@@ -130,29 +131,19 @@ pub fn routes() -> Router<AppState> {
 async fn login(
     State(state): State<AppState>,
     Json(body): Json<LoginRequest>,
-) -> Result<Json<AuthResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<AuthResponse>, ApiError> {
     let user = users::get_user_by_email(&state.pool, &body.email)
         .await
         .map_err(internal_error)?
-        .ok_or_else(|| {
-            (
-                StatusCode::UNAUTHORIZED,
-                Json(serde_json::json!({"error": "Invalid email or password"})),
-            )
-        })?;
+        .ok_or(ApiError::Unauthorized(ErrorCode::InvalidCredentials))?;
 
-    let password_hash = user.password_hash.as_deref().ok_or_else(|| {
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error": "Account uses OAuth login"})),
-        )
-    })?;
+    let password_hash = user
+        .password_hash
+        .as_deref()
+        .ok_or(ApiError::Unauthorized(ErrorCode::OauthAccount))?;
 
     if !auth::verify_password(&body.password, password_hash) {
-        return Err((
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error": "Invalid email or password"})),
-        ));
+        return Err(ApiError::Unauthorized(ErrorCode::InvalidCredentials));
     }
 
     let role = parse_role(&user.role);
@@ -277,13 +268,8 @@ async fn request_login_link(
 async fn token_login(
     State(state): State<AppState>,
     Json(body): Json<TokenLoginRequest>,
-) -> Result<Json<AuthResponse>, (StatusCode, Json<serde_json::Value>)> {
-    let invalid = || {
-        (
-            StatusCode::UNAUTHORIZED,
-            Json(serde_json::json!({"error": "Invalid or expired link"})),
-        )
-    };
+) -> Result<Json<AuthResponse>, ApiError> {
+    let invalid = || ApiError::Unauthorized(ErrorCode::InvalidOrExpiredLink);
 
     // Both purposes authorize login: an 'invite' token logs a client in the
     // first time; a 'login' token is the recovery path.

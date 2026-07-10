@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::AppState;
 use crate::auth::{AuthUser, OptionalAuthUser};
 use crate::db::classes as db;
+use crate::error::ApiError;
 use crate::routes::internal_error;
+use spinbike_core::errors::ErrorCode;
 use spinbike_core::ws::ServerMsg;
 
 #[derive(Deserialize)]
@@ -74,7 +76,7 @@ async fn list_classes(
     State(state): State<AppState>,
     OptionalAuthUser(claims): OptionalAuthUser,
     Query(query): Query<ScheduleQuery>,
-) -> Result<Json<Vec<ClassOccurrenceResponse>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<ClassOccurrenceResponse>>, ApiError> {
     let from = NaiveDate::parse_from_str(&query.from, "%Y-%m-%d")
         .map_err(|_| super::bad_request("Invalid 'from' date format, expected YYYY-MM-DD"))?;
     let to = NaiveDate::parse_from_str(&query.to, "%Y-%m-%d")
@@ -152,12 +154,9 @@ async fn list_participants(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path((template_id, date)): Path<(i64, String)>,
-) -> Result<Json<Vec<ParticipantResponse>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<ParticipantResponse>>, ApiError> {
     if !claims.role.can_cancel_any_booking() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     #[derive(sqlx::FromRow)]
@@ -195,16 +194,13 @@ async fn create_booking(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Json(body): Json<BookingRequest>,
-) -> Result<(StatusCode, Json<BookingResponse>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<BookingResponse>), ApiError> {
     // Determine who the booking is for. Precedence:
     //   1. explicit body.user_id
     //   2. fall back to the caller (customer self-booking)
     let booking_user_id = if let Some(target_id) = body.user_id {
         if target_id != claims.sub && !claims.role.can_book_for_others() {
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"error": "Only staff can book for other users"})),
-            ));
+            return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
         }
         target_id
     } else {
@@ -217,10 +213,7 @@ async fn create_booking(
         .map_err(internal_error)?;
 
     if cancelled {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "Class is cancelled"})),
-        ));
+        return Err(ApiError::conflict(ErrorCode::ClassCancelled));
     }
 
     // Stamp `created_by` whenever the booking's user_id differs from the caller.
@@ -242,10 +235,7 @@ async fn create_booking(
     .map_err(|e| {
         let msg = e.to_string();
         if msg.contains("full") {
-            (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({"error": msg})),
-            )
+            ApiError::conflict_message(ErrorCode::ClassFull, msg)
         } else {
             internal_error(e)
         }
@@ -283,7 +273,7 @@ async fn cancel_booking(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(booking_id): Path<i64>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<StatusCode, ApiError> {
     // Get the booking to check ownership.
     let booking = sqlx::query_as::<_, db::BookingRow>(
         "SELECT * FROM bookings WHERE id = ? AND cancelled_at IS NULL",
@@ -292,19 +282,11 @@ async fn cancel_booking(
     .fetch_optional(&state.pool)
     .await
     .map_err(internal_error)?
-    .ok_or_else(|| {
-        (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Booking not found"})),
-        )
-    })?;
+    .ok_or(ApiError::NotFound(ErrorCode::BookingNotFound))?;
 
     // Check permission: own booking or staff.
     if booking.user_id != claims.sub && !claims.role.can_cancel_any_booking() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Cannot cancel another user's booking"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::BookingNotOwned));
     }
 
     db::cancel_booking(&state.pool, booking_id)
@@ -334,7 +316,7 @@ async fn cancel_booking(
 async fn my_bookings(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-) -> Result<Json<Vec<BookingResponse>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<BookingResponse>>, ApiError> {
     let bookings = db::list_user_bookings(&state.pool, claims.sub)
         .await
         .map_err(internal_error)?;

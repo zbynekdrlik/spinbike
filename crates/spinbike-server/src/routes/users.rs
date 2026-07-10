@@ -15,8 +15,10 @@ use crate::AppState;
 use crate::auth::AuthUser;
 use crate::db::transactions::NOTE_MAX_CHARS;
 use crate::db::{login_tokens, transactions, users as db};
+use crate::error::ApiError;
 use crate::mail::MailError;
 use crate::routes::internal_error;
+use spinbike_core::errors::ErrorCode;
 
 #[derive(Serialize, Clone)]
 pub struct UserResponse {
@@ -230,12 +232,9 @@ pub fn routes() -> Router<AppState> {
 async fn list_users(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-) -> Result<Json<Vec<UserResponse>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<UserResponse>>, ApiError> {
     if !claims.role.can_manage_cards() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff only"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
     let rows = db::list_all_users_with_pass(&state.pool)
         .await
@@ -251,12 +250,9 @@ async fn search_users(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Query(params): Query<SearchQuery>,
-) -> Result<Json<Vec<UserResponse>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<UserResponse>>, ApiError> {
     if !claims.role.can_manage_cards() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff only"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
     let limit = params.limit.clamp(1, 50);
     let rows = db::search_users_with_pass(&state.pool, &params.q, limit)
@@ -273,12 +269,9 @@ async fn create_user(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Json(body): Json<CreateUserRequest>,
-) -> Result<(StatusCode, Json<UserResponse>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<UserResponse>), ApiError> {
     if !claims.role.can_manage_cards() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     let name = body.name.trim().to_owned();
@@ -311,13 +304,12 @@ async fn create_user(
             .await
             .map_err(internal_error)?
         {
-            return Err((
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": "A user with this email already exists",
+            return Err(ApiError::conflict_extra(
+                ErrorCode::EmailConflict,
+                serde_json::json!({
                     "conflict_name": existing.name,
                     "conflict_card": existing.card_code,
-                })),
+                }),
             ));
         }
     }
@@ -328,10 +320,7 @@ async fn create_user(
             .map_err(internal_error)?
             .is_some()
     {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "A user with this card code already exists"})),
-        ));
+        return Err(ApiError::conflict(ErrorCode::CardCodeConflict));
     }
 
     let body_phone = body
@@ -362,10 +351,7 @@ async fn create_user(
     .map_err(|e| {
         let chain = format!("{e:#}");
         if chain.contains("UNIQUE") || chain.contains("unique") {
-            (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({"error": "A user with this email or card code already exists"})),
-            )
+            ApiError::conflict(ErrorCode::EmailOrCardConflict)
         } else {
             internal_error(e)
         }
@@ -433,28 +419,17 @@ async fn invite_user(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<i64>,
-) -> Result<Json<InviteResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<InviteResponse>, ApiError> {
     if !claims.role.can_manage_cards() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     let user = db::get_user_by_id(&state.pool, id)
         .await
         .map_err(internal_error)?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "User not found"})),
-            )
-        })?;
+        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
     if user.deleted_at.is_some() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "User not found"})),
-        ));
+        return Err(ApiError::NotFound(ErrorCode::UserNotFound));
     }
 
     let email = match user
@@ -491,10 +466,7 @@ async fn invite_user(
         Ok(()) => {}
         Err(MailError::Disabled) => {
             tracing::warn!(user_id = id, "invite: mail is disabled — returning 503");
-            return Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": "mail_not_configured"})),
-            ));
+            return Err(ApiError::ServiceUnavailable(ErrorCode::MailNotConfigured));
         }
         Err(e) => return Err(internal_error(e)),
     }
@@ -513,23 +485,15 @@ async fn lookup_user(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(code): Path<String>,
-) -> Result<Json<UserResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<UserResponse>, ApiError> {
     if !claims.role.can_manage_cards() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     let user = db::get_user_by_card_code(&state.pool, &code)
         .await
         .map_err(internal_error)?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "User not found"})),
-            )
-        })?;
+        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
 
     Ok(Json(
         user_response_from_row(&state.pool, &user)
@@ -542,12 +506,9 @@ async fn topup_user(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Json(body): Json<TopupRequest>,
-) -> Result<Json<UserResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<UserResponse>, ApiError> {
     if !claims.role.can_manage_cards() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     if body.amount <= 0.0 {
@@ -563,25 +524,14 @@ async fn topup_user(
     let user = db::get_user_by_id(&state.pool, body.user_id)
         .await
         .map_err(internal_error)?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "User not found"})),
-            )
-        })?;
+        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
 
     if user.deleted_at.is_some() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "User not found"})),
-        ));
+        return Err(ApiError::NotFound(ErrorCode::UserNotFound));
     }
 
     if user.blocked {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "User is blocked"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::UserBlocked));
     }
 
     db::update_credit(&state.pool, body.user_id, body.amount)
@@ -616,12 +566,9 @@ async fn block_user(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Json(body): Json<BlockRequest>,
-) -> Result<Json<UserResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<UserResponse>, ApiError> {
     if !claims.role.can_manage_cards() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     // Verify user is active before mutating — soft-deleted users are
@@ -629,17 +576,9 @@ async fn block_user(
     let existing = db::get_user_by_id(&state.pool, body.user_id)
         .await
         .map_err(internal_error)?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "User not found"})),
-            )
-        })?;
+        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
     if existing.deleted_at.is_some() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "User not found"})),
-        ));
+        return Err(ApiError::NotFound(ErrorCode::UserNotFound));
     }
 
     db::set_blocked(&state.pool, body.user_id, body.blocked)
@@ -649,12 +588,7 @@ async fn block_user(
     let user = db::get_user_by_id(&state.pool, body.user_id)
         .await
         .map_err(internal_error)?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "User not found"})),
-            )
-        })?;
+        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
 
     Ok(Json(
         user_response_from_row(&state.pool, &user)
@@ -666,12 +600,9 @@ async fn block_user(
 async fn negative_balance(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-) -> Result<Json<Vec<NegativeBalanceUserResponse>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<NegativeBalanceUserResponse>>, ApiError> {
     if !claims.role.can_manage_cards() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff only"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
     let rows = db::list_negative_balance(&state.pool)
         .await
@@ -709,7 +640,7 @@ async fn update_user(
     AuthUser(claims): AuthUser,
     Path(id): Path<i64>,
     Json(body): Json<UpdateUserRequest>,
-) -> Result<Json<UserResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<UserResponse>, ApiError> {
     // Self-edit is allowed regardless of role: a customer can update their
     // own name/email/phone/company/password on their own user row. Field-
     // level guards below still enforce admin-only for `allow_self_entry` and
@@ -731,10 +662,7 @@ async fn update_user(
         "PUT /api/users/{id}: update request"
     );
     if !is_staff_or_admin && !is_self {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     // card_code is the legacy-barcode identifier used by staff search/scan
@@ -742,29 +670,16 @@ async fn update_user(
     // their own card_code (would let them collide with other users' codes or
     // claim a freshly-typed code).
     if body.card_code.is_some() && !is_staff_or_admin {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({
-                "error": "Only staff can modify card_code"
-            })),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::CardCodeStaffOnly));
     }
 
     // Soft-deleted users are invariant-frozen (#56) — reject mutation upfront.
     let target = db::get_user_by_id(&state.pool, id)
         .await
         .map_err(internal_error)?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "User not found"})),
-            )
-        })?;
+        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
     if target.deleted_at.is_some() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "User not found"})),
-        ));
+        return Err(ApiError::NotFound(ErrorCode::UserNotFound));
     }
 
     if let Some(ref email) = body.email {
@@ -784,14 +699,19 @@ async fn update_user(
             // self-editing their own row — that would turn the email field
             // into a name-enumeration oracle. Customers get only the generic
             // message; the name/card go out solely to staff/admin.
-            let mut err = serde_json::json!({
-                "error": "A user with this email already exists"
-            });
+            let mut extra = serde_json::Map::new();
             if is_staff_or_admin {
-                err["conflict_name"] = serde_json::json!(existing.name);
-                err["conflict_card"] = serde_json::json!(existing.card_code);
+                extra.insert("conflict_name".into(), serde_json::json!(existing.name));
+                extra.insert(
+                    "conflict_card".into(),
+                    serde_json::json!(existing.card_code),
+                );
             }
-            return Err((StatusCode::CONFLICT, Json(err)));
+            return Err(if extra.is_empty() {
+                ApiError::conflict(ErrorCode::EmailConflict)
+            } else {
+                ApiError::conflict_extra(ErrorCode::EmailConflict, serde_json::Value::Object(extra))
+            });
         }
     }
 
@@ -801,10 +721,7 @@ async fn update_user(
             .map_err(internal_error)?
         && existing.id != id
     {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "A user with this card code already exists"})),
-        ));
+        return Err(ApiError::conflict(ErrorCode::CardCodeConflict));
     }
 
     db::update_user_info(
@@ -821,12 +738,7 @@ async fn update_user(
 
     if let Some(allow) = body.allow_self_entry {
         if claims.role != spinbike_core::auth::Role::Admin {
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({
-                    "error": "Only admin can modify allow_self_entry"
-                })),
-            ));
+            return Err(ApiError::Forbidden(ErrorCode::AllowSelfEntryAdminOnly));
         }
         db::update_user_allow_self_entry(&state.pool, id, allow)
             .await
@@ -840,12 +752,7 @@ async fn update_user(
         let is_admin = claims.role == spinbike_core::auth::Role::Admin;
         let is_self = claims.sub == id;
         if !is_admin && !is_self {
-            return Err((
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({
-                    "error": "Only admin can set another user's password"
-                })),
-            ));
+            return Err(ApiError::Forbidden(ErrorCode::PasswordAdminOnly));
         }
         if pw.len() < 8 {
             return Err(super::bad_request("Password must be at least 8 characters"));
@@ -859,12 +766,7 @@ async fn update_user(
     let user = db::get_user_by_id(&state.pool, id)
         .await
         .map_err(internal_error)?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "User not found"})),
-            )
-        })?;
+        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
 
     Ok(Json(
         user_response_from_row(&state.pool, &user)
@@ -878,13 +780,10 @@ async fn user_transactions(
     AuthUser(claims): AuthUser,
     Path(id): Path<i64>,
     Query(params): Query<TransactionsQuery>,
-) -> Result<Json<Vec<TransactionResponse>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<TransactionResponse>>, ApiError> {
     // Staff can see any user's transactions; a customer can only see their own.
     if !claims.role.can_manage_cards() && claims.sub != id {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     let txns = transactions::list_transactions_for_user_paginated(
@@ -919,12 +818,9 @@ async fn user_stats(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<i64>,
-) -> Result<Json<StatsResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<StatsResponse>, ApiError> {
     if !claims.role.can_manage_cards() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     // Build the IN-clause placeholders dynamically from the constants.
@@ -1055,12 +951,9 @@ async fn by_last_movement(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Query(q): Query<ByMovementQuery>,
-) -> Result<Json<Vec<db::UserByMovementRow>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<db::UserByMovementRow>>, ApiError> {
     if !claims.role.can_manage_cards() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
     if !(1..=200).contains(&q.limit) || q.offset < 0 {
         return Err(super::bad_request("limit must be 1..=200, offset >= 0"));
@@ -1081,12 +974,9 @@ async fn delete_user_route(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<i64>,
-) -> Result<Json<DeleteUserResp>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<DeleteUserResp>, ApiError> {
     if !claims.role.can_manage_cards() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
     match db::delete_user(&state.pool, id)
         .await
@@ -1095,21 +985,17 @@ async fn delete_user_route(
         db::DeleteUserOutcome::Deleted { deleted_at } => {
             Ok(Json(DeleteUserResp { id, deleted_at }))
         }
-        db::DeleteUserOutcome::NotFound => Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "User not found"})),
-        )),
-        db::DeleteUserOutcome::AlreadyDeleted => Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "User already deleted"})),
-        )),
+        db::DeleteUserOutcome::NotFound => Err(ApiError::NotFound(ErrorCode::UserNotFound)),
+        db::DeleteUserOutcome::AlreadyDeleted => {
+            Err(ApiError::conflict(ErrorCode::UserAlreadyDeleted))
+        }
     }
 }
 
 async fn my_balance(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-) -> Result<Json<BalanceResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<BalanceResponse>, ApiError> {
     let user_id = claims.sub;
     tracing::debug!(user_id, "my_balance: loading user row");
 
@@ -1141,10 +1027,7 @@ async fn my_balance(
         }
         None => {
             tracing::warn!(user_id, "my_balance: user not found or soft-deleted");
-            return Err((
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "User not found"})),
-            ));
+            return Err(ApiError::NotFound(ErrorCode::UserNotFound));
         }
     };
 
