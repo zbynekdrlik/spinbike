@@ -74,23 +74,23 @@ pub fn is_test_mode_from_env(raw: Option<&str>) -> bool {
 /// Pure, unit-testable JWT-secret resolver (#157).
 ///
 /// `raw` is the current `JWT_SECRET` env value (`None` = unset); `test_mode`
-/// is `is_test_mode_from_env(SPINBIKE_TEST_MODE)`. When `JWT_SECRET` is
-/// unset/empty, falls back to the well-known dev default — regardless of
-/// `test_mode` — and only warns. That is the bug: a redeploy with a missing
-/// env var silently boots with a source-visible secret, letting anyone forge
-/// an HS256 admin JWT (`auth::create_token`) and reach the door/payments/users
-/// routes. Kept here temporarily to prove the RED test fails before the fix
-/// (see #157); the GREEN commit flips this to fail closed.
-pub fn resolve_jwt_secret(raw: Option<&str>, _test_mode: bool) -> Result<String, String> {
+/// is `is_test_mode_from_env(SPINBIKE_TEST_MODE)`. Fails closed: when
+/// `JWT_SECRET` is unset/empty and NOT in test mode, refuses to start rather
+/// than falling back to the well-known dev default — that default signs
+/// forgeable HS256 admin JWTs (`auth::create_token`), letting anyone reach
+/// the door/payments/users routes if a redeploy drops the env var. The
+/// insecure default is allowed ONLY when `SPINBIKE_TEST_MODE=1`.
+pub fn resolve_jwt_secret(raw: Option<&str>, test_mode: bool) -> Result<String, String> {
     match raw {
         Some(s) if !s.is_empty() => {
             info!("JWT_SECRET configured from environment");
             Ok(s.to_string())
         }
-        _ => {
+        _ if test_mode => {
             warn!("JWT_SECRET not set — using insecure default. DO NOT use in production!");
             Ok("dev-secret-change-in-production".to_string())
         }
+        _ => Err("JWT_SECRET must be set (or SPINBIKE_TEST_MODE=1 for local dev)".to_string()),
     }
 }
 
