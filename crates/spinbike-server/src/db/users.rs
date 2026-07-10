@@ -175,7 +175,8 @@ pub async fn update_user_role(pool: &SqlitePool, user_id: i64, role: &str) -> Re
 }
 
 /// User row + its current monthly-pass (id + end date) — populated by a single
-/// query with correlated subquery to pull the row with MAX(valid_until) per user.
+/// query LEFT JOINing the canonical `user_active_pass` view (migration V18),
+/// which already resolves the newest non-voided pass transaction per user.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct UserRowWithPass {
     pub id: i64,
@@ -235,8 +236,10 @@ impl UserRowWithPass {
 }
 
 /// Return all users with their current monthly-pass (tx id + end date) in a
-/// single query. Uses correlated subqueries to pick the newest non-voided pass
-/// transaction per user (ties broken by id DESC).
+/// single query. LEFT JOINs the canonical `user_active_pass` view (V18),
+/// which already picks the newest non-voided pass transaction per user
+/// (ties broken by id DESC) — see that view's own doc comment for the exact
+/// predicate.
 pub async fn list_all_users_with_pass(
     pool: &SqlitePool,
 ) -> Result<Vec<(UserRow, Option<(i64, chrono::NaiveDate)>, Option<String>)>> {
@@ -464,9 +467,9 @@ pub struct NegativeBalanceUserRow {
 }
 
 /// Users with `credit < 0`, sorted most-negative-first. Includes blocked
-/// users (still owe money). Three scalar subqueries on `transactions`
-/// run for each negative-credit user; at current data scale this is
-/// sub-millisecond.
+/// users (still owe money). One scalar subquery for `last_visit_at` plus a
+/// LEFT JOIN on the canonical `user_active_pass` view (V18) for the pass
+/// columns; at current data scale this is sub-millisecond.
 pub async fn list_negative_balance(pool: &SqlitePool) -> Result<Vec<NegativeBalanceUserRow>> {
     let rows = sqlx::query_as::<_, NegativeBalanceUserRow>(
         "SELECT

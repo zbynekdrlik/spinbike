@@ -688,10 +688,23 @@ CREATE INDEX IF NOT EXISTS idx_login_tokens_user ON login_tokens(user_id);
 // service is THE monthly_pass service (kind='monthly_pass') AND valid_until is
 // present AND the row is not voided. Ties are broken latest-first by
 // (valid_until DESC, id DESC) — identical to the `ORDER BY … LIMIT 1` the
-// previous correlated subqueries used. On real data every valid_until row is
-// already a monthly_pass charge, so switching the sibling queries onto this
-// view is behaviour-preserving; the only behaviour change is the charger now
-// correctly excludes voided passes.
+// previous correlated subqueries used.
+//
+// This predicate is STRICTER than the sibling queries' old one (any service,
+// no action filter) — safe only because, empirically, every valid_until row
+// ever written is already a monthly_pass charge (the only code path that sets
+// valid_until is routes/payments.rs::sell_pass, which always uses this
+// service+action). Verified directly against the live prod DB on 2026-07-10:
+// 0 of 4671 valid_until rows diverge between the old and new predicate, and 0
+// of the ~1000 multi-pass users have a different "latest pass" winner. This is
+// an APPLICATION-LEVEL invariant, not a schema-enforced one (no CHECK/trigger
+// ties valid_until to this service+action) — see #179 for hardening options
+// (a CHECK constraint, plus routes/door.rs's still-un-migrated 7th copy of
+// this predicate and a date-vs-datetime boundary inconsistency between
+// my_balance/door.rs and the charger). Switching the sibling queries onto this view is
+// therefore behaviour-preserving on all data observed to date; the only
+// INTENDED behaviour change is the charger now correctly excludes voided
+// passes.
 //
 // GOTCHA for future migrations: this view references `services` AND
 // `transactions`. SQLite validates a dependent view's stored SQL during
