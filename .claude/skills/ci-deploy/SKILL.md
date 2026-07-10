@@ -191,6 +191,21 @@ contains both brackets and the bypass is NOT recognized, even though it looks
 present in the full message. Keep every `[no-test: ...]` bypass on ONE
 physical line — a long reason is fine as long as it isn't hard-wrapped.
 
+**Gotcha — a pure dead-code-deletion cleanup batch (no new logic, nothing to
+assert) trips Gate 1 ("feature code changed but no test files modified"), not
+just Gate 2.** #169/#171/#173/#176 (delete 51 dead i18n keys, 18 dead CSS
+selectors, a dead `Role` method, swap one untyped JS interop call for its
+typed web-sys equivalent) touched `.rs` files with no accompanying test
+diff — Gate 1 fired even though every deletion was independently re-verified
+(fresh `grep -rn` per key/selector immediately before removal, on top of the
+ticket's own architecture-check + adversarial-reviewer pass) and there is no
+new behavior to write a meaningful assertion against; the existing E2E/unit
+suite is what actually proves nothing broke (a wrongly-removed key surfaces
+as a `???` render, a wrongly-removed selector as a visual/E2E regression).
+Same bypass recipe as the Gate 2 case: `git commit --allow-empty -m "chore:
+push gate bypass [no-test: <reason>]"` as its own commit, THEN a separate
+`git push` call.
+
 ## Removing an API route → SPA static fallback returns 200, NOT a router 404
 
 `all_routes()` ends with `.fallback(static_files::static_handler)`, and
