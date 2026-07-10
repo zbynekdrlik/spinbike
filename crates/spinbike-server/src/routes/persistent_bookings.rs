@@ -8,7 +8,9 @@ use serde::Deserialize;
 
 use crate::AppState;
 use crate::auth::AuthUser;
+use crate::error::ApiError;
 use crate::routes::internal_error;
+use spinbike_core::errors::ErrorCode;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -31,12 +33,9 @@ async fn list(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(user_id): Path<i64>,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     if !claims.role.can_book_for_others() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
     let rows = crate::db::persistent_bookings::list_for_user(&state.pool, user_id)
         .await
@@ -49,12 +48,9 @@ async fn create(
     AuthUser(claims): AuthUser,
     Path(user_id): Path<i64>,
     Json(body): Json<CreateReq>,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     if !claims.role.can_book_for_others() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
     let id = crate::db::persistent_bookings::create(&state.pool, user_id, body.template_id)
         .await
@@ -72,12 +68,9 @@ async fn end_persistent(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path((user_id, template_id)): Path<(i64, i64)>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<StatusCode, ApiError> {
     if !claims.role.can_book_for_others() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
     crate::db::persistent_bookings::end(&state.pool, user_id, template_id)
         .await

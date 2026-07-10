@@ -278,16 +278,30 @@ jobs:
           if-no-files-found: ignore
 
   mutation-test:
-    name: Mutation Testing
+    name: Mutation Testing (shard ${{ matrix.shard }}/8)
     runs-on: ubuntu-latest
-    # HARD CAP per mutation-testing.md (≤20 min). The gate is diff-scoped
-    # (--in-diff), so it only mutates lines changed since main and finishes fast;
-    # the whole tree is swept on-demand by .github/workflows/mutation-full.yml (#102).
+    # HARD CAP per mutation-testing.md (≤20 min PER SHARD). The gate is
+    # diff-scoped (--in-diff), which normally mutates only a handful of changed
+    # lines and finishes in well under a minute. BUT a wide mechanical refactor
+    # can push --in-diff toward full-tree size — e.g. #158's typed-error layer
+    # touched ~57 handler signatures + 86 error sites, yielding ~236 mutants
+    # (≈88% of the whole tree). No single 20-min job can test that. Per the
+    # skill's budget rule (overrun = fix the setup, NEVER raise the timeout),
+    # the PR gate is sharded, mirroring the proven 8-way split of the on-demand
+    # full-tree sweep (.github/workflows/mutation-full.yml). A normal small PR
+    # puts ~0 mutants in most shards, so each finishes in a couple of minutes.
     timeout-minutes: 20
     needs: test
     # Re-gated for the single-trigger model (#103): runs on the dev push (was
     # pull_request-only). --in-diff compares dev's HEAD against origin/main.
     if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    strategy:
+      # A survivor in one shard must NOT cancel the others — every surviving
+      # mutant across all shards must be reported, not just the first shard's.
+      fail-fast: false
+      matrix:
+        # cargo-mutants --shard is 0-indexed: k in [0, n-1].
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -317,13 +331,16 @@ jobs:
         # the dev→main diff — exactly the set of lines this PR introduces (#103).
         run: git diff origin/main...HEAD > pr.diff
 
-      - name: Run cargo-mutants on diff
+      - name: Run cargo-mutants on diff (shard ${{ matrix.shard }}/8)
         run: |
-          # Mutate only PR-changed lines in the Rust crates.
+          # Mutate only PR-changed lines in the Rust crates, this shard's slice.
+          # --shard k/8: cargo-mutants partitions the --in-diff mutant list 8
+          #   ways so each shard stays inside the 20-min cap (budget rule above).
           # --baseline=skip: the `test` job (needs: test) already proved the
           #   unmutated tree green, so skip re-running the baseline here (#102).
           # --test-tool=nextest: run each mutant's tests under cargo-nextest
           #   (per-test process isolation, faster) instead of `cargo test` (#102).
+          # Builds use [profile.mutants] (debug off) via .cargo/mutants.toml.
           # --no-shuffle keeps output deterministic for log readability.
           # Exclude one-off CLI tools and the trivial server main() — these are
           # entry points that would need full E2E harnesses to mutate usefully.
@@ -332,6 +349,7 @@ jobs:
           # normal variance. 180s leaves room without masking real hangs.
           cargo mutants \
             --in-diff pr.diff \
+            --shard ${{ matrix.shard }}/8 \
             --baseline=skip \
             --test-tool=nextest \
             --timeout 180 \

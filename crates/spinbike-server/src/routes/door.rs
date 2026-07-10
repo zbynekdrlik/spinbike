@@ -28,9 +28,11 @@ use std::time::{Duration, Instant};
 
 use crate::AppState;
 use crate::auth::AuthUser;
+use crate::error::ApiError;
 use crate::ewelink::EwelinkState;
 use crate::routes::internal_error;
 use spinbike_core::auth::Role;
+use spinbike_core::errors::ErrorCode;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -114,7 +116,7 @@ impl Default for RateLimiter {
 async fn open(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let user_id = claims.sub;
 
     // 1. Load user + role + allow_self_entry + credit + blocked.
@@ -341,23 +343,18 @@ async fn open(
 
 /// Require admin OR staff. Mirrors `admin::require_staff` but inlined to keep
 /// the door module self-contained.
-fn require_admin_or_staff(
-    claims: &spinbike_core::auth::Claims,
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+fn require_admin_or_staff(claims: &spinbike_core::auth::Claims) -> Result<(), ApiError> {
     if claims.role.is_staff_or_admin() {
         Ok(())
     } else {
-        Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ))
+        Err(ApiError::Forbidden(ErrorCode::StaffRequired))
     }
 }
 
 async fn health(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-) -> Result<Json<serde_json::Value>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, ApiError> {
     require_admin_or_staff(&claims)?;
 
     let ws_state = match state.ewelink.state() {
@@ -622,8 +619,11 @@ mod tests {
         };
         let result = require_admin_or_staff(&claims);
         match result {
-            Err((status, _)) => assert_eq!(status, StatusCode::FORBIDDEN),
+            Err(ApiError::Forbidden(code)) => {
+                assert_eq!(code, spinbike_core::errors::ErrorCode::StaffRequired)
+            }
             Ok(()) => panic!("customer must be rejected; L297 Ok(()) mutant"),
+            Err(other) => panic!("expected Forbidden(StaffRequired), got {other:?}"),
         }
     }
 }

@@ -9,7 +9,9 @@ use serde::Deserialize;
 use crate::AppState;
 use crate::auth::AuthUser;
 use crate::db::transactions::NOTE_MAX_CHARS;
+use crate::error::ApiError;
 use crate::routes::internal_error;
+use spinbike_core::errors::ErrorCode;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -70,12 +72,9 @@ async fn void_transaction(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<i64>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<StatusCode, ApiError> {
     if !claims.role.can_process_payments() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     let mut tx = state.pool.begin().await.map_err(internal_error)?;
@@ -89,16 +88,10 @@ async fn void_transaction(
     .map_err(internal_error)?;
 
     let Some(row) = row else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Transaction not found"})),
-        ));
+        return Err(ApiError::NotFound(ErrorCode::TransactionNotFound));
     };
     if row.deleted_at.is_some() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Transaction already voided"})),
-        ));
+        return Err(ApiError::NotFound(ErrorCode::TransactionAlreadyVoided));
     }
 
     sqlx::query("UPDATE transactions SET deleted_at = datetime('now') WHERE id = ?")
@@ -130,12 +123,9 @@ async fn patch_valid_until(
     AuthUser(claims): AuthUser,
     Path(id): Path<i64>,
     Json(body): Json<PatchValidUntilReq>,
-) -> Result<Json<PatchValidUntilResp>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<PatchValidUntilResp>, ApiError> {
     if !claims.role.can_process_payments() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     let row: Option<TxMini> = sqlx::query_as(
@@ -147,10 +137,7 @@ async fn patch_valid_until(
     .map_err(internal_error)?;
 
     let Some(row) = row else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Transaction not found"})),
-        ));
+        return Err(ApiError::NotFound(ErrorCode::TransactionNotFound));
     };
     if row.valid_until.is_none() {
         return Err(super::bad_request(
@@ -176,13 +163,10 @@ async fn patch_note(
     AuthUser(claims): AuthUser,
     Path(id): Path<i64>,
     Json(body): Json<PatchNoteReq>,
-) -> Result<Json<PatchNoteResp>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<PatchNoteResp>, ApiError> {
     // Same role gate as void / valid-until edit — staff only.
     if !claims.role.can_manage_cards() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     // 200-char cap, counted in characters (not bytes) so Slovak diacritics
@@ -206,16 +190,10 @@ async fn patch_note(
     .map_err(internal_error)?;
 
     let Some(row) = row else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Transaction not found"})),
-        ));
+        return Err(ApiError::NotFound(ErrorCode::TransactionNotFound));
     };
     if row.deleted_at.is_some() {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "Cannot edit note on a voided transaction"})),
-        ));
+        return Err(ApiError::conflict(ErrorCode::NoteOnVoidedTransaction));
     }
 
     sqlx::query("UPDATE transactions SET note = ? WHERE id = ?")
@@ -236,12 +214,9 @@ async fn patch_created_at(
     AuthUser(claims): AuthUser,
     Path(id): Path<i64>,
     Json(body): Json<PatchCreatedAtReq>,
-) -> Result<Json<PatchCreatedAtResp>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<PatchCreatedAtResp>, ApiError> {
     if !claims.role.can_manage_cards() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     let row: Option<TxMini> = sqlx::query_as(
@@ -253,16 +228,10 @@ async fn patch_created_at(
     .map_err(internal_error)?;
 
     let Some(row) = row else {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Transaction not found"})),
-        ));
+        return Err(ApiError::NotFound(ErrorCode::TransactionNotFound));
     };
     if row.deleted_at.is_some() {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "Cannot edit date on a voided transaction"})),
-        ));
+        return Err(ApiError::conflict(ErrorCode::DateOnVoidedTransaction));
     }
 
     // 30-day window check (inclusive). Future dates are also rejected — same

@@ -1,11 +1,13 @@
-use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+use axum::{Json, Router, extract::State, routing::post};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::auth::AuthUser;
 use crate::db::transactions::NOTE_MAX_CHARS;
 use crate::db::users;
+use crate::error::ApiError;
 use crate::routes::internal_error;
+use spinbike_core::errors::ErrorCode;
 
 #[derive(Deserialize)]
 pub struct ChargeRequest {
@@ -71,12 +73,9 @@ async fn charge(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Json(body): Json<ChargeRequest>,
-) -> Result<Json<PaymentResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<PaymentResponse>, ApiError> {
     if !claims.role.can_process_payments() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     // #31: charge requires an explicit service_id (data integrity — untyped
@@ -127,18 +126,10 @@ async fn charge(
         .fetch_optional(&mut *tx)
         .await
         .map_err(internal_error)?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "User not found"})),
-            )
-        })?;
+        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
 
     if user.blocked {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "User is blocked"})),
-        ));
+        return Err(ApiError::conflict(ErrorCode::UserBlocked));
     }
 
     // Legacy app allowed credit to go negative — any user can go into debt.
@@ -179,12 +170,9 @@ async fn storno(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Json(body): Json<StornoRequest>,
-) -> Result<Json<PaymentResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<PaymentResponse>, ApiError> {
     if !claims.role.can_process_payments() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     // C3: Validate amount is positive.
@@ -202,12 +190,7 @@ async fn storno(
         .fetch_optional(&mut *tx)
         .await
         .map_err(internal_error)?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "User not found"})),
-            )
-        })?;
+        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
 
     // Credit the user (refund) within the transaction.
     sqlx::query("UPDATE users SET credit = ROUND(credit + ?, 2) WHERE id = ?")
@@ -244,12 +227,9 @@ async fn sell_pass(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Json(body): Json<SellPassRequest>,
-) -> Result<Json<SellPassResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<SellPassResponse>, ApiError> {
     if !claims.role.can_process_payments() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
     if body.price < 0.0 {
         return Err(super::bad_request("Price must be zero or greater"));
@@ -274,17 +254,9 @@ async fn sell_pass(
         .fetch_optional(&mut *tx)
         .await
         .map_err(internal_error)?
-        .ok_or_else(|| {
-            (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({"error": "User not found"})),
-            )
-        })?;
+        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
     if user.blocked {
-        return Err((
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({"error": "User is blocked"})),
-        ));
+        return Err(ApiError::conflict(ErrorCode::UserBlocked));
     }
 
     // Resolve Monthly pass service id by name (seeded by V4 migration).
@@ -332,12 +304,9 @@ async fn log_visit(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Json(body): Json<LogVisitRequest>,
-) -> Result<Json<LogVisitResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<LogVisitResponse>, ApiError> {
     if !claims.role.can_process_payments() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     let today = chrono::Local::now().date_naive();
@@ -347,12 +316,7 @@ async fn log_visit(
     match valid_until {
         Some(d) if d >= today => {} // active — OK
         _ => {
-            return Err((
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({
-                    "error": "User has no active monthly pass; use /api/payments/charge"
-                })),
-            ));
+            return Err(ApiError::conflict(ErrorCode::NoActiveMonthlyPass));
         }
     }
 
@@ -364,10 +328,7 @@ async fn log_visit(
             .await
             .map_err(internal_error)?;
     if service_exists.is_none() {
-        return Err((
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({"error": "Service not found"})),
-        ));
+        return Err(ApiError::NotFound(ErrorCode::ServiceNotFound));
     }
 
     if let Some(n) = body.note.as_deref()

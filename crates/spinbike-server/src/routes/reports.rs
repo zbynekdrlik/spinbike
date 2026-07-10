@@ -1,7 +1,6 @@
 use axum::{
     Json, Router,
     extract::{Query, State},
-    http::StatusCode,
     routing::get,
 };
 use serde::Deserialize;
@@ -9,7 +8,9 @@ use serde::Deserialize;
 use crate::AppState;
 use crate::auth::AuthUser;
 use crate::db;
+use crate::error::ApiError;
 use crate::routes::internal_error;
+use spinbike_core::errors::ErrorCode;
 
 use spinbike_core::reports::ReportResponse;
 
@@ -20,16 +21,11 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// Require admin role. Reports contain business-level data and are admin-only.
-fn require_admin(
-    claims: &spinbike_core::auth::Claims,
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+fn require_admin(claims: &spinbike_core::auth::Claims) -> Result<(), ApiError> {
     if matches!(claims.role, spinbike_core::auth::Role::Admin) {
         Ok(())
     } else {
-        Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin access required"})),
-        ))
+        Err(ApiError::Forbidden(ErrorCode::AdminRequired))
     }
 }
 
@@ -44,7 +40,7 @@ async fn day(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Query(q): Query<DayQuery>,
-) -> Result<Json<ReportResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<ReportResponse>, ApiError> {
     require_admin(&claims)?;
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
     let (kpi, events, has_more) = db::reports::day_report(&state.pool, q.date, limit, q.before)
@@ -69,7 +65,7 @@ async fn range(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Query(q): Query<RangeQuery>,
-) -> Result<Json<ReportResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<ReportResponse>, ApiError> {
     require_admin(&claims)?;
     if q.to < q.from {
         return Err(super::bad_request("to < from"));

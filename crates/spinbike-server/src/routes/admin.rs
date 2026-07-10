@@ -9,8 +9,10 @@ use serde::{Deserialize, Serialize};
 use crate::AppState;
 use crate::auth::AuthUser;
 use crate::db::{classes, settings, users};
+use crate::error::ApiError;
 use crate::routes::internal_error;
 use spinbike_core::auth::Role;
+use spinbike_core::errors::ErrorCode;
 use spinbike_core::ws::ServerMsg;
 
 // ---------- Templates ----------
@@ -174,14 +176,9 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// Require at least staff role. Returns Err with 403 if the user is a customer.
-fn require_staff(
-    claims: &spinbike_core::auth::Claims,
-) -> Result<(), (StatusCode, Json<serde_json::Value>)> {
+fn require_staff(claims: &spinbike_core::auth::Claims) -> Result<(), ApiError> {
     if matches!(claims.role, spinbike_core::auth::Role::Customer) {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
     Ok(())
 }
@@ -193,7 +190,7 @@ async fn list_templates(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Query(query): Query<ListTemplatesQuery>,
-) -> Result<Json<Vec<TemplateResponse>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<TemplateResponse>>, ApiError> {
     require_staff(&claims)?;
 
     // M3: Support ?include_inactive=true for admin use.
@@ -227,12 +224,9 @@ async fn create_template(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Json(body): Json<CreateTemplateRequest>,
-) -> Result<(StatusCode, Json<TemplateResponse>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<TemplateResponse>), ApiError> {
     if !claims.role.can_manage_users() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::AdminRequired));
     }
 
     let id = classes::create_template(
@@ -264,12 +258,9 @@ async fn delete_template(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Path(id): Path<i64>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<StatusCode, ApiError> {
     if !claims.role.can_manage_users() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::AdminRequired));
     }
 
     sqlx::query("UPDATE class_templates SET active = 0 WHERE id = ?")
@@ -286,12 +277,9 @@ async fn update_template(
     AuthUser(claims): AuthUser,
     Path(id): Path<i64>,
     Json(body): Json<UpdateTemplateRequest>,
-) -> Result<Json<TemplateResponse>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<TemplateResponse>, ApiError> {
     if !claims.role.can_manage_users() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::AdminRequired));
     }
 
     // Fetch existing row, merge fields, then do a full UPDATE.
@@ -344,12 +332,9 @@ async fn cancel_class(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Json(body): Json<CancelClassRequest>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<StatusCode, ApiError> {
     if !claims.role.can_cancel_class() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Staff access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     classes::cancel_occurrence(
@@ -376,7 +361,7 @@ async fn cancel_class(
 async fn list_instructors(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-) -> Result<Json<Vec<InstructorRow>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<InstructorRow>>, ApiError> {
     require_staff(&claims)?;
 
     let rows =
@@ -392,12 +377,9 @@ async fn create_instructor(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Json(body): Json<CreateInstructorRequest>,
-) -> Result<(StatusCode, Json<InstructorRow>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<InstructorRow>), ApiError> {
     if !claims.role.can_manage_users() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::AdminRequired));
     }
 
     let id: i64 = sqlx::query_scalar("INSERT INTO instructors (name) VALUES (?) RETURNING id")
@@ -421,12 +403,9 @@ async fn update_instructor(
     AuthUser(claims): AuthUser,
     Path(id): Path<i64>,
     Json(body): Json<UpdateInstructorRequest>,
-) -> Result<Json<InstructorRow>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<InstructorRow>, ApiError> {
     if !claims.role.can_manage_users() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::AdminRequired));
     }
 
     let existing =
@@ -459,7 +438,7 @@ async fn update_instructor(
 async fn list_services(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-) -> Result<Json<Vec<ServiceRow>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<ServiceRow>>, ApiError> {
     require_staff(&claims)?;
 
     let rows = sqlx::query_as::<_, ServiceRow>(
@@ -476,12 +455,9 @@ async fn create_service(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Json(body): Json<CreateServiceRequest>,
-) -> Result<(StatusCode, Json<ServiceRow>), (StatusCode, Json<serde_json::Value>)> {
+) -> Result<(StatusCode, Json<ServiceRow>), ApiError> {
     if !claims.role.can_manage_users() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::AdminRequired));
     }
 
     if body.name_sk.trim().is_empty() || body.name_en.trim().is_empty() {
@@ -510,10 +486,7 @@ async fn create_service(
         if let sqlx::Error::Database(db_err) = &e
             && db_err.is_unique_violation()
         {
-            return (
-                StatusCode::CONFLICT,
-                Json(serde_json::json!({"error": "a monthly_pass service already exists"})),
-            );
+            return ApiError::conflict(ErrorCode::MonthlyPassExists);
         }
         internal_error(e)
     })?;
@@ -535,12 +508,9 @@ async fn update_service(
     AuthUser(claims): AuthUser,
     Path(id): Path<i64>,
     Json(body): Json<UpdateServiceRequest>,
-) -> Result<Json<ServiceRow>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<ServiceRow>, ApiError> {
     if !claims.role.can_manage_users() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::AdminRequired));
     }
 
     let existing = sqlx::query_as::<_, ServiceRow>(
@@ -550,10 +520,7 @@ async fn update_service(
     .fetch_optional(&state.pool)
     .await
     .map_err(internal_error)?
-    .ok_or((
-        StatusCode::NOT_FOUND,
-        Json(serde_json::json!({"error": "service not found"})),
-    ))?;
+    .ok_or(ApiError::NotFound(ErrorCode::ServiceNotFound))?;
 
     let name_sk = body.name_sk.unwrap_or(existing.name_sk);
     let name_en = body.name_en.unwrap_or(existing.name_en);
@@ -588,7 +555,7 @@ async fn update_service(
 async fn get_settings(
     State(state): State<AppState>,
     AuthUser(_claims): AuthUser,
-) -> Result<Json<Vec<SettingRow>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<SettingRow>>, ApiError> {
     let rows: Vec<(String, String)> =
         sqlx::query_as("SELECT key, value FROM settings ORDER BY key")
             .fetch_all(&state.pool)
@@ -606,12 +573,9 @@ async fn update_setting(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
     Json(body): Json<UpdateSettingRequest>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<StatusCode, ApiError> {
     if !claims.role.can_manage_users() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::AdminRequired));
     }
 
     settings::set_setting(&state.pool, &body.key, &body.value)
@@ -626,12 +590,9 @@ async fn update_setting(
 async fn list_users_handler(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-) -> Result<Json<Vec<UserResponse>>, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<Vec<UserResponse>>, ApiError> {
     if !claims.role.can_manage_users() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::AdminRequired));
     }
 
     let rows = users::list_users(&state.pool)
@@ -657,12 +618,9 @@ async fn update_user_role(
     AuthUser(claims): AuthUser,
     Path(user_id): Path<i64>,
     Json(body): Json<UpdateRoleRequest>,
-) -> Result<StatusCode, (StatusCode, Json<serde_json::Value>)> {
+) -> Result<StatusCode, ApiError> {
     if !claims.role.can_manage_users() {
-        return Err((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"error": "Admin access required"})),
-        ));
+        return Err(ApiError::Forbidden(ErrorCode::AdminRequired));
     }
 
     // I6: Validate the role before writing to DB. `Role::from` maps any

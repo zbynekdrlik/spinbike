@@ -12,31 +12,27 @@ pub mod upcoming_classes;
 pub mod users;
 pub mod version;
 
-use axum::{Json, Router, http::StatusCode};
+use axum::Router;
 
 use crate::AppState;
+use crate::error::ApiError;
 
-/// Log the real error and return a generic "Internal server error" to the client.
-/// Prevents leaking implementation details to users.
-pub fn internal_error(e: impl std::fmt::Display) -> (StatusCode, Json<serde_json::Value>) {
+/// Log the real error and return a generic 500 to the client (no
+/// implementation detail leaked). Retained as a helper so the ~110
+/// `.map_err(internal_error)?` call sites stay untouched by the typed-error
+/// migration (#158) — the return type is now `ApiError` instead of the old
+/// `(StatusCode, Json<Value>)` tuple.
+pub fn internal_error(e: impl std::fmt::Display) -> ApiError {
     tracing::error!("Internal error: {e}");
-    (
-        StatusCode::INTERNAL_SERVER_ERROR,
-        Json(serde_json::json!({"error": "Internal server error"})),
-    )
+    ApiError::Internal
 }
 
-/// Build a BAD_REQUEST response with an error message body.
-///
-/// Wraps the `(StatusCode, Json<Value>)` tuple so cargo-mutants can mutate
-/// the message string reliably (#36 — `axum::Json` newtype has no `::new()`
-/// constructor for cargo-mutants to synthesize). Behaviorally identical to
-/// inline `(StatusCode::BAD_REQUEST, Json(json!({"error": msg})))`.
-pub fn bad_request(msg: &str) -> (StatusCode, Json<serde_json::Value>) {
-    (
-        StatusCode::BAD_REQUEST,
-        Json(serde_json::json!({"error": msg})),
-    )
+/// Build a 400 Bad Request carrying `msg` as the human `error` message. The
+/// machine `error_code` is the generic `bad_request`; the specifics live in
+/// the message (which tests assert on). Retained so the many
+/// `super::bad_request("...")` call sites stay untouched (#158).
+pub fn bad_request(msg: &str) -> ApiError {
+    ApiError::BadRequest(msg.to_string())
 }
 
 /// All API routes merged together.
