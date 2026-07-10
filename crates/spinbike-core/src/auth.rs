@@ -20,10 +20,6 @@ pub enum Role {
 }
 
 impl Role {
-    pub fn can_manage_templates(&self) -> bool {
-        matches!(self, Role::Admin | Role::Staff)
-    }
-
     pub fn can_manage_cards(&self) -> bool {
         matches!(self, Role::Admin | Role::Staff)
     }
@@ -197,7 +193,6 @@ mod tests {
         // The fallback must NEVER widen permissions. Every can_* check is
         // an explicit Admin/Staff match; Unknown falls through to false.
         let r = Role::Unknown;
-        assert!(!r.can_manage_templates());
         assert!(!r.can_manage_cards());
         assert!(!r.can_book_for_others());
         assert!(!r.can_cancel_any_booking());
