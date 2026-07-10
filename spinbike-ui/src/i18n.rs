@@ -211,19 +211,13 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("balance", ("Zostatok", "Balance"));
     m.insert("staff", ("Personal", "Staff"));
     m.insert("admin", ("Administracia", "Admin"));
-    m.insert("cards", ("Karty", "Cards"));
-    m.insert("payments", ("Platby", "Payments"));
-    m.insert("classes", ("Hodiny", "Classes"));
 
     // Auth forms
     m.insert("email", ("Email", "Email"));
     m.insert("password", ("Heslo", "Password"));
     m.insert("name", ("Meno", "Name"));
     m.insert("phone", ("Telefon", "Phone"));
-    m.insert("first_name", ("Meno", "First Name"));
-    m.insert("last_name", ("Priezvisko", "Last Name"));
     m.insert("company", ("Firma", "Company"));
-    m.insert("cardholder", ("Drzitel karty", "Cardholder"));
     m.insert(
         "transaction_history",
         ("Historia transakcii", "Transaction History"),
@@ -233,7 +227,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         ("Ziadne transakcie", "No transactions"),
     );
     m.insert("date", ("Datum", "Date"));
-    m.insert("action", ("Akcia", "Action"));
     m.insert("logging_in", ("Prihlasovanie...", "Logging in..."));
 
     // Magic-link onboarding (/welcome + login-page customer section, #109)
@@ -339,15 +332,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("sat", ("So", "Sat"));
     m.insert("sun", ("Ne", "Sun"));
 
-    // Day names (long)
-    m.insert("monday", ("Pondelok", "Monday"));
-    m.insert("tuesday", ("Utorok", "Tuesday"));
-    m.insert("wednesday", ("Streda", "Wednesday"));
-    m.insert("thursday", ("Stvrtok", "Thursday"));
-    m.insert("friday", ("Piatok", "Friday"));
-    m.insert("saturday", ("Sobota", "Saturday"));
-    m.insert("sunday", ("Nedela", "Sunday"));
-
     // My bookings
     m.insert(
         "no_bookings",
@@ -358,31 +342,18 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("my_balance", ("Moj zostatok", "My Balance"));
 
     // Card operations
-    m.insert("card_operations", ("Operacie s kartami", "Card Operations"));
-    m.insert("barcode_lookup", ("Vyhladanie karty", "Barcode Lookup"));
-    m.insert("enter_barcode", ("Zadajte ciarovy kod", "Enter barcode"));
-    m.insert("lookup", ("Vyhladat", "Lookup"));
     m.insert("activate", ("Aktivovat", "Activate"));
     m.insert(
         "all_member_cards",
         ("Vsetky clenske karty", "All Member Cards"),
     );
-    m.insert("credit", ("Kredit", "Credit"));
-    m.insert("status", ("Stav", "Status"));
-    m.insert("linked", ("Prepojena", "Linked"));
-    m.insert("yes", ("Ano", "Yes"));
-    m.insert("no", ("Nie", "No"));
     m.insert("active", ("Aktivna", "Active"));
     m.insert("inactive", ("Neaktivna", "Inactive"));
     m.insert("blocked", ("Zablokovana", "Blocked"));
     m.insert("topup", ("Dobit", "Top Up"));
     m.insert("block", ("Zablokovat", "Block"));
     m.insert("unblock", ("Odblokovat", "Unblock"));
-    m.insert("barcode", ("Ciarovy kod", "Barcode"));
     m.insert("card_code", ("Kod karty", "Card code"));
-    m.insert("initial_credit", ("Pociatocny kredit", "Initial Credit"));
-    m.insert("no_cards_found", ("Ziadne karty", "No cards found"));
-    m.insert("loading_cards", ("Nacitavam karty...", "Loading cards..."));
     m.insert(
         "new_card_barcode",
         ("Ciarovy kod novej karty", "New card barcode"),
@@ -397,9 +368,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     );
     m.insert("searching", ("Hladam…", "Searching…"));
     m.insert("no_matches", ("Ziadne zhody", "No matches"));
-    m.insert("quick_topup", ("Rychle dobitie", "Quick top-up"));
-    m.insert("quick_charge", ("Rychla platba", "Quick charge"));
-    m.insert("custom_amount", ("Vlastna suma", "Custom amount"));
     m.insert(
         "topup_ok_format",
         ("Dobite! Novy kredit: {} €", "Topped up! New credit: {} €"),
@@ -418,10 +386,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
 
     // Staff dashboard
     m.insert("staff_dashboard", ("Panel personalu", "Staff Dashboard"));
-    m.insert("walk_in", ("Vstup bez rezervacie", "Walk-in"));
     m.insert("add_walk_in", ("+ Navstevnik", "+ Walk-in"));
-    m.insert("user_id", ("ID pouzivatela", "User ID"));
-    m.insert("participants", ("Ucastnici", "Participants"));
     m.insert("booked_format", ("{}/{} rezervovanych", "{}/{} booked"));
     m.insert(
         "enter_valid_user_id",
@@ -438,14 +403,9 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
 
     // Payments
     m.insert("charge", ("Platba", "Charge"));
-    m.insert("storno", ("Storno", "Storno"));
-    m.insert("storno_refund", ("Storno (Vratenie)", "Storno (Refund)"));
-    m.insert("service", ("Sluzba", "Service"));
     m.insert("select_service", ("-- Vyberte --", "-- Select --"));
     m.insert("amount", ("Suma", "Amount"));
-    m.insert("amount_czk", ("Suma (EUR)", "Amount (EUR)"));
     m.insert("price", ("Cena", "Price"));
-    m.insert("price_czk", ("Cena (EUR)", "Price (EUR)"));
 
     // Admin
     m.insert("templates", ("Sablony hodin", "Templates"));
@@ -551,7 +511,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         "sell_monthly_pass",
         ("Predat mesacny listok", "Sell monthly pass"),
     );
-    m.insert("modal_price", ("Cena (EUR)", "Price (EUR)"));
     m.insert("modal_date", ("Datum", "Date"));
     m.insert("modal_valid_until", ("Platny do", "Valid until"));
     m.insert("modal_confirm", ("Potvrdit", "OK"));
@@ -603,7 +562,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("overview_loading", ("Nacitavam stat...", "Loading..."));
 
     // General
-    m.insert("loading", ("Nacitavanie...", "Loading..."));
     m.insert("page_not_found", ("Stranka nenajdena", "Page not found"));
     m.insert(
         "unable_to_load",
@@ -614,7 +572,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("show_older", ("Zobrazit starsie", "Show older"));
     m.insert("close", ("Zatvorit", "Close"));
     m.insert("edit_info", ("Upravit udaje", "Edit info"));
-    m.insert("customer_info", ("Udaje klienta", "Customer info"));
 
     // Staff invite button in edit-info form (#111)
     m.insert("send_invite", ("Poslat pozvanku", "Send invite"));
@@ -633,11 +590,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         "sell_pass_label",
         ("Predat mesacny preukaz", "Sell monthly pass"),
     );
-    m.insert("pass_active_until", ("Aktivny do {}", "Active until {}"));
-    m.insert("pass_expired_on", ("Skoncil {}", "Expired {}"));
-    m.insert("days_left_short", ("{} d", "{}d"));
-    m.insert("days_short", ("dni", "days"));
-    m.insert("days_ago_short", ("pred {} d", "{}d ago"));
     m.insert("edit_pass_date", ("Upravit datum", "Edit date"));
     m.insert(
         "edit_tx_date",
@@ -664,7 +616,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     // Reports — date navigation
     m.insert("reports_yesterday", ("Vcera", "Yesterday"));
     m.insert("reports_today", ("Dnes", "Today"));
-    m.insert("reports_tomorrow", ("Zajtra", "Tomorrow"));
     m.insert("reports_week", ("Tyzden", "Week"));
     m.insert("reports_month", ("Mesiac", "Month"));
     m.insert("reports_pick_date", ("Zvolit datum", "Pick date"));
@@ -682,9 +633,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("filters_event_payments", ("Platby", "Payments"));
     m.insert("filters_event_topups", ("Vklady", "Top-ups"));
     m.insert("filters_event_passes", ("Permanentky", "Passes"));
-    m.insert("filters_service_spinning", ("Spinning", "Spinning"));
-    m.insert("filters_service_fitness", ("Fitness", "Fitness"));
-    m.insert("filters_service_pass", ("Permanentka", "Pass"));
     m.insert(
         "filters_search_placeholder",
         (
@@ -770,7 +718,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "Users by last movement",
         ),
     );
-    m.insert("last_movement", ("Posledny pohyb", "Last movement"));
     m.insert("no_movement_yet", ("Bez pohybu", "No movement yet"));
     m.insert("show_more", ("Zobrazit dalsie", "Show more"));
     m.insert("delete_user", ("Zmazat pouzivatela", "Delete user"));

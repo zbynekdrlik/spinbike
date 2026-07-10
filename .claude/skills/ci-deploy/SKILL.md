@@ -181,15 +181,32 @@ zero-behavior-change clippy cleanup) — it's flagged too. Bypass with
 logic; this is legitimate per the rule above, just note the trigger can be
 the BODY, not only the subject.
 
-**Gotcha — the `[no-test: <reason>]` bypass regex is LINE-based; a reason
-that wraps across multiple lines in the commit body silently fails to
-match.** The hook does `echo "$LAST_MSG" | grep -qE '\[no-test:\s*[^]]+\]'`
-with NO `-z`, so `grep` evaluates one line at a time — if the opening `[` and
-closing `]` land on DIFFERENT lines (e.g. a long reason written as a wrapped
-paragraph via a `cat <<'EOF'` heredoc commit message), no single line
-contains both brackets and the bypass is NOT recognized, even though it looks
-present in the full message. Keep every `[no-test: ...]` bypass on ONE
-physical line — a long reason is fine as long as it isn't hard-wrapped.
+**Update — the `[no-test: <reason>]` bypass now tolerates a hard-wrapped,
+multi-line reason.** The hook used to grep `$LAST_MSG` per-line with no `-z`,
+so a reason whose opening `[no-test:` and closing `]` landed on DIFFERENT
+lines (e.g. a long reason written as a wrapped paragraph via a `cat <<'EOF'`
+heredoc commit message) silently failed to match even though it looked
+present in the full message. The hook now flattens newlines to spaces first
+(`LAST_MSG_FLAT=$(printf '%s' "$LAST_MSG" | tr '\n' ' ')`, then greps that)
+before checking the bypass marker, so a hard-wrapped reason is recognized
+fine (verified against the actual real commit for #169/#171/#173/#176's
+push-gate bypass, which itself hard-wraps). Keeping the reason on one
+physical line is still the clearer style, just no longer required.
+
+**Gotcha — a pure dead-code-deletion cleanup batch (no new logic, nothing to
+assert) trips Gate 1 ("feature code changed but no test files modified"), not
+just Gate 2.** #169/#171/#173/#176 (delete 51 dead i18n keys, 18 dead CSS
+selectors, a dead `Role` method, swap one untyped JS interop call for its
+typed web-sys equivalent) touched `.rs` files with no accompanying test
+diff — Gate 1 fired even though every deletion was independently re-verified
+(fresh `grep -rn` per key/selector immediately before removal, on top of the
+ticket's own architecture-check + adversarial-reviewer pass) and there is no
+new behavior to write a meaningful assertion against; the existing E2E/unit
+suite is what actually proves nothing broke (a wrongly-removed key surfaces
+as a `???` render, a wrongly-removed selector as a visual/E2E regression).
+Same bypass recipe as the Gate 2 case: `git commit --allow-empty -m "chore:
+push gate bypass [no-test: <reason>]"` as its own commit, THEN a separate
+`git push` call.
 
 ## Removing an API route → SPA static fallback returns 200, NOT a router 404
 

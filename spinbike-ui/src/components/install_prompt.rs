@@ -41,23 +41,21 @@ fn get_prop(target: &JsValue, key: &str) -> JsValue {
 /// True once the app is already running installed (standalone). Checked two
 /// ways: the iOS Safari-only legacy `navigator.standalone` flag (no typed
 /// web-sys binding — non-standard), and the standard `display-mode:
-/// standalone` media query (Chromium + modern Safari).
+/// standalone` media query (Chromium + modern Safari), via the typed
+/// `Window::match_media` binding (`MediaQueryList` web-sys feature).
 fn is_standalone() -> bool {
-    let Some(window) = window_value() else {
+    let Some(win) = web_sys::window() else {
         return false;
     };
+    let window = JsValue::from(win.clone());
     let navigator = get_prop(&window, "navigator");
     if get_prop(&navigator, "standalone").as_bool() == Some(true) {
         return true;
     }
-    let match_media = get_prop(&window, "matchMedia");
-    if let Some(func) = match_media.dyn_ref::<Function>()
-        && let Ok(result) = func.call1(&window, &JsValue::from_str("(display-mode: standalone)"))
-        && get_prop(&result, "matches").as_bool() == Some(true)
-    {
-        return true;
-    }
-    false
+    win.match_media("(display-mode: standalone)")
+        .ok()
+        .flatten()
+        .is_some_and(|mql| mql.matches())
 }
 
 /// True when `index.html`'s `beforeinstallprompt` listener has captured a
