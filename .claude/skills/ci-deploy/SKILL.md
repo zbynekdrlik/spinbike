@@ -181,15 +181,17 @@ zero-behavior-change clippy cleanup) — it's flagged too. Bypass with
 logic; this is legitimate per the rule above, just note the trigger can be
 the BODY, not only the subject.
 
-**Gotcha — the `[no-test: <reason>]` bypass regex is LINE-based; a reason
-that wraps across multiple lines in the commit body silently fails to
-match.** The hook does `echo "$LAST_MSG" | grep -qE '\[no-test:\s*[^]]+\]'`
-with NO `-z`, so `grep` evaluates one line at a time — if the opening `[` and
-closing `]` land on DIFFERENT lines (e.g. a long reason written as a wrapped
-paragraph via a `cat <<'EOF'` heredoc commit message), no single line
-contains both brackets and the bypass is NOT recognized, even though it looks
-present in the full message. Keep every `[no-test: ...]` bypass on ONE
-physical line — a long reason is fine as long as it isn't hard-wrapped.
+**Update — the `[no-test: <reason>]` bypass now tolerates a hard-wrapped,
+multi-line reason.** The hook used to grep `$LAST_MSG` per-line with no `-z`,
+so a reason whose opening `[no-test:` and closing `]` landed on DIFFERENT
+lines (e.g. a long reason written as a wrapped paragraph via a `cat <<'EOF'`
+heredoc commit message) silently failed to match even though it looked
+present in the full message. The hook now flattens newlines to spaces first
+(`LAST_MSG_FLAT=$(printf '%s' "$LAST_MSG" | tr '\n' ' ')`, then greps that)
+before checking the bypass marker, so a hard-wrapped reason is recognized
+fine (verified against the actual real commit for #169/#171/#173/#176's
+push-gate bypass, which itself hard-wraps). Keeping the reason on one
+physical line is still the clearer style, just no longer required.
 
 **Gotcha — a pure dead-code-deletion cleanup batch (no new logic, nothing to
 assert) trips Gate 1 ("feature code changed but no test files modified"), not

@@ -44,15 +44,17 @@ fn get_prop(target: &JsValue, key: &str) -> JsValue {
 /// standalone` media query (Chromium + modern Safari), via the typed
 /// `Window::match_media` binding (`MediaQueryList` web-sys feature).
 fn is_standalone() -> bool {
-    let Some(window) = window_value() else {
+    let Some(win) = web_sys::window() else {
         return false;
     };
+    let window = JsValue::from(win.clone());
     let navigator = get_prop(&window, "navigator");
     if get_prop(&navigator, "standalone").as_bool() == Some(true) {
         return true;
     }
-    web_sys::window()
-        .and_then(|w| w.match_media("(display-mode: standalone)").ok().flatten())
+    win.match_media("(display-mode: standalone)")
+        .ok()
+        .flatten()
         .is_some_and(|mql| mql.matches())
 }
 
