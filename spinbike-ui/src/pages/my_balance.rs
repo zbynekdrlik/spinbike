@@ -40,14 +40,10 @@ struct RecentTx {
 }
 
 impl RecentTx {
-    /// Mirrors the admin `TxnInfo::service_label` (dashboard/mod.rs) — pick
-    /// the joined service name for the active language. `None` when the
-    /// movement wasn't tied to a service (e.g. a plain top-up).
+    /// Delegates to the shared `i18n::service_label` (#147) — same helper
+    /// the admin `TxnInfo::service_label` (dashboard/mod.rs) uses.
     fn service_label(&self, lang: Lang) -> Option<&str> {
-        match lang {
-            Lang::Sk => self.service_name_sk.as_deref(),
-            Lang::En => self.service_name_en.as_deref(),
-        }
+        i18n::service_label(&self.service_name_sk, &self.service_name_en, lang)
     }
 }
 

@@ -149,11 +149,10 @@ pub struct TxnInfo {
 }
 
 impl TxnInfo {
+    /// Delegates to the shared `i18n::service_label` (#147) — same helper
+    /// the customer `RecentTx::service_label` (my_balance.rs) uses.
     pub fn service_label(&self, lang: crate::i18n::Lang) -> Option<&str> {
-        match lang {
-            crate::i18n::Lang::Sk => self.service_name_sk.as_deref(),
-            crate::i18n::Lang::En => self.service_name_en.as_deref(),
-        }
+        crate::i18n::service_label(&self.service_name_sk, &self.service_name_en, lang)
     }
 
     /// EventKind classification — same precedence as ReportEvent::kind().

@@ -74,7 +74,7 @@ pub struct BalanceResponse {
     pub recent: Vec<RecentTx>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, sqlx::FromRow)]
 pub struct RecentTx {
     pub id: i64,
     pub created_at: String,
@@ -1018,23 +1018,13 @@ async fn my_balance(
 
     // 3. Last 20 transactions (newest first). LEFT JOIN services (#147) so
     //    the customer sees WHICH service a movement was for, same as the
-    //    admin transactions list.
+    //    admin transactions list. RecentTx derives FromRow (column-name
+    //    matched, not positional) so the aliases below just need to match
+    //    its field names — no manual tuple destructuring to keep in sync.
     tracing::debug!(user_id, "my_balance: querying recent transactions");
-    let recent: Vec<RecentTx> = sqlx::query_as::<
-        _,
-        (
-            i64,
-            String,
-            String,
-            f64,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        ),
-    >(
+    let recent: Vec<RecentTx> = sqlx::query_as::<_, RecentTx>(
         "SELECT t.id, t.created_at, t.action, t.amount, t.valid_until, t.note, \
-                s.name_sk, s.name_en \
+                s.name_sk AS service_name_sk, s.name_en AS service_name_en \
            FROM transactions t \
            LEFT JOIN services s ON s.id = t.service_id \
           WHERE t.user_id = ? \
@@ -1045,23 +1035,7 @@ async fn my_balance(
     .bind(user_id)
     .fetch_all(&state.pool)
     .await
-    .map_err(internal_error)?
-    .into_iter()
-    .map(
-        |(id, created_at, action, amount, valid_until, note, service_name_sk, service_name_en)| {
-            RecentTx {
-                id,
-                created_at,
-                action,
-                amount,
-                valid_until,
-                note,
-                service_name_sk,
-                service_name_en,
-            }
-        },
-    )
-    .collect();
+    .map_err(internal_error)?;
 
     tracing::info!(
         user_id = id,

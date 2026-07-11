@@ -101,16 +101,16 @@ pub fn MyBookingsPage() -> impl IntoView {
                     Some(t) if !t.is_empty() => format!("{date_label} {t}"),
                     _ => date_label,
                 };
-                let instructor_name = b.instructor_name.clone();
+                // Option<impl IntoView> renders nothing on None (no dummy
+                // element needed) — see Leptos's control-flow docs.
+                let instructor_sub = b.instructor_name.clone()
+                    .map(|name| view! { <div class="list-row__sub">{name}</div> });
 
                 view! {
                     <div class="list-row">
                         <div class="list-row__main">
                             <div class="list-row__title">{title}</div>
-                            {match instructor_name {
-                                Some(name) => view! { <div class="list-row__sub">{name}</div> }.into_any(),
-                                None => view! { <span></span> }.into_any(),
-                            }}
+                            {instructor_sub}
                             {move || {
                                 match cancel_err.get() {
                                     Some(ce) => {
