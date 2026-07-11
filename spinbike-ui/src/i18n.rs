@@ -289,6 +289,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         "send_login_link",
         ("Poslat prihlasovaci link", "Send login link"),
     );
+    m.insert("sending_login_link", ("Odosielam...", "Sending..."));
     m.insert(
         "login_link_sent",
         (

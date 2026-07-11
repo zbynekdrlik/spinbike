@@ -76,7 +76,13 @@ pub fn LoginLinkForm() -> impl IntoView {
                             <input type="email" class="form-control" node_ref=email_ref required data-testid="login-link-email" />
                         </div>
                         <button type="submit" class="btn btn--ghost btn--block" disabled=move || loading.get() data-testid="login-link-submit">
-                            {move || i18n::t(lang.get(), "send_login_link")}
+                            {move || {
+                                if loading.get() {
+                                    i18n::t(lang.get(), "sending_login_link")
+                                } else {
+                                    i18n::t(lang.get(), "send_login_link")
+                                }
+                            }}
                         </button>
                     </form>
                 }
