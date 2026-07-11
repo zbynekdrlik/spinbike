@@ -621,6 +621,84 @@ async fn my_balance_reports_no_allow_self_entry_when_opted_out() {
     );
 }
 
+// ─── /api/my/balance monthly-pass expiry-day boundary (#179) ─────────────────
+//
+// my_balance's `monthly_pass_active_until` must report a pass as ACTIVE for
+// the whole of its last valid day (inclusive), consistent with the door route
+// and the T-4h charger. Before the fix, `valid_until > datetime('now')`
+// compared a 10-char bare date against a 19-char datetime; SQLite's byte-wise
+// TEXT compare makes the shorter prefix sort LESS, so the predicate was FALSE
+// on the expiry day — the customer's own balance screen wrongly showed "no
+// active pass" from midnight of their last paid day.
+
+#[tokio::test]
+async fn my_balance_shows_pass_active_on_its_expiry_day() {
+    let app = TestApp::new().await;
+    let svc_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    // Pass valid_until = EXACTLY today, as a bare date (sell_pass's format).
+    sqlx::query(
+        "INSERT INTO transactions (user_id, service_id, amount, action, valid_until) \
+         VALUES (?, ?, -35.0, 'charge', date('now'))",
+    )
+    .bind(app.customer_id)
+    .bind(svc_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    // What the DB considers "today" — same basis the seeded date uses, so the
+    // exact-value assertion can't flake on a UTC-vs-local mismatch.
+    let today: String = sqlx::query_scalar("SELECT date('now')")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+
+    let (status, body) = app
+        .request(get("/api/my/balance", &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(
+        !body["monthly_pass_active_until"].is_null(),
+        "a pass expiring today must show as active on its last valid day, got {body}"
+    );
+    assert_eq!(
+        body["monthly_pass_active_until"].as_str(),
+        Some(today.as_str()),
+        "monthly_pass_active_until must be today's date on the expiry day"
+    );
+}
+
+#[tokio::test]
+async fn my_balance_no_active_pass_after_expiry() {
+    let app = TestApp::new().await;
+    let svc_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    // Pass expired YESTERDAY → must report no active pass (guard against the
+    // inclusive fix becoming permissive of truly-expired passes).
+    sqlx::query(
+        "INSERT INTO transactions (user_id, service_id, amount, action, valid_until) \
+         VALUES (?, ?, -35.0, 'charge', date('now', '-1 day'))",
+    )
+    .bind(app.customer_id)
+    .bind(svc_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, body) = app
+        .request(get("/api/my/balance", &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert!(
+        body["monthly_pass_active_until"].is_null(),
+        "a pass that expired yesterday must NOT show as active, got {body}"
+    );
+}
+
 // ─── /api/my/balance recent movements — service name (#147) ──────────────────
 //
 // The admin transactions list already names the service a movement was for
