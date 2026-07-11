@@ -1,4 +1,9 @@
-use axum::{Json, Router, extract::State, http::StatusCode, routing::post};
+use axum::{
+    Json, Router,
+    extract::State,
+    http::StatusCode,
+    routing::{get, post},
+};
 use serde::Deserialize;
 
 use crate::AppState;
@@ -76,6 +81,11 @@ pub fn routes() -> Router<AppState> {
         // to work; the handler interprets the body as {barcode, credit} and
         // creates/updates the matching user's credit field.
         .route("/api/test/seed-credit", post(seed_credit_compat))
+        // #172: deliberately panics, so the integration test in lib.rs can
+        // prove a handler panic is caught (500) rather than aborting the
+        // whole process. Only reachable under SPINBIKE_TEST_MODE=1, exactly
+        // like every other route in this module.
+        .route("/api/test/panic", get(trigger_panic))
 }
 
 // ---------------------------------------------------------------------------
@@ -122,6 +132,15 @@ async fn find_or_create_user_by_card_code(
 
 fn default_seed_role() -> String {
     "customer".to_string()
+}
+
+/// #172: deliberately panics so `lib.rs`'s
+/// `panicking_handler_returns_500_and_server_survives` test can prove the
+/// router-level `CatchPanicLayer` turns a handler panic into a 500 response
+/// instead of aborting the whole process. Never reachable outside
+/// `SPINBIKE_TEST_MODE=1` (same gate as every other route in this module).
+async fn trigger_panic() -> StatusCode {
+    panic!("intentional test panic (#172) — verifying CatchPanicLayer");
 }
 
 /// Bootstrap account for E2E: create a user WITH a password + role from an

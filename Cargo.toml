@@ -4,7 +4,7 @@ exclude = ["spinbike-ui"]
 resolver = "2"
 
 [workspace.package]
-version = "0.15.0-dev.55"
+version = "0.15.0-dev.57"
 edition = "2024"
 license = "MIT"
 
@@ -12,7 +12,7 @@ license = "MIT"
 spinbike-core = { path = "crates/spinbike-core" }
 tokio = { version = "1", features = ["full"] }
 axum = { version = "0.8", features = ["ws", "macros"] }
-tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+tower-http = { version = "0.6", features = ["cors", "trace", "fs", "catch-panic"] }
 sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite", "chrono"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -45,7 +45,13 @@ lettre = { version = "0.11", default-features = false, features = [
 [profile.release]
 lto = true
 codegen-units = 1
-panic = "abort"
+# unwind (the default) rather than abort (#172): this is a single-instance
+# server, so an unguarded handler panic under abort takes down the WHOLE
+# process for every concurrent user. With unwind + CatchPanicLayer
+# (lib.rs::build_router), a handler panic is caught and turned into a 500
+# for just that one request — everyone else stays connected. Trades a
+# slightly larger release binary for crash-resilience.
+panic = "unwind"
 
 # Build profile used by cargo-mutants (see .cargo/mutants.toml `profile`).
 # Inherits the test profile but drops debuginfo — each mutant is built + tested

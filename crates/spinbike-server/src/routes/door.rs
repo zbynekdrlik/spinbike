@@ -152,8 +152,14 @@ async fn open(
     // outcome — anti-abuse is throttled even when the cloud is down.
     if let Err(reason) = state
         .door_rate_limit
+        // #172: panic="unwind" (was "abort") means a future panic while this
+        // guard is held now actually poisons the mutex instead of aborting
+        // the whole process. Recover the guard rather than propagate the
+        // poison via .expect() — a sliding-window hit counter has no
+        // invariant that a mid-update panic could leave inconsistent enough
+        // to justify permanently 500-ing every door request until restart.
         .lock()
-        .expect("rate-limiter mutex poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .check_and_record(user_id)
     {
         tracing::warn!(user_id, %reason, "door: rejected — rate limited");

@@ -198,8 +198,13 @@ async fn request_login_link(
     // no send.
     if let Err(reason) = state
         .login_link_rate_limit
+        // #172: same reasoning as door.rs's door_rate_limit — panic="unwind"
+        // means a future panic while holding this guard now poisons the
+        // mutex instead of aborting the process. Recover rather than
+        // .expect(), so one panic doesn't permanently 500 every login-link
+        // request until restart.
         .lock()
-        .expect("login-link rate-limiter mutex poisoned")
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
         .check_and_record(&email)
     {
         tracing::warn!(%reason, "request-login-link: throttled");

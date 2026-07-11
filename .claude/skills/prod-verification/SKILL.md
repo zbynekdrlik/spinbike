@@ -91,6 +91,18 @@ customer-facing (`/my/*`) ticket.
 - **Curl-only** verification never proves the DOM actually renders the
   enrichment (see `autonomous-verification.md` — liveness ≠ functional).
 
+## Shortcut — verifying a pure ROLE-boundary check needs NO DB row at all
+
+If the only thing under test is an extractor-level role gate (`StaffUser`/
+`AdminUser` vs `AuthUser` — e.g. #175, confirming a customer JWT now gets 403
+`staff_required` where it used to get 200), skip step 2 entirely. Those
+extractors (`crates/spinbike-server/src/auth/mod.rs`) decide purely from the
+JWT's own `role` claim — no DB lookup happens before the check. Mint the JWT
+with `sub` set to any non-existent id (e.g. `999999999`) and the target
+`role`, then curl straight away. Zero DB writes, zero cleanup. Only fall back
+to the full synthetic-user-row recipe when the endpoint under test actually
+reads the DB row (balance, bookings, name rendering, etc.).
+
 ## Gotchas
 
 - **NEVER name a shell var `UID` (or `GID`/`PPID`/`EUID`) when capturing the

@@ -13,8 +13,9 @@ use anyhow::Result;
 use spinbike_core::ws::ServerMsg;
 use sqlx::SqlitePool;
 use tokio::sync::broadcast;
+use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::CorsLayer;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -96,6 +97,47 @@ pub fn resolve_jwt_secret(raw: Option<&str>, test_mode: bool) -> Result<String, 
     }
 }
 
+/// Pure, unit-testable panic-payload → human string extractor (#172), split
+/// out of `handle_panic` so the branch logic (String vs &str vs unknown
+/// payload type) is directly testable — the HTTP response `handle_panic`
+/// returns is a FIXED "Internal Server Error" regardless of `details` (it
+/// only feeds the log line), so an end-to-end response assertion alone can
+/// never exercise these branches.
+fn panic_details(err: &(dyn std::any::Any + Send + 'static)) -> String {
+    if let Some(s) = err.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = err.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
+/// Custom `CatchPanicLayer` responder (#172). This is a single-instance
+/// server; without `panic = "unwind"` (Cargo.toml `[profile.release]`) a
+/// handler panic used to abort the WHOLE process for every user. This layer
+/// wraps the ordinary HTTP request/response service stack and turns a panic
+/// there into a 500 for the ONE request that panicked, so every other
+/// concurrent HTTP request is unaffected. It does NOT wrap the WebSocket
+/// handler (`ws::handle_socket` runs in the task axum spawns after the
+/// upgrade response is already sent, outside this middleware stack) — a
+/// panic there is still only guarded by the `unwind` profile switch itself
+/// (that task fails without taking down the process; other WS connections
+/// are unaffected either way, just not via THIS layer). Logs the panic
+/// payload via `tracing::error!` (comprehensive-logging.md: an unguarded
+/// panic is exactly the kind of failure that must be visible in logs alone,
+/// with no ability to redeploy).
+fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
+    let details = panic_details(err.as_ref());
+    error!(panic = %details, "handler panicked — caught by CatchPanicLayer, request failed with 500");
+
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+        .header(axum::http::header::CONTENT_TYPE, "text/plain")
+        .body(axum::body::Body::from("Internal Server Error"))
+        .unwrap()
+}
+
 /// Build the full application router, applying the `SPINBIKE_TEST_MODE`
 /// fixture-route gate. This is the SINGLE place that decides whether the
 /// unauthenticated, arbitrary-role `/api/test/*` fixtures
@@ -106,6 +148,12 @@ pub fn resolve_jwt_secret(raw: Option<&str>, test_mode: bool) -> Result<String, 
 /// through (#161: a prior version of that test hand-copied this logic
 /// instead of sharing it, so it could never have caught a real regression
 /// in `start_server` itself).
+///
+/// Also wires `CatchPanicLayer` (#172) so a panicking handler returns 500
+/// instead of crashing the whole process — applied here (not only in
+/// `start_server`) so the SAME guarantee covers every test that builds its
+/// router through this function, e.g.
+/// `panicking_handler_returns_500_and_server_survives` below.
 pub fn build_router(test_mode: bool) -> axum::Router<AppState> {
     let mut router = routes::all_routes();
     if test_mode {
@@ -114,7 +162,7 @@ pub fn build_router(test_mode: bool) -> axum::Router<AppState> {
         );
         router = router.merge(routes::test_fixtures::routes());
     }
-    router
+    router.layer(CatchPanicLayer::custom(handle_panic))
 }
 
 /// Build and start the Axum server.
@@ -164,7 +212,7 @@ pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Re
 mod tests {
     use super::*;
     use axum::Router;
-    use axum::body::Body;
+    use axum::body::{Body, to_bytes};
     use axum::http::{Method, Request, StatusCode};
     use axum::routing::get;
     use db::{create_memory_pool, run_migrations};
@@ -434,5 +482,121 @@ mod tests {
                  was {content_type:?}) — it must not be reachable there"
             );
         }
+
+        // #172: /api/test/panic must be gated exactly like every other
+        // fixture route above — if a future edit ever moved it outside the
+        // test_mode gate, hitting it here would either panic this test (no
+        // CatchPanicLayer regression) or, worse, actually invoke the panic
+        // handler on the "production" router built with test_mode=false.
+        // Same SPA-fallback shape assertion as the loop above (never a 500,
+        // never the fixture's own behavior).
+        let panic_req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/test/panic")
+            .body(Body::empty())
+            .unwrap();
+        let panic_resp = app.clone().oneshot(panic_req).await.unwrap();
+        assert_eq!(
+            panic_resp.status(),
+            StatusCode::OK,
+            "/api/test/panic returned a non-200 status on the production router — \
+             it must not be reachable there (expected the SPA fallback)"
+        );
+    }
+
+    /// #172 RED: proves a panicking handler must be caught (500) rather than
+    /// taking down the whole router. As written at this commit, `build_router`
+    /// wires no `CatchPanicLayer` anywhere, so nothing intercepts the panic
+    /// before it propagates out of `Router::oneshot` — this test would panic
+    /// (and thus fail) rather than observe a 500. Deterministically RED by
+    /// static proof, not an actual failing CI run: local `cargo test` is
+    /// banned in this repo (CI-only, see CLAUDE.md), and the absence of any
+    /// `catch_panic`/`CatchPanicLayer` reference anywhere in the crate
+    /// (grep-confirmed) is exactly the condition this test targets.
+    #[tokio::test]
+    async fn panicking_handler_returns_500_and_server_survives() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (event_tx, _) = broadcast::channel(16);
+        let state = AppState {
+            pool: pool.clone(),
+            event_tx,
+            jwt_secret: "placeholder".to_string(),
+            ewelink: crate::ewelink::EwelinkHandle::spawn(),
+            mail: crate::mail::MailHandle::spawn(),
+            public_base_url: String::new(),
+            door_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::door::RateLimiter::new(),
+            )),
+            login_link_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::auth::LoginLinkRateLimiter::new(),
+            )),
+        };
+
+        // test_mode=true mounts routes::test_fixtures::routes(), which now
+        // includes the panic-only-under-SPINBIKE_TEST_MODE /api/test/panic
+        // route (#172). Whatever layer stack build_router applies (or
+        // doesn't) is exactly what production gets via start_server, too.
+        let app: Router = build_router(true).with_state(state);
+
+        let panic_req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/test/panic")
+            .body(Body::empty())
+            .unwrap();
+        let panic_resp = app.clone().oneshot(panic_req).await.unwrap();
+        assert_eq!(
+            panic_resp.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "a panicking handler must be caught and turned into a 500 response, \
+             not left to crash the process"
+        );
+        let content_type = panic_resp
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        assert_eq!(content_type, "text/plain");
+        let panic_body = to_bytes(panic_resp.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&panic_body[..], b"Internal Server Error");
+
+        // The server must still be alive and able to serve OTHER requests —
+        // the entire point of catching the panic instead of aborting.
+        let health_req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/version")
+            .body(Body::empty())
+            .unwrap();
+        let health_resp = app.clone().oneshot(health_req).await.unwrap();
+        assert_eq!(
+            health_resp.status(),
+            StatusCode::OK,
+            "server must still serve requests after a handler panic was caught"
+        );
+    }
+
+    /// #172: `panic_details`'s branch selection (String vs &str vs unknown
+    /// payload type) only affects the logged line, never the HTTP response
+    /// `handle_panic` returns — so it needs its own direct tests, not just
+    /// end-to-end coverage through the panic route above.
+    #[test]
+    fn panic_details_extracts_string_payload() {
+        let err: Box<dyn std::any::Any + Send> = Box::new("boom".to_string());
+        assert_eq!(panic_details(err.as_ref()), "boom");
+    }
+
+    /// `panic!("literal")` (no format args) produces a `&'static str`
+    /// payload — the exact shape the /api/test/panic route above uses.
+    #[test]
+    fn panic_details_extracts_str_payload() {
+        let err: Box<dyn std::any::Any + Send> = Box::new("boom");
+        assert_eq!(panic_details(err.as_ref()), "boom");
+    }
+
+    #[test]
+    fn panic_details_falls_back_for_unknown_payload_type() {
+        let err: Box<dyn std::any::Any + Send> = Box::new(42i32);
+        assert_eq!(panic_details(err.as_ref()), "unknown panic payload");
     }
 }

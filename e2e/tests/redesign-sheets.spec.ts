@@ -58,11 +58,11 @@ test.describe('redesign: sheets', () => {
         await openCard(page, barcode);
 
         // The active pass banner must be visible for this test to be meaningful.
+        // Auto-waiting assertion (not a non-retrying isVisible()+test.skip guard,
+        // #174) so a seeding/render regression FAILS the test instead of
+        // silently skipping it green.
         const activeBanner = page.locator('[data-testid="pass-banner-active"]');
-        if (!(await activeBanner.isVisible())) {
-            test.skip(true, 'No active pass on this card — seeding may have failed');
-            return;
-        }
+        await expect(activeBanner).toBeVisible();
 
         // Click the edit pass date button inside the banner.
         await page.locator('[data-testid="pass-date-edit"]').click();
@@ -83,11 +83,9 @@ test.describe('redesign: sheets', () => {
         await seedCardWithPass(request, token, barcode, '2030-12-31');
         await openCard(page, barcode);
 
+        // Auto-waiting assertion (#174) — see the identical fix above.
         const activeBanner = page.locator('[data-testid="pass-banner-active"]');
-        if (!(await activeBanner.isVisible())) {
-            test.skip(true, 'No active pass on this card — seeding may have failed');
-            return;
-        }
+        await expect(activeBanner).toBeVisible();
 
         await page.locator('[data-testid="pass-date-edit"]').click();
         const sheet = page.locator('[data-testid="sheet-edit-pass-date"]');

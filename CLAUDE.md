@@ -89,7 +89,7 @@ Load the skill for the area you're working in — each contains the full HOW-TO:
 | Area | Skill | When to load |
 |---|---|---|
 | DB migrations / queries | `.claude/skills/db-migrations/SKILL.md` | Any migration, backfill, visit count, or prod-DB validation |
-| CI / deploy workflows | `.claude/skills/ci-deploy/SKILL.md` | Writing CI YAML, subagent prompts, or staging commits |
+| CI / deploy workflows | `.claude/skills/ci-deploy/SKILL.md` | Writing CI YAML, subagent prompts, staging commits, or monitoring a CI run (has the foreground-poll sandbox-block gotcha) |
 | Domain / design | `.claude/skills/domain/SKILL.md` | Any design, spec, brainstorm, or feature touching roles/users/cards |
 | Door unlock / eWeLink / Sonoff | `.claude/skills/ewelink-door/SKILL.md` | Any work on `ewelink/*`, `routes/door.rs`, `/api/door/*`, or door credentials |
 | Frontend PWA / JS interop | `.claude/skills/frontend-pwa/SKILL.md` | Untyped browser API access (`js_sys::Reflect`), UA sniffing, manifest icons |
