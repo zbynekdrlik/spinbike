@@ -114,13 +114,19 @@ fn panic_details(err: &(dyn std::any::Any + Send + 'static)) -> String {
 }
 
 /// Custom `CatchPanicLayer` responder (#172). This is a single-instance
-/// server built with `panic = "unwind"` (Cargo.toml `[profile.release]`) —
-/// without this layer a panicking handler would still just crash the
-/// calling task silently. The layer catches the unwind and turns it into a
-/// 500 for the ONE request that panicked; every other concurrent request /
-/// WS connection is unaffected. Logs the panic payload via `tracing::error!`
-/// (comprehensive-logging.md: an unguarded panic is exactly the kind of
-/// failure that must be visible in logs alone, with no ability to redeploy).
+/// server; without `panic = "unwind"` (Cargo.toml `[profile.release]`) a
+/// handler panic used to abort the WHOLE process for every user. This layer
+/// wraps the ordinary HTTP request/response service stack and turns a panic
+/// there into a 500 for the ONE request that panicked, so every other
+/// concurrent HTTP request is unaffected. It does NOT wrap the WebSocket
+/// handler (`ws::handle_socket` runs in the task axum spawns after the
+/// upgrade response is already sent, outside this middleware stack) — a
+/// panic there is still only guarded by the `unwind` profile switch itself
+/// (that task fails without taking down the process; other WS connections
+/// are unaffected either way, just not via THIS layer). Logs the panic
+/// payload via `tracing::error!` (comprehensive-logging.md: an unguarded
+/// panic is exactly the kind of failure that must be visible in logs alone,
+/// with no ability to redeploy).
 fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
     let details = panic_details(err.as_ref());
     error!(panic = %details, "handler panicked — caught by CatchPanicLayer, request failed with 500");
@@ -476,6 +482,26 @@ mod tests {
                  was {content_type:?}) — it must not be reachable there"
             );
         }
+
+        // #172: /api/test/panic must be gated exactly like every other
+        // fixture route above — if a future edit ever moved it outside the
+        // test_mode gate, hitting it here would either panic this test (no
+        // CatchPanicLayer regression) or, worse, actually invoke the panic
+        // handler on the "production" router built with test_mode=false.
+        // Same SPA-fallback shape assertion as the loop above (never a 500,
+        // never the fixture's own behavior).
+        let panic_req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/test/panic")
+            .body(Body::empty())
+            .unwrap();
+        let panic_resp = app.clone().oneshot(panic_req).await.unwrap();
+        assert_eq!(
+            panic_resp.status(),
+            StatusCode::OK,
+            "/api/test/panic returned a non-200 status on the production router — \
+             it must not be reachable there (expected the SPA fallback)"
+        );
     }
 
     /// #172 RED: proves a panicking handler must be caught (500) rather than
