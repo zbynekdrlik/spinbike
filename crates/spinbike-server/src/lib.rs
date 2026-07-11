@@ -13,8 +13,9 @@ use anyhow::Result;
 use spinbike_core::ws::ServerMsg;
 use sqlx::SqlitePool;
 use tokio::sync::broadcast;
+use tower_http::catch_panic::CatchPanicLayer;
 use tower_http::cors::CorsLayer;
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -96,6 +97,31 @@ pub fn resolve_jwt_secret(raw: Option<&str>, test_mode: bool) -> Result<String, 
     }
 }
 
+/// Custom `CatchPanicLayer` responder (#172). This is a single-instance
+/// server built with `panic = "unwind"` (Cargo.toml `[profile.release]`) —
+/// without this layer a panicking handler would still just crash the
+/// calling task silently. The layer catches the unwind and turns it into a
+/// 500 for the ONE request that panicked; every other concurrent request /
+/// WS connection is unaffected. Logs the panic payload via `tracing::error!`
+/// (comprehensive-logging.md: an unguarded panic is exactly the kind of
+/// failure that must be visible in logs alone, with no ability to redeploy).
+fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
+    let details = if let Some(s) = err.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = err.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else {
+        "unknown panic payload".to_string()
+    };
+    error!(panic = %details, "handler panicked — caught by CatchPanicLayer, request failed with 500");
+
+    axum::response::Response::builder()
+        .status(axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+        .header(axum::http::header::CONTENT_TYPE, "text/plain")
+        .body(axum::body::Body::from("Internal Server Error"))
+        .unwrap()
+}
+
 /// Build the full application router, applying the `SPINBIKE_TEST_MODE`
 /// fixture-route gate. This is the SINGLE place that decides whether the
 /// unauthenticated, arbitrary-role `/api/test/*` fixtures
@@ -106,6 +132,12 @@ pub fn resolve_jwt_secret(raw: Option<&str>, test_mode: bool) -> Result<String, 
 /// through (#161: a prior version of that test hand-copied this logic
 /// instead of sharing it, so it could never have caught a real regression
 /// in `start_server` itself).
+///
+/// Also wires `CatchPanicLayer` (#172) so a panicking handler returns 500
+/// instead of crashing the whole process — applied here (not only in
+/// `start_server`) so the SAME guarantee covers every test that builds its
+/// router through this function, e.g.
+/// `panicking_handler_returns_500_and_server_survives` below.
 pub fn build_router(test_mode: bool) -> axum::Router<AppState> {
     let mut router = routes::all_routes();
     if test_mode {
@@ -114,7 +146,7 @@ pub fn build_router(test_mode: bool) -> axum::Router<AppState> {
         );
         router = router.merge(routes::test_fixtures::routes());
     }
-    router
+    router.layer(CatchPanicLayer::custom(handle_panic))
 }
 
 /// Build and start the Axum server.
