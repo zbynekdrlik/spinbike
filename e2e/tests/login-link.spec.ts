@@ -23,6 +23,28 @@ test.describe('Login page — customer login-link form (#109)', () => {
         assertCleanConsole(consoleMessages);
     });
 
+    // Regression test for #151: an admin/staff owner who typed their OWN
+    // email into this customer-only field got the same generic success
+    // banner as a real customer — with no hint why nothing arrived (the
+    // backend only sends for role=customer accounts, but always 200s by
+    // design to avoid enumeration). The fix is a STATIC hint shown
+    // unconditionally (before any submission, regardless of email typed) —
+    // asserting it is visible on page load, not derived from any API
+    // response, is exactly what proves it adds zero enumeration surface.
+    test('a static hint clarifies the login-link field is customer-only (#151)', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await setEnglishLanguage(page);
+
+        await page.goto('/login');
+        await page.waitForSelector('h1.page-title');
+
+        const hint = page.locator('[data-testid="login-link-customer-only-help"]');
+        await expect(hint).toBeVisible();
+        await expect(hint).toHaveText('This link is for client accounts only. Staff and admin log in with a password above.');
+
+        assertCleanConsole(consoleMessages);
+    });
+
     test('customer email form works even for an email that does not exist (no enumeration)', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
         await setEnglishLanguage(page);

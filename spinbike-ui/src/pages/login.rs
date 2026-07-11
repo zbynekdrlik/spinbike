@@ -139,6 +139,15 @@ pub fn LoginPage() -> impl IntoView {
             <h2 class="page-title mt-3" data-testid="customer-login-heading">
                 {move || i18n::t(lang.get(), "customer_login_heading")}
             </h2>
+            // #151: static, response-independent hint (never derived from the
+            // API result — the endpoint itself always 200s regardless of
+            // whether the typed email is a customer, so no enumeration
+            // surface is added). Clarifies for an admin/staff owner who
+            // types their own email here why nothing arrives: this field is
+            // for customer accounts, they use the password form above.
+            <small class="form-help" data-testid="login-link-customer-only-help">
+                {move || i18n::t(lang.get(), "login_link_customer_only_help")}
+            </small>
             <LoginLinkForm />
         </div>
     }
