@@ -92,7 +92,7 @@ Load the skill for the area you're working in — each contains the full HOW-TO:
 | CI / deploy workflows | `.claude/skills/ci-deploy/SKILL.md` | Writing CI YAML, subagent prompts, staging commits, or monitoring a CI run (has the foreground-poll sandbox-block gotcha) |
 | Domain / design | `.claude/skills/domain/SKILL.md` | Any design, spec, brainstorm, or feature touching roles/users/cards |
 | Door unlock / eWeLink / Sonoff | `.claude/skills/ewelink-door/SKILL.md` | Any work on `ewelink/*`, `routes/door.rs`, `/api/door/*`, or door credentials |
-| Frontend PWA / JS interop | `.claude/skills/frontend-pwa/SKILL.md` | Untyped browser API access (`js_sys::Reflect`), UA sniffing, manifest icons |
+| Frontend PWA / JS interop / post-deploy DOM checks | `.claude/skills/frontend-pwa/SKILL.md` | Untyped browser API access (`js_sys::Reflect`), UA sniffing, manifest icons, reading a version/feature off the live DOM after deploy (service-worker cache gotcha) |
 | Auth / client onboarding | `.claude/skills/auth-onboarding/SKILL.md` | Magic-link tokens (`login_tokens`), `/api/auth/*`, `/welcome`, login/invite UI, register removal |
 | Prod functional verification | `.claude/skills/prod-verification/SKILL.md` | Post-deploy verification of a customer-facing (`/my/*`) feature on live prod |
 
