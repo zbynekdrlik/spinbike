@@ -735,3 +735,24 @@ cargo test is banned" — and always run `git add` and `git commit` as
 SEPARATE Bash calls anyway (the same discipline the push-gate gotcha above
 already requires), so a block on the commit doesn't also silently skip the
 staging.
+
+## `Cargo.lock` can show as modified in `git status` even when you never ran `cargo` yourself — don't sweep it into an unrelated ticket's commit
+
+Observed during #151 (a pure frontend copy/i18n change, no dependency touched):
+right after a plain version bump (`VERSION` + `sync-version.sh`, sed-only, no
+cargo), `git status` showed `M Cargo.lock` — some background process on the
+dev box (most likely an editor's rust-analyzer instance running `cargo
+check`/`cargo metadata` for IDE support) had silently regenerated it,
+partially catching up its embedded `spinbike-core`/`spinbike-server` versions
+from a much older committed value. This repo's `Cargo.lock` has been
+committed-stale for a while (no `--locked`/`--frozen` flag anywhere in CI, so
+nothing enforces it — see "Adding a crate dependency" above), so this kind of
+drift is expected background noise, not a sign anything is wrong.
+
+**Don't reflexively `git add` a stray `Cargo.lock` change into a ticket that
+never touched a dependency.** Check `git status --porcelain` before staging
+(already required by the "Git staging" rule above); if `Cargo.lock` shows
+modified but your diff has no `Cargo.toml`/dependency change, just leave it
+unstaged — it doesn't block CI (no `--locked`) and isn't part of your PR's
+scope. Only stage it deliberately when you actually bumped/added a
+dependency (per the `cargo metadata` recipe above).

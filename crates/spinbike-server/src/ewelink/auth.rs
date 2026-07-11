@@ -11,7 +11,7 @@
 use crate::ewelink::EwelinkError;
 use base64::Engine as _;
 use hmac::{Hmac, Mac};
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 
@@ -76,9 +76,9 @@ pub fn sign(body: &str) -> String {
 /// character set without going through the network round-trip.
 pub(crate) fn random_nonce() -> String {
     const CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyz0123456789";
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     (0..8)
-        .map(|_| CHARS[rng.gen_range(0..CHARS.len())] as char)
+        .map(|_| CHARS[rng.random_range(0..CHARS.len())] as char)
         .collect()
 }
 
