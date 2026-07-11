@@ -14,7 +14,6 @@
 use crate::db::error::Result;
 use base64::Engine as _;
 use rand::Rng;
-use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 
 /// Invite (onboarding) token lifetime: 14 days.
@@ -39,8 +38,7 @@ pub fn generate_raw_token() -> String {
 
 /// SHA-256 hex of the raw token — exactly what is stored in `token_hash`.
 pub fn hash_token(raw: &str) -> String {
-    let digest = Sha256::digest(raw.as_bytes());
-    hex::encode(digest)
+    crate::db::sha256_hex(raw)
 }
 
 /// Create a token for `user_id` with the given `purpose` and TTL, store its

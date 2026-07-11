@@ -77,11 +77,18 @@ pub async fn create_memory_pool() -> Result<SqlitePool> {
     Ok(pool)
 }
 
+/// SHA-256 hex digest of an arbitrary string. Shared by
+/// `migration_checksum` (below) and `login_tokens::hash_token` — both need
+/// the exact same "hash this string, hex-encode it" primitive, so it lives
+/// here once instead of being duplicated per call site.
+pub(crate) fn sha256_hex(input: &str) -> String {
+    hex::encode(Sha256::digest(input.as_bytes()))
+}
+
 /// SHA-256 hex digest of a migration's SQL body — the tamper-detection
-/// fingerprint recorded in `schema_version.checksum` (V19, #170). Same hash
-/// idiom as `db::login_tokens::hash_token`.
+/// fingerprint recorded in `schema_version.checksum` (V19, #170).
 fn migration_checksum(sql: &str) -> String {
-    hex::encode(Sha256::digest(sql.as_bytes()))
+    sha256_hex(sql)
 }
 
 /// Run all pending migrations inside transactions with schema_version tracking.
@@ -187,13 +194,23 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
                     .with_context(|| {
                         format!("Failed to backfill checksum for migration v{version}")
                     })?;
+                info!(version, description, checksum = %expected, "backfilled migration checksum");
             }
             Some(actual) if actual != expected => {
+                tracing::error!(
+                    version,
+                    description,
+                    stored_checksum = %actual,
+                    expected_checksum = %expected,
+                    "migration checksum mismatch — refusing to boot"
+                );
                 anyhow::bail!(
                     "migration {version} ({description}) has been modified after being applied — checksum mismatch"
                 );
             }
-            Some(_) => {}
+            Some(_) => {
+                tracing::debug!(version, "migration checksum verified");
+            }
         }
     }
 
