@@ -1,4 +1,5 @@
 pub mod classes;
+pub mod error;
 pub mod login_tokens;
 pub mod migrations;
 pub mod persistent_bookings;
@@ -15,6 +16,8 @@ use sqlx::{Connection, Row, SqlitePool};
 use tracing::info;
 
 use migrations::MIGRATIONS;
+
+pub use error::DbError;
 
 /// Create a persistent SQLite pool with WAL mode and foreign keys.
 ///

@@ -177,8 +177,7 @@ async fn seed_account(
             Json(serde_json::json!({ "user_id": user_id })),
         )),
         Err(e) => {
-            let chain = format!("{e:#}");
-            if chain.contains("UNIQUE") || chain.contains("unique") {
+            if matches!(e, crate::db::DbError::UniqueViolation) {
                 Err((StatusCode::CONFLICT, "account already exists".into()))
             } else {
                 Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))

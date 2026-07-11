@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::db::error::Result;
 use sqlx::SqlitePool;
 
 #[derive(Debug, Clone, sqlx::FromRow, serde::Serialize)]

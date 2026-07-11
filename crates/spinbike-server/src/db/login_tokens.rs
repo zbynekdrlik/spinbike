@@ -11,7 +11,7 @@
 //!
 //! SECURITY: never log the raw token. Log the hash if anything is logged.
 
-use anyhow::{Context, Result};
+use crate::db::error::Result;
 use base64::Engine as _;
 use rand::RngCore;
 use sha2::{Digest, Sha256};
@@ -65,8 +65,7 @@ pub async fn create_token(
     .bind(purpose)
     .bind(&interval)
     .execute(pool)
-    .await
-    .context("Failed to insert login token")?;
+    .await?;
     Ok(raw)
 }
 
@@ -100,10 +99,7 @@ pub async fn redeem(
     for p in allowed_purposes {
         q = q.bind(*p);
     }
-    let user_id = q
-        .fetch_optional(pool)
-        .await
-        .context("Failed to redeem login token")?;
+    let user_id = q.fetch_optional(pool).await?;
     Ok(user_id)
 }
 
@@ -120,8 +116,7 @@ pub async fn purge_expired_and_used(pool: &SqlitePool) -> Result<u64> {
         "DELETE FROM login_tokens WHERE used_at IS NOT NULL OR expires_at <= datetime('now')",
     )
     .execute(pool)
-    .await
-    .context("Failed to purge login tokens")?;
+    .await?;
     Ok(result.rows_affected())
 }
 

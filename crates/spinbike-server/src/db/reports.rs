@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::db::error::Result;
 use sqlx::SqlitePool;
 
 use spinbike_core::reports::{KpiSummary, ReportEvent};
