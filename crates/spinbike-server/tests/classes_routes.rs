@@ -86,6 +86,43 @@ async fn my_bookings_returns_user_bookings() {
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["template_id"].as_i64().unwrap(), tid);
     assert_eq!(arr[0]["user_id"].as_i64().unwrap(), app.customer_id);
+    // #146: the row is enriched with the class start time (joined from
+    // class_templates) — seed_monday_template seeds "17:00" with no instructor.
+    assert_eq!(arr[0]["start_time"].as_str().unwrap(), "17:00");
+    assert!(arr[0]["instructor_name"].is_null());
+}
+
+/// #146: when the booked class HAS an instructor, `/api/my/bookings` returns
+/// its name (joined via class_templates.instructor_id) — the V6 migration
+/// seeds a Monday 18:00 template taught by "Stevo".
+#[tokio::test]
+async fn my_bookings_includes_instructor_name() {
+    let app = TestApp::new().await;
+    let tid: i64 =
+        sqlx::query_scalar("SELECT id FROM class_templates WHERE weekday=0 AND start_time='18:00'")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    let date = future_monday();
+
+    let booking_body = serde_json::json!({ "template_id": tid, "date": date });
+    let (status, _) = app
+        .request(post_json(
+            "/api/bookings",
+            &app.customer_token,
+            &booking_body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+
+    let (status, resp) = app
+        .request(get("/api/my/bookings", &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let arr = resp.as_array().unwrap();
+    assert_eq!(arr.len(), 1);
+    assert_eq!(arr[0]["start_time"].as_str().unwrap(), "18:00");
+    assert_eq!(arr[0]["instructor_name"].as_str().unwrap(), "Stevo");
 }
 
 #[tokio::test]

@@ -11,6 +11,13 @@ struct BookingRow {
     template_id: i64,
     date: String,
     user_id: i64,
+    start_time: Option<String>,
+    instructor_name: Option<String>,
+}
+
+/// "YYYY-MM-DD" (server's ISO date) -> `NaiveDate`, for `fmt_date_short`.
+fn parse_booking_date(s: &str) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
 }
 
 #[component]
@@ -61,9 +68,9 @@ pub fn MyBookingsPage() -> impl IntoView {
                 return view! { <div class="empty-state">{move || i18n::t(lang.get(), "no_bookings")}</div> }.into_any();
             }
 
+            let lang_now = lang.get();
             let rows: Vec<_> = list.iter().map(|b| {
                 let bid = b.id;
-                let template_id = b.template_id;
                 let date = b.date.clone();
                 let set_v = set_ver;
                 let (cancel_loading, set_cancel_loading) = signal(false);
@@ -84,12 +91,26 @@ pub fn MyBookingsPage() -> impl IntoView {
                     });
                 };
 
-                let title = format!("Class #{template_id} — {date}");
+                // Localized date + class start time — no raw internal
+                // template_id / ISO date shown to the customer (#146). This
+                // is a SPIN-only app so no class name is needed.
+                let date_label = parse_booking_date(&date)
+                    .map(|d| i18n::fmt_date_short(d, lang_now))
+                    .unwrap_or_else(|| date.clone());
+                let title = match &b.start_time {
+                    Some(t) if !t.is_empty() => format!("{date_label} {t}"),
+                    _ => date_label,
+                };
+                let instructor_name = b.instructor_name.clone();
 
                 view! {
                     <div class="list-row">
                         <div class="list-row__main">
                             <div class="list-row__title">{title}</div>
+                            {match instructor_name {
+                                Some(name) => view! { <div class="list-row__sub">{name}</div> }.into_any(),
+                                None => view! { <span></span> }.into_any(),
+                            }}
                             {move || {
                                 match cancel_err.get() {
                                     Some(ce) => {

@@ -50,6 +50,11 @@ pub struct BookingResponse {
     pub template_id: i64,
     pub date: String,
     pub user_id: i64,
+    /// Class start time ("HH:MM"), #146 — populated by `/api/my/bookings`
+    /// (joined from `class_templates`); `None` on the `create_booking` echo
+    /// response, which the frontend only reads `id` from.
+    pub start_time: Option<String>,
+    pub instructor_name: Option<String>,
 }
 
 /// A participant in a class (booking joined with user info).
@@ -265,6 +270,8 @@ async fn create_booking(
             template_id: body.template_id,
             date: body.date,
             user_id: booking_user_id,
+            start_time: None,
+            instructor_name: None,
         }),
     ))
 }
@@ -330,6 +337,8 @@ async fn my_bookings(
             template_id: b.template_id,
             date: b.date,
             user_id: b.user_id,
+            start_time: Some(b.start_time),
+            instructor_name: b.instructor_name,
         })
         .collect();
 

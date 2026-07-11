@@ -181,9 +181,33 @@ pub async fn list_bookings_for_class(
     Ok(bookings)
 }
 
-pub async fn list_user_bookings(pool: &SqlitePool, user_id: i64) -> Result<Vec<BookingRow>> {
-    let bookings = sqlx::query_as::<_, BookingRow>(
-        "SELECT * FROM bookings WHERE user_id = ? AND cancelled_at IS NULL AND date >= date('now') ORDER BY date, created_at",
+/// A user's own upcoming booking, joined with its class template + instructor
+/// (#146) — customer `/my/bookings` view. Kept as its own row type (not
+/// `BookingRow`) because `BookingRow` also backs `SELECT * FROM bookings`
+/// (see `cancel_booking`), which must stay column-for-column with the raw
+/// table.
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct BookingWithClassRow {
+    pub id: i64,
+    pub template_id: i64,
+    pub date: String,
+    pub user_id: i64,
+    pub start_time: String,
+    pub instructor_name: Option<String>,
+}
+
+pub async fn list_user_bookings(
+    pool: &SqlitePool,
+    user_id: i64,
+) -> Result<Vec<BookingWithClassRow>> {
+    let bookings = sqlx::query_as::<_, BookingWithClassRow>(
+        "SELECT b.id, b.template_id, b.date, b.user_id, \
+                ct.start_time, i.name AS instructor_name \
+           FROM bookings b \
+           JOIN class_templates ct ON ct.id = b.template_id \
+           LEFT JOIN instructors i ON i.id = ct.instructor_id \
+          WHERE b.user_id = ? AND b.cancelled_at IS NULL AND b.date >= date('now') \
+          ORDER BY b.date, b.created_at",
     )
     .bind(user_id)
     .fetch_all(pool)
