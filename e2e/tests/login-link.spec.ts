@@ -42,6 +42,19 @@ test.describe('Login page — customer login-link form (#109)', () => {
         await expect(hint).toBeVisible();
         await expect(hint).toHaveText('This link is for client accounts only. Staff and admin log in with a password above.');
 
+        // Regression test for #201: `.form-help` had ZERO CSS rules, so the
+        // hint rendered with only the browser's default <small> styling
+        // (font-size ~13.3px, inherited text color — indistinguishable from
+        // body text). Assert the actual computed style now differs from
+        // that default: a muted (non-body) text color and a small font-size.
+        const style = await hint.evaluate((el) => {
+            const computed = window.getComputedStyle(el);
+            return { color: computed.color, fontSize: computed.fontSize };
+        });
+        const bodyColor = await page.locator('body').evaluate((el) => window.getComputedStyle(el).color);
+        expect(style.color).not.toBe(bodyColor);
+        expect(style.fontSize).toBe('12px');
+
         assertCleanConsole(consoleMessages);
     });
 
