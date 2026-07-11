@@ -2610,4 +2610,102 @@ mod tests {
         .unwrap();
         assert!(tbl.is_some(), "login_tokens must still exist after re-run");
     }
+
+    // V19 — schema_version checksum column (#170) ------------------------
+
+    /// #170 genuine upgrade path: a real pre-V19 database where
+    /// `schema_version` was populated by migrations 1..=18 the way an OLDER
+    /// binary actually did it — via the plain `(version, description)`
+    /// INSERT, with NO `checksum` column existing on the table AT ALL (not
+    /// just NULL — the column itself is absent, mirroring `create_pool`'s
+    /// production schema_version bootstrap before this feature shipped).
+    ///
+    /// This is the scenario the independent review flagged as untested: the
+    /// other #170 tests in db::tests all start from a version=0 pool and run
+    /// the FULL 1..=19 chain in one `run_migrations` call, which only
+    /// exercises the mid-loop path (V19's own ALTER happening partway
+    /// through the SAME run that also applies 1..18). Here, 1..=18 are
+    /// already committed in a SEPARATE, EARLIER step — closer to what
+    /// actually happens in production when this binary is deployed onto an
+    /// existing v18 database.
+    #[tokio::test]
+    async fn v19_checksum_backfills_on_genuine_upgrade_from_v18() {
+        use sqlx::sqlite::SqlitePoolOptions;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        // Bootstrap schema_version exactly as it looked BEFORE V19 — no
+        // checksum column at all (mirrors run_migrations' own
+        // CREATE TABLE IF NOT EXISTS, pre-#170).
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Apply 1..=18 the way an older binary already committed them: raw
+        // SQL + a plain (version, description) INSERT — never touching a
+        // checksum column, because on THIS binary's schema_version table
+        // there isn't one yet.
+        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 18) {
+            apply_sql_block(&pool, sql).await;
+            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
+                .bind(v)
+                .bind(desc)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        // Sanity: confirm the pre-upgrade state genuinely has no checksum
+        // column yet (not just NULL values) — otherwise this test would not
+        // be exercising what it claims to.
+        let cols_before: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('schema_version')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            !cols_before.iter().any(|(n,)| n == "checksum"),
+            "test setup: schema_version must not have a checksum column yet"
+        );
+
+        // Deploy the new binary: run_migrations should apply ONLY V19 (add
+        // the column via ALTER), then backfill checksums for all 19
+        // versions — no error.
+        run_migrations(&pool).await.unwrap();
+
+        let cols_after: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('schema_version')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            cols_after.iter().any(|(n,)| n == "checksum"),
+            "schema_version must gain a checksum column after upgrading through V19"
+        );
+
+        for &(version, _description, sql) in MIGRATIONS {
+            let expected = crate::db::sha256_hex(sql);
+            let stored: Option<String> =
+                sqlx::query_scalar("SELECT checksum FROM schema_version WHERE version = ?")
+                    .bind(version)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                stored,
+                Some(expected),
+                "migration v{version} must have a correct checksum after the genuine upgrade"
+            );
+        }
+    }
 }

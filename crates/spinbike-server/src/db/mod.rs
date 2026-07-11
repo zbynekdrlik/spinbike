@@ -182,7 +182,11 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
                 .bind(version)
                 .fetch_one(pool)
                 .await
-                .with_context(|| format!("Failed to read checksum for migration v{version}"))?;
+                .with_context(|| {
+                    format!(
+                        "schema_version has no row for migration v{version} — table is missing an expected row (corrupted or manually edited?)"
+                    )
+                })?;
 
         match stored {
             None => {
