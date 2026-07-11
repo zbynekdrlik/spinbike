@@ -185,7 +185,8 @@ pub async fn list_bookings_for_class(
 /// `BookingRow`) because `BookingRow` also backs the raw `bookings` column set
 /// (see `list_bookings_for_class` here and `cancel_booking` in
 /// `routes/classes.rs`, both explicit-column `SELECT`s, #164), which must stay
-/// column-for-column with the table.
+/// exactly in sync with the (deliberately partial — it omits `card_id`,
+/// `charged_at`, `charge_transaction_id`) subset of table columns it names.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct BookingWithClassRow {
     pub id: i64,
