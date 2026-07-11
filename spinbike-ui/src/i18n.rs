@@ -360,6 +360,18 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         "customer_login_heading",
         ("Prihlasenie pre klientov", "Customer login"),
     );
+    // #151: static, response-INDEPENDENT hint — shown unconditionally
+    // regardless of what (or whether) the user has typed, so it adds zero
+    // user-enumeration surface. Clarifies why an admin/staff email typed
+    // into this field silently produces no email (request-login-link only
+    // sends for role=customer accounts, but always returns 200 by design).
+    m.insert(
+        "login_link_customer_only_help",
+        (
+            "Tento odkaz je len pre zakaznicke ucty. Personal a admin sa prihlasuju heslom vyssie.",
+            "This link is for client accounts only. Staff and admin log in with a password above.",
+        ),
+    );
     m.insert(
         "send_login_link",
         ("Poslat prihlasovaci link", "Send login link"),
