@@ -23,13 +23,13 @@ use axum::{
     http::StatusCode,
     routing::{get, post},
 };
-use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::AppState;
 use crate::auth::{AuthUser, StaffUser};
 use crate::error::ApiError;
 use crate::ewelink::EwelinkState;
+use crate::rate_limit::{RateLimitConfig, SlidingWindowLimiter};
 use crate::routes::internal_error;
 use spinbike_core::auth::Role;
 
@@ -41,66 +41,40 @@ pub fn routes() -> Router<AppState> {
 
 // ---------- Rate limiter ----------
 
-/// In-memory rate-limit state for the door route.
+/// In-memory rate-limit state for the door route: per-user 10 s min-gap + a
+/// 5/60 s per-user cap under a global 30/60 s cap. A thin typed wrapper over the
+/// shared `SlidingWindowLimiter` (#166) — one abstraction backs both this and
+/// the login-link limiter; the per-user map now evicts quiet keys (the leak the
+/// old hand-rolled copy carried).
 ///
-/// Single-instance server, so a per-process struct is enough — no Redis.
 /// Stored as an `Arc<Mutex<RateLimiter>>` on `AppState` so concurrent
 /// integration tests get their own throttle windows.
-pub struct RateLimiter {
-    per_user: HashMap<i64, VecDeque<Instant>>,
-    global: VecDeque<Instant>,
-}
+pub struct RateLimiter(SlidingWindowLimiter<i64>);
 
 impl RateLimiter {
     pub fn new() -> Self {
-        Self {
-            per_user: HashMap::new(),
-            global: VecDeque::new(),
-        }
+        Self(SlidingWindowLimiter::new(RateLimitConfig {
+            per_key_window: Duration::from_secs(60),
+            per_key_min_gap: Some(Duration::from_secs(10)),
+            per_key_max: Some(5),
+            per_key_cap_reason: "per_user_cap",
+            key_memory: Duration::from_secs(60),
+            global_window: Duration::from_secs(60),
+            global_max: 30,
+        }))
     }
 
     /// Returns Ok if this press is allowed and records it. Err with a short
-    /// reason tag otherwise. Reason tags are logged but the HTTP response
-    /// flattens them to "rate_limited" per spec.
+    /// reason tag ("too_fast" / "per_user_cap" / "global_cap") otherwise; the
+    /// HTTP response flattens it to "rate_limited" per spec.
     pub fn check_and_record(&mut self, user_id: i64) -> Result<(), &'static str> {
-        self.check_and_record_at(user_id, Instant::now())
+        self.0.check_and_record(user_id)
     }
 
-    /// Same as `check_and_record` but takes the current `Instant` as a
-    /// parameter so unit tests can simulate elapsed time without sleeping.
-    /// Production callers use the no-arg shim above.
+    /// Same as `check_and_record` but takes the current `Instant` so unit tests
+    /// can simulate elapsed time without sleeping.
     pub fn check_and_record_at(&mut self, user_id: i64, now: Instant) -> Result<(), &'static str> {
-        // Prune global window (60s).
-        while let Some(front) = self.global.front() {
-            if now.duration_since(*front) > Duration::from_secs(60) {
-                self.global.pop_front();
-            } else {
-                break;
-            }
-        }
-        if self.global.len() >= 30 {
-            return Err("global_cap");
-        }
-        // Prune per-user window (60s).
-        let q = self.per_user.entry(user_id).or_default();
-        while let Some(front) = q.front() {
-            if now.duration_since(*front) > Duration::from_secs(60) {
-                q.pop_front();
-            } else {
-                break;
-            }
-        }
-        if let Some(last) = q.back()
-            && now.duration_since(*last) < Duration::from_secs(10)
-        {
-            return Err("too_fast");
-        }
-        if q.len() >= 5 {
-            return Err("per_user_cap");
-        }
-        q.push_back(now);
-        self.global.push_back(now);
-        Ok(())
+        self.0.check_and_record_at(user_id, now)
     }
 }
 

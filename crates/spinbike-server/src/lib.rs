@@ -4,6 +4,7 @@ pub mod error;
 pub mod ewelink;
 pub mod jobs;
 pub mod mail;
+pub mod rate_limit;
 pub mod routes;
 pub mod util;
 pub mod ws;

@@ -4,13 +4,13 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::AppState;
 use crate::auth::{self, AuthUser, parse_role};
 use crate::db::{login_tokens, users};
 use crate::error::ApiError;
+use crate::rate_limit::{RateLimitConfig, SlidingWindowLimiter};
 use crate::routes::internal_error;
 use spinbike_core::auth::Role;
 use spinbike_core::errors::ErrorCode;
@@ -55,62 +55,47 @@ pub struct UserInfo {
 /// In-memory rate-limit for the public login-link endpoint. Keyed by email
 /// (String) — distinct from the door route's `i64`-keyed `RateLimiter`. Two
 /// caps: at most one send per email per 60 s, and a global 10-per-60 s ceiling
-/// across all emails (anti-spam / anti-enumeration-amplification). Single-
-/// instance server, so a per-process struct is enough. Stored as
-/// `Arc<Mutex<_>>` on `AppState` so concurrent integration tests get isolated
-/// windows.
-pub struct LoginLinkRateLimiter {
-    /// Last accepted send time per email.
-    per_email: HashMap<String, Instant>,
-    /// Sliding 60 s window of all accepted sends.
-    global: VecDeque<Instant>,
-}
+/// across all emails (anti-spam / anti-enumeration-amplification). A thin typed
+/// wrapper over the shared `SlidingWindowLimiter` (#166) — the same abstraction
+/// backs the door limiter.
+///
+/// The degenerate "single last-Instant" shape is expressed as `per_key_max =
+/// None` (min-gap alone throttles, no per-key cap reason is ever emitted). The
+/// attacker-controllable email key would otherwise grow the map unbounded, so
+/// `key_memory` (120 s) is set WIDER than the 60 s decision window: an entry
+/// between 60 s and 120 s old no longer throttles but is still kept, keeping the
+/// too-fast decision boundary observable, and the key is evicted past 120 s.
+/// Stored as `Arc<Mutex<_>>` on `AppState` so concurrent integration tests get
+/// isolated windows.
+pub struct LoginLinkRateLimiter(SlidingWindowLimiter<String>);
 
 impl LoginLinkRateLimiter {
     pub fn new() -> Self {
-        Self {
-            per_email: HashMap::new(),
-            global: VecDeque::new(),
-        }
+        Self(SlidingWindowLimiter::new(RateLimitConfig {
+            per_key_window: Duration::from_secs(60),
+            per_key_min_gap: Some(Duration::from_secs(60)),
+            per_key_max: None,
+            per_key_cap_reason: "",
+            key_memory: Duration::from_secs(120),
+            global_window: Duration::from_secs(60),
+            global_max: 10,
+        }))
     }
 
-    /// Returns Ok and records the send if allowed; Err(reason) otherwise.
+    /// Returns Ok and records the send if allowed; Err(reason) otherwise
+    /// ("too_fast" / "global_cap").
     pub fn check_and_record(&mut self, email: &str) -> Result<(), &'static str> {
-        self.check_and_record_at(email, Instant::now())
+        self.0.check_and_record(email.to_string())
     }
 
     /// Testable variant taking the current `Instant` so tests need not sleep.
     pub fn check_and_record_at(&mut self, email: &str, now: Instant) -> Result<(), &'static str> {
-        // Prune the global 60 s window.
-        while let Some(front) = self.global.front() {
-            if now.duration_since(*front) > Duration::from_secs(60) {
-                self.global.pop_front();
-            } else {
-                break;
-            }
-        }
-        // Evict stale per-email entries. The key is an attacker-controllable
-        // email string (unlike the door limiter's bounded i64 keys), so without
-        // this the map would grow unbounded under probing. The memory window is
-        // deliberately WIDER than the 60 s decision window below (120 s): an
-        // entry between 60 s and 120 s old no longer throttles but is still kept,
-        // which keeps the too-fast decision boundary observable (and bounds the
-        // map to the last 120 s of activity).
-        self.per_email
-            .retain(|_, last| now.duration_since(*last) < Duration::from_secs(120));
+        self.0.check_and_record_at(email.to_string(), now)
+    }
 
-        if self.global.len() >= 10 {
-            return Err("global_cap");
-        }
-        // Per-email minimum 60 s interval.
-        if let Some(last) = self.per_email.get(email)
-            && now.duration_since(*last) < Duration::from_secs(60)
-        {
-            return Err("too_fast");
-        }
-        self.per_email.insert(email.to_string(), now);
-        self.global.push_back(now);
-        Ok(())
+    /// Number of tracked emails — for the map-bounding tests.
+    pub fn tracked_keys(&self) -> usize {
+        self.0.tracked_keys()
     }
 }
 
@@ -459,7 +444,7 @@ mod tests {
                 .unwrap();
         }
         assert_eq!(
-            rl.per_email.len(),
+            rl.tracked_keys(),
             5,
             "five distinct emails within the window"
         );
@@ -468,7 +453,7 @@ mod tests {
         rl.check_and_record_at("late@x.com", t0 + Duration::from_secs(200))
             .unwrap();
         assert_eq!(
-            rl.per_email.len(),
+            rl.tracked_keys(),
             1,
             "stale per-email entries must be evicted, leaving only the recent one"
         );
@@ -487,7 +472,7 @@ mod tests {
         rl.check_and_record_at("new@x.com", t0 + Duration::from_secs(120))
             .unwrap();
         assert_eq!(
-            rl.per_email.len(),
+            rl.tracked_keys(),
             1,
             "the exactly-120s-old entry must be evicted (strict `<`)"
         );
