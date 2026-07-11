@@ -92,6 +92,30 @@ the accumulated staleness); confirm no `openssl`/native-tls entries leak in
 (this workspace is rustls-only) and that bumped versions stay within the
 manifest's SemVer ranges, then let a fresh CI run re-validate the committed lock.
 
+**`git add`/`git commit` of a regenerated `Cargo.lock` trips the global
+secret-scanner hook** (`block-sensitive-staging.sh`) — a `checksum = "<64-hex>"`
+line matches its "40+ char hex blob" pattern. It's a false positive (a
+registry SHA256, not a secret); bypass it inline on both the `add` and the
+`commit` command: `# airuleset:secret-ok Cargo.lock checksum = SHA256
+registry hash from cargo metadata, not a secret` (every use is logged to
+`~/devel/airuleset/audits/secret-scan-bypasses.log` — that's fine, it's the
+sanctioned path, not a workaround to hide).
+
+**A major dependency bump can go further than the filing issue's evidence
+describes — always verify against the actual pinned version, not just the
+headline changelog entry.** #167's rand 0.8→0.10 sub-item: the issue's
+evidence only cited the 0.9-era renames (`thread_rng()`→`rng()`,
+`gen_range()`→`random_range()`); CI's clippy caught that 0.10 went further
+and additionally split `fill_bytes()` onto `rand::Rng` (deprecating the old
+`rand::RngCore` re-export) and split `random_range()` into a brand-new
+`rand::RngExt` trait. Applying only what the issue text says can leave a
+compile error CI has to catch on the first push — expect that, don't be
+surprised by it, and let the compiler's own suggested-import diagnostics
+(`E0432`/`E0599`) tell you the fix (they name the exact trait, verified
+against the real pinned crate source, more reliable than guessing from a
+changelog). Same caution applies to #167's remaining tokio-tungstenite and
+leptos sub-items.
+
 ## AppState has THREE construction sites — wire every new field at all three
 
 `spinbike_server::AppState` is struct-literal-constructed in **three** places;
