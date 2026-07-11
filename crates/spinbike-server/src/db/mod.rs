@@ -320,6 +320,32 @@ mod tests {
         assert_eq!(count, 2);
     }
 
+    /// #170: `migration_checksum` must compute a REAL SHA-256 hex digest —
+    /// independently verified against a hash computed outside the function
+    /// under test (`sha256sum`), not by calling `migration_checksum` again.
+    /// Every other test in this module derives its "expected" value via
+    /// `migration_checksum` itself, which cannot detect the function
+    /// degrading to a constant (e.g. `String::new()`) — this test is the one
+    /// that does.
+    #[test]
+    fn migration_checksum_matches_independently_computed_sha256() {
+        // `printf 'test-migration-sql' | sha256sum` on the same input.
+        let expected = "94b4089f9151cd7f874463261d781d4655c0021eb772145b50e9fa6d8127e15a";
+        assert_eq!(migration_checksum("test-migration-sql"), expected);
+    }
+
+    /// #170: distinct SQL bodies must produce distinct checksums — guards
+    /// against a constant-return mutant slipping past the test above by
+    /// coincidence, and against the checksum degenerating to something that
+    /// ignores its input.
+    #[test]
+    fn migration_checksum_differs_for_different_sql() {
+        assert_ne!(
+            migration_checksum("CREATE TABLE a (id INTEGER);"),
+            migration_checksum("CREATE TABLE b (id INTEGER);")
+        );
+    }
+
     /// #170: on a fresh DB, every applied migration ends up with a non-null
     /// checksum in schema_version, matching `migration_checksum` of its
     /// current SQL const. Covers both the mid-loop path (V19 itself, whose
