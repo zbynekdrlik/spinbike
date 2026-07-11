@@ -21,22 +21,20 @@ self.addEventListener('activate', (event) => {
 });
 
 // Only genuinely static (non-HTML) responses may be cached-first. HTML
-// documents — the app shell AND every extension-less SPA route (/login,
-// /dashboard, /my/balance, ...) — embed Trunk's content-hashed JS/WASM/CSS
-// filenames, which change on every deploy. Caching an HTML doc first pins the
-// user to a stale bundle whose asset URLs 404 after the next deploy (#208).
-// Content-Type — not URL shape — is the reliable signal, since SPA routes have
-// no file extension and the old URL-path heuristic silently missed them.
+// documents change their embedded content-hashed asset references on every
+// deploy, so pinning one leaves the user on a stale bundle whose asset URLs
+// 404 after the next deploy (#208). The content-type guard is defence-in-depth
+// behind the navigation-mode routing below.
 function isHtml(resp) {
     const ct = (resp.headers.get('content-type') || '').toLowerCase();
     return ct.startsWith('text/html');
 }
 
-// Cache-first for content-hashed immutable assets (fast, offline-capable). A
-// new deploy always produces a NEW hashed filename, so serving a cached copy of
-// THIS url forever is correct. The isHtml guard means that even if a stray
-// /assets/* miss falls through to the server's SPA index.html fallback, that
-// HTML is never pinned.
+// Cache-first for immutable subresources (the content-hashed JS/WASM bundle,
+// CSS, fonts, icons). A new deploy always produces a NEW hashed filename, so
+// serving a cached copy of THIS url forever is correct + fast. The isHtml guard
+// means a stray HTML SPA-fallback (e.g. a mistyped subresource path the server
+// answers with index.html) is never pinned.
 function cacheFirst(request) {
     return caches.match(request).then((cached) => {
         if (cached) {
@@ -52,9 +50,10 @@ function cacheFirst(request) {
     });
 }
 
-// Network-first for everything else (HTML shell + SPA routes): always try the
-// network so a fresh deploy is picked up immediately; keep a copy for offline
-// fallback; serve the cached copy only when the network is unreachable.
+// Network-first for HTML document navigations (the app shell + every SPA route):
+// always try the network so a fresh deploy is picked up immediately; keep a copy
+// for offline fallback; serve the cached copy only when the network is
+// unreachable.
 function networkFirst(request) {
     return fetch(request)
         .then((resp) => {
@@ -82,14 +81,16 @@ self.addEventListener('fetch', (event) => {
         return;
     }
 
-    // Content-hashed immutable assets (Trunk writes them under /assets/ and the
-    // server marks them `immutable`) are safe to serve cache-first. New SPA
-    // routes need no change here — they fall into the network-first branch
-    // automatically, so freshness self-adapts without editing this file.
-    if (url.pathname.startsWith('/assets/')) {
-        event.respondWith(cacheFirst(event.request));
+    // HTML document navigations (root, /login, /dashboard, /my/balance, ...) are
+    // identified by request.mode === 'navigate' — the canonical service-worker
+    // discriminator. This self-adapts to ANY route with no URL list, and (unlike
+    // a /assets/ or extension heuristic) correctly treats this app's ROOT-served
+    // Trunk bundle (/spinbike-ui-<hash>.js, _bg.wasm) as a cacheable subresource
+    // rather than a navigation.
+    if (event.request.mode === 'navigate') {
+        event.respondWith(networkFirst(event.request));
         return;
     }
 
-    event.respondWith(networkFirst(event.request));
+    event.respondWith(cacheFirst(event.request));
 });
