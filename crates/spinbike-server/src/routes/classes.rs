@@ -52,6 +52,23 @@ pub struct BookingResponse {
     pub user_id: i64,
 }
 
+/// A user's own booking, enriched with its class start time + instructor
+/// (#146) — the `/api/my/bookings` response shape. Kept separate from
+/// `BookingResponse` (the `create_booking` echo, which the frontend only
+/// reads `id` from) rather than bolting always-null fields onto a shared
+/// type for one caller — same reasoning as the `_coded` API variant
+/// pattern (see `.claude/skills/frontend-pwa/SKILL.md`).
+#[derive(Serialize)]
+pub struct MyBookingResponse {
+    pub id: i64,
+    pub template_id: i64,
+    pub date: String,
+    pub user_id: i64,
+    /// Class start time ("HH:MM"), joined from `class_templates`.
+    pub start_time: String,
+    pub instructor_name: Option<String>,
+}
+
 /// A participant in a class (booking joined with user info).
 #[derive(Serialize)]
 pub struct ParticipantResponse {
@@ -318,18 +335,20 @@ async fn cancel_booking(
 async fn my_bookings(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
-) -> Result<Json<Vec<BookingResponse>>, ApiError> {
+) -> Result<Json<Vec<MyBookingResponse>>, ApiError> {
     let bookings = db::list_user_bookings(&state.pool, claims.sub)
         .await
         .map_err(internal_error)?;
 
-    let responses: Vec<BookingResponse> = bookings
+    let responses: Vec<MyBookingResponse> = bookings
         .into_iter()
-        .map(|b| BookingResponse {
+        .map(|b| MyBookingResponse {
             id: b.id,
             template_id: b.template_id,
             date: b.date,
             user_id: b.user_id,
+            start_time: b.start_time,
+            instructor_name: b.instructor_name,
         })
         .collect();
 

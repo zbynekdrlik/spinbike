@@ -621,6 +621,62 @@ async fn my_balance_reports_no_allow_self_entry_when_opted_out() {
     );
 }
 
+// ─── /api/my/balance recent movements — service name (#147) ──────────────────
+//
+// The admin transactions list already names the service a movement was for
+// (LEFT JOIN services). The customer's own /my/balance view didn't — same
+// data, just not surfaced. This locks the same join onto `recent`.
+
+#[tokio::test]
+async fn my_balance_recent_includes_service_name() {
+    let app = TestApp::new().await;
+    let spinning_id = app.spinning_service_id().await;
+
+    let charge_body = serde_json::json!({
+        "user_id": app.customer_id,
+        "amount": 5.0,
+        "service_id": spinning_id,
+    });
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/charge",
+            &app.staff_token,
+            &charge_body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let (status, body) = app
+        .request(get("/api/my/balance", &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let recent = body["recent"].as_array().unwrap();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(recent[0]["service_name_sk"].as_str().unwrap(), "Spinning");
+    assert_eq!(recent[0]["service_name_en"].as_str().unwrap(), "Spinning");
+}
+
+/// A top-up isn't tied to any service — the join must degrade to `null`,
+/// not error or fabricate a name.
+#[tokio::test]
+async fn my_balance_recent_service_name_null_for_topup() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({ "user_id": app.customer_id, "amount": 10.0 });
+    let (status, _) = app
+        .request(post_json("/api/users/topup", &app.staff_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let (status, body) = app
+        .request(get("/api/my/balance", &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let recent = body["recent"].as_array().unwrap();
+    assert_eq!(recent.len(), 1);
+    assert!(recent[0]["service_name_sk"].is_null());
+    assert!(recent[0]["service_name_en"].is_null());
+}
+
 /// Admin's allow_self_entry stored value is 0 (default) BUT my_balance must
 /// report effective true — admin/staff bypass the flag entirely (commit
 /// 0dfe85b). Without this override, admin's /door page would render the

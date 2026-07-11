@@ -11,9 +11,59 @@ triggers:
   - navigator.userAgent
   - iOS detection
   - manifest.json icons
+  - error_code
+  - api.rs
+  - localize error
 ---
 
 # SpinBike Frontend / PWA gotchas
+
+## Extending `api.rs` for only SOME callers: add an additive `_coded` variant, don't change the shared function's signature (#145)
+
+`api.rs`'s `get`/`post`/`post_public`/`put`/`patch`/`delete`/`put_json` are
+called from **~69 sites across 26 files** — changing any of their signatures
+(e.g. `Result<T, String>` → `Result<T, SomethingRicher>`) ripples through
+every caller even when only a handful actually need the richer error. #145
+needed the server's `error_code` (#158) at exactly 5 customer-facing render
+sites (login, my-balance, my-bookings x2, door, login-link-form) to localize
+the banner — everywhere else (staff/admin pages, ~62 other call sites)
+correctly keeps showing the server's raw English `error` text unchanged.
+
+**Pattern: add a parallel `_coded` function per verb** (`get_coded`,
+`post_public_coded`, `delete_coded`) that shares the transport logic but
+returns a small named struct (`CodedError { code: Option<ErrorCode>,
+message: String }`) instead of a bare `String`. The ORIGINAL function stays
+byte-identical — zero ripple to the other ~62 sites. Only the render sites
+that actually need to branch on the code switch their `Err(String)` →
+`Err(CodedError)` handling (and their local error `Signal<String>` →
+`Signal<Option<CodedError>>`).
+
+**Parse the code defensively, decoupled from the message.** Deserialize
+`error_code` as `Option<String>` first, THEN try `serde_json::from_value` into
+the typed `ErrorCode` enum and `.ok()` the result. If you instead deserialize
+directly as `Option<ErrorCode>` in the same struct as `error`, an unrecognized
+code string (stale client during a rolling deploy, a future code the UI
+doesn't know yet) fails the WHOLE body parse — including the perfectly good
+human `error` message — and the user sees a generic "request failed" instead
+of the server's real text. Degrade the code to `None`, never the message.
+
+**Map codes to i18n keys via an EXHAUSTIVE match that explicitly returns
+`None` for out-of-scope codes** — same shape as `tx_label_key` below.
+`error_code_key(code: ErrorCode) -> Option<&'static str>` forces a compile
+error when a new `ErrorCode` variant is added upstream, until someone
+decides whether it needs a customer translation; codes intentionally left
+`None` (staff_required, conflict codes, etc.) fall back to the raw server
+text — that's the scope boundary, enforced by the compiler, not a comment.
+
+**`api.rs` has no reactive `Lang` — use `i18n::get_saved_lang()` for its
+OWN hardcoded fallback strings** ("session expired", "request failed").
+`get_saved_lang()` reads the same `localStorage` key the reactive `Lang`
+signal is initialized from and kept in sync with via `i18n::save_lang()` on
+every toggle (`components/nav.rs`, `adaptive_nav.rs`) — safe to call from a
+non-component module. Render-site-specific error TEXT, by contrast, should
+localize via the page's own `lang.get()` at render time (reactive), not
+baked in at error-set time — pass the raw `code`/`message` through the
+signal, localize in the `view!` closure.
 
 ## Untyped JS interop via `js_sys::Reflect` (no prior use in this repo before #110)
 

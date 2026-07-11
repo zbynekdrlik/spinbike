@@ -102,6 +102,14 @@ test.describe('Customer movements on /my/balance (#144)', () => {
         // The pass-sale row shows its expiry (the "until" suffix), like admin.
         expect(allText).toContain('until');
 
+        // Each movement now names its service (#147), like the admin view.
+        // "Spinning" links the charge + visit rows; the pass row links to the
+        // monthly-pass service (English name "Monthly pass"). The top-up row
+        // ("Kredit") has no matching service — it degrades to no service text,
+        // not an error.
+        expect(allText).toContain('Spinning');
+        expect(allText).toContain('Monthly pass');
+
         assertCleanConsole(messages);
     });
 
@@ -132,6 +140,10 @@ test.describe('Customer movements on /my/balance (#144)', () => {
         expect(allText).not.toMatch(/\btopup\b/);
         expect(allText).not.toMatch(/\bcharge\b/);
         expect(allText).not.toMatch(/\bvisit\b/);
+
+        // Each movement now names its service (#147), in Slovak here.
+        expect(allText).toContain('Spinning');
+        expect(allText).toContain('Mesačná permanentka');
 
         assertCleanConsole(messages);
     });

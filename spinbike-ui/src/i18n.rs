@@ -50,6 +50,22 @@ pub fn t(lang: Lang, key: &str) -> &'static str {
     }
 }
 
+/// Pick a joined service's display name for the active language. `None`
+/// when the row wasn't tied to a service (e.g. a plain top-up). Single
+/// source shared by the admin `TxnInfo::service_label` (dashboard/mod.rs)
+/// and the customer `RecentTx::service_label` (my_balance.rs, #147) — same
+/// joined `services.name_sk`/`name_en` columns, two response structs.
+pub fn service_label<'a>(
+    name_sk: &'a Option<String>,
+    name_en: &'a Option<String>,
+    lang: Lang,
+) -> Option<&'a str> {
+    match lang {
+        Lang::Sk => name_sk.as_deref(),
+        Lang::En => name_en.as_deref(),
+    }
+}
+
 /// The i18n key for a transaction's `EventKind` label. Single source of the
 /// mapping shared by the admin transactions list and the customer movements
 /// list, so both surfaces show the same label for the same kind. Adding an

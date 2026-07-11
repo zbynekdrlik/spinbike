@@ -35,6 +35,16 @@ struct RecentTx {
     amount: f64,
     valid_until: Option<String>,
     note: Option<String>,
+    service_name_sk: Option<String>,
+    service_name_en: Option<String>,
+}
+
+impl RecentTx {
+    /// Delegates to the shared `i18n::service_label` (#147) — same helper
+    /// the admin `TxnInfo::service_label` (dashboard/mod.rs) uses.
+    fn service_label(&self, lang: Lang) -> Option<&str> {
+        i18n::service_label(&self.service_name_sk, &self.service_name_en, lang)
+    }
 }
 
 #[component]
@@ -171,6 +181,15 @@ pub fn MyBalancePage() -> impl IntoView {
                                     "list-row__amount list-row__amount--neg"
                                 };
 
+                                // Service name (#147) — same joined data + language
+                                // pick the admin transactions list uses. Shows nothing
+                                // when the movement wasn't tied to a service (e.g. a
+                                // plain top-up), matching the graceful-fallback style
+                                // already used for door notes below.
+                                let service_suffix = t.service_label(lang_now)
+                                    .map(|s| format!(" \u{b7} {s}"))
+                                    .unwrap_or_default();
+
                                 // Door-entry notes are stored as English "door: Nth"
                                 // (door.rs). Localize the DISPLAY only — the stored value
                                 // stays intact (door.rs's `note LIKE 'door:%'` same-day
@@ -195,7 +214,7 @@ pub fn MyBalancePage() -> impl IntoView {
                                     <li data-testid="recent-visit" class="list-row">
                                         <div class="list-row__main">
                                             <div class="list-row__title">{action_label}{until_suffix}</div>
-                                            <div class="list-row__sub">{date_label}{sub_note}</div>
+                                            <div class="list-row__sub">{date_label}{service_suffix}{sub_note}</div>
                                         </div>
                                         <div class=amount_class>{amount_label}</div>
                                     </li>
