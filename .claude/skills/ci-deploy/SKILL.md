@@ -614,6 +614,19 @@ against the advisory's raw `patched`/`unaffected` ranges yourself
 (`cargo tree -i <crate>@<version>` for reachability, the raw advisory `.md`
 for the exact ranges) — do not assume cargo-deny's silence means safe.**
 
+**UPDATE (#185, 2026-07-11) — root cause found, fixed at the config level.** The
+gap above was a `deny.toml` scope default, not a cargo-deny bug: `[advisories]`
+never set `unsound`, which defaults to `Scope::Workspace` (only checks an
+unsound-class advisory — like RUSTSEC-2026-0097/rand — against DIRECT workspace
+dependencies, silently skipping a transitive-only resolution). `deny.toml` now
+sets `unsound = "all"`, so every resolved version in `Cargo.lock` is checked
+for unsound-class advisories. The manual re-check drill above is no longer
+required for `unsound`-category advisories going forward — but note this fix
+is scoped to `unsound` specifically; if a similar per-category `Scope` default
+gap is ever suspected for `vulnerability`/`unmaintained`/`notice`, re-verify
+that category's own scope setting rather than assuming `unsound = "all"`
+covers it too.
+
 **`EmbarkStudios/cargo-deny-action@v2` auto-injects `arguments: --all-features`**
 even when you don't set `arguments:` yourself (visible in the run log's own
 `with:` echo). Confirmed empirically this does NOT expand cargo-deny's
