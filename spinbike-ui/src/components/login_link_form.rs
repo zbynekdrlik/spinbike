@@ -20,7 +20,7 @@ pub fn LoginLinkForm() -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let email_ref = NodeRef::<leptos::html::Input>::new();
     let (sent, set_sent) = signal(false);
-    let (error, set_error) = signal(String::new());
+    let (error, set_error) = signal(None::<api::CodedError>);
     let (loading, set_loading) = signal(false);
 
     view! {
@@ -43,20 +43,22 @@ pub fn LoginLinkForm() -> impl IntoView {
                         })
                         .unwrap_or_default();
                     set_loading.set(true);
-                    set_error.set(String::new());
+                    set_error.set(None);
                     spawn_local(async move {
-                        // post_public, not post: an unknown-email or throttled
-                        // request still returns 200 (no enumeration) so this
-                        // never actually 401s here, but it's still the right
-                        // call for a public, unauthenticated auth endpoint.
-                        match api::post_public::<RequestLoginLinkReq, serde_json::Value>(
+                        // post_public_coded, not post: an unknown-email or
+                        // throttled request still returns 200 (no enumeration)
+                        // so this never actually 401s here, but it's still the
+                        // right call for a public, unauthenticated auth
+                        // endpoint. The `_coded` variant (#145) carries the
+                        // server's `error_code` for the banner below.
+                        match api::post_public_coded::<RequestLoginLinkReq, serde_json::Value>(
                             "/api/auth/request-login-link",
                             &RequestLoginLinkReq { email },
                         )
                         .await
                         {
                             Ok(_) => set_sent.set(true),
-                            Err(e) => set_error.set(e),
+                            Err(e) => set_error.set(Some(e)),
                         }
                         set_loading.set(false);
                     });
@@ -64,11 +66,12 @@ pub fn LoginLinkForm() -> impl IntoView {
                 view! {
                     <form on:submit=on_submit data-testid="login-link-form">
                         {move || {
-                            let e = error.get();
-                            if e.is_empty() {
-                                ().into_any()
-                            } else {
-                                view! { <div class="alert alert-error">{e}</div> }.into_any()
+                            match error.get() {
+                                None => ().into_any(),
+                                Some(e) => {
+                                    let msg = i18n::localize_api_error(lang.get(), e.code, &e.message);
+                                    view! { <div class="alert alert-error">{msg}</div> }.into_any()
+                                }
                             }
                         }}
                         <div class="form-group">

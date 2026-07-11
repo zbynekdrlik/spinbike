@@ -185,6 +185,65 @@ pub fn fmt_time_str(s: &str) -> String {
     }
 }
 
+/// The i18n key for a customer-facing API `error_code` (#145), when one
+/// exists. Only CUSTOMER-facing codes get a translation — staff/admin-only
+/// codes (`staff_required`, conflict codes, etc.) return `None` so the
+/// caller falls back to the server's raw English `error` message, exactly
+/// as before this ticket. Exhaustive match (like `tx_label_key` above) so a
+/// new `ErrorCode` variant is a compile error here until someone decides
+/// whether it needs a customer-facing translation.
+pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static str> {
+    use spinbike_core::errors::ErrorCode;
+    match code {
+        ErrorCode::InvalidCredentials => Some("err_invalid_credentials"),
+        ErrorCode::OauthAccount => Some("err_oauth_account"),
+        ErrorCode::BookingNotFound => Some("err_booking_not_found"),
+        ErrorCode::BookingNotOwned => Some("err_booking_not_owned"),
+        ErrorCode::UserNotFound => Some("err_user_not_found"),
+        ErrorCode::Internal => Some("err_internal"),
+        // Staff/admin-only or not customer-facing in the 5 render sites this
+        // ticket scopes to (#145) — left unmapped on purpose, NOT an
+        // oversight. Falls back to the server's raw English `error` text,
+        // unchanged from pre-#145 behavior.
+        ErrorCode::InvalidOrExpiredLink
+        | ErrorCode::StaffRequired
+        | ErrorCode::AdminRequired
+        | ErrorCode::CardCodeStaffOnly
+        | ErrorCode::AllowSelfEntryAdminOnly
+        | ErrorCode::PasswordAdminOnly
+        | ErrorCode::UserBlocked
+        | ErrorCode::TransactionNotFound
+        | ErrorCode::TransactionAlreadyVoided
+        | ErrorCode::ServiceNotFound
+        | ErrorCode::EmailConflict
+        | ErrorCode::CardCodeConflict
+        | ErrorCode::EmailOrCardConflict
+        | ErrorCode::ClassFull
+        | ErrorCode::ClassCancelled
+        | ErrorCode::NoteOnVoidedTransaction
+        | ErrorCode::DateOnVoidedTransaction
+        | ErrorCode::NoActiveMonthlyPass
+        | ErrorCode::MonthlyPassExists
+        | ErrorCode::UserAlreadyDeleted
+        | ErrorCode::BadRequest
+        | ErrorCode::MailNotConfigured => None,
+    }
+}
+
+/// Localize an API error banner for display: map `error_code` (when present
+/// AND a customer-facing code per [`error_code_key`]) through `t`; otherwise
+/// fall back to the server's raw `error` message — safe for staff/admin-only
+/// codes and for any error the server didn't attach a code to at all.
+pub fn localize_api_error(
+    lang: Lang,
+    code: Option<spinbike_core::errors::ErrorCode>,
+    raw_message: &str,
+) -> String {
+    code.and_then(error_code_key)
+        .map(|key| t(lang, key).to_string())
+        .unwrap_or_else(|| raw_message.to_string())
+}
+
 /// Format a translated string with dynamic values. Returns an owned String.
 pub fn tf(lang: Lang, key: &str, args: &[&str]) -> String {
     let template = t(lang, key);
@@ -843,6 +902,69 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "Tento email uz pouziva ucet: {}. Jeden email moze patrit len jednemu uctu.",
             "This email is already used by account: {}. One email can belong to only one account.",
         ),
+    );
+
+    // Customer-facing API error banners (#145). Keyed off
+    // `spinbike_core::errors::ErrorCode` (#158) via `error_code_key` above —
+    // only the codes a customer can actually hit at the 5 scoped render
+    // sites (login, my-balance, my-bookings, door, login-link-form) get a
+    // translation; everything else falls back to the server's raw English
+    // `error` text.
+    m.insert(
+        "err_invalid_credentials",
+        ("Nespravny email alebo heslo", "Invalid email or password"),
+    );
+    // `oauth_account` fires when `password_hash` is NULL (login.rs uses the
+    // password form against an account that has no password set). This repo
+    // has no actual third-party OAuth button wired into the UI today — the
+    // code name is legacy/forward-looking scaffolding (see
+    // crates/spinbike-server/src/auth/oauth.rs) — so a specific provider
+    // name would be misleading. Kept deliberately generic.
+    m.insert(
+        "err_oauth_account",
+        (
+            "Tento ucet pouziva ine prihlasenie",
+            "This account uses a different sign-in method",
+        ),
+    );
+    m.insert(
+        "err_booking_not_found",
+        ("Rezervacia sa nenasla", "Booking not found"),
+    );
+    m.insert(
+        "err_booking_not_owned",
+        (
+            "Nemozes zrusit cudziu rezervaciu",
+            "You can't cancel someone else's booking",
+        ),
+    );
+    m.insert(
+        "err_user_not_found",
+        ("Pouzivatel sa nenasiel", "User not found"),
+    );
+    m.insert(
+        "err_internal",
+        (
+            "Nastala chyba, skus to prosim znova",
+            "Something went wrong, please try again",
+        ),
+    );
+    // Generic api.rs fallbacks (not error-code-driven — these fire for the
+    // session-expiry redirect and for a response whose body carries no
+    // `error` field at all). Customer-visible at any authenticated call
+    // site, not just the 5 scoped render sites, so api.rs applies these via
+    // `i18n::get_saved_lang()` directly rather than the reactive `Lang`
+    // signal (api.rs has no Leptos component context).
+    m.insert(
+        "err_session_expired",
+        (
+            "Prihlasenie vyprsalo, presmerovavam...",
+            "Session expired, redirecting to login...",
+        ),
+    );
+    m.insert(
+        "err_request_failed_format",
+        ("Poziadavka zlyhala (HTTP {})", "Request failed (HTTP {})"),
     );
 
     m
