@@ -109,6 +109,41 @@ transaction. Worked example:
 (had to be updated when V18 landed — it manually re-simulates a future
 `services` rebuild and hit this exact failure).
 
+## GOTCHA: a migration that ALTERs `schema_version` ITSELF can't be relied on inside its own INSERT, on a fresh install
+
+`run_migrations` (db/mod.rs) applies `MIGRATIONS` in a single loop, in
+version order, from whatever `current_version` already is. If a migration
+adds a column to `schema_version` (V19's `ALTER TABLE schema_version ADD
+COLUMN checksum TEXT`, #170), that column does NOT exist yet when EARLIER
+migrations in the SAME fresh-install run reach their own
+`INSERT INTO schema_version (...)` — V19 hasn't executed yet at that point,
+even though it's later in the same `MIGRATIONS` array. Concretely: on a
+brand-new DB (`current_version=0`), the loop applies v1, v2, ... v18 (each
+inserting its own `schema_version` row) BEFORE it ever reaches v19's
+`ALTER`. Any code that unconditionally writes to a not-yet-added column in
+the per-migration INSERT will error with `no such column` on a fresh
+install, even though the exact same code works fine on an UPGRADE (where
+`current_version` is already ≥18 and the loop only runs v19).
+
+**Fix pattern used for the checksum column:** don't try to write the new
+column from inside the per-migration INSERT at all. Leave it NULL there
+(nullable column, no special-casing needed), then add a SEPARATE pass
+AFTER the whole apply loop that walks every migration in `MIGRATIONS` and
+backfills/verifies the column — by that point every migration (including
+the one that added the column) has been applied, so the column is
+guaranteed to exist. This one AFTER-pass handles the fresh-install path
+(all versions were NULL going in) and the incremental-upgrade path
+(pre-existing versions had no column at all until this run's ALTER) with
+the SAME code, no branching on which scenario you're in. Worked example:
+`db::run_migrations`'s post-loop checksum loop, tested from BOTH angles —
+`db::tests::fresh_db_backfills_checksum_for_every_migration` (full 1..=19
+chain in one call) and `migrations::tests::
+v19_checksum_backfills_on_genuine_upgrade_from_v18` (1..=18 pre-committed
+via the `apply_sql_block` idiom, mirroring a REAL pre-upgrade database,
+THEN `run_migrations` applies only v19) — an independent code review
+caught that the first test alone doesn't actually exercise the real
+production upgrade path, only the fresh-install shape of it.
+
 ## Dev CI must sync prod DB before install
 
 The `deploy-dev` job in `.github/workflows/ci.yml` MUST sync prod → dev BEFORE installing the new binary:
