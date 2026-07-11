@@ -14,9 +14,8 @@ use spinbike_core::stats::{MonthlyBucket, PeriodAgg, PeriodTotals, StatsResponse
 use crate::AppState;
 use crate::auth::{AuthUser, StaffUser};
 use crate::db::transactions::NOTE_MAX_CHARS;
-use crate::db::{login_tokens, transactions, users as db};
+use crate::db::{transactions, users as db};
 use crate::error::ApiError;
-use crate::mail::MailError;
 use crate::routes::internal_error;
 use spinbike_core::errors::ErrorCode;
 
@@ -59,35 +58,6 @@ pub struct NegativeBalanceUserResponse {
     pub company: Option<String>,
     pub last_visit_at: Option<String>,
     pub pass: Option<CardPass>,
-}
-
-#[derive(Serialize)]
-pub struct BalanceResponse {
-    pub user_id: i64,
-    pub name: String,
-    pub credit: f64,
-    pub card_code: Option<String>,
-    pub allow_self_entry: bool,
-    /// SQLite UTC timestamp; `None` = no active monthly pass.
-    pub monthly_pass_active_until: Option<String>,
-    /// Last 20 transactions for this user, newest first.
-    pub recent: Vec<RecentTx>,
-}
-
-#[derive(Serialize, sqlx::FromRow)]
-pub struct RecentTx {
-    pub id: i64,
-    pub created_at: String,
-    pub action: String,
-    pub amount: f64,
-    pub valid_until: Option<String>,
-    pub note: Option<String>,
-    /// Joined from services (#147) — None when the transaction wasn't tied
-    /// to a service (e.g. a plain top-up). Same join as
-    /// `db::transactions::list_transactions_for_user_paginated`, used by the
-    /// admin transactions list.
-    pub service_name_sk: Option<String>,
-    pub service_name_en: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -229,10 +199,8 @@ pub fn routes() -> Router<AppState> {
             "/api/users/{id}",
             put(update_user).delete(delete_user_route),
         )
-        .route("/api/users/{id}/invite", post(invite_user))
         .route("/api/users/{id}/transactions", get(user_transactions))
         .route("/api/users/{id}/stats", get(user_stats))
-        .route("/api/my/balance", get(my_balance))
 }
 
 async fn list_users(
@@ -379,97 +347,6 @@ async fn create_user(
                 .map_err(internal_error)?,
         ),
     ))
-}
-
-#[derive(Serialize)]
-struct InviteResponse {
-    sent_to: String,
-    /// Present only in `SMTP_TEST_MODE=capture` so E2E can drive the welcome
-    /// flow without a real mailbox. Never populated with a real SMTP relay.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    test_link: Option<String>,
-}
-
-/// Compose the unaccented-Slovak invite email. Returns (subject, text, html).
-fn invite_email(link: &str) -> (String, String, String) {
-    let subject = "Vitaj v SpinBike".to_string();
-    let text = format!(
-        "Ahoj,\n\nSpinBike je nasa aplikacia na rezervacie spinningu a spravu kreditu. \
-         Klikni na odkaz a aktivuj si pristup:\n{link}\n\nOdkaz plati 14 dni."
-    );
-    let html = format!(
-        "<p>Ahoj,</p>\
-         <p>SpinBike je nasa aplikacia na rezervacie spinningu a spravu kreditu.</p>\
-         <p>Klikni na odkaz a aktivuj si pristup:</p>\
-         <p><a href=\"{link}\">Aktivovat pristup</a></p>\
-         <p>Odkaz plati 14 dni.</p>"
-    );
-    (subject, text, html)
-}
-
-/// Admin/staff-only: email a magic invite link to the given user. Requires the
-/// user to have an email. Returns 503 `mail_not_configured` when the mail
-/// module is Disabled (missing SMTP env).
-async fn invite_user(
-    State(state): State<AppState>,
-    _: StaffUser,
-    Path(id): Path<i64>,
-) -> Result<Json<InviteResponse>, ApiError> {
-    let user = db::get_user_by_id(&state.pool, id)
-        .await
-        .map_err(internal_error)?
-        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
-    if user.deleted_at.is_some() {
-        return Err(ApiError::NotFound(ErrorCode::UserNotFound));
-    }
-
-    let email = match user
-        .email
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        Some(e) => e.to_string(),
-        None => {
-            return Err(super::bad_request(
-                "User has no email address to send an invite to",
-            ));
-        }
-    };
-
-    let raw = login_tokens::create_token(
-        &state.pool,
-        id,
-        login_tokens::PURPOSE_INVITE,
-        login_tokens::INVITE_TTL_SECS,
-    )
-    .await
-    .map_err(internal_error)?;
-
-    let link = format!(
-        "{}/welcome?t={}",
-        state.public_base_url.trim_end_matches('/'),
-        raw
-    );
-    let (subject, text, html) = invite_email(&link);
-
-    match state.mail.send(&email, &subject, &text, &html).await {
-        Ok(()) => {}
-        Err(MailError::Disabled) => {
-            tracing::warn!(user_id = id, "invite: mail is disabled — returning 503");
-            return Err(ApiError::ServiceUnavailable(ErrorCode::MailNotConfigured));
-        }
-        Err(e) => return Err(internal_error(e)),
-    }
-
-    // last_captured() is Some only in capture test mode — use it as the
-    // capture-mode detector, then echo the freshly-composed link.
-    let test_link = state.mail.last_captured().map(|_| link);
-    tracing::info!(user_id = id, %email, "invite: sent");
-    Ok(Json(InviteResponse {
-        sent_to: email,
-        test_link,
-    }))
 }
 
 async fn lookup_user(
@@ -959,107 +836,6 @@ async fn delete_user_route(
             Err(ApiError::conflict(ErrorCode::UserAlreadyDeleted))
         }
     }
-}
-
-async fn my_balance(
-    State(state): State<AppState>,
-    AuthUser(claims): AuthUser,
-) -> Result<Json<BalanceResponse>, ApiError> {
-    let user_id = claims.sub;
-    tracing::debug!(user_id, "my_balance: loading user row");
-
-    // 1. User row — includes the new allow_self_entry column.
-    // SQLite stores allow_self_entry as INTEGER (0/1); fetch as i64 here and
-    // map to bool below — sqlx tuple destructuring is stricter about types
-    // than `#[derive(FromRow)]`, so we avoid the bool type entirely at the
-    // query boundary.
-    let user_row: Option<(i64, String, f64, Option<String>, i64)> = sqlx::query_as(
-        "SELECT id, name, credit, card_code, allow_self_entry \
-         FROM users WHERE id = ? AND deleted_at IS NULL",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(internal_error)?;
-
-    let (id, name, credit, card_code, allow_self_entry) = match user_row {
-        Some((id, name, credit, card_code, ase)) => {
-            // Admin/staff always see the door button enabled — they bypass
-            // the per-user opt-in toggle (they manage the place). Stored
-            // flag stays as-is; this is just the effective UI value.
-            let role_is_staff_or_admin = matches!(
-                claims.role,
-                spinbike_core::auth::Role::Admin | spinbike_core::auth::Role::Staff
-            );
-            let effective_ase = ase != 0 || role_is_staff_or_admin;
-            (id, name, credit, card_code, effective_ase)
-        }
-        None => {
-            tracing::warn!(user_id, "my_balance: user not found or soft-deleted");
-            return Err(ApiError::NotFound(ErrorCode::UserNotFound));
-        }
-    };
-
-    // 2. Active monthly-pass valid_until, via the canonical `user_active_pass`
-    //    view (migration V18) — the SAME definition the charger and the staff
-    //    user lists use. The view already exposes the user's latest non-voided
-    //    monthly-pass purchase; here we surface it only while it is still valid
-    //    today or later (an expired pass shows as "no active pass"). The
-    //    comparison is INCLUSIVE of the last paid day and coerces both sides to
-    //    a calendar date (`date(valid_until) >= date('now')`), matching the
-    //    charger and the door route (#179). The previous
-    //    `valid_until > datetime('now')` compared a bare date against a
-    //    datetime and, via SQLite's byte-wise TEXT ordering, wrongly reported
-    //    "no active pass" from midnight of the pass's own last valid day.
-    tracing::debug!(user_id, "my_balance: querying monthly_pass_active_until");
-    let monthly_pass_active_until: Option<String> = sqlx::query_scalar(
-        "SELECT valid_until FROM user_active_pass \
-          WHERE user_id = ? AND date(valid_until) >= date('now')",
-    )
-    .bind(user_id)
-    .fetch_optional(&state.pool)
-    .await
-    .map_err(internal_error)?;
-
-    // 3. Last 20 transactions (newest first). LEFT JOIN services (#147) so
-    //    the customer sees WHICH service a movement was for, same as the
-    //    admin transactions list. RecentTx derives FromRow (column-name
-    //    matched, not positional) so the aliases below just need to match
-    //    its field names — no manual tuple destructuring to keep in sync.
-    tracing::debug!(user_id, "my_balance: querying recent transactions");
-    let recent: Vec<RecentTx> = sqlx::query_as::<_, RecentTx>(
-        "SELECT t.id, t.created_at, t.action, t.amount, t.valid_until, t.note, \
-                s.name_sk AS service_name_sk, s.name_en AS service_name_en \
-           FROM transactions t \
-           LEFT JOIN services s ON s.id = t.service_id \
-          WHERE t.user_id = ? \
-            AND t.deleted_at IS NULL \
-          ORDER BY t.created_at DESC \
-          LIMIT 20",
-    )
-    .bind(user_id)
-    .fetch_all(&state.pool)
-    .await
-    .map_err(internal_error)?;
-
-    tracing::info!(
-        user_id = id,
-        credit,
-        allow_self_entry,
-        pass_active = monthly_pass_active_until.is_some(),
-        recent_count = recent.len(),
-        "my_balance: ok"
-    );
-
-    Ok(Json(BalanceResponse {
-        user_id: id,
-        name,
-        credit,
-        card_code,
-        allow_self_entry,
-        monthly_pass_active_until,
-        recent,
-    }))
 }
 
 #[cfg(test)]
