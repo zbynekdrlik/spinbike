@@ -225,3 +225,36 @@ persistent_bookings/reports) return `Result<T, DbError>` — the thiserror enum 
   every non-sqlx `?` (chrono `parse_from_str`, `str::parse` for `ParseIntError`)
   needs a `#[from]` variant on `DbError` or it won't convert. `cargo fmt --all`
   collapses the `.await` / `?` split left after removing `.context(...)`.
+
+## GOTCHA: never compare a DATE column against `datetime('now')` with `>`/`<` (#179, MONEY bug)
+
+DATE columns like `transactions.valid_until` (monthly-pass expiry) are stored as
+a bare `YYYY-MM-DD` (10 chars) — `routes/payments.rs::sell_pass` binds a
+`chrono::NaiveDate`. SQLite compares TEXT **byte-wise**, and a 10-char bare date
+is a PREFIX of the 19-char `datetime('now')` (`'2026-07-11'` vs
+`'2026-07-11 20:22:47'`), so the shorter string sorts as **LESS**. Therefore
+`valid_until > datetime('now')` is **FALSE on the pass's exact expiry day** — the
+pass reads as already-expired on its own last valid day. This was a real
+OVERCHARGE: the door route charged a single entry on a day the pass still
+covered (customer's last paid day).
+
+**Canonical form** — coerce BOTH sides with `date()` and use INCLUSIVE `>=` (a
+pass is valid THROUGH its last day; the charger treats it that way):
+
+```sql
+date(valid_until) >= date('now')      -- ✅ inclusive, calendar-date compare
+valid_until       >  datetime('now')  -- ❌ off-by-one on the expiry day
+```
+
+- Reference forms: `jobs/charger.rs` (the canonical inclusive compare, against
+  the booking's date), `routes/door.rs` + `routes/users.rs::my_balance` (both
+  fixed to match in #179).
+- The "is this an active monthly pass?" predicate lives ONCE in the
+  `user_active_pass` view (V18). Route any NEW pass check through the view —
+  never hand-roll an Nth copy (#159 unified 6 sites, #179 finished the 7th).
+- `db/users.rs::get_user_pass_valid_until` / `get_user_pass_tx` also wrap the
+  view's `valid_until` in `date(...)` before decoding into `chrono::NaiveDate`,
+  defending the decode against a hypothetical future full-datetime row.
+- Day-boundary basis is **UTC** (`date('now')`). Open question #205: should it be
+  the gym's LOCAL day (Europe/Bratislava)? — must stay consistent across the
+  charger, door, and my_balance if changed.
