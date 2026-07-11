@@ -3,6 +3,83 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-07-11 — #146 + #147: bundled batch — bookings/movements enrichment
+
+- **Issues:** [#146](https://github.com/zbynekdrlik/spinbike/issues/146) —
+  `/my/bookings` rendered `"Class #<internal template id> — <ISO date>"`,
+  meaningless to a customer. [#147](https://github.com/zbynekdrlik/spinbike/issues/147) —
+  `/my/balance` movements didn't name the service a movement was for, even
+  though the admin transactions list already does. Both ticket-validated
+  STILL_VALID against current `dev` (grepped: no service join on the
+  `my_balance` query, `format!("Class #{template_id} — {date}")` still
+  literally in `my_bookings.rs`); pure read-enrichment, no schema change,
+  zero file overlap → bundled one PR per the batch gate.
+- **Version:** bump `26f2d81` (0.15.0-dev.46 → 0.15.0-dev.47).
+- **#147** (`f502ecf`) — `my_balance`'s inline recent-transactions query
+  gained `LEFT JOIN services s ON s.id = t.service_id` (same pattern as
+  `db::transactions::list_transactions_for_user_paginated`, used by the
+  admin view); `RecentTx` gained `service_name_sk`/`service_name_en`.
+  Frontend renders it via a `service_label(lang)` helper. Falls back to
+  showing nothing when the movement has no linked service (a plain
+  top-up).
+- **#146** (`cdb1c95`) — `db::classes::list_user_bookings` now JOINs
+  `class_templates` + `instructors` (mirroring how
+  `list_upcoming_for_user` resolves `instructor_name`), returning
+  `start_time` + `instructor_name`. Frontend drops the raw
+  `template_id`/ISO date and renders `fmt_date_short(date, lang)` +
+  start time as the title, instructor as the sub-line — mirroring
+  `UpcomingClasses`'s layout. Spin-only app, so no class name needed.
+- **Review-driven refactor** (`2605f29`, two independent parallel
+  passes — a 3-angle finder fan-out before merge, then a full
+  `requesting-code-review` deep pass, both clean after): `RecentTx` now
+  derives `sqlx::FromRow` (column-name matched) instead of an
+  8-field manual tuple destructure; split a NEW `MyBookingResponse`
+  (start_time + instructor_name) off the shared `BookingResponse`
+  instead of bolting always-null fields onto the type `create_booking`'s
+  echo response also uses — same reasoning as the `_coded` API variant
+  pattern from #145; extracted the Sk/En service-name pick into a
+  shared `i18n::service_label` helper used by BOTH the admin
+  `TxnInfo::service_label` and the new customer `RecentTx::service_label`
+  (was duplicated); `my_bookings.rs`'s instructor sub-line now renders
+  via `Option<impl IntoView>.map(...)` (confirmed via Leptos's own docs:
+  renders nothing on `None`) instead of a match with a dummy empty
+  `<span>`.
+- **Tests:** `classes_routes.rs` — extended
+  `my_bookings_returns_user_bookings` (asserts `start_time="17:00"`,
+  `instructor_name` null) + new `my_bookings_includes_instructor_name`
+  (V6-seeded Monday-18:00-Stevo template, asserts both fields).
+  `users_routes.rs` — new `my_balance_recent_includes_service_name`
+  (charges against the seeded Spinning service, asserts
+  `service_name_sk`/`service_name_en`) +
+  `my_balance_recent_service_name_null_for_topup` (a plain top-up
+  degrades to `null`, not an error). E2E: new `e2e/tests/my-bookings.spec.ts`
+  (discovers the real `template_id` via the public `/api/classes`
+  endpoint, books, asserts the row shows `"18:00"` + `"Stevo"` and
+  NEITHER `"Class #"` NOR a raw `\d{4}-\d{2}-\d{2}` ISO date); extended
+  `e2e/tests/my-balance-movements.spec.ts` (both EN and SK describe
+  blocks now assert `"Spinning"` + `"Monthly pass"`/`"Mesačná
+  permanentka"` render on the movement rows).
+- **PR:** [#191](https://github.com/zbynekdrlik/spinbike/pull/191) —
+  merged `c7c974c`. CI on `dev` green (incl. all 8 mutation-testing
+  shards) both before and after the review-driven refactor commit; main
+  CI green, `Deploy (prod)` + `Smoke (prod)` both passed.
+- **Deployed:** v0.15.0-dev.47, confirmed on `https://spinbike.sk`. Live
+  functional verification used a synthetic throwaway customer (own user
+  row, cleaned up after — same pattern as the #109 cycle): booked the
+  REAL Monday-18:00-Stevo occurrence via `POST /api/bookings` and seeded
+  one real `charge` transaction against the real Spinning service via
+  direct SQL, then read both `/api/my/bookings` and `/api/my/balance`
+  AND the live rendered DOM (Playwright, stale-SW cleared first).
+  `/my/bookings` row showed `"13.07. 18:00"` / `"Stevo"` (no `"Class #"`,
+  no raw ISO date). `/my/balance` showed `"Výdaj z kreditu"` /
+  `"11.07. · Spinning"` / `"-5.00"`. DOM version label matched
+  `v0.15.0-dev.47` on both pages. 0 real console errors (only the known
+  #188 wasm-bindgen deprecation warning + an unauthenticated-navigation
+  401, both pre-existing/filtered). Synthetic user, transaction, and
+  booking all deleted after verification (booking cancelled via the real
+  `DELETE /api/bookings/{id}` API, user+transaction rows removed
+  directly).
+
 ## 2026-07-11 — #145: localize customer error banners via error_code
 
 - **Issue:** [#145](https://github.com/zbynekdrlik/spinbike/issues/145) —

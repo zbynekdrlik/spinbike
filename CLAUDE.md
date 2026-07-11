@@ -94,6 +94,7 @@ Load the skill for the area you're working in — each contains the full HOW-TO:
 | Door unlock / eWeLink / Sonoff | `.claude/skills/ewelink-door/SKILL.md` | Any work on `ewelink/*`, `routes/door.rs`, `/api/door/*`, or door credentials |
 | Frontend PWA / JS interop | `.claude/skills/frontend-pwa/SKILL.md` | Untyped browser API access (`js_sys::Reflect`), UA sniffing, manifest icons |
 | Auth / client onboarding | `.claude/skills/auth-onboarding/SKILL.md` | Magic-link tokens (`login_tokens`), `/api/auth/*`, `/welcome`, login/invite UI, register removal |
+| Prod functional verification | `.claude/skills/prod-verification/SKILL.md` | Post-deploy verification of a customer-facing (`/my/*`) feature on live prod |
 
 ## Project-wide always-apply rules
 
