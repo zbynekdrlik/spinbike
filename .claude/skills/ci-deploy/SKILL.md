@@ -335,6 +335,17 @@ ambiguous — don't assume only the test you're writing is affected.
   window) to kill `||→&&`. When a refactor moves logic into a new file: keep the
   behaviour tests reaching it (wrapper delegation), and add direct tests for any
   keep/drop or `&&`/`||` predicate whose non-obvious branch the moved tests miss.
+- **A test that computes its "expected" value by calling the SAME function
+  it's testing cannot catch that function degrading to a constant.** #170's
+  `migration_checksum` (`sha2::Sha256` → hex) had 4 tests, ALL of which did
+  `let expected = migration_checksum(sql); assert_eq!(stored, expected)` —
+  under the mutant `migration_checksum -> String::new()`, BOTH sides of every
+  assertion became `""`, so nothing failed and 2 mutants (`String::new()`,
+  `"xyzzy".into()`) survived a live CI run. Fix: add ONE test per pure
+  hash/transform function that asserts against a value computed OUTSIDE the
+  function under test (a literal from `sha256sum`/`md5sum`/a spec-known
+  constant) — every other test in the suite can still use the self-referential
+  form for convenience, but at least one must not.
 - **The mutation gate covers ONLY `--package spinbike-core --package
   spinbike-server` — the UI crate (`spinbike-ui`) has NO mutation gate** (the
   `mutation-ui` job is intentionally absent — a wasm32/cargo-mutants tooling gap,
@@ -588,6 +599,27 @@ a single CI run can need 2-3 of these back to back. (A prior version of this
 entry recommended writing the poll into a temp script FILE instead — that
 still works but is unnecessary; the inline loop above is simpler.)
 
+## `gh run view --log` / `--log-failed` returns EMPTY for a self-hosted-runner matrix job — use `gh api .../actions/jobs/<id>/logs`
+
+Debugging a failed `Mutation Testing (shard N/8)` job (#170): `gh run view
+<run-id> --job=<job-id> --log` and `gh run view <run-id> --log-failed` both
+silently returned nothing (exit 0, zero output) — not an error, just no
+lines. `gh run view <run-id> --log` (whole-run dump) DID work, but scanning
+it for the failing job's content came up empty too — the dump only covered
+the `ubuntu-latest` jobs; the failing job's own name never appeared. Fix:
+fetch that job's log directly from the API, which has no such gap:
+
+```bash
+gh api repos/OWNER/REPO/actions/jobs/<job-id>/logs > job.log
+grep -nE "MISSED|error|FAILED" job.log
+```
+
+`--json jobs -q '.jobs[] | select(.conclusion=="failure") | .databaseId'`
+on the run gets you the job id. Root cause not confirmed (self-hosted vs
+`ubuntu-latest`, or CLI log-streaming buffering on a long-running job) —
+just use the `gh api .../logs` form whenever `gh run view --log[-failed]`
+comes back suspiciously empty for a job you know failed.
+
 ## `cargo-deny` advisory gate (#162): expect REAL findings the first time it runs
 
 Adding a `cargo-deny check advisories` CI job to a repo that has never had
@@ -687,6 +719,16 @@ Two shapes, both blocked `git add`/`git commit` with "No stderr output":
    Every bypass is logged to `~/devel/airuleset/audits/secret-scan-bypasses.log`
    — legitimate here since it's genuinely not a secret, just don't reach for
    it reflexively on a diff you haven't actually checked.
+3. **A `#[test]` fixture that hardcodes a real SHA-256/hex hash literal in
+   `src/`** — e.g. `#170`'s `migration_checksum_matches_independently_computed_sha256`
+   asserted `migration_checksum("test-migration-sql") ==
+   "94b4089f9151cd7f874463261d781d4655c0021eb772145b50e9fa6d8127e15a"`
+   (computed via `printf '...' | sha256sum`, deliberately NOT via the
+   function under test — see the `mutation-testing` skill: a test that
+   derives its "expected" value by calling the same function it's testing
+   can't catch a constant-return mutant). Same 40+-char-hex trigger as case
+   2, same fix: `git add <file> # airuleset:secret-ok SHA-256 test fixture
+   (sha256sum of a literal string), not a credential`.
 
 ## Deleting a dead CSS class combined in a compound selector with a still-live bare element selector — split, don't delete the whole rule
 

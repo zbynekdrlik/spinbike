@@ -167,6 +167,143 @@ async fn first_of_day_with_pass_writes_visit_row() {
     assert_eq!(n, 1);
 }
 
+/// #179 — MONEY-BUG boundary: a monthly pass whose `valid_until` is EXACTLY
+/// today's date (a bare `YYYY-MM-DD` string — the exact format
+/// routes/payments.rs::sell_pass writes) must be treated as STILL ACTIVE for
+/// the whole of its last valid day, mirroring the T-4h charger's inclusive
+/// `date(valid_until) >= date('now')` semantics.
+///
+/// Before the fix, door.rs hand-rolled `valid_until > datetime('now')`. SQLite
+/// compares TEXT byte-wise, and the 10-char bare date `'2026-07-11'` is a
+/// prefix of the 19-char `datetime('now')` (`'2026-07-11 08:00:00'`), so the
+/// shorter string sorts as LESS → the predicate is FALSE on the expiry day →
+/// the customer with a still-valid pass was CHARGED for a single entry (a real
+/// overcharge). RED on the old code (charged=true), GREEN after routing the
+/// check through the canonical `user_active_pass` view with inclusive date
+/// semantics.
+#[tokio::test]
+async fn first_of_day_pass_expiring_today_grants_entry_without_charge() {
+    let app = TestApp::with_door_mode("success").await;
+    enable_self_entry(&app).await;
+    // Give the customer credit so that IF the (buggy) charge path fired, it
+    // would visibly debit — making the "no charge" assertions unambiguous.
+    sqlx::query("UPDATE users SET credit = 20.0 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    // Seed a monthly pass whose valid_until is EXACTLY today, as a bare date.
+    let svc_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO transactions (user_id, service_id, amount, action, valid_until) \
+         VALUES (?, ?, -35.0, 'charge', date('now'))",
+    )
+    .bind(app.customer_id)
+    .bind(svc_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, body) = app
+        .request(post_json(
+            "/api/door/open",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["status"], "opened");
+    // The pass covers the entry ON its last valid day — NO charge.
+    assert_eq!(
+        body["charged"], false,
+        "a pass expiring TODAY must cover the entry (last day inclusive), not charge"
+    );
+
+    // Credit must be untouched (no single-entry debit happened).
+    let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+        .bind(app.customer_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert!(
+        (credit - 20.0).abs() < 0.001,
+        "credit must be unchanged (pass covers entry), got {credit}"
+    );
+
+    // A zero-amount 'visit' row (not a 'charge') should be written for today.
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM transactions \
+         WHERE user_id = ? AND action = 'visit' AND amount = 0 AND note = 'door: 1st' \
+           AND date(created_at, 'localtime') = date('now', 'localtime')",
+    )
+    .bind(app.customer_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        n, 1,
+        "expected a zero-amount visit row for the pass-covered entry"
+    );
+}
+
+/// #179 — the OTHER side of the boundary: a pass that expired YESTERDAY
+/// (`valid_until = date('now','-1 day')`) is genuinely over, so the inclusive
+/// `>=` fix must STILL exclude it and charge the single entry. Guards against
+/// the fix over-correcting into "any past pass keeps counting". This passes
+/// both before and after the fix — it is the permissiveness guard.
+#[tokio::test]
+async fn first_of_day_pass_expired_yesterday_is_charged() {
+    let app = TestApp::with_door_mode("success").await;
+    enable_self_entry(&app).await;
+    sqlx::query("UPDATE users SET credit = 20.0 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    let svc_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO transactions (user_id, service_id, amount, action, valid_until) \
+         VALUES (?, ?, -35.0, 'charge', date('now', '-1 day'))",
+    )
+    .bind(app.customer_id)
+    .bind(svc_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, body) = app
+        .request(post_json(
+            "/api/door/open",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["status"], "opened");
+    assert_eq!(
+        body["charged"], true,
+        "a pass that expired yesterday must NOT cover today's entry — charge applies"
+    );
+    // Single-entry price is 5.0 (V16 retag); credit 20 → 15.
+    let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+        .bind(app.customer_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert!(
+        (credit - 15.0).abs() < 0.01,
+        "expected credit ~= 15.0 after single-entry charge, got {credit}"
+    );
+}
+
 #[tokio::test]
 async fn first_of_day_no_pass_writes_charge_row_and_deducts() {
     let app = TestApp::with_door_mode("success").await;

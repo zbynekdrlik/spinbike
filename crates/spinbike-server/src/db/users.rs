@@ -414,8 +414,13 @@ pub async fn get_user_pass_valid_until(
     pool: &SqlitePool,
     user_id: i64,
 ) -> Result<Option<chrono::NaiveDate>> {
+    // `date(valid_until)` coerces any legacy full-datetime string down to a
+    // bare `YYYY-MM-DD` before it is decoded into `chrono::NaiveDate`, matching
+    // the charger's own defensive `date(...)` wrap (#179). Every valid_until in
+    // prod is already a bare date, but without this a future importer writing a
+    // datetime would hard-error the decode here while the charger kept working.
     let row: Option<(chrono::NaiveDate,)> =
-        sqlx::query_as("SELECT valid_until FROM user_active_pass WHERE user_id = ?")
+        sqlx::query_as("SELECT date(valid_until) FROM user_active_pass WHERE user_id = ?")
             .bind(user_id)
             .fetch_optional(pool)
             .await?;
@@ -428,11 +433,15 @@ pub async fn get_user_pass_tx(
     pool: &SqlitePool,
     user_id: i64,
 ) -> Result<Option<(i64, chrono::NaiveDate)>> {
-    let row: Option<(i64, chrono::NaiveDate)> =
-        sqlx::query_as("SELECT pass_tx_id, valid_until FROM user_active_pass WHERE user_id = ?")
-            .bind(user_id)
-            .fetch_optional(pool)
-            .await?;
+    // `date(valid_until)` coerces any legacy full-datetime string to a bare
+    // date before decoding into `chrono::NaiveDate` — same defence as
+    // get_user_pass_valid_until above (#179).
+    let row: Option<(i64, chrono::NaiveDate)> = sqlx::query_as(
+        "SELECT pass_tx_id, date(valid_until) FROM user_active_pass WHERE user_id = ?",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
     Ok(row)
 }
 
