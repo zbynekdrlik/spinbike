@@ -90,3 +90,25 @@ customer-facing (`/my/*`) ticket.
   broadcast) — prefer the real endpoint whenever one exists.
 - **Curl-only** verification never proves the DOM actually renders the
   enrichment (see `autonomous-verification.md` — liveness ≠ functional).
+
+## Gotchas
+
+- **NEVER name a shell var `UID` (or `GID`/`PPID`/`EUID`) when capturing the
+  synthetic user id.** `UID` is a bash READONLY (= the OS uid, `1000` here), so
+  `UID=$(sqlite3 ... "SELECT id FROM users WHERE email=...")` **silently fails**
+  ("readonly variable"), and every later `user_id=$UID` INSERT attaches to a
+  dangling `user_id=1000` (no such user row → SQLite's default `PRAGMA
+  foreign_keys=OFF` lets it through), NOT your synthetic user. Discovered on
+  #168 verify — the movements/booking landed on a non-existent user 1000 and had
+  to be re-inserted. Use a distinctive name (`SYN_ID`), and after inserting
+  ALWAYS assert the rows are on the real synthetic id
+  (`SELECT count(*) ... WHERE user_id=$SYN_ID`) before driving the API.
+- **Booking a real class occurrence via raw SQL** needs a valid `template_id`
+  (from `class_templates`) + a future `date` matching a real occurrence — get
+  the id from `GET /api/classes?from=&to=` (public), e.g. template 1 recurs
+  weekly. `bookings` has `source` NOT NULL (`'manual'`).
+- **`monthly_pass_active_until` is NOT set just by inserting a `charge` tx with
+  a future `valid_until`** — the balance API derives the active pass by its own
+  rule, so that field can read `None` even with a valid pass-sale row. To verify
+  the pass-EXPIRY date render (`tx_until_short` + `fmt_date_short`), the pass-sale
+  MOVEMENT row's `do DD.MM.` suffix is enough — you don't need the pass banner.
