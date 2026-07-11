@@ -50,6 +50,11 @@ test.describe('Admin services — dual-language CRUD', () => {
     test('the single_entry service (door self-entry, formerly Fitness) shows a real label, not ??? (#186)', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+        // loginViaAPI defaults localStorage lang to 'en'; force Slovak so we
+        // assert the actual Slovak label the owner sees (#186's real fix).
+        await page.addInitScript(() => {
+            try { localStorage.setItem('spinbike_lang', 'sk'); } catch { /* storage not ready */ }
+        });
         await page.goto('/admin');
         await page.waitForSelector('h1.page-title');
         await page.locator('[data-testid="admin-tab-services"]').click();
