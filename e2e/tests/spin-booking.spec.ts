@@ -141,11 +141,15 @@ test.describe('spin booking', () => {
         }
 
         // Now click the Off toggle to turn the subscription OFF (button text returns to "On").
+        // Capture the template_id from the toggle we flip so we can scope the
+        // auto-cancel assertion below to exactly that template.
         let turnedOff = false;
+        let offTid: string | null = null;
         const m = await toggles.count();
         for (let i = 0; i < m; i++) {
             const t = toggles.nth(i);
             if (((await t.textContent())?.trim()) === 'Off') {
+                offTid = (await t.getAttribute('data-testid'))?.replace('persistent-toggle-', '') ?? null;
                 await t.click();
                 await expect(t).toHaveText('On', { timeout: 5000 });
                 turnedOff = true;
@@ -153,18 +157,18 @@ test.describe('spin booking', () => {
             }
         }
         expect(turnedOff).toBe(true);
+        expect(offTid).not.toBeNull();
 
-        // AUTO rows for that template should be gone. We just assert count is 0 OR
-        // at least one fewer than before — simpler: count == 0 after all are off.
-        // (Conservative: assert the count is <= 0, allowing for timing.)
+        // Turning a toggle off deterministically zeroes ALL auto-cancel rows for
+        // that exact template_id: server-side end_persistent cancels every
+        // future/uncharged/persistent-source booking for that (user_id,
+        // template_id), and the materialiser only re-creates rows for ACTIVE
+        // subscriptions. Scope the assertion to that template_id so it fails if
+        // the cancellation didn't actually happen.
         await page.waitForTimeout(500);
         await page.locator('[data-testid="tab-upcoming"]').click();
-        const autoCount = await page.locator('[data-testid^="auto-cancel-"]').count();
-        // If there were multiple persistent subscriptions we only turned one off; assert it went DOWN.
-        // Simpler: assert the number of Off toggles now equals zero OR some templates still have auto rows.
-        // For this minimal test we just require that at least one auto row is gone.
-        // Use test.skip if nothing can be verified.
-        expect(autoCount).toBeGreaterThanOrEqual(0);
+        const remaining = await page.locator(`[data-testid^="auto-cancel-${offTid}-"]`).count();
+        expect(remaining).toBe(0);
 
         assertCleanConsole(consoleMessages);
     });
