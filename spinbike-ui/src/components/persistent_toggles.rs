@@ -53,7 +53,7 @@ pub fn PersistentToggles(card_id: i64, #[prop(into)] on_changed: Callback<()>) -
                     for r in rs {
                         seen.entry(r.template_id).or_insert_with(|| TemplateLite {
                             id: r.template_id,
-                            weekday: chrono::NaiveDate::parse_from_str(&r.date, "%Y-%m-%d")
+                            weekday: crate::dates::parse_server_date(&r.date)
                                 .map(|d| {
                                     use chrono::Datelike;
                                     d.weekday().num_days_from_monday() as i64

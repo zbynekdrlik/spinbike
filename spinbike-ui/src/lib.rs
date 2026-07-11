@@ -1,6 +1,7 @@
 pub mod api;
 pub mod auth;
 pub mod components;
+pub mod dates;
 pub mod i18n;
 pub mod pages;
 pub mod relative_date;

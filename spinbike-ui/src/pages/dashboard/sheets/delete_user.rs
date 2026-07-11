@@ -88,7 +88,7 @@ pub fn DeleteUserSheet(
                         match active_pass_end {
                             Some(d) => {
                                 let txt = i18n::t(lang.get(), "delete_user_warning_pass")
-                                    .replace("{date}", &d.format("%d.%m.%Y").to_string());
+                                    .replace("{date}", &i18n::fmt_date(d, lang.get()));
                                 view! {
                                     <div class="alert alert-info" data-testid="delete-user-warning-pass">{txt}</div>
                                 }.into_any()

@@ -16,13 +16,10 @@ use super::transactions_list::TransactionsList;
 use super::{CardInfo, ServiceInfo};
 
 /// Parse the SQLite `created_at` shape ("YYYY-MM-DD HH:MM:SS") into a date.
-/// Returns None if the input doesn't match the expected leading 10 chars.
+/// Returns None for a missing value or an unparseable date. Delegates the ISO
+/// parsing to the shared `dates::parse_server_date` (#168).
 fn parse_last_visit(s: &Option<String>) -> Option<NaiveDate> {
-    let s = s.as_deref()?;
-    if s.len() < 10 {
-        return None;
-    }
-    NaiveDate::parse_from_str(&s[..10], "%Y-%m-%d").ok()
+    crate::dates::parse_server_date(s.as_deref()?)
 }
 
 #[component]

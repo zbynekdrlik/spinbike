@@ -126,17 +126,12 @@ fn format_optional_date(
 ) -> String {
     match raw {
         None => never_label.to_string(),
-        Some(s) => {
-            // SQLite literal: "YYYY-MM-DD HH:MM:SS". Slice the leading 10
-            // characters defensively via `get(..10)` — the API only returns
-            // ASCII timestamps today, but a byte-index slice would panic on
-            // a multi-byte char boundary if that ever changes.
-            let date_str = s.get(..10).unwrap_or(s.as_str());
-            match NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
-                Ok(d) => relative(d, today, lang),
-                Err(_) => never_label.to_string(),
-            }
-        }
+        // SQLite literal "YYYY-MM-DD HH:MM:SS" (or a bare ISO date) — the
+        // shared parser trims the trailing time component (#168).
+        Some(s) => match crate::dates::parse_server_date(s) {
+            Some(d) => relative(d, today, lang),
+            None => never_label.to_string(),
+        },
     }
 }
 

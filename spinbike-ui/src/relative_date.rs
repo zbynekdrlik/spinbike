@@ -11,7 +11,7 @@
 //! prefix.
 
 use crate::i18n::{self, Lang};
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 
 /// Locale-aware "today" — wraps `chrono::Local::now().date_naive()`.
 /// Centralised so future date-formatting features (and tests that mock
@@ -34,9 +34,12 @@ pub fn format_last_visit(visited: NaiveDate, today: NaiveDate, lang: Lang) -> St
 }
 
 /// DD.MM.YYYY date — same form for SK and EN (Slovak idiom; project's
-/// existing English staff displays also use %d.%m.%Y).
+/// existing English staff displays also use %d.%m.%Y). Deliberately
+/// locale-INDEPENDENT — do NOT route this through `i18n::fmt_date` (which
+/// returns ISO for English); it shares only the digit arithmetic via
+/// `dates::format_ddmmyyyy` (#168).
 fn format_date(d: NaiveDate) -> String {
-    format!("{:02}.{:02}.{:04}", d.day(), d.month(), d.year())
+    crate::dates::format_ddmmyyyy(d)
 }
 
 /// Relative-time bucket. See module docs for the exact thresholds.
