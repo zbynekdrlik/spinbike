@@ -3,6 +3,40 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-07-11 — #165: split routes/users.rs by concern
+
+- **Issue:** [#165](https://github.com/zbynekdrlik/spinbike/issues/165) —
+  1105-LoC `routes/users.rs` tangled staff-CRUD, customer self-service
+  (`my_balance`), and magic-link invite onboarding. Ticket-validated
+  STILL_VALID with a fully settled design in the issue comments (rescope: keep
+  `user_transactions`/`user_stats` in users.rs — thematic mismatch with
+  transactions.rs/reports.rs). Solo PR, pure reorg → auto-merge.
+- **Version:** bump `289aae0` (0.15.0-dev.72 → 0.15.0-dev.73).
+- **Work** (`0b4a4ec`) — NEW `routes/my_balance.rs` (142 LoC): `my_balance`
+  handler + `BalanceResponse`/`RecentTx` moved verbatim (`GET
+  /api/my/balance`, `AuthUser`). EXTEND `routes/auth.rs` (+97 LoC):
+  `invite_user`/`invite_email`/`InviteResponse` moved beside the existing
+  magic-link machinery (`POST /api/users/{id}/invite`, `StaffUser`); only
+  content change is `db::` → `users::` (same fn). `routes/users.rs` shrinks to
+  881 LoC (staff-CRUD + `user_transactions`/`user_stats`, per the rescope).
+  Pure refactor — no RED/GREEN pair; `[no-test: pure refactor, code moved
+  between files with zero behavior/URL/JSON-shape change]` marker commit
+  (`9fe2e6a`) bypasses the push gate (no test file needed changes, deep
+  code-review confirmed every moved handler byte-identical to its original).
+- **PR:** [#209](https://github.com/zbynekdrlik/spinbike/pull/209) — CI green
+  incl. all 8 diff-scoped mutation shards (moved logic re-mutated fresh in
+  its new location per the ci-deploy skill's gotcha — zero survivors), E2E,
+  dev deploy+smoke. `/review` + `/requesting-code-review` both clean (0🔴 0🟡
+  0🔵 — reviewer diffed every moved item against the pre-move original and
+  found zero drift). Merged `17f0a0f`. Main CI green, prod deploy+smoke green.
+- **Post-deploy verify:** synthetic customer (id 576) + staff JWT (per
+  `prod-verification` skill) confirmed `GET /api/my/balance` (200, correct
+  shape) and `POST /api/users/{id}/invite` (200) both work through their new
+  file locations on live `spinbike.sk`. Playwright DOM read of `/my/balance`
+  showed the credit/recent-activity render correctly, version footer
+  `v0.15.0-dev.73`, zero console errors. Synthetic user/transaction/
+  login_tokens rows cleaned up after.
+
 ## 2026-07-11 — #168: consolidate duplicated UI date parse/format helpers
 
 - **Issue:** [#168](https://github.com/zbynekdrlik/spinbike/issues/168) —
