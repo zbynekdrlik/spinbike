@@ -47,6 +47,31 @@ test.describe('Admin services — dual-language CRUD', () => {
         assertCleanConsole(msgs);
     });
 
+    test('the single_entry service (door self-entry, formerly Fitness) shows a real label, not ??? (#186)', async ({ page }) => {
+        const msgs = setupConsoleCheck(page);
+        await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+        // loginViaAPI defaults localStorage lang to 'en'; force Slovak so we
+        // assert the actual Slovak label the owner sees (#186's real fix).
+        await page.addInitScript(() => {
+            try { localStorage.setItem('spinbike_lang', 'sk'); } catch { /* storage not ready */ }
+        });
+        await page.goto('/admin');
+        await page.waitForSelector('h1.page-title');
+        await page.locator('[data-testid="admin-tab-services"]').click();
+        await page.waitForFunction(() => !document.querySelector('.spinner'), { timeout: 10000 });
+
+        // Migration V16 re-tags the seeded "Fitness" row to kind='single_entry'
+        // for the door self-entry feature. Its kind badge used to render "???"
+        // because i18n.rs had no service_kind_single_entry key.
+        const row = page.locator('tr', { hasText: 'Fitness' });
+        await expect(row).toBeVisible();
+        await expect(row.locator('.badge--single_entry')).toBeVisible();
+        await expect(row.locator('.badge--single_entry')).toHaveText('Jednorazovy vstup');
+        await expect(row.locator('.badge--single_entry')).not.toHaveText('???');
+
+        assertCleanConsole(msgs);
+    });
+
     test('GET /api/admin/services returns rows with kind, name_sk, name_en', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');

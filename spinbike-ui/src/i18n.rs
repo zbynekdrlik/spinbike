@@ -516,6 +516,10 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         "service_kind_monthly_pass",
         ("Mesacny listok", "Monthly pass"),
     );
+    m.insert(
+        "service_kind_single_entry",
+        ("Jednorazovy vstup", "Single entry"),
+    );
 
     // Monthly pass banner
     // #32: collapsed single-line pass status (active + expired). Used by
@@ -526,14 +530,14 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "pass_active_oneline_format",
         (
-            "✓ Mesačný lístok do {} ({} dní)",
+            "✓ Mesacny listok do {} ({} dni)",
             "✓ Monthly pass valid until {} ({} days)",
         ),
     );
     m.insert(
         "pass_expired_oneline_format",
         (
-            "⚠ Mesačný lístok vypršal pred {} dňami (do {})",
+            "⚠ Mesacny listok vyprsal pred {} dnami (do {})",
             "⚠ Monthly pass expired {} days ago (was valid until {})",
         ),
     );
@@ -565,7 +569,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
 
     // Transaction history action labels (EventKind-driven; DB stores raw English: topup/charge/visit/pass).
     m.insert("tx_label_topup", ("Dobitie kreditu", "Top-up"));
-    m.insert("tx_label_charge", ("Výdaj z kreditu", "Spent from credit"));
+    m.insert("tx_label_charge", ("Vydaj z kreditu", "Spent from credit"));
     m.insert(
         "tx_label_visit",
         ("Vstup s permanentkou", "Entry with pass"),
@@ -574,11 +578,11 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     // Transaction note UI strings
     m.insert(
         "tx_note_placeholder",
-        ("Poznámka (nepovinné)", "Note (optional)"),
+        ("Poznamka (nepovinne)", "Note (optional)"),
     );
-    m.insert("tx_note_edit", ("Upraviť poznámku", "Edit note"));
-    m.insert("tx_note_save", ("Uložiť", "Save"));
-    m.insert("tx_note_cancel", ("Zrušiť", "Cancel"));
+    m.insert("tx_note_edit", ("Upravit poznamku", "Edit note"));
+    m.insert("tx_note_save", ("Ulozit", "Save"));
+    m.insert("tx_note_cancel", ("Zrusit", "Cancel"));
     m.insert("tx_until_short", ("do", "until"));
     m.insert("error_format", ("Chyba: {}", "Error: {}"));
 
@@ -718,7 +722,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     );
 
     // Reports — feed event labels (Other is a fallback; main labels come from tx_label_*)
-    m.insert("event_other", ("Iné", "Other"));
+    m.insert("event_other", ("Ine", "Other"));
     // Reports — feed
     m.insert("feed_load_older", ("Nacitat starsie", "Load older"));
     m.insert(
