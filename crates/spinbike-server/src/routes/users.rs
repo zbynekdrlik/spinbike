@@ -1003,12 +1003,18 @@ async fn my_balance(
     // 2. Active monthly-pass valid_until, via the canonical `user_active_pass`
     //    view (migration V18) — the SAME definition the charger and the staff
     //    user lists use. The view already exposes the user's latest non-voided
-    //    monthly-pass purchase; here we surface it only while it is still in the
-    //    future (an expired pass shows as "no active pass").
+    //    monthly-pass purchase; here we surface it only while it is still valid
+    //    today or later (an expired pass shows as "no active pass"). The
+    //    comparison is INCLUSIVE of the last paid day and coerces both sides to
+    //    a calendar date (`date(valid_until) >= date('now')`), matching the
+    //    charger and the door route (#179). The previous
+    //    `valid_until > datetime('now')` compared a bare date against a
+    //    datetime and, via SQLite's byte-wise TEXT ordering, wrongly reported
+    //    "no active pass" from midnight of the pass's own last valid day.
     tracing::debug!(user_id, "my_balance: querying monthly_pass_active_until");
     let monthly_pass_active_until: Option<String> = sqlx::query_scalar(
         "SELECT valid_until FROM user_active_pass \
-          WHERE user_id = ? AND valid_until > datetime('now')",
+          WHERE user_id = ? AND date(valid_until) >= date('now')",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)

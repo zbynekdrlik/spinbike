@@ -218,13 +218,26 @@ async fn open(
         let pass_active: Option<i64> = if is_staff_or_admin_role {
             Some(1) // short-circuit — treat as "pass covers it"
         } else {
+            // Route the "does this user hold an active monthly pass?" check
+            // through the canonical `user_active_pass` view (migration V18) —
+            // the SAME single definition the T-4h charger, my_balance and the
+            // staff user lists use — instead of a 7th hand-rolled copy of the
+            // predicate (#159 unified the other six; #179 finishes the door).
+            // The view already applies `action='charge' AND
+            // service kind='monthly_pass' AND deleted_at IS NULL` and picks the
+            // latest non-voided pass, so this site inherits the voided-pass fix
+            // for free. Inclusive last-day semantics mirror the charger EXACTLY:
+            // `date(valid_until) >= date('now')` coerces the (bare-date)
+            // valid_until and today's date to a calendar-date compare, so a pass
+            // covers the WHOLE of its last paid day. The previous
+            // `valid_until > datetime('now')` compared a 10-char bare date
+            // against a 19-char datetime and, via SQLite's byte-wise TEXT
+            // ordering, read the expiry day as already-expired — charging the
+            // customer a single entry on a day their pass still covered (#179).
             sqlx::query_scalar(
-                "SELECT 1 FROM transactions \
+                "SELECT 1 FROM user_active_pass \
                  WHERE user_id = ? \
-                   AND action = 'charge' \
-                   AND service_id = (SELECT id FROM services WHERE kind = 'monthly_pass') \
-                   AND valid_until > datetime('now') \
-                   AND deleted_at IS NULL \
+                   AND date(valid_until) >= date('now') \
                  LIMIT 1",
             )
             .bind(user_id)
