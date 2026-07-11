@@ -74,6 +74,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "user_active_pass view: one canonical active-monthly-pass definition",
         V18_USER_ACTIVE_PASS_VIEW,
     ),
+    (
+        19,
+        "schema_version: checksum column for tamper detection",
+        V19_SCHEMA_VERSION_CHECKSUM,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -733,6 +738,30 @@ FROM (
       AND t.deleted_at IS NULL
 )
 WHERE rn = 1;
+"#;
+
+// V19: checksum column on schema_version, for tamper detection (#170).
+//
+// The hand-rolled runner in db/mod.rs previously gated solely on the integer
+// `version` — if someone edited an ALREADY-APPLIED migration's SQL const
+// after it shipped, the apply loop would silently skip it (`version <=
+// current_version`) with zero detection. This mirrors the one real gap vs
+// sqlx's built-in directory migrator (which records + checks a checksum per
+// migration file).
+//
+// Additive + nullable: runs through the existing apply loop like any other
+// migration, no special-casing. `run_migrations` (db/mod.rs) computes a
+// SHA-256 hex digest of each migration's SQL body and, after the apply loop,
+// walks every migration up to the current version: a NULL checksum (a
+// pre-upgrade row, or one just applied in this same run — the ALTER above
+// only takes effect partway through a fresh-install loop, so the mid-loop
+// INSERT deliberately does NOT set it) gets backfilled from the CURRENT
+// const; a non-NULL checksum that no longer matches the const means the
+// migration was edited after being applied, and `run_migrations` returns an
+// `Err` that propagates out of `main()` — the server refuses to boot rather
+// than run against a schema that no longer matches what shipped.
+const V19_SCHEMA_VERSION_CHECKSUM: &str = r#"
+ALTER TABLE schema_version ADD COLUMN checksum TEXT;
 "#;
 
 #[cfg(test)]

@@ -11,6 +11,7 @@ pub mod users;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Connection, Row, SqlitePool};
 use tracing::info;
@@ -74,6 +75,13 @@ pub async fn create_memory_pool() -> Result<SqlitePool> {
         .context("Failed to create in-memory SQLite pool")?;
 
     Ok(pool)
+}
+
+/// SHA-256 hex digest of a migration's SQL body — the tamper-detection
+/// fingerprint recorded in `schema_version.checksum` (V19, #170). Same hash
+/// idiom as `db::login_tokens::hash_token`.
+fn migration_checksum(sql: &str) -> String {
+    hex::encode(Sha256::digest(sql.as_bytes()))
 }
 
 /// Run all pending migrations inside transactions with schema_version tracking.
@@ -145,6 +153,48 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
             .context("Failed to re-enable foreign_keys after migration")?;
 
         info!(version, "migration applied");
+    }
+
+    // Verify + backfill checksums for every migration in MIGRATIONS (#170).
+    // By this point every migration has been applied (the loop above never
+    // returns early) — including V19 itself, whose ALTER TABLE added the
+    // `checksum` column mid-loop, so the INSERT above deliberately never set
+    // it for the migration(s) applied in this run.
+    //
+    // A NULL checksum means "not yet fingerprinted" — either a row that
+    // predates this feature (v1..v18 on the very first boot after this
+    // ships) or one just applied above in this same run — and gets
+    // backfilled from the CURRENT const, establishing the baseline going
+    // forward. A non-NULL checksum that no longer matches the const means
+    // the migration's SQL was edited after being applied: refuse to boot
+    // rather than run against a schema that no longer matches what shipped.
+    for &(version, description, sql) in MIGRATIONS {
+        let expected = migration_checksum(sql);
+        let stored: Option<String> =
+            sqlx::query_scalar("SELECT checksum FROM schema_version WHERE version = ?")
+                .bind(version)
+                .fetch_one(pool)
+                .await
+                .with_context(|| format!("Failed to read checksum for migration v{version}"))?;
+
+        match stored {
+            None => {
+                sqlx::query("UPDATE schema_version SET checksum = ? WHERE version = ?")
+                    .bind(&expected)
+                    .bind(version)
+                    .execute(pool)
+                    .await
+                    .with_context(|| {
+                        format!("Failed to backfill checksum for migration v{version}")
+                    })?;
+            }
+            Some(actual) if actual != expected => {
+                anyhow::bail!(
+                    "migration {version} ({description}) has been modified after being applied — checksum mismatch"
+                );
+            }
+            Some(_) => {}
+        }
     }
 
     Ok(())
@@ -268,5 +318,89 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(count, 2);
+    }
+
+    /// #170: on a fresh DB, every applied migration ends up with a non-null
+    /// checksum in schema_version, matching `migration_checksum` of its
+    /// current SQL const. Covers both the mid-loop path (V19 itself, whose
+    /// INSERT deliberately leaves checksum NULL) and the post-loop backfill
+    /// path (v1..v18) — both must converge on the same fingerprinted state.
+    #[tokio::test]
+    async fn fresh_db_backfills_checksum_for_every_migration() {
+        let pool = setup().await;
+
+        for &(version, description, sql) in MIGRATIONS {
+            let expected = migration_checksum(sql);
+            let stored: Option<String> =
+                sqlx::query_scalar("SELECT checksum FROM schema_version WHERE version = ?")
+                    .bind(version)
+                    .fetch_one(&pool)
+                    .await
+                    .unwrap();
+            assert_eq!(
+                stored,
+                Some(expected),
+                "migration v{version} ({description}) missing/wrong checksum"
+            );
+        }
+    }
+
+    /// #170: a schema_version row with a NULL checksum (simulating a
+    /// pre-upgrade row written before this feature existed) gets backfilled
+    /// on the next `run_migrations` call — no error, no special-casing.
+    #[tokio::test]
+    async fn null_checksum_row_gets_backfilled_on_rerun() {
+        let pool = setup().await;
+
+        // Simulate "before this feature shipped": wipe v1's checksum back to
+        // NULL, as if it had been applied by an older binary.
+        sqlx::query("UPDATE schema_version SET checksum = NULL WHERE version = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let wiped: Option<String> =
+            sqlx::query_scalar("SELECT checksum FROM schema_version WHERE version = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(wiped, None, "test setup: checksum should be NULL now");
+
+        // Re-running migrations must backfill it, not error.
+        run_migrations(&pool).await.unwrap();
+
+        let expected = migration_checksum(MIGRATIONS[0].2);
+        let backfilled: Option<String> =
+            sqlx::query_scalar("SELECT checksum FROM schema_version WHERE version = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(backfilled, Some(expected));
+    }
+
+    /// #170 core regression guard: if an already-applied migration's stored
+    /// checksum no longer matches its current SQL const (i.e. someone edited
+    /// the const after it shipped), `run_migrations` MUST fail loudly — never
+    /// silently continue and boot against a schema that no longer matches
+    /// what was recorded as applied.
+    #[tokio::test]
+    async fn tampered_migration_checksum_fails_loudly() {
+        let pool = setup().await;
+
+        // Simulate tampering: an already-applied migration (v1) now has a
+        // stored checksum that does not match `migration_checksum` of its
+        // current const — as if the const's SQL had been edited post-hoc.
+        sqlx::query("UPDATE schema_version SET checksum = 'deadbeef' WHERE version = 1")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let result = run_migrations(&pool).await;
+        let err = result.expect_err("tampered checksum must fail run_migrations, not succeed");
+        let msg = format!("{err:?}").to_lowercase();
+        assert!(
+            msg.contains("checksum") && msg.contains("modified"),
+            "expected a checksum-mismatch error, got: {msg}"
+        );
     }
 }
