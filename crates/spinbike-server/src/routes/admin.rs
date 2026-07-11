@@ -7,7 +7,7 @@ use axum::{
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::auth::{AdminUser, AuthUser, StaffUser};
+use crate::auth::{AdminUser, StaffUser};
 use crate::db::{classes, settings, users};
 use crate::error::ApiError;
 use crate::routes::internal_error;
@@ -506,9 +506,13 @@ async fn update_service(
 
 // ---------- Settings handlers ----------
 
+// #175: staff-only, matching the sibling admin GET handlers
+// (list_templates/list_instructors/list_services). The write path
+// (update_setting) stays AdminUser -- the read/write asymmetry is
+// intentional.
 async fn get_settings(
     State(state): State<AppState>,
-    AuthUser(_claims): AuthUser,
+    _: StaffUser,
 ) -> Result<Json<Vec<SettingRow>>, ApiError> {
     let rows: Vec<(String, String)> =
         sqlx::query_as("SELECT key, value FROM settings ORDER BY key")
