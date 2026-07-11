@@ -51,6 +51,17 @@ pub enum DbError {
     #[error("Class is full")]
     ClassFull,
 
+    /// A date string stored in / passed to the DB failed to parse (e.g.
+    /// `list_upcoming_for_user` parsing its `from`/`to` bounds). Bubbles to a
+    /// 500 like any other internal error — no caller distinguishes it.
+    #[error(transparent)]
+    DateParse(#[from] chrono::ParseError),
+
+    /// A numeric setting stored as text failed to parse (e.g. `get_bike_count`
+    /// reading `bike_count`). A data-integrity failure → 500.
+    #[error(transparent)]
+    IntParse(#[from] std::num::ParseIntError),
+
     /// Any other database error (connection, SQL syntax, a non-unique
     /// constraint, ...). Transparent, so its `Display`/`source` is the
     /// underlying `sqlx::Error`.

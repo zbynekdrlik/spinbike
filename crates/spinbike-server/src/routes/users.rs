@@ -345,7 +345,7 @@ async fn create_user(
     )
     .await
     .map_err(|e| {
-        if matches!(e, db::DbError::UniqueViolation) {
+        if matches!(e, crate::db::DbError::UniqueViolation) {
             ApiError::conflict(ErrorCode::EmailOrCardConflict)
         } else {
             internal_error(e)
