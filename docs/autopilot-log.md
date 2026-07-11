@@ -3,6 +3,69 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-07-11 — #152: login-link button missing loading feedback
+
+- **Issue:** [#152](https://github.com/zbynekdrlik/spinbike/issues/152) —
+  the customer login-link submit button on `/login` gave no visible signal
+  while a request was in flight (subtle disabled/opacity change on a
+  low-contrast `btn--ghost`); prod logs showed duplicate sends ~2.5 min
+  apart for the same email, consistent with users retrying. A
+  ticket-validator disproved the original "reactive double-submit"
+  hypothesis live (a real double-click already fires exactly one request,
+  guarded by `disabled=move || loading.get()`) — the real cause was
+  missing loading feedback.
+- **Version:** bumped `454d57e` (0.15.0-dev.42 → 0.15.0-dev.43).
+- **RED** (`cf738a0`) — new `e2e/tests/login-link.spec.ts` test asserting
+  the button shows `"Sending..."` within 1s of a click (well before an
+  artificial 500ms response delay) and that a rapid double-click still
+  fires exactly one `POST /api/auth/request-login-link`. Confirmed failing
+  on CI (button stuck on `"Send login link"`), all 162 other E2E tests
+  passed. Run: https://github.com/zbynekdrlik/spinbike/actions/runs/29133430958
+- **GREEN** (`4b070a4`) — `login_link_form.rs` now swaps to a new
+  `sending_login_link` i18n key while `loading` is true, mirroring the
+  sibling staff-login button's existing loading-text pattern (`login.rs`).
+  Also added a defensive `appearance: none; -webkit-appearance: none;`
+  reset to the `.btn` base rule for the issue's reported iOS text-
+  misalignment symptom — not reproducible in Chromium, shipped as an
+  honestly-labeled unverified defensive fix, not a confirmed repro+fix. CI
+  all green (Lint, Test, Test (UI), Build WASM, E2E, all 8 Mutation
+  Testing shards, Deploy (dev), Smoke (dev)). Run:
+  https://github.com/zbynekdrlik/spinbike/actions/runs/29133707069
+- **Review:** two-stage (`/review` + `superpowers:requesting-code-review`
+  via a dispatched general-purpose reviewer scoped to `454d57e..4b070a4`)
+  both found 0 🔴 0 🟡 0 🔵 — only optional-only notes (the double-click
+  assertion re-verifies already-proven disabled-guard behavior; the
+  speculative CSS fix could have been its own commit). No fixes required.
+- **PR:** [#189](https://github.com/zbynekdrlik/spinbike/pull/189), merged
+  `fc71ff5`. Main CI green (Lint, Test, Test (UI), Build WASM, E2E,
+  Supply-Chain Advisories, Deploy (prod), Smoke (prod)).
+- **Post-deploy verify gotcha:** this session's long-lived Playwright
+  browser profile had a stale service-worker registration from earlier
+  test cycles, showing `v0.15.0-dev.30` on the DOM even though
+  `/api/version` already served `v0.15.0-dev.43`. Current `sw.js` (network-
+  first for `/`, `.html`, `sw.js`, `manifest.json`; cache-first only for
+  Trunk's hashed immutable assets; `CACHE_NAME = 'spinbike-v2'`) is already
+  the correct fix for this — the stale read was this specific persistent
+  test profile carrying an old SW instance, not a deploy bug (confirmed:
+  `navigator.serviceWorker.getRegistrations()` + unregister + cache clear +
+  reload immediately showed the correct `v0.15.0-dev.43`). **Playbook
+  takeaway: before trusting a DOM version read in a long-lived Playwright
+  MCP session, unregister any stale service worker + clear caches first**
+  — Smoke (prod) CI itself is unaffected since it uses a fresh browser
+  context per run.
+- **Live verify:** on `https://spinbike.sk/login` (fresh SW state), a real
+  click showed the button as `"Odosielam..."` + `disabled=true` within one
+  animation frame (caught via a synchronous in-page `requestAnimationFrame`
+  poll, since the real round-trip is fast enough that a full MCP
+  screenshot round-trip missed the transient state), then swapped to the
+  success alert. 0 console errors/warnings on `/login` (the one console
+  warning seen — the wasm-bindgen deprecated-init-params message — is the
+  pre-existing, already-filed #188, unrelated to this fix).
+- **Deployed:** v0.15.0-dev.43, confirmed on `https://spinbike.sk` — DOM
+  `"Verzia aplikacie"` == `/api/version` == `v0.15.0-dev.43` (after
+  clearing the stale test-profile SW above). prod `spinbike.service`
+  active.
+
 ## 2026-07-10 — #169 + #171 + #173 + #176: bundled dead-code cleanup batch
 
 - **Issues:** [#169](https://github.com/zbynekdrlik/spinbike/issues/169) —
