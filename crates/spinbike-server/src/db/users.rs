@@ -93,7 +93,7 @@ pub async fn create_user(
     initial_credit: Option<f64>,
     oauth_provider: Option<&str>,
     oauth_id: Option<&str>,
-) -> sqlx::Result<i64> {
+) -> Result<i64> {
     let search_text = compute_search_text(Some(name), company, card_code);
     let credit = initial_credit.unwrap_or(0.0);
     let id = sqlx::query_scalar::<_, i64>(
