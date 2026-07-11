@@ -435,4 +435,67 @@ mod tests {
             );
         }
     }
+
+    /// #172 RED: proves a panicking handler must be caught (500) rather than
+    /// taking down the whole router. As written at this commit, `build_router`
+    /// wires no `CatchPanicLayer` anywhere, so nothing intercepts the panic
+    /// before it propagates out of `Router::oneshot` — this test would panic
+    /// (and thus fail) rather than observe a 500. Deterministically RED by
+    /// static proof, not an actual failing CI run: local `cargo test` is
+    /// banned in this repo (CI-only, see CLAUDE.md), and the absence of any
+    /// `catch_panic`/`CatchPanicLayer` reference anywhere in the crate
+    /// (grep-confirmed) is exactly the condition this test targets.
+    #[tokio::test]
+    async fn panicking_handler_returns_500_and_server_survives() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (event_tx, _) = broadcast::channel(16);
+        let state = AppState {
+            pool: pool.clone(),
+            event_tx,
+            jwt_secret: "placeholder".to_string(),
+            ewelink: crate::ewelink::EwelinkHandle::spawn(),
+            mail: crate::mail::MailHandle::spawn(),
+            public_base_url: String::new(),
+            door_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::door::RateLimiter::new(),
+            )),
+            login_link_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::auth::LoginLinkRateLimiter::new(),
+            )),
+        };
+
+        // test_mode=true mounts routes::test_fixtures::routes(), which now
+        // includes the panic-only-under-SPINBIKE_TEST_MODE /api/test/panic
+        // route (#172). Whatever layer stack build_router applies (or
+        // doesn't) is exactly what production gets via start_server, too.
+        let app: Router = build_router(true).with_state(state);
+
+        let panic_req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/test/panic")
+            .body(Body::empty())
+            .unwrap();
+        let panic_resp = app.clone().oneshot(panic_req).await.unwrap();
+        assert_eq!(
+            panic_resp.status(),
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "a panicking handler must be caught and turned into a 500 response, \
+             not left to crash the process"
+        );
+
+        // The server must still be alive and able to serve OTHER requests —
+        // the entire point of catching the panic instead of aborting.
+        let health_req = Request::builder()
+            .method(Method::GET)
+            .uri("/api/version")
+            .body(Body::empty())
+            .unwrap();
+        let health_resp = app.clone().oneshot(health_req).await.unwrap();
+        assert_eq!(
+            health_resp.status(),
+            StatusCode::OK,
+            "server must still serve requests after a handler panic was caught"
+        );
+    }
 }
