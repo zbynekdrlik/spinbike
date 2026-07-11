@@ -262,7 +262,8 @@ async fn update_template(
 ) -> Result<Json<TemplateResponse>, ApiError> {
     // Fetch existing row, merge fields, then do a full UPDATE.
     let existing = sqlx::query_as::<_, classes::ClassTemplateRow>(
-        "SELECT * FROM class_templates WHERE id = ?",
+        "SELECT id, weekday, start_time, duration_minutes, instructor_id, capacity, active
+         FROM class_templates WHERE id = ?",
     )
     .bind(id)
     .fetch_one(&state.pool)

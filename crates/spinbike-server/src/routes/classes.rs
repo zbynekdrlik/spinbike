@@ -292,7 +292,8 @@ async fn cancel_booking(
 ) -> Result<StatusCode, ApiError> {
     // Get the booking to check ownership.
     let booking = sqlx::query_as::<_, db::BookingRow>(
-        "SELECT * FROM bookings WHERE id = ? AND cancelled_at IS NULL",
+        "SELECT id, template_id, date, user_id, created_by, source, created_at, cancelled_at
+         FROM bookings WHERE id = ? AND cancelled_at IS NULL",
     )
     .bind(booking_id)
     .fetch_optional(&state.pool)

@@ -55,7 +55,10 @@ pub fn compute_search_text(
 /// startup — idempotent, and only touches rows that need it.
 pub async fn backfill_search_text(pool: &SqlitePool) -> Result<usize> {
     let rows: Vec<UserRow> = sqlx::query_as::<_, UserRow>(
-        "SELECT * FROM users WHERE search_text IS NULL OR search_text = ''",
+        "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
+                oauth_id, credit, card_code, blocked, allow_debit, search_text,
+                created_at, deleted_at, allow_self_entry
+         FROM users WHERE search_text IS NULL OR search_text = ''",
     )
     .fetch_all(pool)
     .await?;
@@ -119,19 +122,28 @@ pub async fn create_user(
 }
 
 pub async fn get_user_by_email(pool: &SqlitePool, email: &str) -> Result<Option<UserRow>> {
-    let user =
-        sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE email = ? AND deleted_at IS NULL")
-            .bind(email)
-            .fetch_optional(pool)
-            .await?;
+    let user = sqlx::query_as::<_, UserRow>(
+        "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
+                oauth_id, credit, card_code, blocked, allow_debit, search_text,
+                created_at, deleted_at, allow_self_entry
+         FROM users WHERE email = ? AND deleted_at IS NULL",
+    )
+    .bind(email)
+    .fetch_optional(pool)
+    .await?;
     Ok(user)
 }
 
 pub async fn get_user_by_id(pool: &SqlitePool, id: i64) -> Result<Option<UserRow>> {
-    let user = sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE id = ?")
-        .bind(id)
-        .fetch_optional(pool)
-        .await?;
+    let user = sqlx::query_as::<_, UserRow>(
+        "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
+                oauth_id, credit, card_code, blocked, allow_debit, search_text,
+                created_at, deleted_at, allow_self_entry
+         FROM users WHERE id = ?",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
     Ok(user)
 }
 
@@ -141,7 +153,10 @@ pub async fn get_user_by_oauth(
     oauth_id: &str,
 ) -> Result<Option<UserRow>> {
     let user = sqlx::query_as::<_, UserRow>(
-        "SELECT * FROM users WHERE oauth_provider = ? AND oauth_id = ? AND deleted_at IS NULL",
+        "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
+                oauth_id, credit, card_code, blocked, allow_debit, search_text,
+                created_at, deleted_at, allow_self_entry
+         FROM users WHERE oauth_provider = ? AND oauth_id = ? AND deleted_at IS NULL",
     )
     .bind(provider)
     .bind(oauth_id)
@@ -151,10 +166,14 @@ pub async fn get_user_by_oauth(
 }
 
 pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserRow>> {
-    let users =
-        sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE deleted_at IS NULL ORDER BY id")
-            .fetch_all(pool)
-            .await?;
+    let users = sqlx::query_as::<_, UserRow>(
+        "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
+                oauth_id, credit, card_code, blocked, allow_debit, search_text,
+                created_at, deleted_at, allow_self_entry
+         FROM users WHERE deleted_at IS NULL ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await?;
     Ok(users)
 }
 
@@ -321,7 +340,10 @@ pub async fn search_users(pool: &SqlitePool, query: &str, limit: i64) -> Result<
     let like = format!("%{needle}%");
     let prefix = format!("{q}%");
     let users = sqlx::query_as::<_, UserRow>(
-        "SELECT * FROM users
+        "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
+                oauth_id, credit, card_code, blocked, allow_debit, search_text,
+                created_at, deleted_at, allow_self_entry
+         FROM users
          WHERE deleted_at IS NULL AND search_text LIKE ?
          ORDER BY
            CASE WHEN card_code LIKE ? THEN 0 ELSE 1 END,
@@ -339,7 +361,10 @@ pub async fn search_users(pool: &SqlitePool, query: &str, limit: i64) -> Result<
 
 pub async fn get_user_by_card_code(pool: &SqlitePool, code: &str) -> Result<Option<UserRow>> {
     let user = sqlx::query_as::<_, UserRow>(
-        "SELECT * FROM users WHERE card_code = ? AND deleted_at IS NULL",
+        "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
+                oauth_id, credit, card_code, blocked, allow_debit, search_text,
+                created_at, deleted_at, allow_self_entry
+         FROM users WHERE card_code = ? AND deleted_at IS NULL",
     )
     .bind(code)
     .fetch_optional(pool)
@@ -627,6 +652,62 @@ mod tests {
         )
         .await
         .unwrap()
+    }
+
+    /// #164: every `UserRow`-decoding query now names its columns explicitly
+    /// instead of `SELECT *`. Spot-check that ALL 17 struct fields decode
+    /// correctly with real (non-default) values — including the nullable
+    /// ones (`company`, `card_code`, `deleted_at`) and the boolean flags
+    /// (`blocked`, `allow_debit`, `allow_self_entry`) that a lot of other
+    /// tests leave at their default. `get_user_by_id` doesn't filter
+    /// `deleted_at`, so this also proves that column decodes post-delete.
+    #[tokio::test]
+    async fn get_user_by_id_decodes_every_column() {
+        let pool = setup().await;
+
+        let id = create_user(
+            &pool,
+            Some("full@example.com"),
+            Some("hash-abc"),
+            "Full Fields",
+            Some("+999"),
+            Some("Acme Inc"),
+            Some("CARD-FULL"),
+            "staff",
+            Some(12.5),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        set_blocked(&pool, id, true).await.unwrap();
+        set_allow_debit(&pool, id, true).await.unwrap();
+        update_user_allow_self_entry(&pool, id, true).await.unwrap();
+
+        let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert_eq!(u.id, id);
+        assert_eq!(u.email.as_deref(), Some("full@example.com"));
+        assert_eq!(u.name, "Full Fields");
+        assert_eq!(u.password_hash.as_deref(), Some("hash-abc"));
+        assert_eq!(u.phone.as_deref(), Some("+999"));
+        assert_eq!(u.company.as_deref(), Some("Acme Inc"));
+        assert_eq!(u.role, "staff");
+        assert_eq!(u.oauth_provider, None);
+        assert_eq!(u.oauth_id, None);
+        assert!((u.credit - 12.5).abs() < f64::EPSILON);
+        assert_eq!(u.card_code.as_deref(), Some("CARD-FULL"));
+        assert!(u.blocked);
+        assert!(u.allow_debit);
+        assert!(u.search_text.is_some());
+        assert!(!u.created_at.is_empty());
+        assert_eq!(u.deleted_at, None);
+        assert!(u.allow_self_entry);
+
+        // Soft-delete: deleted_at must decode as Some(_) too (get_user_by_id
+        // doesn't filter on it).
+        crate::db::users::delete_user(&pool, id).await.unwrap();
+        let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert!(u.deleted_at.is_some());
     }
 
     #[tokio::test]

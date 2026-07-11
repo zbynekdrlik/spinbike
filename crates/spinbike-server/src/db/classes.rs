@@ -60,7 +60,8 @@ pub async fn create_template(
 
 pub async fn list_active_templates(pool: &SqlitePool) -> Result<Vec<ClassTemplateRow>> {
     let templates = sqlx::query_as::<_, ClassTemplateRow>(
-        "SELECT * FROM class_templates WHERE active = 1 ORDER BY weekday, start_time",
+        "SELECT id, weekday, start_time, duration_minutes, instructor_id, capacity, active
+         FROM class_templates WHERE active = 1 ORDER BY weekday, start_time",
     )
     .fetch_all(pool)
     .await?;
@@ -69,7 +70,8 @@ pub async fn list_active_templates(pool: &SqlitePool) -> Result<Vec<ClassTemplat
 
 pub async fn list_all_templates(pool: &SqlitePool) -> Result<Vec<ClassTemplateRow>> {
     let templates = sqlx::query_as::<_, ClassTemplateRow>(
-        "SELECT * FROM class_templates ORDER BY weekday, start_time",
+        "SELECT id, weekday, start_time, duration_minutes, instructor_id, capacity, active
+         FROM class_templates ORDER BY weekday, start_time",
     )
     .fetch_all(pool)
     .await?;
@@ -167,7 +169,8 @@ pub async fn list_bookings_for_class(
     date: &str,
 ) -> Result<Vec<BookingRow>> {
     let bookings = sqlx::query_as::<_, BookingRow>(
-        "SELECT * FROM bookings WHERE template_id = ? AND date = ? AND cancelled_at IS NULL ORDER BY created_at",
+        "SELECT id, template_id, date, user_id, created_by, source, created_at, cancelled_at
+         FROM bookings WHERE template_id = ? AND date = ? AND cancelled_at IS NULL ORDER BY created_at",
     )
     .bind(template_id)
     .bind(date)
@@ -179,9 +182,10 @@ pub async fn list_bookings_for_class(
 
 /// A user's own upcoming booking, joined with its class template + instructor
 /// (#146) — customer `/my/bookings` view. Kept as its own row type (not
-/// `BookingRow`) because `BookingRow` also backs `SELECT * FROM bookings`
-/// (see `cancel_booking`), which must stay column-for-column with the raw
-/// table.
+/// `BookingRow`) because `BookingRow` also backs the raw `bookings` column set
+/// (see `list_bookings_for_class` here and `cancel_booking` in
+/// `routes/classes.rs`, both explicit-column `SELECT`s, #164), which must stay
+/// column-for-column with the table.
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct BookingWithClassRow {
     pub id: i64,
@@ -371,6 +375,46 @@ mod tests {
         assert_eq!(bookings.len(), 1);
         assert_eq!(bookings[0].id, booking_id);
         assert_eq!(bookings[0].user_id, user_id);
+    }
+
+    /// #164: `list_bookings_for_class` now names its columns explicitly
+    /// instead of `SELECT *`. Spot-check every `BookingRow` field decodes —
+    /// including `created_by` (staff-on-behalf booking), which no other test
+    /// reads back through this query (existing coverage reads it via a raw
+    /// `SELECT created_by FROM bookings`, not through `BookingRow`).
+    #[tokio::test]
+    async fn list_bookings_for_class_decodes_every_column() {
+        let pool = setup().await;
+        let staff_id = make_user(&pool, "staff-created@test.com").await;
+        let user_id = make_user(&pool, "b2@test.com").await;
+
+        let tmpl_id = create_template(&pool, 2, "18:30", 45, None, 5)
+            .await
+            .unwrap();
+        let booking_id = create_booking(
+            &pool,
+            tmpl_id,
+            "2026-05-01",
+            user_id,
+            Some(staff_id),
+            "persistent",
+        )
+        .await
+        .unwrap();
+
+        let bookings = list_bookings_for_class(&pool, tmpl_id, "2026-05-01")
+            .await
+            .unwrap();
+        assert_eq!(bookings.len(), 1);
+        let b = &bookings[0];
+        assert_eq!(b.id, booking_id);
+        assert_eq!(b.template_id, tmpl_id);
+        assert_eq!(b.date, "2026-05-01");
+        assert_eq!(b.user_id, user_id);
+        assert_eq!(b.created_by, Some(staff_id));
+        assert_eq!(b.source, "persistent");
+        assert!(!b.created_at.is_empty());
+        assert_eq!(b.cancelled_at, None);
     }
 
     #[tokio::test]
