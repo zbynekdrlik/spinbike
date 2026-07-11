@@ -298,6 +298,19 @@ ambiguous — don't assume only the test you're writing is affected.
   the `||→&&` and default-return mutants survive otherwise.
 - `cargo-mutants` does NOT mutate `#[cfg(test)]` code or `tests/` integration
   binaries, so new tests never add survivors — only changed `src/` lines do.
+- **MOVING already-tested logic into a NEW `src/` module re-exposes ALL of it
+  to `--in-diff` — a "pure refactor" is NOT mutation-free.** #166 extracted the
+  two hand-rolled limiters into `src/rate_limit.rs::SlidingWindowLimiter`; every
+  line of the relocated algorithm counted as changed `src/`, so cargo-mutants
+  mutated it fresh. The old door/login `#[cfg(test)]` tests still reach it
+  *through the thin typed wrappers* (`door::RateLimiter` / `LoginLinkRateLimiter`
+  delegate) and kill the boundary/cap mutants; but a predicate the relocated
+  tests only exercised on ONE branch survived — the eviction
+  `!hits.is_empty() || last-within-memory` needed a NEW direct test asserting
+  the KEEP branch (a key past its decision window but within the wider memory
+  window) to kill `||→&&`. When a refactor moves logic into a new file: keep the
+  behaviour tests reaching it (wrapper delegation), and add direct tests for any
+  keep/drop or `&&`/`||` predicate whose non-obvious branch the moved tests miss.
 
 ## `test.use({ ...devices[...] })` inside a `describe` block fails CI
 
