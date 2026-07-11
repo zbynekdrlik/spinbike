@@ -97,6 +97,22 @@ pub fn resolve_jwt_secret(raw: Option<&str>, test_mode: bool) -> Result<String, 
     }
 }
 
+/// Pure, unit-testable panic-payload → human string extractor (#172), split
+/// out of `handle_panic` so the branch logic (String vs &str vs unknown
+/// payload type) is directly testable — the HTTP response `handle_panic`
+/// returns is a FIXED "Internal Server Error" regardless of `details` (it
+/// only feeds the log line), so an end-to-end response assertion alone can
+/// never exercise these branches.
+fn panic_details(err: &(dyn std::any::Any + Send + 'static)) -> String {
+    if let Some(s) = err.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = err.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else {
+        "unknown panic payload".to_string()
+    }
+}
+
 /// Custom `CatchPanicLayer` responder (#172). This is a single-instance
 /// server built with `panic = "unwind"` (Cargo.toml `[profile.release]`) —
 /// without this layer a panicking handler would still just crash the
@@ -106,13 +122,7 @@ pub fn resolve_jwt_secret(raw: Option<&str>, test_mode: bool) -> Result<String, 
 /// (comprehensive-logging.md: an unguarded panic is exactly the kind of
 /// failure that must be visible in logs alone, with no ability to redeploy).
 fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response::Response {
-    let details = if let Some(s) = err.downcast_ref::<String>() {
-        s.clone()
-    } else if let Some(s) = err.downcast_ref::<&str>() {
-        (*s).to_string()
-    } else {
-        "unknown panic payload".to_string()
-    };
+    let details = panic_details(err.as_ref());
     error!(panic = %details, "handler panicked — caught by CatchPanicLayer, request failed with 500");
 
     axum::response::Response::builder()
@@ -196,7 +206,7 @@ pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Re
 mod tests {
     use super::*;
     use axum::Router;
-    use axum::body::Body;
+    use axum::body::{Body, to_bytes};
     use axum::http::{Method, Request, StatusCode};
     use axum::routing::get;
     use db::{create_memory_pool, run_migrations};
@@ -515,6 +525,15 @@ mod tests {
             "a panicking handler must be caught and turned into a 500 response, \
              not left to crash the process"
         );
+        let content_type = panic_resp
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("")
+            .to_string();
+        assert_eq!(content_type, "text/plain");
+        let panic_body = to_bytes(panic_resp.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(&panic_body[..], b"Internal Server Error");
 
         // The server must still be alive and able to serve OTHER requests —
         // the entire point of catching the panic instead of aborting.
@@ -529,5 +548,29 @@ mod tests {
             StatusCode::OK,
             "server must still serve requests after a handler panic was caught"
         );
+    }
+
+    /// #172: `panic_details`'s branch selection (String vs &str vs unknown
+    /// payload type) only affects the logged line, never the HTTP response
+    /// `handle_panic` returns — so it needs its own direct tests, not just
+    /// end-to-end coverage through the panic route above.
+    #[test]
+    fn panic_details_extracts_string_payload() {
+        let err: Box<dyn std::any::Any + Send> = Box::new("boom".to_string());
+        assert_eq!(panic_details(err.as_ref()), "boom");
+    }
+
+    /// `panic!("literal")` (no format args) produces a `&'static str`
+    /// payload — the exact shape the /api/test/panic route above uses.
+    #[test]
+    fn panic_details_extracts_str_payload() {
+        let err: Box<dyn std::any::Any + Send> = Box::new("boom");
+        assert_eq!(panic_details(err.as_ref()), "boom");
+    }
+
+    #[test]
+    fn panic_details_falls_back_for_unknown_payload_type() {
+        let err: Box<dyn std::any::Any + Send> = Box::new(42i32);
+        assert_eq!(panic_details(err.as_ref()), "unknown panic payload");
     }
 }
