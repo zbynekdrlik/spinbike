@@ -300,6 +300,12 @@ a:hover { text-decoration: underline; }
     font-family: inherit;
     text-decoration: none;
     white-space: nowrap;
+    /* Defensive reset for #152's reported text misalignment — some mobile
+       WebKit builds apply native button chrome (padding/line-height) on
+       top of our own unless appearance is explicitly reset. Not
+       reproducible in Chromium; unverified on a real iOS device. */
+    appearance: none;
+    -webkit-appearance: none;
     transition: background var(--dur-fast) var(--ease-out),
                 border-color var(--dur-fast) var(--ease-out),
                 color var(--dur-fast) var(--ease-out),

@@ -627,3 +627,43 @@ Two shapes, both blocked `git add`/`git commit` with "No stderr output":
    Every bypass is logged to `~/devel/airuleset/audits/secret-scan-bypasses.log`
    — legitimate here since it's genuinely not a secret, just don't reach for
    it reflexively on a diff you haven't actually checked.
+
+## Deleting a dead CSS class combined in a compound selector with a still-live bare element selector — split, don't delete the whole rule
+
+When a dead-code sweep (e.g. the #155 epic) flags a class like `.data-table`
+as having zero live producers in `spinbike-ui/src/`, don't reflexively delete
+the whole CSS rule it appears in — CHECK whether it's combined via a comma
+with a bare HTML element selector that's still live:
+
+```css
+table,
+.data-table {
+    width: 100%;
+    ...
+}
+```
+
+`style.css`'s TABLES section had `.data-table` combined with plain `table`
+across 5 separate rule blocks (base, `th`, `td`, `tr:hover`,
+`tr:last-child td`). `.data-table` had zero producers, but `admin.rs` has 4
+bare `<table>` elements — deleting the whole rule would have stripped
+styling from those real tables. Fix: remove only the dead selector's own
+line from the comma list, keep the live one:
+
+```css
+table {
+    width: 100%;
+    ...
+}
+```
+
+**General rule for any dead-selector sweep:** before deleting a rule, grep
+the selector's OWN class stem across `spinbike-ui/src/` (proves it's dead)
+AND check whether the rule's selector list is comma-combined with something
+ELSE that might still be live (a bare element, a different still-used
+class) — a comma means "OR", so one dead arm doesn't make the whole rule
+dead. Conversely, a `.txn-row--voided .amount` case (issue #171, discovered
+during re-verify) showed the OPPOSITE: a rule can have a comma-combined
+selector where BOTH arms turn out dead — always grep each comma-separated
+arm independently, don't assume a compound selector is safe just because
+one part looked plausible.

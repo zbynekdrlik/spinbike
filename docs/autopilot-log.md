@@ -3,6 +3,75 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-07-10 — #169 + #171 + #173 + #176: bundled dead-code cleanup batch
+
+- **Issues:** [#169](https://github.com/zbynekdrlik/spinbike/issues/169) —
+  51 dead i18n translation keys in `spinbike-ui/src/i18n.rs` (legacy
+  card-management cluster, stranded CZK-named keys, unused full weekday
+  names, unused service filters, assorted orphans). [#171](https://github.com/zbynekdrlik/spinbike/issues/171) —
+  18 dead CSS selectors in `spinbike-ui/style.css`. [#173](https://github.com/zbynekdrlik/spinbike/issues/173) —
+  swap an untyped `Reflect`/`Function::call1` JS-interop trick for the typed
+  `web_sys::Window::match_media` binding in `install_prompt.rs`. [#176](https://github.com/zbynekdrlik/spinbike/issues/176) —
+  remove the dead `Role::can_manage_templates()` method + its lone test
+  assertion. All four `/architecture-check`-filed (Opus 4.8, 2026-07-10),
+  each independently re-verified STILL_VALID before implementation; bundled
+  as one PR since all four are independent, disjoint-file, sub-300-LoC
+  cleanups (bundling gate).
+- **Version:** bump `39a6246` (0.15.0-dev.40 → 0.15.0-dev.41).
+- **#169** (`88f4511`) — re-grepped all 51 named keys individually across
+  `spinbike-ui/src/` before deletion (zero hits beyond each key's own
+  `m.insert()` line); also dropped the now-empty "Day names (long)" comment
+  header left behind by the 7 weekday-name deletions.
+- **#171** (`343a17d`) — re-grepped all 18 named selectors; the `.data-table`
+  selector was combined with the still-live bare `table` element selector
+  across 5 compound rule blocks (`table, .data-table { ... }`) — surgically
+  removed only the `.data-table` arm, kept `table` (confirmed live via 4
+  `<table>` elements in `admin.rs`). Re-verifying `txn-amount`'s rule
+  surfaced a second, previously-unflagged dead selector sharing the same
+  rule (`.txn-row--voided .amount` — bare `.amount`, never emitted by
+  `my_balance.rs`'s `amount_class`, which only ever produces
+  `list-row__amount(--pos|--neg)`) — removed together as a same-rule,
+  same-file cleanup.
+- **#173** (`c1fa2cd`) — added `MediaQueryList` to `spinbike-ui/Cargo.toml`'s
+  web-sys features; `is_standalone()` now calls `Window::match_media(...)`
+  directly. Left `navigator.standalone` and `__deferredInstallPrompt`
+  untouched (no stable web-sys binding for either, per the frontend-pwa
+  skill's documented exception).
+- **#176** (`326d8f1`) — grepped `can_manage_templates` repo-wide: only the
+  definition + its own test assertion, zero production callers (template
+  routes gate on `can_manage_users()`).
+- **Push-gate gotcha:** the pre-push hook's Gate 1 ("feature code changed,
+  no test files") fires on pure dead-code-deletion cleanups too, not just
+  bug fixes — bypassed with a documented `[no-test: ...]` marker commit
+  (`78aff46`, folded into a genuine playbook update to `.claude/skills/
+  ci-deploy/SKILL.md` documenting the gotcha for future cycles).
+- **Deep-review fixes** (`7c6e5bf`) — `requesting-code-review` pass (base
+  `8623c1e`, head `78aff46`) found 0 🔴 0 🟡, 2 🔵 minor: `install_prompt.rs`
+  fetched the window twice (once via `window_value()`, again via
+  `web_sys::window()` for `match_media`) — fixed to fetch once and reuse;
+  and the just-added SKILL.md gotcha about the `[no-test: ...]` bypass
+  needing one physical line was stale versus the hook's actual current
+  behavior (it flattens newlines before matching) — corrected.
+- **PR:** [#187](https://github.com/zbynekdrlik/spinbike/pull/187), merged
+  `614c619`. CI green throughout (Lint, Test, Test (UI), Build WASM (UI),
+  E2E, all 8 Mutation Testing shards, Deploy (dev), Smoke (dev) on the dev
+  pushes; Deploy (prod), Smoke (prod) on the main merge).
+- **Follow-up filed:** [#188](https://github.com/zbynekdrlik/spinbike/issues/188) —
+  pre-existing Trunk/wasm-bindgen console warning ("deprecated parameters
+  for the initialization function"), unrelated to this PR (`index.html`'s
+  wasm-loader directive last touched by an earlier, unrelated commit),
+  found during post-deploy console verification.
+- **Playbook:** `.claude/skills/ci-deploy/SKILL.md` gained the "dead-code
+  cleanup batch trips Gate 1" gotcha (with the review-fix correction to
+  the pre-existing "one physical line" `[no-test: ...]` note).
+- **Deployed:** v0.15.0-dev.41, confirmed on `https://spinbike.sk` — DOM
+  `[data-testid="version"]` == `/api/version` == `v0.15.0-dev.41`. 0
+  console errors/warnings on fresh navigations to `/` and `/login` (an
+  earlier `all:true` console dump showed stale messages from a prior
+  browser context, not from these navigations — confirmed by re-checking
+  with the default since-last-navigation scope). No `???` render artifacts
+  on either page (`document.body.innerText.includes('???') === false`).
+
 ## 2026-07-10 — #161 + #162: prod-router fixture-route regression test + cargo-deny gate
 
 - **Issues:** [#161](https://github.com/zbynekdrlik/spinbike/issues/161) —
