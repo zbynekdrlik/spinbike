@@ -6,7 +6,7 @@ the `/api/door/open` + `/api/door/health` endpoints, or door credentials.
 ## What it is
 
 Allowlisted customers (or admin/staff, who bypass the `allow_self_entry`
-gate) tap "hold-to-open" on `/my-balance`. Server presses a **Sonoff MINI-D**
+gate) tap "hold-to-open" on `/my/balance`. Server presses a **Sonoff MINI-D**
 Wi-Fi dry-contact relay over the eWeLink cloud WebSocket. The MINI-D drives
 the legacy fitness-center door buzzer. Billing mirrors reception:
 1st open/day = `visit` (or `charge -<single-entry>` if no pass), 2nd+ = `charge 0`;
