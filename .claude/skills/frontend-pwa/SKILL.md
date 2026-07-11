@@ -286,22 +286,46 @@ string a customer sees.
 
 ## Post-deploy version verification: clear the service worker BEFORE reading the DOM version
 
-`sw.js` is network-first for `/`, `*.html`, `sw.js` itself, and
-`manifest.json` (cache-first only for Trunk's content-hashed immutable JS/WASM
-assets), with `CACHE_NAME` bumped on breaking changes. **This is INCOMPLETE,
-not just profile-staleness** — `isVolatile()`'s path check only matches the
-exact root `/` and `*.html`, so an SPA client-side route (`/login`,
-`/dashboard`, `/welcome`) that isn't `/` gets cache-first'd and pinned
-FOREVER on whatever version it was first visited at, in ANY browser (not just
-a long-lived Playwright profile — a real user's first visit to a bookmarked
-`/login` hits this too). Reproduced live during #201 (`spinbike.sk/login`
-stuck on `v0.15.0-dev.65` while prod was actually on `.71`); tracked
-unfixed as #208 — check its status before assuming this is just profile
-staleness.
+`sw.js` (fixed in #208 / PRs #210+#211, dev.75) routes by
+**`request.mode === 'navigate'`** — the canonical SW discriminator:
+- **navigations** (the app shell + EVERY SPA route: `/`, `/login`, `/dashboard`,
+  `/my/balance`, …) → **network-first** (always picks up a fresh deploy, keeps an
+  offline cache fallback). Self-adapts to any new route — no URL list to maintain.
+- **everything else** (subresources) → **cache-first**. NOTE: this app's Trunk
+  bundle is served at the **ROOT** (`/spinbike-ui-<hash>.js`, `_bg.wasm`), NOT
+  under `/assets/` (`/assets/…` 404s; the 2.4 MB WASM has NO cache-control) — the
+  first #208 attempt (#210) used a `/assets/` prefix and wrongly dropped the
+  root bundle onto network-first (2.4 MB re-download per navigation); `request.mode`
+  routing fixes that regardless of asset path. A `Content-Type: text/html` guard
+  keeps a stray SPA-fallback HTML out of the cache-first store.
+- `/api/*` + `/ws*` bypass the SW; `CACHE_NAME` (currently `spinbike-v3`) bumped
+  on breaking changes → `activate` purges every non-current cache.
 
-Separately (and this part IS just profile staleness, already correctly
-handled by the network-first root/`.html` path once #208's routes are also
-network-first): a **long-lived Playwright MCP browser profile** (reused
+**Testing `sw.js` deterministically** (`e2e/tests/sw-cache.spec.ts`): a real
+browser can't force a mid-run "new deploy", so the test loads the REAL
+`spinbike-ui/sw.js` into a mocked `ServiceWorkerGlobalScope` via Node's `vm`
+(mock `self`/`caches`/`fetch`, capture the `addEventListener` handlers, drive
+synthetic FetchEvents with `request.mode`) and asserts network-first-vs-cache-first
+outcomes across a simulated deploy. Deterministic, server-independent, runs in the
+normal Playwright job. Set `request: { url, mode }` on the synthetic event — the
+`'navigate'` mode is what routes to network-first. When editing `sw.js`, update
+this test; it FAILS on the old URL-shape `isVolatile()` and on a `/assets/`-only
+rewrite (the root-bundle regression).
+
+**The pre-#208 bug (now fixed):** the old `isVolatile()` URL-shape check only
+network-first'd `/` + `*.html`, so any SPA route got cache-first-pinned FOREVER
+on its first-visited version (reproduced live #201: `/login` stuck on `.65` while
+prod served `.71`). If you see a route stuck on an old version now, it is NOT this
+bug — suspect either profile-staleness (below) or **#212**: Cloudflare edge-caches
+`/sw.js` itself for 4h (`cf-cache-status: HIT`, `max-age=14400`), so a NEW SW
+script reaches users only within CF's ≤4h TTL (HTML + `manifest.json` are CF
+`DYNAMIC`, so page freshness is immediate; only the SW-script update lags). To
+force the new SW for verification, unregister + re-navigate (below) or purge CF's
+`/sw.js`.
+
+Separately (pure profile staleness — a long-lived MCP profile carrying a stale
+SW registration, unrelated to the fixed #208 strategy): a **long-lived Playwright
+MCP browser profile** (reused
 across many autopilot cycles/days, not a fresh per-run context like CI's
 Smoke job) can carry an ALREADY-ACTIVE service worker registration from an
 earlier session. Reloading/navigating in that profile is not guaranteed to
