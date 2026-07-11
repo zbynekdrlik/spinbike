@@ -286,17 +286,30 @@ string a customer sees.
 
 ## Post-deploy version verification: clear the service worker BEFORE reading the DOM version
 
-`sw.js` is deliberately network-first for `/`, `*.html`, `sw.js` itself, and
+`sw.js` is network-first for `/`, `*.html`, `sw.js` itself, and
 `manifest.json` (cache-first only for Trunk's content-hashed immutable JS/WASM
-assets), with `CACHE_NAME` bumped on breaking changes — this is already the
-correct fix for stale-deploy caching. But a **long-lived Playwright MCP
-browser profile** (reused across many autopilot cycles/days, not a fresh
-per-run context like CI's Smoke job) can carry an ALREADY-ACTIVE service
-worker registration from an earlier session. Reloading/navigating in that
-profile is not guaranteed to pick up the newly-deployed version on the very
-first read — the DOM's `"Verzia aplikacie"` label can show a version several
-releases behind `/api/version` (found post-#152-deploy: DOM showed
-`v0.15.0-dev.30` while the backend already served `v0.15.0-dev.43`).
+assets), with `CACHE_NAME` bumped on breaking changes. **This is INCOMPLETE,
+not just profile-staleness** — `isVolatile()`'s path check only matches the
+exact root `/` and `*.html`, so an SPA client-side route (`/login`,
+`/dashboard`, `/welcome`) that isn't `/` gets cache-first'd and pinned
+FOREVER on whatever version it was first visited at, in ANY browser (not just
+a long-lived Playwright profile — a real user's first visit to a bookmarked
+`/login` hits this too). Reproduced live during #201 (`spinbike.sk/login`
+stuck on `v0.15.0-dev.65` while prod was actually on `.71`); tracked
+unfixed as #208 — check its status before assuming this is just profile
+staleness.
+
+Separately (and this part IS just profile staleness, already correctly
+handled by the network-first root/`.html` path once #208's routes are also
+network-first): a **long-lived Playwright MCP browser profile** (reused
+across many autopilot cycles/days, not a fresh per-run context like CI's
+Smoke job) can carry an ALREADY-ACTIVE service worker registration from an
+earlier session. Reloading/navigating in that profile is not guaranteed to
+pick up the newly-deployed version on the very first read — the DOM's
+`"Verzia aplikacie"` label can show a version several releases behind
+`/api/version` (found post-#152-deploy: DOM showed `v0.15.0-dev.30` while the
+backend already served `v0.15.0-dev.43`; recurred post-#201: DOM showed
+`.65` vs backend `.71`).
 
 **Before trusting a DOM version read in a long-lived Playwright session**,
 clear any stale registration first:
