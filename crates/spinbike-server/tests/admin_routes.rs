@@ -352,6 +352,28 @@ async fn settings_get_returns_seeded_rows() {
     );
 }
 
+// #175: get_settings was reachable by ANY authenticated user (bare AuthUser,
+// no role check) — every sibling admin GET (list_templates/list_instructors/
+// list_services) requires StaffUser. A customer JWT must now be rejected.
+#[tokio::test]
+async fn settings_get_forbidden_for_customer() {
+    let app = TestApp::new().await;
+    let (status, body) = app
+        .request(get("/api/admin/settings", &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+    assert_eq!(body["error_code"], "staff_required");
+}
+
+#[tokio::test]
+async fn settings_get_allowed_for_staff() {
+    let app = TestApp::new().await;
+    let (status, _) = app
+        .request(get("/api/admin/settings", &app.staff_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+}
+
 #[tokio::test]
 async fn settings_update_persists() {
     let app = TestApp::new().await;

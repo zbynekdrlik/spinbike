@@ -355,3 +355,32 @@ verify with `git status --porcelain` that they show as staged (`A`, not
 untracked `??`/`!!`) before committing — a missing PNG in the deployed
 `dist/` means a broken manifest and an install-ineligible PWA, discovered
 only by fetching the URL and getting 404 post-deploy.
+
+## UI date parsing/formatting lives in ONE place: `spinbike-ui/src/dates.rs` (#168)
+
+Do NOT re-inline an ISO date parser or a `DD.MM.YYYY` renderer. Two shared helpers:
+
+- `dates::parse_server_date(&str) -> Option<NaiveDate>` — trims + takes the
+  first whitespace token + the part before any `T`, then parses `%Y-%m-%d`. Use
+  it for ANY server-supplied date/timestamp (`"2026-04-25"`,
+  `"2026-04-25 18:00:00"`, `"2026-04-25T18:00:00Z"`). It's a safe superset — a
+  bare ISO date is unaffected; it only strips a trailing time component.
+- `dates::format_ddmmyyyy(NaiveDate) -> String` — the shared `DD.MM.YYYY` digit
+  renderer behind BOTH `i18n::fmt_date`'s Sk arm AND `relative_date::format_date`.
+
+**Three neighbours are deliberately SEPARATE — do NOT fold them into the above
+(it would be a bug):**
+- `components::date_input::parse_user_date` — a 9-format LENIENT parser for
+  interactive typing (2-digit years, slash/space). Distinct from the strict
+  server parser.
+- `relative_date::format_date` — deliberately locale-INDEPENDENT (always
+  DD.MM.YYYY, even for English staff, because `card_panel` passes staff `lang`
+  which can be `En` and `i18n::fmt_date` returns ISO for En). It shares only the
+  DIGITS via `format_ddmmyyyy`, never the locale policy. Routing it through
+  `i18n::fmt_date` regresses English staff display.
+- `i18n::fmt_date_short` — already the canonical short-date (`DD.MM.`) formatter.
+
+For a server timestamp you need converted UTC→Bratislava (not just the date),
+use the now-`pub` `i18n::parse_to_local(&str) -> Option<DateTime<Tz>>` (DST-aware,
+handles fractional-seconds + legacy MS-Access forms), then `.date_naive()` /
+format off it — don't hand-roll the `from_utc_datetime` conversion.

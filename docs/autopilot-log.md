@@ -3,6 +3,45 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-07-11 — #168: consolidate duplicated UI date parse/format helpers
+
+- **Issue:** [#168](https://github.com/zbynekdrlik/spinbike/issues/168) —
+  ISO-date parsing and the `DD.MM.YYYY` renderer were re-derived across the UI.
+  Ticket-validated STILL_VALID (rescope comment on the issue: real surface was
+  ~10 sites / 8 files, not the 4 cited; #146 had even added a new
+  `parse_booking_date` instance). Solo PR, no schema/API/security → auto-merge.
+- **Version:** bump `32cfa88` (0.15.0-dev.52 → 0.15.0-dev.53).
+- **Work** (`7fbce66`) — new `spinbike-ui/src/dates.rs` (registered in `lib.rs`):
+  `parse_server_date` (my_balance's trim+split_whitespace+split('T')+`%Y-%m-%d`,
+  a safe superset of all 6 inline ISO parsers) + `format_ddmmyyyy`
+  (`d.format("%d.%m.%Y")`, the shared digit renderer). 6 parse sites now route
+  through `parse_server_date` (my_balance's `parse_pass_date`/`parse_visit_date`
+  deleted; my_bookings `parse_booking_date` deleted; staff_dashboard,
+  negative_balance_list, card_panel, persistent_toggles). Both render sites
+  (`i18n::fmt_date` Sk arm + `relative_date::format_date`) delegate to
+  `format_ddmmyyyy`.
+- **PRESERVED (DO-NOT-MERGE, would be bugs):** `date_input::parse_user_date`
+  (9-format lenient interactive parser) untouched; `relative_date::format_date`
+  stays locale-INDEPENDENT (always DD.MM.YYYY, even En staff) — shares only the
+  digits; `i18n::fmt_date_short` untouched.
+- **Latent bug fixed:** `delete_user.rs` pass-expiry warning hard-coded
+  `.format("%d.%m.%Y")`, bypassing `lang` → now `i18n::fmt_date(d, lang.get())`
+  (En staff no longer forced to DD.MM.YYYY). Also routed `transactions_list`'s
+  inline UTC→Bratislava parse through the now-`pub` `i18n::parse_to_local`.
+- **Tests:** no bug-fix RED→GREEN mandate (refactor); behavior-preservation is
+  the net — added 8 `#[wasm_bindgen_test]` in `dates.rs` (bare/space/T/whitespace/
+  garbage parse, zero-pad + two-digit format, roundtrip). Existing relative_date
+  combined-format + i18n datetime tests + E2E stayed green.
+- **Gotcha:** UI crate has NO mutation gate (`mutation-ui` job intentionally
+  absent, #47) — so a new UI module is not mutation-tested (unlike the #166
+  server-crate case). `wasm-pack test --node` needs `#[wasm_bindgen_test]`, not
+  plain `#[test]`.
+- **Deploy:** merge `953a3351` → main CI green → prod v0.15.0-dev.53. Live
+  Playwright verify (synthetic customer 575, cleaned up): /my/balance movements
+  `11.07./10.07./09.07.` + pass expiry `do 11.08.`, /my/bookings `13.07.`,
+  version DOM `v0.15.0-dev.53`, 0 console errors.
+- **PR:** [#194](https://github.com/zbynekdrlik/spinbike/pull/194).
+
 ## 2026-07-11 — #146 + #147: bundled batch — bookings/movements enrichment
 
 - **Issues:** [#146](https://github.com/zbynekdrlik/spinbike/issues/146) —

@@ -311,6 +311,16 @@ ambiguous — don't assume only the test you're writing is affected.
   window) to kill `||→&&`. When a refactor moves logic into a new file: keep the
   behaviour tests reaching it (wrapper delegation), and add direct tests for any
   keep/drop or `&&`/`||` predicate whose non-obvious branch the moved tests miss.
+- **The mutation gate covers ONLY `--package spinbike-core --package
+  spinbike-server` — the UI crate (`spinbike-ui`) has NO mutation gate** (the
+  `mutation-ui` job is intentionally absent — a wasm32/cargo-mutants tooling gap,
+  tracked in #47). So the #166 "new src/ module → in-diff mutants" trap does NOT
+  apply to a UI-crate refactor (#168 moved date helpers into a new
+  `spinbike-ui/src/dates.rs` with zero mutation-gate impact). Still write real
+  behaviour tests for new UI logic — the `Test (UI)` (`wasm-pack test --node`) +
+  `E2E` jobs are the UI safety net, not mutation. UI tests MUST be
+  `#[wasm_bindgen_test]` (with `use wasm_bindgen_test::*;`), never plain
+  `#[test]` — `wasm-pack test --node` only runs the former.
 
 ## `test.use({ ...devices[...] })` inside a `describe` block fails CI
 
