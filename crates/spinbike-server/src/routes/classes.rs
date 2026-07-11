@@ -250,9 +250,8 @@ async fn create_booking(
     )
     .await
     .map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("full") {
-            ApiError::conflict_message(ErrorCode::ClassFull, msg)
+        if matches!(e, crate::db::DbError::ClassFull) {
+            ApiError::conflict_message(ErrorCode::ClassFull, e.to_string())
         } else {
             internal_error(e)
         }

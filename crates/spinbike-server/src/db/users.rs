@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::db::error::{DbError, Result};
 use sqlx::SqlitePool;
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
@@ -58,8 +58,7 @@ pub async fn backfill_search_text(pool: &SqlitePool) -> Result<usize> {
         "SELECT * FROM users WHERE search_text IS NULL OR search_text = ''",
     )
     .fetch_all(pool)
-    .await
-    .context("Failed to scan users for search_text backfill")?;
+    .await?;
     let count = rows.len();
     for row in rows {
         let text = compute_search_text(
@@ -71,8 +70,7 @@ pub async fn backfill_search_text(pool: &SqlitePool) -> Result<usize> {
             .bind(&text)
             .bind(row.id)
             .execute(pool)
-            .await
-            .with_context(|| format!("Failed to backfill search_text for user {}", row.id))?;
+            .await?;
     }
     Ok(count)
 }
@@ -95,7 +93,7 @@ pub async fn create_user(
     initial_credit: Option<f64>,
     oauth_provider: Option<&str>,
     oauth_id: Option<&str>,
-) -> sqlx::Result<i64> {
+) -> Result<i64> {
     let search_text = compute_search_text(Some(name), company, card_code);
     let credit = initial_credit.unwrap_or(0.0);
     let id = sqlx::query_scalar::<_, i64>(
@@ -125,8 +123,7 @@ pub async fn get_user_by_email(pool: &SqlitePool, email: &str) -> Result<Option<
         sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE email = ? AND deleted_at IS NULL")
             .bind(email)
             .fetch_optional(pool)
-            .await
-            .context("Failed to get user by email")?;
+            .await?;
     Ok(user)
 }
 
@@ -134,8 +131,7 @@ pub async fn get_user_by_id(pool: &SqlitePool, id: i64) -> Result<Option<UserRow
     let user = sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE id = ?")
         .bind(id)
         .fetch_optional(pool)
-        .await
-        .context("Failed to get user by id")?;
+        .await?;
     Ok(user)
 }
 
@@ -150,8 +146,7 @@ pub async fn get_user_by_oauth(
     .bind(provider)
     .bind(oauth_id)
     .fetch_optional(pool)
-    .await
-    .context("Failed to get user by oauth")?;
+    .await?;
     Ok(user)
 }
 
@@ -159,8 +154,7 @@ pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserRow>> {
     let users =
         sqlx::query_as::<_, UserRow>("SELECT * FROM users WHERE deleted_at IS NULL ORDER BY id")
             .fetch_all(pool)
-            .await
-            .context("Failed to list users")?;
+            .await?;
     Ok(users)
 }
 
@@ -169,8 +163,7 @@ pub async fn update_user_role(pool: &SqlitePool, user_id: i64, role: &str) -> Re
         .bind(role)
         .bind(user_id)
         .execute(pool)
-        .await
-        .context("Failed to update user role")?;
+        .await?;
     Ok(())
 }
 
@@ -263,7 +256,7 @@ pub async fn list_all_users_with_pass(
     .bind(CLASS_VISIT_NAMES_EN[1])
     .fetch_all(pool)
     .await
-    .context("Failed to list users with pass")?;
+    ?;
     Ok(rows.into_iter().map(UserRowWithPass::into_parts).collect())
 }
 
@@ -310,7 +303,7 @@ pub async fn search_users_with_pass(
     .bind(limit)
     .fetch_all(pool)
     .await
-    .context("Failed to search users with pass")?;
+    ?;
     Ok(rows.into_iter().map(UserRowWithPass::into_parts).collect())
 }
 
@@ -340,8 +333,7 @@ pub async fn search_users(pool: &SqlitePool, query: &str, limit: i64) -> Result<
     .bind(&prefix)
     .bind(limit)
     .fetch_all(pool)
-    .await
-    .context("Failed to search users")?;
+    .await?;
     Ok(users)
 }
 
@@ -351,8 +343,7 @@ pub async fn get_user_by_card_code(pool: &SqlitePool, code: &str) -> Result<Opti
     )
     .bind(code)
     .fetch_optional(pool)
-    .await
-    .context("Failed to get user by card_code")?;
+    .await?;
     Ok(user)
 }
 
@@ -362,8 +353,7 @@ pub async fn update_credit(pool: &SqlitePool, user_id: i64, delta: f64) -> Resul
         .bind(rounded_delta)
         .bind(user_id)
         .execute(pool)
-        .await
-        .context("Failed to update credit")?;
+        .await?;
     Ok(())
 }
 
@@ -372,8 +362,7 @@ pub async fn set_blocked(pool: &SqlitePool, user_id: i64, blocked: bool) -> Resu
         .bind(blocked as i64)
         .bind(user_id)
         .execute(pool)
-        .await
-        .context("Failed to set blocked status")?;
+        .await?;
     Ok(())
 }
 
@@ -382,8 +371,7 @@ pub async fn set_allow_debit(pool: &SqlitePool, user_id: i64, allow: bool) -> Re
         .bind(allow as i64)
         .bind(user_id)
         .execute(pool)
-        .await
-        .context("Failed to set allow_debit")?;
+        .await?;
     Ok(())
 }
 
@@ -398,8 +386,7 @@ pub async fn update_user_allow_self_entry(
         .bind(if allow { 1 } else { 0 })
         .bind(user_id)
         .execute(pool)
-        .await
-        .context("Failed to update allow_self_entry")?;
+        .await?;
     Ok(())
 }
 
@@ -415,8 +402,7 @@ pub async fn update_user_password_hash(
         .bind(password_hash)
         .bind(user_id)
         .execute(pool)
-        .await
-        .context("Failed to update password_hash")?;
+        .await?;
     Ok(())
 }
 
@@ -432,8 +418,7 @@ pub async fn get_user_pass_valid_until(
         sqlx::query_as("SELECT valid_until FROM user_active_pass WHERE user_id = ?")
             .bind(user_id)
             .fetch_optional(pool)
-            .await
-            .context("Failed to compute pass valid_until")?;
+            .await?;
     Ok(row.map(|(d,)| d))
 }
 
@@ -447,8 +432,7 @@ pub async fn get_user_pass_tx(
         sqlx::query_as("SELECT pass_tx_id, valid_until FROM user_active_pass WHERE user_id = ?")
             .bind(user_id)
             .fetch_optional(pool)
-            .await
-            .context("Failed to fetch latest pass transaction")?;
+            .await?;
     Ok(row)
 }
 
@@ -490,8 +474,7 @@ pub async fn list_negative_balance(pool: &SqlitePool) -> Result<Vec<NegativeBala
     .bind(CLASS_VISIT_NAMES_EN[0])
     .bind(CLASS_VISIT_NAMES_EN[1])
     .fetch_all(pool)
-    .await
-    .context("Failed to list users with negative balance")?;
+    .await?;
     Ok(rows)
 }
 
@@ -507,7 +490,7 @@ pub async fn update_user_info(
     // Read the current row so we can compute search_text correctly under partial updates.
     let current = get_user_by_id(pool, user_id)
         .await?
-        .ok_or_else(|| anyhow::anyhow!("User {} not found", user_id))?;
+        .ok_or(DbError::NotFound)?;
     let effective_name = name.unwrap_or(&current.name);
     let effective_company = company.or(current.company.as_deref());
     let effective_code = card_code.or(current.card_code.as_deref());
@@ -530,8 +513,7 @@ pub async fn update_user_info(
     .bind(&search_text)
     .bind(user_id)
     .execute(pool)
-    .await
-    .context("Failed to update user info")?;
+    .await?;
     Ok(())
 }
 
@@ -573,8 +555,7 @@ pub async fn users_by_last_movement(
     .bind(limit)
     .bind(offset)
     .fetch_all(pool)
-    .await
-    .context("Failed to list users by last movement")?;
+    .await?;
     Ok(rows)
 }
 
@@ -596,16 +577,14 @@ pub async fn delete_user(pool: &SqlitePool, id: i64) -> Result<DeleteUserOutcome
     )
     .bind(id)
     .execute(pool)
-    .await
-    .context("Failed to soft-delete user")?;
+    .await?;
 
     if updated.rows_affected() == 0 {
         // No rows flipped — disambiguate not-found vs already-deleted.
         let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE id = ?")
             .bind(id)
             .fetch_optional(pool)
-            .await
-            .context("Failed to check user existence after no-op delete")?;
+            .await?;
         return Ok(if exists.is_none() {
             DeleteUserOutcome::NotFound
         } else {
@@ -617,8 +596,7 @@ pub async fn delete_user(pool: &SqlitePool, id: i64) -> Result<DeleteUserOutcome
     let row: (Option<String>,) = sqlx::query_as("SELECT deleted_at FROM users WHERE id = ?")
         .bind(id)
         .fetch_one(pool)
-        .await
-        .context("Failed to read deleted_at after soft-delete")?;
+        .await?;
     let deleted_at = row.0.unwrap_or_default();
     Ok(DeleteUserOutcome::Deleted { deleted_at })
 }
@@ -710,6 +688,49 @@ mod tests {
         )
         .await;
         assert!(result.is_err());
+    }
+
+    /// #163: a duplicate insert must surface the typed `DbError::UniqueViolation`
+    /// (not an erased error the caller has to string-match) so the route can
+    /// return a friendly 409.
+    #[tokio::test]
+    async fn duplicate_email_surfaces_unique_violation() {
+        let pool = setup().await;
+        make_user(&pool, Some("dup@test.com"), "First").await;
+
+        let err = create_user(
+            &pool,
+            Some("dup@test.com"),
+            None,
+            "Second",
+            None,
+            None,
+            None,
+            "customer",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, DbError::UniqueViolation),
+            "expected UniqueViolation, got {err:?}"
+        );
+    }
+
+    /// #163: updating a user id that does not exist returns the typed
+    /// `DbError::NotFound`.
+    #[tokio::test]
+    async fn update_user_info_errors_when_user_missing() {
+        let pool = setup().await;
+        let err = update_user_info(&pool, 999_999, Some("New"), None, None, None, None)
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, DbError::NotFound),
+            "expected NotFound, got {err:?}"
+        );
     }
 
     #[tokio::test]

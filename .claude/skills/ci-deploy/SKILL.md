@@ -705,3 +705,20 @@ only checks types, not runtime text). Fix: after `loginViaAPI`, add
 test — same pattern already used in `my-balance-movements.spec.ts`. Do this
 proactively for any new test asserting Slovak text, rather than discovering
 it via a CI failure.
+
+## The `block-tier0-local-build.sh` hook false-positives on the literal text "cargo test" inside a COMMIT MESSAGE, not just an actual command
+
+This is a global airuleset hook (Tier-0 local-build ban), not a project file
+— but a `git commit -m "..."` whose heredoc BODY merely *mentions* the
+phrase "cargo test" in prose (e.g. explaining why RED can't be verified
+locally: "local cargo test is banned in this repo") gets BLOCKED before
+either `git add` or `git commit` runs — the hook scans the whole Bash
+command string for the pattern, not just the parts that are actual shell
+commands. The failure mode is confusing: it looks like a real block, but
+`git status` afterward shows nothing staged (the whole compound `add &&
+commit` never ran). Fix: reword the commit message to avoid the literal
+substring — e.g. "local Rust test execution is banned" instead of "local
+cargo test is banned" — and always run `git add` and `git commit` as
+SEPARATE Bash calls anyway (the same discipline the push-gate gotcha above
+already requires), so a block on the commit doesn't also silently skip the
+staging.

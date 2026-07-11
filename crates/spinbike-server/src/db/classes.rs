@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::db::error::{DbError, Result};
 use sqlx::SqlitePool;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -54,7 +54,7 @@ pub async fn create_template(
     .bind(capacity)
     .fetch_one(pool)
     .await
-    .context("Failed to create template")?;
+    ?;
     Ok(id)
 }
 
@@ -63,8 +63,7 @@ pub async fn list_active_templates(pool: &SqlitePool) -> Result<Vec<ClassTemplat
         "SELECT * FROM class_templates WHERE active = 1 ORDER BY weekday, start_time",
     )
     .fetch_all(pool)
-    .await
-    .context("Failed to list active templates")?;
+    .await?;
     Ok(templates)
 }
 
@@ -73,8 +72,7 @@ pub async fn list_all_templates(pool: &SqlitePool) -> Result<Vec<ClassTemplateRo
         "SELECT * FROM class_templates ORDER BY weekday, start_time",
     )
     .fetch_all(pool)
-    .await
-    .context("Failed to list all templates")?;
+    .await?;
     Ok(templates)
 }
 
@@ -95,8 +93,7 @@ pub async fn cancel_occurrence(
     .bind(reason)
     .bind(cancelled_by)
     .fetch_one(pool)
-    .await
-    .context("Failed to cancel occurrence")?;
+    .await?;
     Ok(id)
 }
 
@@ -152,7 +149,7 @@ pub async fn create_booking(
     .await?;
     match result {
         Some(id) => Ok(id),
-        None => anyhow::bail!("Class is full"),
+        None => Err(DbError::ClassFull),
     }
 }
 
@@ -160,8 +157,7 @@ pub async fn cancel_booking(pool: &SqlitePool, booking_id: i64) -> Result<()> {
     sqlx::query("UPDATE bookings SET cancelled_at = datetime('now') WHERE id = ?")
         .bind(booking_id)
         .execute(pool)
-        .await
-        .context("Failed to cancel booking")?;
+        .await?;
     Ok(())
 }
 
@@ -177,7 +173,7 @@ pub async fn list_bookings_for_class(
     .bind(date)
     .fetch_all(pool)
     .await
-    .context("Failed to list bookings for class")?;
+    ?;
     Ok(bookings)
 }
 
@@ -211,8 +207,7 @@ pub async fn list_user_bookings(
     )
     .bind(user_id)
     .fetch_all(pool)
-    .await
-    .context("Failed to list user bookings")?;
+    .await?;
     Ok(bookings)
 }
 

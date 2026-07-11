@@ -1,12 +1,11 @@
-use anyhow::{Context, Result};
+use crate::db::error::Result;
 use sqlx::SqlitePool;
 
 pub async fn get_setting(pool: &SqlitePool, key: &str) -> Result<Option<String>> {
     let value: Option<String> = sqlx::query_scalar("SELECT value FROM settings WHERE key = ?")
         .bind(key)
         .fetch_optional(pool)
-        .await
-        .context("Failed to get setting")?;
+        .await?;
     Ok(value)
 }
 
@@ -18,8 +17,7 @@ pub async fn set_setting(pool: &SqlitePool, key: &str, value: &str) -> Result<()
     .bind(key)
     .bind(value)
     .execute(pool)
-    .await
-    .context("Failed to set setting")?;
+    .await?;
     Ok(())
 }
 

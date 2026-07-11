@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::db::error::Result;
 use sqlx::SqlitePool;
 
 /// Maximum length (in Unicode code points) for a transaction note.
@@ -54,8 +54,7 @@ pub async fn create_transaction(
     .bind(action)
     .bind(note)
     .fetch_one(pool)
-    .await
-    .context("Failed to create transaction")?;
+    .await?;
     Ok(id)
 }
 
@@ -84,7 +83,7 @@ pub async fn create_transaction_with_valid_until(
     .bind(note)
     .fetch_one(pool)
     .await
-    .context("Failed to create transaction with valid_until")?;
+    ?;
     Ok(id)
 }
 
@@ -104,7 +103,7 @@ pub async fn list_transactions_for_user(
     .bind(user_id)
     .fetch_all(pool)
     .await
-    .context("Failed to list transactions for user")?;
+    ?;
     Ok(txns)
 }
 
@@ -139,7 +138,7 @@ pub async fn list_transactions_for_user_paginated(
         .bind(effective_limit)
         .fetch_all(pool)
         .await
-        .context("Failed to list paginated transactions for user (with cursor)")?,
+        ?,
         None => sqlx::query_as::<_, TransactionRow>(
             "SELECT t.id, t.user_id, t.staff_id, t.service_id,
                         t.amount, t.action, t.created_at, t.valid_until,
@@ -154,7 +153,7 @@ pub async fn list_transactions_for_user_paginated(
         .bind(effective_limit)
         .fetch_all(pool)
         .await
-        .context("Failed to list paginated transactions for user")?,
+        ?,
     };
     Ok(txns)
 }
@@ -168,8 +167,7 @@ pub async fn soft_delete(pool: &SqlitePool, id: i64) -> Result<()> {
     )
     .bind(id)
     .execute(pool)
-    .await
-    .context("Failed to soft-delete transaction")?;
+    .await?;
     Ok(())
 }
 
