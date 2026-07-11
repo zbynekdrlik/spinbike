@@ -82,6 +82,12 @@ pub struct RecentTx {
     pub amount: f64,
     pub valid_until: Option<String>,
     pub note: Option<String>,
+    /// Joined from services (#147) — None when the transaction wasn't tied
+    /// to a service (e.g. a plain top-up). Same join as
+    /// `db::transactions::list_transactions_for_user_paginated`, used by the
+    /// admin transactions list.
+    pub service_name_sk: Option<String>,
+    pub service_name_en: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -1010,33 +1016,52 @@ async fn my_balance(
     .await
     .map_err(internal_error)?;
 
-    // 3. Last 20 transactions (newest first).
+    // 3. Last 20 transactions (newest first). LEFT JOIN services (#147) so
+    //    the customer sees WHICH service a movement was for, same as the
+    //    admin transactions list.
     tracing::debug!(user_id, "my_balance: querying recent transactions");
-    let recent: Vec<RecentTx> =
-        sqlx::query_as::<_, (i64, String, String, f64, Option<String>, Option<String>)>(
-            "SELECT id, created_at, action, amount, valid_until, note \
-           FROM transactions \
-          WHERE user_id = ? \
-            AND deleted_at IS NULL \
-          ORDER BY created_at DESC \
+    let recent: Vec<RecentTx> = sqlx::query_as::<
+        _,
+        (
+            i64,
+            String,
+            String,
+            f64,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+            Option<String>,
+        ),
+    >(
+        "SELECT t.id, t.created_at, t.action, t.amount, t.valid_until, t.note, \
+                s.name_sk, s.name_en \
+           FROM transactions t \
+           LEFT JOIN services s ON s.id = t.service_id \
+          WHERE t.user_id = ? \
+            AND t.deleted_at IS NULL \
+          ORDER BY t.created_at DESC \
           LIMIT 20",
-        )
-        .bind(user_id)
-        .fetch_all(&state.pool)
-        .await
-        .map_err(internal_error)?
-        .into_iter()
-        .map(
-            |(id, created_at, action, amount, valid_until, note)| RecentTx {
+    )
+    .bind(user_id)
+    .fetch_all(&state.pool)
+    .await
+    .map_err(internal_error)?
+    .into_iter()
+    .map(
+        |(id, created_at, action, amount, valid_until, note, service_name_sk, service_name_en)| {
+            RecentTx {
                 id,
                 created_at,
                 action,
                 amount,
                 valid_until,
                 note,
-            },
-        )
-        .collect();
+                service_name_sk,
+                service_name_en,
+            }
+        },
+    )
+    .collect();
 
     tracing::info!(
         user_id = id,
