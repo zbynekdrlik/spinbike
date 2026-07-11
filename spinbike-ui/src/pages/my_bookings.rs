@@ -2,6 +2,7 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
+use crate::dates;
 use crate::i18n::{self, Lang};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -13,11 +14,6 @@ struct BookingRow {
     user_id: i64,
     start_time: Option<String>,
     instructor_name: Option<String>,
-}
-
-/// "YYYY-MM-DD" (server's ISO date) -> `NaiveDate`, for `fmt_date_short`.
-fn parse_booking_date(s: &str) -> Option<chrono::NaiveDate> {
-    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
 }
 
 #[component]
@@ -94,7 +90,7 @@ pub fn MyBookingsPage() -> impl IntoView {
                 // Localized date + class start time — no raw internal
                 // template_id / ISO date shown to the customer (#146). This
                 // is a SPIN-only app so no class name is needed.
-                let date_label = parse_booking_date(&date)
+                let date_label = dates::parse_server_date(&date)
                     .map(|d| i18n::fmt_date_short(d, lang_now))
                     .unwrap_or_else(|| date.clone());
                 let title = match &b.start_time {

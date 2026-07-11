@@ -87,7 +87,7 @@ pub fn tx_label_key(kind: spinbike_core::reports::EventKind) -> &'static str {
 /// the ISO form (`%Y-%m-%d`) explicitly — this helper is for display only.
 pub fn fmt_date(d: chrono::NaiveDate, lang: Lang) -> String {
     match lang {
-        Lang::Sk => d.format("%d.%m.%Y").to_string(),
+        Lang::Sk => crate::dates::format_ddmmyyyy(d),
         Lang::En => d.format("%Y-%m-%d").to_string(),
     }
 }
@@ -122,7 +122,7 @@ pub fn fmt_weekday_short(d: chrono::NaiveDate, lang: Lang) -> &'static str {
 /// the timezone identity attached so future callers can do arithmetic or
 /// comparisons without losing context. The display helpers below format
 /// directly off the tz-aware value, which prints in local wall-clock time.
-fn parse_to_local(s: &str) -> Option<chrono::DateTime<chrono_tz::Tz>> {
+pub fn parse_to_local(s: &str) -> Option<chrono::DateTime<chrono_tz::Tz>> {
     use chrono::TimeZone;
     let trimmed = s.trim();
     let bratislava = chrono_tz::Europe::Bratislava;

@@ -138,7 +138,7 @@ pub fn StaffDashboardPage() -> impl IntoView {
                 let start_time = slot.start_time.clone();
                 let time_label = move || {
                     let l = lang.get();
-                    let date_pretty = chrono::NaiveDate::parse_from_str(&slot_date, "%Y-%m-%d")
+                    let date_pretty = crate::dates::parse_server_date(&slot_date)
                         .map(|d| {
                             format!(
                                 "{} {}",
@@ -146,7 +146,7 @@ pub fn StaffDashboardPage() -> impl IntoView {
                                 i18n::fmt_date(d, l)
                             )
                         })
-                        .unwrap_or_else(|_| slot_date.clone());
+                        .unwrap_or_else(|| slot_date.clone());
                     format!("{} {}", date_pretty, start_time)
                 };
                 let booked = slot.booked;

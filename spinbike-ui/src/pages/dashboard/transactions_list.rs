@@ -104,25 +104,11 @@ pub fn TransactionsList(
                 let editing_date = RwSignal::new(false);
                 // tx.created_at is UTC text; convert to Bratislava local so the date
                 // pre-filled in the sheet matches what the user sees in the row.
-                let current_date = {
-                    use chrono::TimeZone;
-                    let bratislava = chrono_tz::Europe::Bratislava;
-                    let trimmed = tx.created_at.trim();
-                    let parsed_utc =
-                        chrono::NaiveDateTime::parse_from_str(trimmed, "%Y-%m-%d %H:%M:%S")
-                            .ok()
-                            .or_else(|| {
-                                chrono::NaiveDateTime::parse_from_str(
-                                    trimmed,
-                                    "%Y-%m-%dT%H:%M:%S",
-                                )
-                                .ok()
-                            });
-                    match parsed_utc {
-                        Some(utc) => bratislava.from_utc_datetime(&utc).date_naive(),
-                        None => crate::relative_date::today_local(),
-                    }
-                };
+                // Routes through the shared `i18n::parse_to_local` (#168) — the same
+                // UTC→Bratislava conversion the row's `fmt_datetime_str` already uses.
+                let current_date = i18n::parse_to_local(&tx.created_at)
+                    .map(|dt| dt.date_naive())
+                    .unwrap_or_else(crate::relative_date::today_local);
 
                 let on_edit = move |_| set_editing.set(true);
 

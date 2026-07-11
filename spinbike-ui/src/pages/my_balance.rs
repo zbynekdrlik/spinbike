@@ -11,6 +11,7 @@ use spinbike_core::reports::{EventKind, classify};
 
 use crate::api;
 use crate::components::{DoorButton, InstallPrompt};
+use crate::dates;
 use crate::i18n::{self, Lang, fmt_date_short, tf};
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -108,7 +109,7 @@ pub fn MyBalancePage() -> impl IntoView {
                         return String::new();
                     };
                     match &b.monthly_pass_active_until {
-                        Some(ts) => match parse_pass_date(ts) {
+                        Some(ts) => match dates::parse_server_date(ts) {
                             Some(d) => tf(lang.get(), "monthly_pass_active_until", &[&fmt_date_short(d, lang.get())]),
                             None => tf(lang.get(), "monthly_pass_active_until", &[ts]),
                         },
@@ -147,14 +148,14 @@ pub fn MyBalancePage() -> impl IntoView {
                         <h2 class="recent-visits__heading">{i18n::t(lang_now, "my_balance_recent_movements")}</h2>
                         <ul class="recent-visits">
                             {recent_rows.into_iter().map(|t| {
-                                let date_label = parse_visit_date(&t.created_at)
+                                let date_label = dates::parse_server_date(&t.created_at)
                                     .map(|d| fmt_date_short(d, lang_now))
                                     .unwrap_or_else(|| t.created_at.clone());
 
                                 // Derive the movement kind from the SAME shared
                                 // classifier the admin uses, so the customer sees
                                 // the SAME Slovak labels instead of the raw DB token.
-                                let valid_until = t.valid_until.as_deref().and_then(parse_pass_date);
+                                let valid_until = t.valid_until.as_deref().and_then(dates::parse_server_date);
                                 let kind = classify(&t.action, t.amount, valid_until);
                                 let action_label = i18n::t(lang_now, i18n::tx_label_key(kind)).to_string();
 
@@ -226,15 +227,4 @@ pub fn MyBalancePage() -> impl IntoView {
             })
         }}
     }
-}
-
-fn parse_pass_date(s: &str) -> Option<chrono::NaiveDate> {
-    let trimmed = s.trim();
-    let date_str = trimmed.split_whitespace().next().unwrap_or(trimmed);
-    let date_str = date_str.split('T').next().unwrap_or(date_str);
-    chrono::NaiveDate::parse_from_str(date_str, "%Y-%m-%d").ok()
-}
-
-fn parse_visit_date(s: &str) -> Option<chrono::NaiveDate> {
-    parse_pass_date(s)
 }
