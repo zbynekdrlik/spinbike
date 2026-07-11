@@ -667,3 +667,18 @@ during re-verify) showed the OPPOSITE: a rule can have a comma-combined
 selector where BOTH arms turn out dead — always grep each comma-separated
 arm independently, don't assume a compound selector is safe just because
 one part looked plausible.
+
+## `loginViaAPI` defaults `spinbike_lang` to `'en'` — a new SK-text E2E assertion needs an explicit override, or CI fails
+
+`e2e/tests/helpers.ts`'s `loginViaAPI()` calls `setEnglishLanguage(page)`
+internally, so ANY new test that logs in via `loginViaAPI` and then asserts
+Slovak UI text (a badge label, an i18n key rendered in the DOM) will see
+the English string instead and fail in CI (#149/#186 cycle: a
+`service_kind_single_entry` badge test asserted `"Jednorazovy vstup"` but
+got `"Single entry"` — caught by CI, not locally, since `npx tsc --noEmit`
+only checks types, not runtime text). Fix: after `loginViaAPI`, add
+`await page.addInitScript(() => { try { localStorage.setItem('spinbike_lang',
+'sk'); } catch {} });` BEFORE the `page.goto()` that renders the page under
+test — same pattern already used in `my-balance-movements.spec.ts`. Do this
+proactively for any new test asserting Slovak text, rather than discovering
+it via a CI failure.
