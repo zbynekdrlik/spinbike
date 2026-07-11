@@ -516,6 +516,10 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         "service_kind_monthly_pass",
         ("Mesacny listok", "Monthly pass"),
     );
+    m.insert(
+        "service_kind_single_entry",
+        ("Jednorazovy vstup", "Single entry"),
+    );
 
     // Monthly pass banner
     // #32: collapsed single-line pass status (active + expired). Used by
