@@ -13,7 +13,7 @@
 
 use crate::db::error::Result;
 use base64::Engine as _;
-use rand::RngCore;
+use rand::Rng;
 use sha2::{Digest, Sha256};
 use sqlx::SqlitePool;
 

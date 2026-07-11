@@ -11,7 +11,7 @@
 use crate::ewelink::EwelinkError;
 use base64::Engine as _;
 use hmac::{Hmac, Mac};
-use rand::Rng;
+use rand::RngExt;
 use serde::{Deserialize, Serialize};
 use sha2::Sha256;
 

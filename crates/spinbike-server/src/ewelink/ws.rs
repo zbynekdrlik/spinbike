@@ -17,7 +17,7 @@
 
 use crate::ewelink::{EwelinkError, EwelinkState, PressRequest, auth};
 use futures::{SinkExt, StreamExt};
-use rand::Rng;
+use rand::RngExt;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::sync::Arc;
