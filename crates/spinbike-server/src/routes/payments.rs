@@ -117,12 +117,17 @@ async fn charge(
     let mut tx = state.pool.begin().await.map_err(internal_error)?;
 
     // Re-read user inside the transaction.
-    let user = sqlx::query_as::<_, users::UserRow>("SELECT * FROM users WHERE id = ?")
-        .bind(body.user_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(internal_error)?
-        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
+    let user = sqlx::query_as::<_, users::UserRow>(
+        "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
+                oauth_id, credit, card_code, blocked, allow_debit, search_text,
+                created_at, deleted_at, allow_self_entry
+         FROM users WHERE id = ?",
+    )
+    .bind(body.user_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(internal_error)?
+    .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
 
     if user.blocked {
         return Err(ApiError::conflict(ErrorCode::UserBlocked));
@@ -177,12 +182,17 @@ async fn storno(
     // Wrap in a transaction for consistency.
     let mut tx = state.pool.begin().await.map_err(internal_error)?;
 
-    let user = sqlx::query_as::<_, users::UserRow>("SELECT * FROM users WHERE id = ?")
-        .bind(body.user_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(internal_error)?
-        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
+    let user = sqlx::query_as::<_, users::UserRow>(
+        "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
+                oauth_id, credit, card_code, blocked, allow_debit, search_text,
+                created_at, deleted_at, allow_self_entry
+         FROM users WHERE id = ?",
+    )
+    .bind(body.user_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(internal_error)?
+    .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
 
     // Credit the user (refund) within the transaction.
     sqlx::query("UPDATE users SET credit = ROUND(credit + ?, 2) WHERE id = ?")
@@ -238,12 +248,17 @@ async fn sell_pass(
 
     let mut tx = state.pool.begin().await.map_err(internal_error)?;
 
-    let user = sqlx::query_as::<_, users::UserRow>("SELECT * FROM users WHERE id = ?")
-        .bind(body.user_id)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(internal_error)?
-        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
+    let user = sqlx::query_as::<_, users::UserRow>(
+        "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
+                oauth_id, credit, card_code, blocked, allow_debit, search_text,
+                created_at, deleted_at, allow_self_entry
+         FROM users WHERE id = ?",
+    )
+    .bind(body.user_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .map_err(internal_error)?
+    .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
     if user.blocked {
         return Err(ApiError::conflict(ErrorCode::UserBlocked));
     }
