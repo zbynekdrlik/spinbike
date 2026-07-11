@@ -3,6 +3,78 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-07-11 — #145: localize customer error banners via error_code
+
+- **Issue:** [#145](https://github.com/zbynekdrlik/spinbike/issues/145) —
+  customer-facing error/alert banners rendered raw English (e.g. a
+  Slovak customer mistyping a password on `/login` saw "Invalid email or
+  password"). Ticket-validated PARTIAL: the backend prerequisite (a
+  machine-readable `error_code` on every API error body) had already
+  landed via #158/PR #181 (same-day architecture-review split), so this
+  cycle rescoped to frontend-only: read `error_code`, map to Slovak.
+- **Version:** bump `d1be15f` (0.15.0-dev.44 → 0.15.0-dev.45).
+- **RED** (`e322f17`) — new `e2e/tests/auth.spec.ts` test (separate
+  describe, no forced language — a fresh browser context defaults to
+  Slovak via `i18n::get_saved_lang()`) asserting a wrong-password login
+  shows `"Nespravny email alebo heslo"`, not raw English. Confirmed
+  failing on CI (`Received: "Invalid email or password"`), 163/164 other
+  E2E tests unaffected. Run:
+  https://github.com/zbynekdrlik/spinbike/actions/runs/29135592859
+- **GREEN** (`d4bd0d4`) — `api.rs` gained additive `get_coded`/
+  `post_public_coded`/`delete_coded` (alongside the untouched originals
+  — ~62 other call sites in the app unaffected) returning a new
+  `CodedError{code, message}`; `error_code` parsed defensively (raw
+  string first, then matched into `ErrorCode` — an unrecognized code
+  degrades to `None` rather than failing the whole body parse).
+  `i18n.rs` gained `error_code_key()` — an exhaustive match (same
+  pattern as `tx_label_key`) mapping ONLY the 6 codes a customer can
+  hit at the 5 scoped render sites (`invalid_credentials`,
+  `oauth_account`, `booking_not_found`, `booking_not_owned`,
+  `user_not_found`, `internal`); every other code (staff_required,
+  conflict codes, etc.) resolves to `None` on purpose, falling back to
+  the server's raw English — staff/admin errors are unchanged, out of
+  this ticket's scope. Also localized the two generic hardcoded
+  fallbacks ("Session expired, redirecting to login..." / "Request
+  failed (HTTP {status})") via `i18n::get_saved_lang()` (api.rs has no
+  reactive `Lang` context). Wired the 5 render sites (`login.rs`,
+  `my_balance.rs`, `my_bookings.rs` x2, `door.rs`,
+  `login_link_form.rs`) — error signals switched `String` →
+  `Option<CodedError>`, localized at render time via each page's own
+  reactive `Lang` signal. CI all green (Lint, Test, Test (UI), Build
+  WASM, E2E 164/164, all 8 Mutation Testing shards, Deploy (dev), Smoke
+  (dev)). Run:
+  https://github.com/zbynekdrlik/spinbike/actions/runs/29135842463
+- **Decision:** `oauth_account` fires whenever `password_hash` is NULL
+  (login.rs's password form against a passwordless account) — this app
+  has no actual third-party OAuth button wired into the UI today (the
+  code is legacy/forward-looking scaffolding in
+  `crates/spinbike-server/src/auth/oauth.rs`), so a specific provider
+  name would be misleading. Used a deliberately generic Slovak message
+  ("Tento ucet pouziva ine prihlasenie") rather than naming an unused
+  provider — documented inline in both `oauth.rs`'s call site comment
+  and `i18n.rs`.
+- **Review:** inline self-review (10-angle checklist: line-by-line,
+  removed-behavior, cross-file callers, Rust pitfalls, wrapper
+  correctness, reuse/simplification/efficiency/altitude, CLAUDE.md
+  conventions) — 0 findings requiring a fix. Cross-checked the
+  `frontend-pwa` skill's gotchas (JS interop, UA sniffing, shared
+  status-signal split, sheet occlusion, disposal-ordering) — none apply
+  to this diff (no Sheet, no JS interop, no component disposal in the
+  changed handlers).
+- **PR:** [#190](https://github.com/zbynekdrlik/spinbike/pull/190),
+  merged `dac34ed`. Main CI green (Lint, Test, Test (UI), Build WASM,
+  E2E, Deploy (prod), Smoke (prod); Version Bump Check + Mutation
+  Testing correctly skipped on the main push).
+- **Live verification:** cleared stale SW/caches on the long-lived
+  Playwright MCP profile first (`frontend-pwa` skill gotcha), then on
+  `https://spinbike.sk/login` (default Slovak, no forced language)
+  submitted a wrong password — banner showed
+  `"Nespravny email alebo heslo"` live on prod. Only console message
+  was the expected benign `401` fetch noise (the E2E harness's own
+  filtered pattern) — zero real console errors.
+- **Deployed:** v0.15.0-dev.45, confirmed on `https://spinbike.sk` DOM
+  version label.
+
 ## 2026-07-11 — #152: login-link button missing loading feedback
 
 - **Issue:** [#152](https://github.com/zbynekdrlik/spinbike/issues/152) —
