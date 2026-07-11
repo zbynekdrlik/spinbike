@@ -417,6 +417,13 @@ a:hover { text-decoration: underline; }
     color: var(--text-dim);
 }
 
+.form-help {
+    display: block;
+    margin-top: var(--s-1);
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+}
+
 .form-control {
     width: 100%;
     min-height: var(--tap-min);
