@@ -125,3 +125,33 @@ test.describe('Authentication flows', () => {
         assertCleanConsole(consoleMessages);
     });
 });
+
+// #145: customer error banners must be localized (Slovak by default), not raw
+// server English. The block above forces English (setEnglishLanguage in its
+// beforeEach) for its own assertions, so the Slovak-default path needs its
+// own describe with NO forced language — a fresh Playwright browser context
+// has no `spinbike_lang` in localStorage, and i18n::get_saved_lang() falls
+// back to Lang::Sk in that case (the real default a first-time visitor sees).
+test.describe('Authentication flows — default Slovak locale (#145)', () => {
+    test('login with wrong password shows the Slovak error message, not English', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+
+        await page.goto('/login');
+        await page.waitForSelector('h1.page-title');
+
+        const form = passwordLoginForm(page);
+        await form.locator('input[type="email"]').fill('customer@test.com');
+        await form.locator('input[type="password"]').fill('wrongpassword');
+        await form.locator('button[type="submit"]').click();
+
+        await page.waitForSelector('.alert.alert-error', { timeout: 5000 });
+        const errorText = await page.textContent('.alert.alert-error');
+        expect(errorText).toBe('Nespravny email alebo heslo');
+        expect(errorText).not.toContain('Invalid email or password');
+
+        // Should still be on /login
+        expect(page.url()).toContain('/login');
+
+        assertCleanConsole(consoleMessages);
+    });
+});

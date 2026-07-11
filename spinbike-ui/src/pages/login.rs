@@ -65,7 +65,7 @@ pub fn LoginPage() -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let email_ref = NodeRef::<leptos::html::Input>::new();
     let pass_ref = NodeRef::<leptos::html::Input>::new();
-    let (error, set_error) = signal(String::new());
+    let (error, set_error) = signal(None::<api::CodedError>);
     let (loading, set_loading) = signal(false);
 
     let on_submit = move |ev: web_sys::SubmitEvent| {
@@ -86,21 +86,23 @@ pub fn LoginPage() -> impl IntoView {
             .unwrap_or_default();
 
         set_loading.set(true);
-        set_error.set(String::new());
+        set_error.set(None);
 
         spawn_local(async move {
-            // post_public, not post: a wrong-password 401 must not clear a
-            // DIFFERENT, still-valid session this browser happens to hold
+            // post_public_coded, not post: a wrong-password 401 must not clear
+            // a DIFFERENT, still-valid session this browser happens to hold
             // (e.g. a shared kiosk already logged in as someone else) — see
-            // api::post_public's doc comment and #109.
-            match api::post_public::<LoginReq, AuthResp>(
+            // api::post_public's doc comment and #109. The `_coded` variant
+            // (#145) also carries the server's `error_code` so the banner
+            // below can localize it instead of showing raw English.
+            match api::post_public_coded::<LoginReq, AuthResp>(
                 "/api/auth/login",
                 &LoginReq { email, password },
             )
             .await
             {
                 Ok(resp) => save_and_redirect(resp),
-                Err(e) => set_error.set(e),
+                Err(e) => set_error.set(Some(e)),
             }
             set_loading.set(false);
         });
@@ -110,11 +112,12 @@ pub fn LoginPage() -> impl IntoView {
         <div class="page-form">
             <h1 class="page-title">{move || i18n::t(lang.get(), "login")}</h1>
             {move || {
-                let e = error.get();
-                if e.is_empty() {
-                    ().into_any()
-                } else {
-                    view! { <div class="alert alert-error">{e}</div> }.into_any()
+                match error.get() {
+                    None => ().into_any(),
+                    Some(e) => {
+                        let msg = i18n::localize_api_error(lang.get(), e.code, &e.message);
+                        view! { <div class="alert alert-error">{msg}</div> }.into_any()
+                    }
                 }
             }}
             <form on:submit=on_submit>

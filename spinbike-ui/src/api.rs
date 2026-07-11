@@ -42,13 +42,36 @@ pub async fn get<T: DeserializeOwned>(path: &str) -> Result<T, String> {
 
     if !resp.ok() {
         if handle_unauthorized(resp.status(), get_token().is_some()) {
-            return Err("Session expired, redirecting to login...".into());
+            return Err(session_expired_message());
         }
         let text = resp.text().await.unwrap_or_default();
         return Err(extract_error(&text, resp.status()));
     }
 
     resp.json::<T>().await.map_err(|e| e.to_string())
+}
+
+/// Like [`get`], but the `Err` carries the server's machine-readable
+/// `error_code` (#158) alongside the raw message, so a render site can
+/// localize by code (#145) instead of showing the server's raw English text.
+/// Existing `get()` callers are left untouched — this is additive, used only
+/// by the customer-facing render sites that need to localize their error.
+pub async fn get_coded<T: DeserializeOwned>(path: &str) -> Result<T, CodedError> {
+    let url = format!("{}{}", base_url(), path);
+    let resp = add_auth(RequestBuilder::new(&url))
+        .send()
+        .await
+        .map_err(CodedError::from_transport)?;
+
+    if !resp.ok() {
+        if handle_unauthorized(resp.status(), get_token().is_some()) {
+            return Err(CodedError::msg(session_expired_message()));
+        }
+        let text = resp.text().await.unwrap_or_default();
+        return Err(extract_coded_error(&text, resp.status()));
+    }
+
+    resp.json::<T>().await.map_err(CodedError::from_transport)
 }
 
 pub async fn post<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Result<T, String> {
@@ -61,7 +84,7 @@ pub async fn post<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Re
 
     if !resp.ok() {
         if handle_unauthorized(resp.status(), get_token().is_some()) {
-            return Err("Session expired, redirecting to login...".into());
+            return Err(session_expired_message());
         }
         let text = resp.text().await.unwrap_or_default();
         return Err(extract_error(&text, resp.status()));
@@ -99,6 +122,28 @@ pub async fn post_public<B: Serialize, T: DeserializeOwned>(
     resp.json::<T>().await.map_err(|e| e.to_string())
 }
 
+/// Like [`post_public`], but the `Err` carries the server's machine-readable
+/// `error_code` (#158) alongside the raw message — see [`get_coded`].
+pub async fn post_public_coded<B: Serialize, T: DeserializeOwned>(
+    path: &str,
+    body: &B,
+) -> Result<T, CodedError> {
+    let url = format!("{}{}", base_url(), path);
+    let req = RequestBuilder::new(&url)
+        .method(gloo_net::http::Method::POST)
+        .json(body)
+        .map_err(CodedError::from_transport)?;
+
+    let resp = req.send().await.map_err(CodedError::from_transport)?;
+
+    if !resp.ok() {
+        let text = resp.text().await.unwrap_or_default();
+        return Err(extract_coded_error(&text, resp.status()));
+    }
+
+    resp.json::<T>().await.map_err(CodedError::from_transport)
+}
+
 pub async fn put<B: Serialize>(path: &str, body: &B) -> Result<(), String> {
     let url = format!("{}{}", base_url(), path);
     let req = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::PUT))
@@ -109,7 +154,7 @@ pub async fn put<B: Serialize>(path: &str, body: &B) -> Result<(), String> {
 
     if !resp.ok() {
         if handle_unauthorized(resp.status(), get_token().is_some()) {
-            return Err("Session expired, redirecting to login...".into());
+            return Err(session_expired_message());
         }
         let text = resp.text().await.unwrap_or_default();
         return Err(extract_error(&text, resp.status()));
@@ -128,7 +173,7 @@ pub async fn patch<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> R
 
     if !resp.ok() {
         if handle_unauthorized(resp.status(), get_token().is_some()) {
-            return Err("Session expired, redirecting to login...".into());
+            return Err(session_expired_message());
         }
         let text = resp.text().await.unwrap_or_default();
         return Err(extract_error(&text, resp.status()));
@@ -171,7 +216,7 @@ pub async fn put_json<B: Serialize, T: DeserializeOwned>(
 
     if !resp.ok() {
         if handle_unauthorized(resp.status(), get_token().is_some()) {
-            return Err(ApiError::msg("Session expired, redirecting to login..."));
+            return Err(ApiError::msg(session_expired_message()));
         }
         let text = resp.text().await.unwrap_or_default();
         return Err(extract_api_error(&text, resp.status()));
@@ -191,7 +236,7 @@ pub async fn delete(path: &str) -> Result<(), String> {
 
     if !resp.ok() {
         if handle_unauthorized(resp.status(), get_token().is_some()) {
-            return Err("Session expired, redirecting to login...".into());
+            return Err(session_expired_message());
         }
         let text = resp.text().await.unwrap_or_default();
         return Err(extract_error(&text, resp.status()));
@@ -207,17 +252,92 @@ pub async fn delete_empty(path: &str) -> Result<(), String> {
     delete(path).await
 }
 
-fn extract_error(body: &str, status: u16) -> String {
+/// Like [`delete`], but the `Err` carries the server's machine-readable
+/// `error_code` (#158) alongside the raw message — see [`get_coded`].
+pub async fn delete_coded(path: &str) -> Result<(), CodedError> {
+    let url = format!("{}{}", base_url(), path);
+    let resp = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::DELETE))
+        .send()
+        .await
+        .map_err(CodedError::from_transport)?;
+
+    if !resp.ok() {
+        if handle_unauthorized(resp.status(), get_token().is_some()) {
+            return Err(CodedError::msg(session_expired_message()));
+        }
+        let text = resp.text().await.unwrap_or_default();
+        return Err(extract_coded_error(&text, resp.status()));
+    }
+
+    Ok(())
+}
+
+/// Error from a "coded" API call (`get_coded` / `post_public_coded` /
+/// `delete_coded`) — mirrors [`extract_error`]'s raw human message but also
+/// carries the machine-readable `error_code` (#158) when the server attached
+/// one, so a render site can localize by code (#145) while still falling
+/// back to the raw server text for an unmapped or absent code.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CodedError {
+    pub code: Option<spinbike_core::errors::ErrorCode>,
+    pub message: String,
+}
+
+impl CodedError {
+    fn msg(message: impl Into<String>) -> Self {
+        Self {
+            code: None,
+            message: message.into(),
+        }
+    }
+
+    /// Build from a transport-level failure (network error, non-JSON
+    /// response body, etc.) that never reached a server error body — no
+    /// `error_code` to carry, just the raw `Display` text.
+    fn from_transport(e: impl std::fmt::Display) -> Self {
+        Self::msg(e.to_string())
+    }
+}
+
+/// Shared parse of a JSON error body into (human message, optional
+/// `error_code`). The message-only fallback behavior matches the pre-#145
+/// `extract_error` exactly: an unparseable body or a body with no `error`
+/// field yields the localized "request failed" text.
+///
+/// `error_code` is decoded defensively as a raw string first, THEN parsed
+/// into `ErrorCode` — an unrecognized code string (e.g. version skew during
+/// a deploy) degrades to `None` instead of failing the whole-body parse and
+/// losing the (still perfectly good) human `error` message.
+fn extract_error_parts(
+    body: &str,
+    status: u16,
+) -> (String, Option<spinbike_core::errors::ErrorCode>) {
     #[derive(serde::Deserialize)]
     struct ErrBody {
         error: Option<String>,
+        error_code: Option<String>,
     }
-    if let Ok(e) = serde_json::from_str::<ErrBody>(body)
-        && let Some(msg) = e.error
-    {
-        return msg;
+    match serde_json::from_str::<ErrBody>(body) {
+        Ok(e) => {
+            let code = e.error_code.as_deref().and_then(|c| {
+                serde_json::from_value(serde_json::Value::String(c.to_string())).ok()
+            });
+            (
+                e.error.unwrap_or_else(|| request_failed_message(status)),
+                code,
+            )
+        }
+        Err(_) => (request_failed_message(status), None),
     }
-    format!("Request failed (HTTP {status})")
+}
+
+fn extract_error(body: &str, status: u16) -> String {
+    extract_error_parts(body, status).0
+}
+
+fn extract_coded_error(body: &str, status: u16) -> CodedError {
+    let (message, code) = extract_error_parts(body, status);
+    CodedError { code, message }
 }
 
 /// Like [`extract_error`] but also pulls the optional `conflict_name` /
@@ -232,12 +352,30 @@ fn extract_api_error(body: &str, status: u16) -> ApiError {
     }
     if let Ok(e) = serde_json::from_str::<ErrBody>(body) {
         return ApiError {
-            message: e
-                .error
-                .unwrap_or_else(|| format!("Request failed (HTTP {status})")),
+            message: e.error.unwrap_or_else(|| request_failed_message(status)),
             conflict_name: e.conflict_name,
             conflict_card: e.conflict_card,
         };
     }
-    ApiError::msg(format!("Request failed (HTTP {status})"))
+    ApiError::msg(request_failed_message(status))
+}
+
+/// Localized "session expired" text for the 401-while-token-stored redirect
+/// path. This module has no reactive `Lang` context (it's not a Leptos
+/// component) — `i18n::get_saved_lang()` reads the same `localStorage` key
+/// the reactive `Lang` signal is initialized from and kept in sync with on
+/// every toggle (`i18n::save_lang`), so this is safe outside a component.
+fn session_expired_message() -> String {
+    crate::i18n::t(crate::i18n::get_saved_lang(), "err_session_expired").to_string()
+}
+
+/// Localized generic "request failed" fallback for a response whose body
+/// couldn't be parsed at all, or had no `error` field. See
+/// [`session_expired_message`] for why `get_saved_lang()` is safe here.
+fn request_failed_message(status: u16) -> String {
+    crate::i18n::tf(
+        crate::i18n::get_saved_lang(),
+        "err_request_failed_format",
+        &[&status.to_string()],
+    )
 }

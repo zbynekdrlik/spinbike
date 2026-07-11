@@ -18,19 +18,21 @@ pub fn MyBookingsPage() -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (bookings, set_bookings) = signal(Vec::<BookingRow>::new());
     let (loading, set_loading) = signal(true);
-    let (error, set_error) = signal(String::new());
+    let (error, set_error) = signal(None::<api::CodedError>);
     let (ver, set_ver) = signal(0u32);
 
     Effect::new(move || {
         let _ = ver.get();
         set_loading.set(true);
         spawn_local(async move {
-            match api::get::<Vec<BookingRow>>("/api/my/bookings").await {
+            // get_coded (#145): carries the server's `error_code` so the
+            // banner below can localize it instead of showing raw English.
+            match api::get_coded::<Vec<BookingRow>>("/api/my/bookings").await {
                 Ok(data) => {
                     set_bookings.set(data);
-                    set_error.set(String::new());
+                    set_error.set(None);
                 }
-                Err(e) => set_error.set(e),
+                Err(e) => set_error.set(Some(e)),
             }
             set_loading.set(false);
         });
@@ -40,11 +42,12 @@ pub fn MyBookingsPage() -> impl IntoView {
         <h1 class="page-title">{move || i18n::t(lang.get(), "my_bookings")}</h1>
 
         {move || {
-            let e = error.get();
-            if !e.is_empty() {
-                view! { <div class="alert alert-error">{e}</div> }.into_any()
-            } else {
-                view! { <span></span> }.into_any()
+            match error.get() {
+                Some(e) => {
+                    let msg = i18n::localize_api_error(lang.get(), e.code, &e.message);
+                    view! { <div class="alert alert-error">{msg}</div> }.into_any()
+                }
+                None => view! { <span></span> }.into_any(),
             }
         }}
 
@@ -64,15 +67,18 @@ pub fn MyBookingsPage() -> impl IntoView {
                 let date = b.date.clone();
                 let set_v = set_ver;
                 let (cancel_loading, set_cancel_loading) = signal(false);
-                let (cancel_err, set_cancel_err) = signal(String::new());
+                let (cancel_err, set_cancel_err) = signal(None::<api::CodedError>);
 
                 let on_cancel = move |_| {
                     set_cancel_loading.set(true);
-                    set_cancel_err.set(String::new());
+                    set_cancel_err.set(None);
                     spawn_local(async move {
-                        match api::delete(&format!("/api/bookings/{bid}")).await {
+                        // delete_coded (#145): carries the server's
+                        // `error_code` (e.g. booking_not_owned) so the
+                        // banner below can localize it.
+                        match api::delete_coded(&format!("/api/bookings/{bid}")).await {
                             Ok(_) => set_v.update(|v| *v += 1),
-                            Err(e) => set_cancel_err.set(e),
+                            Err(e) => set_cancel_err.set(Some(e)),
                         }
                         set_cancel_loading.set(false);
                     });
@@ -85,11 +91,12 @@ pub fn MyBookingsPage() -> impl IntoView {
                         <div class="list-row__main">
                             <div class="list-row__title">{title}</div>
                             {move || {
-                                let ce = cancel_err.get();
-                                if ce.is_empty() {
-                                    view! { <span></span> }.into_any()
-                                } else {
-                                    view! { <div class="alert alert-error">{ce}</div> }.into_any()
+                                match cancel_err.get() {
+                                    Some(ce) => {
+                                        let msg = i18n::localize_api_error(lang.get(), ce.code, &ce.message);
+                                        view! { <div class="alert alert-error">{msg}</div> }.into_any()
+                                    }
+                                    None => view! { <span></span> }.into_any(),
                                 }
                             }}
                         </div>

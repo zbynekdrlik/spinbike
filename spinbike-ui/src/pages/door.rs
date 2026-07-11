@@ -24,17 +24,19 @@ pub fn DoorPage() -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (allowed, set_allowed) = signal(false);
     let (loading, set_loading) = signal(true);
-    let (error, set_error) = signal(String::new());
+    let (error, set_error) = signal(None::<api::CodedError>);
 
     let load = move || {
         set_loading.set(true);
         spawn_local(async move {
-            match api::get::<AllowResp>("/api/my/balance").await {
+            // get_coded (#145): carries the server's `error_code` so the
+            // banner below can localize it instead of showing raw English.
+            match api::get_coded::<AllowResp>("/api/my/balance").await {
                 Ok(d) => {
                     set_allowed.set(d.allow_self_entry);
-                    set_error.set(String::new());
+                    set_error.set(None);
                 }
-                Err(e) => set_error.set(e),
+                Err(e) => set_error.set(Some(e)),
             }
             set_loading.set(false);
         });
@@ -48,9 +50,9 @@ pub fn DoorPage() -> impl IntoView {
             <h1 class="page-title">{move || i18n::t(lang.get(), "door_page_title")}</h1>
 
             {move || {
-                let e = error.get();
-                if !e.is_empty() {
-                    return view! { <div class="alert alert-error">{e}</div> }.into_any();
+                if let Some(e) = error.get() {
+                    let msg = i18n::localize_api_error(lang.get(), e.code, &e.message);
+                    return view! { <div class="alert alert-error">{msg}</div> }.into_any();
                 }
                 if loading.get() {
                     return view! {

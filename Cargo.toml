@@ -4,7 +4,7 @@ exclude = ["spinbike-ui"]
 resolver = "2"
 
 [workspace.package]
-version = "0.15.0-dev.43"
+version = "0.15.0-dev.45"
 edition = "2024"
 license = "MIT"
 

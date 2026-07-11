@@ -42,17 +42,19 @@ pub fn MyBalancePage() -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (data, set_data) = signal(None::<BalanceResp>);
     let (loading, set_loading) = signal(true);
-    let (error, set_error) = signal(String::new());
+    let (error, set_error) = signal(None::<api::CodedError>);
 
     let load = move || {
         set_loading.set(true);
         spawn_local(async move {
-            match api::get::<BalanceResp>("/api/my/balance").await {
+            // get_coded (#145): carries the server's `error_code` so the
+            // banner below can localize it instead of showing raw English.
+            match api::get_coded::<BalanceResp>("/api/my/balance").await {
                 Ok(d) => {
                     set_data.set(Some(d));
-                    set_error.set(String::new());
+                    set_error.set(None);
                 }
-                Err(e) => set_error.set(e),
+                Err(e) => set_error.set(Some(e)),
             }
             set_loading.set(false);
         });
@@ -119,9 +121,9 @@ pub fn MyBalancePage() -> impl IntoView {
         // Loading spinner / error banner / recent visits — these update
         // reactively on data changes.
         {move || {
-            let e = error.get();
-            if !e.is_empty() {
-                return view! { <div class="alert alert-error">{e}</div> }.into_any();
+            if let Some(e) = error.get() {
+                let msg = i18n::localize_api_error(lang.get(), e.code, &e.message);
+                return view! { <div class="alert alert-error">{msg}</div> }.into_any();
             }
             if loading.get() && data.with(|d| d.is_none()) {
                 return view! { <div class="text-center mt-3"><span class="spinner"></span></div> }.into_any();

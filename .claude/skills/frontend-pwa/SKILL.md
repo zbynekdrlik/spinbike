@@ -234,6 +234,67 @@ i18n key (`"Vstup c. {}"` / `"Entry #{}"`), falling back to the raw note when
 there's no digit (`my_balance.rs`, #144). Same rule for any stored-English audit
 string a customer sees.
 
+## Post-deploy version verification: clear the service worker BEFORE reading the DOM version
+
+`sw.js` is deliberately network-first for `/`, `*.html`, `sw.js` itself, and
+`manifest.json` (cache-first only for Trunk's content-hashed immutable JS/WASM
+assets), with `CACHE_NAME` bumped on breaking changes — this is already the
+correct fix for stale-deploy caching. But a **long-lived Playwright MCP
+browser profile** (reused across many autopilot cycles/days, not a fresh
+per-run context like CI's Smoke job) can carry an ALREADY-ACTIVE service
+worker registration from an earlier session. Reloading/navigating in that
+profile is not guaranteed to pick up the newly-deployed version on the very
+first read — the DOM's `"Verzia aplikacie"` label can show a version several
+releases behind `/api/version` (found post-#152-deploy: DOM showed
+`v0.15.0-dev.30` while the backend already served `v0.15.0-dev.43`).
+
+**Before trusting a DOM version read in a long-lived Playwright session**,
+clear any stale registration first:
+
+```js
+async () => {
+  const regs = await navigator.serviceWorker.getRegistrations();
+  for (const r of regs) { await r.unregister(); }
+  if (window.caches) {
+    const keys = await caches.keys();
+    for (const k of keys) { await caches.delete(k); }
+  }
+}
+```
+
+...then re-navigate. Confirm the fix actually landed by comparing the fresh
+HTML's hashed asset filename via `curl -s https://<host>/ | grep -oE
+'<app>-[a-f0-9]+\.(js|wasm)'` against what the browser loaded — a mismatch
+before the clear, matching after, confirms it was profile-local staleness,
+not a real deploy failure. This does NOT affect Smoke (prod)/Smoke (dev) CI
+— those jobs use a fresh Playwright browser context per run, so they never
+carry a stale SW registration across deploys.
+
+## Catching a fast-resolving loading state live: use in-page `requestAnimationFrame`, not a full MCP snapshot round-trip
+
+Verifying a brief loading/in-flight UI state (e.g. #152's "sending" button
+text) against a REAL prod backend is harder than against a Playwright E2E
+test's artificial network delay — prod round-trips can resolve in well under
+one MCP tool round-trip, so a `browser_click` followed by a separate
+`browser_snapshot` call often already shows the POST-resolution state (the
+success alert), missing the transient loading state entirely. Catch it with
+a single `browser_evaluate` that clicks and polls in-page, no MCP round-trip
+in between:
+
+```js
+async () => {
+  const btn = document.querySelector('[data-testid="...-submit"]');
+  btn.click();
+  const results = [];
+  for (let i = 0; i < 10; i++) {
+    await new Promise(r => requestAnimationFrame(r));
+    results.push({frame: i, text: btn.textContent, disabled: btn.disabled});
+    if (!document.body.contains(btn)) break;
+  }
+  return JSON.stringify(results);
+}
+```
+
 ## Manifest PNG icons: root `.gitignore` silently drops them
 
 The repo's root `.gitignore` has `*.png` with an exception only for
