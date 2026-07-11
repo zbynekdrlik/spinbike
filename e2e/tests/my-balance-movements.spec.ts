@@ -135,6 +135,10 @@ test.describe('Customer movements on /my/balance (#144)', () => {
         expect(allText).toContain('Dobitie kreditu');    // topup
         expect(allText).toContain('Predaj permanentky');  // pass
         expect(allText).toContain('Vstup s permanentkou'); // visit
+        // #149: charge label is unaccented, matching the rest of the app's
+        // Slovak convention (was "Výdaj z kreditu" — mixed diacritics).
+        expect(allText).toContain('Vydaj z kreditu');
+        expect(allText).not.toContain('Výdaj');
 
         // The raw English DB tokens are gone.
         expect(allText).not.toMatch(/\btopup\b/);
