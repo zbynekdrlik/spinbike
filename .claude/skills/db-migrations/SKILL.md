@@ -163,3 +163,30 @@ systemctl status spinbike.service        # prod service
 systemctl status spinbike-dev.service    # dev service
 sudo journalctl -u <service>             # logs
 ```
+
+## DB error type — the query layer returns `DbError`, not `anyhow` (#163)
+
+The `db` query submodules (classes/users/transactions/settings/login_tokens/
+persistent_bookings/reports) return `Result<T, DbError>` — the thiserror enum in
+`crates/spinbike-server/src/db/error.rs`. Only `db/mod.rs`'s startup/infra fns
+(`create_pool`, `create_memory_pool`, `run_migrations`) stay on `anyhow::Result`
+(app boundary; the `Migration v{n} failed` context is load-bearing there).
+
+- **`DbError::from(sqlx::Error)` classifies unique violations** into
+  `DbError::UniqueViolation` (via `db_err.is_unique_violation()` — a provided
+  `DatabaseError` trait method that is callable on the `dyn DatabaseError`
+  receiver WITHOUT importing the trait). Variants: `UniqueViolation`, `NotFound`,
+  `ClassFull`, transparent `DateParse`/`IntParse`/`Sqlx`.
+- **Handling a db error in a route:** the generic path is
+  `.map_err(internal_error)?` (`internal_error(e: impl Display)` takes a DbError
+  for free and logs it → 500, body leaks nothing). To branch on a kind, use
+  `matches!(e, crate::db::DbError::UniqueViolation)`.
+- **GOTCHA — use `crate::db::DbError`, NOT `db::DbError`, in routes.** Route
+  files alias `db` to a SUBMODULE (`use crate::db::classes as db;`), so
+  `db::DbError` resolves to that submodule's private import (E0603 "private").
+  The public re-export lives at `crate::db::DbError`.
+- **When blanket-changing db error types, grep `sqlx::Result` too, not just
+  `use anyhow`** — the layer was a mix; `create_user` was on `sqlx::Result`. And
+  every non-sqlx `?` (chrono `parse_from_str`, `str::parse` for `ParseIntError`)
+  needs a `#[from]` variant on `DbError` or it won't convert. `cargo fmt --all`
+  collapses the `.await` / `?` split left after removing `.context(...)`.
