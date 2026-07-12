@@ -2306,6 +2306,7 @@ dependencies = [
  "lettre",
  "mime_guess",
  "mutants",
+ "password-hash",
  "rand 0.10.2",
  "reqwest",
  "rust-embed",
