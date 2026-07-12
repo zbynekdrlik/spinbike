@@ -229,11 +229,18 @@ mod tests {
         let pool = setup().await;
         let user_id = insert_test_user(&pool, "VU-1 User").await;
         let date = chrono::NaiveDate::from_ymd_opt(2026, 5, 15).unwrap();
+        // Use the real monthly_pass service — a row with valid_until set must be
+        // a monthly-pass charge, which the V20 trigger (#204) now enforces.
+        let pass_svc: i64 =
+            sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         create_transaction_with_valid_until(
             &pool,
             Some(user_id),
             None,
-            Some(1),
+            Some(pass_svc),
             -35.0,
             "charge",
             Some(date),

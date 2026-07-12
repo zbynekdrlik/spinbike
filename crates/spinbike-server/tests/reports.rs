@@ -29,9 +29,11 @@ async fn day_report_aggregates_charges_topups_passes_and_excludes_voided() {
     .await
     .unwrap();
 
-    // One pass sale with valid_until
+    // One pass sale with valid_until — must be a real monthly_pass charge
+    // (the V20 trigger, #204, rejects valid_until on any other shape).
     sqlx::query(
-        "INSERT INTO transactions (user_id, amount, action, valid_until, created_at) VALUES (?1, -35.0, 'charge', date('now','+30 days'), datetime('now'))",
+        "INSERT INTO transactions (user_id, amount, action, service_id, valid_until, created_at) \
+         SELECT ?1, -35.0, 'charge', id, date('now','+30 days'), datetime('now') FROM services WHERE kind = 'monthly_pass' LIMIT 1",
     )
     .bind(card_id)
     .execute(&app.pool)

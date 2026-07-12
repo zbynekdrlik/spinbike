@@ -245,9 +245,11 @@ async fn delete_user_succeeds_with_active_permanentka() {
             .fetch_one(&app.pool)
             .await
             .unwrap();
+    // A real active pass is a 'charge' against the monthly_pass service (the
+    // V20 trigger, #204, rejects valid_until on any other action/service).
     sqlx::query(
         "INSERT INTO transactions(user_id, service_id, amount, action, valid_until)
-         VALUES(?, ?, 35.0, 'topup', ?)",
+         VALUES(?, ?, -35.0, 'charge', ?)",
     )
     .bind(user_id)
     .bind(pass_service)

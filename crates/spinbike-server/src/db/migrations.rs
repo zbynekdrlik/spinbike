@@ -79,6 +79,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "schema_version: checksum column for tamper detection",
         V19_SCHEMA_VERSION_CHECKSUM,
     ),
+    (
+        20,
+        "transactions: enforce active-pass invariant (valid_until => charge + monthly_pass)",
+        V20_ACTIVE_PASS_INVARIANT_TRIGGER,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -764,6 +769,67 @@ const V19_SCHEMA_VERSION_CHECKSUM: &str = r#"
 ALTER TABLE schema_version ADD COLUMN checksum TEXT;
 "#;
 
+// V20: enforce the active-pass invariant at the schema level (#204).
+//
+// The `user_active_pass` view (V18) and everything built on it (my_balance, the
+// door route, staff user lists, negative-balance) treat a row as a monthly pass
+// iff `action='charge' AND service_id = the kind='monthly_pass' service AND
+// valid_until IS NOT NULL`. That "which row even counts as a pass" predicate was
+// an APPLICATION-LEVEL invariant only — nothing at the DB level stopped a future
+// write path from setting valid_until on a non-monthly_pass-charge row, which
+// would then silently VANISH from the view (and thus from every consumer). This
+// is defence-in-depth, not a live-bug fix: verified during #178/#179, 0 of 4671
+// live prod rows violate the invariant, so the trigger has nothing to reject
+// retroactively — it only guards FUTURE inserts.
+//
+// Mechanism — trigger, not CHECK. A same-row CHECK could express
+// `valid_until IS NULL OR action='charge'`, but the cross-table half (the
+// service must be kind='monthly_pass') CANNOT be a CHECK: SQLite forbids
+// subqueries referencing other tables inside a CHECK body. A BEFORE INSERT
+// trigger can, and covers the whole invariant in one place, so we ship the
+// trigger alone rather than pay the table-rebuild cost a redundant CHECK would
+// require (SQLite has no ALTER TABLE ADD CONSTRAINT; adding a CHECK to an
+// existing table means the V8/V11/V16 rebuild dance).
+//
+// INSERT-only is sufficient. The only post-insert writer of valid_until is
+// routes/transactions.rs::patch_valid_until, and it is gated to re-date a row
+// that ALREADY qualifies (it 400s unless the row's valid_until is currently
+// non-NULL — i.e. an existing pass), so it can never introduce a NEW violation;
+// no code path ever UPDATEs `action` or `service_id` on an existing row. A
+// BEFORE INSERT trigger therefore closes every way a violating row could appear.
+//
+// `CREATE TRIGGER` is standalone DDL — NOT an ALTER TABLE — so it does not need
+// the V8/V11/V16 DROP-TABLE + CREATE-new + INSERT + RENAME rebuild pattern, and
+// the `user_active_pass` view does not have to be dropped/recreated here (no
+// table is renamed). The runner executes each migration via `sqlx::raw_sql`, so
+// the semicolons inside the trigger body are parsed by SQLite itself (#73).
+//
+// GOTCHA this trigger INTRODUCES (same class as the V18 view): its body
+// references `services`, so any FUTURE migration that rebuilds `services` OR
+// `transactions` via the DROP-TABLE + CREATE-new + INSERT + RENAME pattern must
+// `DROP TRIGGER enforce_active_pass_invariant` BEFORE the rebuild and re-run
+// this const AFTER the RENAME, inside the same migration transaction — otherwise
+// SQLite reparses the trigger mid-rename and the RENAME fails with "no such
+// table: main.services". Worked pattern: db::migrations::tests::
+// v8_drop_rename_pattern_works_with_fk_child_rows.
+//
+// The `SELECT RAISE(ABORT, ...) WHERE <violation>` idiom aborts the insert only
+// when the WHERE matches (a violation); for a compliant row the SELECT yields no
+// row, RAISE is never evaluated, and the insert proceeds.
+const V20_ACTIVE_PASS_INVARIANT_TRIGGER: &str = r#"
+CREATE TRIGGER IF NOT EXISTS enforce_active_pass_invariant
+BEFORE INSERT ON transactions
+WHEN NEW.valid_until IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'valid_until requires action=charge and a monthly_pass service')
+    WHERE NEW.action != 'charge'
+       OR NOT EXISTS (
+            SELECT 1 FROM services
+            WHERE id = NEW.service_id AND kind = 'monthly_pass'
+       );
+END;
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::MIGRATIONS;
@@ -826,6 +892,17 @@ mod tests {
     async fn v18_user_active_pass_view_is_canonical() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
+
+        // This test asserts the VIEW's own `service_id = monthly_pass` filter by
+        // seeding a deliberately-invalid row (a Spinning charge carrying a
+        // valid_until) and proving the view excludes it. The V20 trigger (#204)
+        // now makes such a row impossible to INSERT — which is the point — so we
+        // drop it for this test's setup to keep exercising the view's predicate
+        // directly. The trigger itself is proven in v20_enforces_active_pass_invariant.
+        sqlx::query("DROP TRIGGER IF EXISTS enforce_active_pass_invariant")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let pass_svc: i64 =
             sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
@@ -920,6 +997,105 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 0, "all passes voided => no active pass");
+    }
+
+    /// V20 (#204): the active-pass invariant is enforced at the schema level by
+    /// a BEFORE INSERT trigger — `valid_until IS NOT NULL` requires
+    /// `action='charge'` AND a `service_id` whose service is `kind='monthly_pass'`.
+    /// This is the core regression guard proving the constraint is real, not
+    /// decorative: every violating INSERT shape must be REJECTED, and the one
+    /// legitimate pass shape (plus any row that leaves valid_until NULL) must
+    /// still be ACCEPTED.
+    #[tokio::test]
+    async fn v20_enforces_active_pass_invariant() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v20@x','V20','customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let pass_svc: i64 =
+            sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let spin_svc: i64 =
+            sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        // (1) valid_until with a non-'charge' action -> REJECTED.
+        let bad_action = sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until)
+             VALUES (?, ?, 0.0, 'visit', '2099-12-31')",
+        )
+        .bind(uid)
+        .bind(pass_svc)
+        .execute(&pool)
+        .await;
+        assert!(
+            bad_action.is_err(),
+            "valid_until with action != 'charge' must be rejected by the trigger"
+        );
+
+        // (2) valid_until on a non-monthly_pass service (Spinning) -> REJECTED.
+        let bad_service = sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until)
+             VALUES (?, ?, -5.0, 'charge', '2099-12-31')",
+        )
+        .bind(uid)
+        .bind(spin_svc)
+        .execute(&pool)
+        .await;
+        assert!(
+            bad_service.is_err(),
+            "valid_until on a non-monthly_pass service must be rejected by the trigger"
+        );
+
+        // (3) valid_until with a NULL service_id -> REJECTED (no monthly_pass match).
+        let bad_null_service = sqlx::query(
+            "INSERT INTO transactions (user_id, amount, action, valid_until)
+             VALUES (?, -5.0, 'charge', '2099-12-31')",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await;
+        assert!(
+            bad_null_service.is_err(),
+            "valid_until with a NULL service_id must be rejected by the trigger"
+        );
+
+        // (4) the one legitimate pass shape (charge + monthly_pass + valid_until) -> ACCEPTED.
+        let good_pass = sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until)
+             VALUES (?, ?, -35.0, 'charge', '2099-12-31')",
+        )
+        .bind(uid)
+        .bind(pass_svc)
+        .execute(&pool)
+        .await;
+        assert!(
+            good_pass.is_ok(),
+            "a valid monthly-pass charge with valid_until must be accepted"
+        );
+
+        // (5) an ordinary non-pass row (valid_until NULL) -> ACCEPTED (trigger does not fire).
+        let normal_spin_charge = sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action)
+             VALUES (?, ?, -5.0, 'charge')",
+        )
+        .bind(uid)
+        .bind(spin_svc)
+        .execute(&pool)
+        .await;
+        assert!(
+            normal_spin_charge.is_ok(),
+            "a non-pass row leaving valid_until NULL must be unaffected by the trigger"
+        );
     }
 
     #[tokio::test]
@@ -1211,14 +1387,19 @@ mod tests {
             .unwrap();
         let mut tx = conn.begin().await.unwrap();
 
-        // V18's `user_active_pass` VIEW references `services`. SQLite validates
-        // a dependent view's stored SQL during ALTER TABLE ... RENAME, so a
-        // DROP+RENAME rebuild of `services` fails once the view exists ("no
-        // such table: main.services") unless the view is dropped first and
-        // recreated after. Any FUTURE real migration that needs this same
-        // rebuild pattern on `services` (or `transactions`, which the view also
-        // references) MUST do the same — this test simulates that requirement.
+        // V18's `user_active_pass` VIEW *and* V20's `enforce_active_pass_invariant`
+        // TRIGGER both reference `services`. SQLite reparses every dependent
+        // object's stored SQL during ALTER TABLE ... RENAME, so a DROP+RENAME
+        // rebuild of `services` fails once either exists ("no such table:
+        // main.services") unless BOTH are dropped first and recreated after. Any
+        // FUTURE real migration that needs this same rebuild pattern on `services`
+        // (or `transactions`, which the view AND the trigger also reference) MUST
+        // do the same — this test simulates that requirement.
         sqlx::query("DROP VIEW user_active_pass")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("DROP TRIGGER IF EXISTS enforce_active_pass_invariant")
             .execute(&mut *tx)
             .await
             .unwrap();
@@ -1251,9 +1432,13 @@ mod tests {
             .execute(&mut *tx)
             .await
             .unwrap();
-        // Recreate the view dropped above, mirroring how a real future
-        // migration must re-attach it after rebuilding `services`.
+        // Recreate the view AND trigger dropped above, mirroring how a real
+        // future migration must re-attach both after rebuilding `services`.
         sqlx::raw_sql(super::V18_USER_ACTIVE_PASS_VIEW)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::raw_sql(super::V20_ACTIVE_PASS_INVARIANT_TRIGGER)
             .execute(&mut *tx)
             .await
             .unwrap();
@@ -1561,6 +1746,20 @@ mod tests {
         use crate::db::{create_memory_pool, run_migrations};
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
+
+        // One seed pattern (id 1003: action='debit' with valid_until set) is a
+        // legacy invariant-VIOLATING row — exactly the shape V12 exists to
+        // normalize. In the real upgrade V12 ran BEFORE the V20 trigger (#204)
+        // existed, so those legacy rows predate the trigger. This test force-
+        // re-runs V12 in an environment where V20 is already applied, so we drop
+        // the trigger to reproduce that pre-V20 world and seed the legacy row.
+        // (The other seeds leave valid_until NULL, so the trigger never fires on
+        // them anyway.) The trigger's own behaviour is proven in
+        // v20_enforces_active_pass_invariant.
+        sqlx::query("DROP TRIGGER IF EXISTS enforce_active_pass_invariant")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         // Seed one row of every pattern from the spec mutation table.
         // Insert raw legacy-shape rows post-migration, then force V12 to
@@ -2678,9 +2877,11 @@ mod tests {
             "test setup: schema_version must not have a checksum column yet"
         );
 
-        // Deploy the new binary: run_migrations should apply ONLY V19 (add
-        // the column via ALTER), then backfill checksums for all 19
-        // versions — no error.
+        // Deploy the new binary: run_migrations applies the outstanding
+        // migrations from v19 up (V19 adds the checksum column via ALTER; any
+        // later versions follow), then backfills checksums for every registered
+        // migration — no error. The assertions below iterate all of MIGRATIONS
+        // dynamically, so they stay correct as new versions are appended.
         run_migrations(&pool).await.unwrap();
 
         let cols_after: Vec<(String,)> =
