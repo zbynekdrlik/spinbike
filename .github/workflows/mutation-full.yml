@@ -54,10 +54,15 @@ jobs:
 
       - name: Create placeholder dist for rust-embed
         run: |
-          mkdir -p spinbike-ui/dist
+          mkdir -p spinbike-ui/dist/assets
           # Non-empty placeholder so static-file integration tests can assert
           # the handler returns content (distinguishing from Default::default()).
           echo "<!doctype html><title>spinbike-test</title>" > spinbike-ui/dist/index.html
+          # #212: sw.js/assets/manifest.json placeholders — see ci.yml's
+          # identical `test` job step for why these are needed.
+          echo "// placeholder service worker" > spinbike-ui/dist/sw.js
+          echo "// placeholder hashed asset" > spinbike-ui/dist/assets/app-abc123.js
+          echo '{"name":"spinbike-test"}' > spinbike-ui/dist/manifest.json
 
       - name: Run full-tree cargo-mutants (shard ${{ matrix.shard }}/8)
         id: mutants

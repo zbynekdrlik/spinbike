@@ -108,10 +108,17 @@ jobs:
 
       - name: Create placeholder dist for rust-embed
         run: |
-          mkdir -p spinbike-ui/dist
+          mkdir -p spinbike-ui/dist/assets
           # Non-empty placeholder so static-file integration tests can assert
           # the handler returns content (distinguishing from Default::default()).
           echo "<!doctype html><title>spinbike-test</title>" > spinbike-ui/dist/index.html
+          # #212: sw.js/assets/manifest.json placeholders so static_files.rs
+          # integration tests can assert real Cache-Control header behavior
+          # (Asset::get requires the file to actually exist on disk in debug
+          # builds — rust-embed has no compiled-in fallback for a missing path).
+          echo "// placeholder service worker" > spinbike-ui/dist/sw.js
+          echo "// placeholder hashed asset" > spinbike-ui/dist/assets/app-abc123.js
+          echo '{"name":"spinbike-test"}' > spinbike-ui/dist/manifest.json
 
       - name: Run tests
         run: cargo test -p spinbike-core -p spinbike-server
@@ -341,10 +348,15 @@ jobs:
 
       - name: Create placeholder dist for rust-embed
         run: |
-          mkdir -p spinbike-ui/dist
+          mkdir -p spinbike-ui/dist/assets
           # Non-empty placeholder so static-file integration tests can assert
           # the handler returns content (distinguishing from Default::default()).
           echo "<!doctype html><title>spinbike-test</title>" > spinbike-ui/dist/index.html
+          # #212: sw.js/assets/manifest.json placeholders — see the `test` job's
+          # identical step above for why these are needed.
+          echo "// placeholder service worker" > spinbike-ui/dist/sw.js
+          echo "// placeholder hashed asset" > spinbike-ui/dist/assets/app-abc123.js
+          echo '{"name":"spinbike-test"}' > spinbike-ui/dist/manifest.json
 
       - name: Compute diff vs main
         # On a dev push github.base_ref is empty, so pin the base to origin/main
