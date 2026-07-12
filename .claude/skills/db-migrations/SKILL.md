@@ -258,3 +258,30 @@ valid_until       >  datetime('now')  -- ❌ off-by-one on the expiry day
 - Day-boundary basis is **UTC** (`date('now')`). Open question #205: should it be
   the gym's LOCAL day (Europe/Bratislava)? — must stay consistent across the
   charger, door, and my_balance if changed.
+
+## `#[derive(sqlx::FromRow)]` matches columns by NAME, not position (#164)
+
+This codebase has zero `#[sqlx(rename = ...)]` attributes anywhere, so every
+`FromRow` struct's default derive decodes each field via
+`Row::try_get("field_name")` — a NAME lookup against the query's result set,
+not a positional one. Proven from an existing query that predates #164:
+`users_by_last_movement`'s `SELECT u.id, u.name, u.card_code,
+u.allow_self_entry, MAX(t.created_at) AS last_movement_at` lists
+`allow_self_entry` BEFORE the `last_movement_at` alias, while
+`UserByMovementRow`'s field order is `id, name, card_code,
+last_movement_at, allow_self_entry` — the mismatch already worked correctly
+before #164, which only makes sense under name-based matching.
+
+**Consequence when writing an explicit-column `SELECT`** (replacing a
+`SELECT *`, or writing a new query into an existing `FromRow` struct):
+column ORDER in the SQL does not need to match the struct's field
+declaration order — only that every struct field has a same-named column
+(or `AS alias`) somewhere in the result set. Missing one is a runtime
+"column not found" decode error (loud, not a silent field-shift), which is
+exactly the failure mode #164 hardened every `SELECT *` site against. When
+converting one, cross-check the struct's field list against the table's
+CREATE/ALTER migration history (a field can be added by a LATER migration
+than the table's original `CREATE TABLE`), not just the original schema —
+`UserRow`'s `deleted_at`/`allow_self_entry` and `bookings`'s
+`charged_at`/`charge_transaction_id` were both added by later `ALTER TABLE`
+statements.
