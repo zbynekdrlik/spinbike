@@ -227,20 +227,24 @@ async fn open(
             // service kind='monthly_pass' AND deleted_at IS NULL` and picks the
             // latest non-voided pass, so this site inherits the voided-pass fix
             // for free. Inclusive last-day semantics mirror the charger EXACTLY:
-            // `date(valid_until) >= date('now')` coerces the (bare-date)
-            // valid_until and today's date to a calendar-date compare, so a pass
-            // covers the WHOLE of its last paid day. The previous
-            // `valid_until > datetime('now')` compared a 10-char bare date
-            // against a 19-char datetime and, via SQLite's byte-wise TEXT
-            // ordering, read the expiry day as already-expired — charging the
-            // customer a single entry on a day their pass still covered (#179).
+            // `date(valid_until) >= ?` coerces the (bare-date) valid_until and
+            // compares it against today's GYM-LOCAL date, so a pass covers the
+            // WHOLE of its last paid day. `valid_until > datetime('now')` (pre
+            // #179) read the expiry day as already-expired via SQLite's
+            // byte-wise TEXT ordering — charging the customer on a day their
+            // pass still covered. The day boundary is now the gym's local
+            // midnight (Europe/Bratislava) via `util::today_bratislava()`, bound
+            // as a parameter — NOT SQLite's UTC `date('now')`, which near local
+            // midnight is up to 2h off from the gym's day (#205).
+            let today = crate::util::today_bratislava();
             sqlx::query_scalar(
                 "SELECT 1 FROM user_active_pass \
                  WHERE user_id = ? \
-                   AND date(valid_until) >= date('now') \
+                   AND date(valid_until) >= ? \
                  LIMIT 1",
             )
             .bind(user_id)
+            .bind(today)
             .fetch_optional(&mut *tx)
             .await
             .map_err(internal_error)?

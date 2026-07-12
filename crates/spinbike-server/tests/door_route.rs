@@ -193,17 +193,21 @@ async fn first_of_day_pass_expiring_today_grants_entry_without_charge() {
         .await
         .unwrap();
 
-    // Seed a monthly pass whose valid_until is EXACTLY today, as a bare date.
+    // Seed a monthly pass whose valid_until is EXACTLY today at the gym
+    // (Europe/Bratislava) — the SAME basis the door route now uses (#205), so
+    // this can't flake near local midnight on a UTC CI runner (where SQLite's
+    // `date('now')` would be a day behind the gym's date).
     let svc_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
         .fetch_one(&app.pool)
         .await
         .unwrap();
     sqlx::query(
         "INSERT INTO transactions (user_id, service_id, amount, action, valid_until) \
-         VALUES (?, ?, -35.0, 'charge', date('now'))",
+         VALUES (?, ?, -35.0, 'charge', ?)",
     )
     .bind(app.customer_id)
     .bind(svc_id)
+    .bind(spinbike_server::util::today_bratislava())
     .execute(&app.pool)
     .await
     .unwrap();

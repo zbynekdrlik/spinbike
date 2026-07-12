@@ -500,3 +500,25 @@ For a server timestamp you need converted UTC→Bratislava (not just the date),
 use the now-`pub` `i18n::parse_to_local(&str) -> Option<DateTime<Tz>>` (DST-aware,
 handles fractional-seconds + legacy MS-Access forms), then `.date_naive()` /
 format off it — don't hand-roll the `from_utc_datetime` conversion.
+
+## GOTCHA: the UI CI gate is `clippy --target wasm32 -D warnings` — `Test (UI)` passing does NOT mean the build passes
+
+`Build WASM (UI)` runs `cargo clippy --manifest-path spinbike-ui/Cargo.toml
+--all-targets --target wasm32-unknown-unknown -- -D warnings` BEFORE `trunk
+build`. So a clippy LINT (not just a compile error) fails the whole UI build —
+and `Test (UI)` (`wasm-pack test --node`) can go GREEN on the same commit
+because it only *compiles* the lib, it doesn't run clippy. Under the Tier-0
+no-local-builds policy you cannot run clippy locally (only `cargo fmt --all
+--check` + `cd e2e && npx tsc --noEmit`), so these lints surface ONLY on CI and
+cost a full ~15-min cycle. Write clippy-clean UI Rust the first time:
+
+- **`clippy::collapsible_if`** — nested `if A { if let Some(x) = y { … } }` must be
+  a let-chain: `if A && let Some(x) = y { … }` (edition 2024 UI, let-chains are
+  supported — see `components::install_prompt.rs`, `api.rs`). This is the exact
+  lint that failed #143's first UI push.
+- Same for the other default `-D warnings` lints (`needless_return`,
+  `redundant_clone`, `let_and_return`, …) — the UI is held to `-D warnings`, so
+  any warning is a hard build failure.
+- Multi-root `view! { <A/> {closure} }` (a fragment / tuple view) IS valid and
+  compiles — if `Test (UI)` compiled it, `trunk build` will too. The wasm32
+  clippy pass is the ONLY extra gate `trunk build` adds over `wasm-pack test`.

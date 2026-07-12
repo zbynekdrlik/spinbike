@@ -8,8 +8,11 @@ use anyhow::Result;
 use sqlx::SqlitePool;
 
 pub async fn tick(pool: &SqlitePool) -> Result<usize> {
-    let now_s = chrono::Local::now()
-        .naive_local()
+    // Gym-local wall clock (Europe/Bratislava), NOT `chrono::Local` — the
+    // charging window is a gym-local concept and must not depend on the server
+    // process's OS/TZ configuration (#205). `now_bratislava()` derives it from
+    // the named IANA zone, so DST is handled automatically.
+    let now_s = crate::util::now_bratislava()
         .format("%Y-%m-%d %H:%M:%S")
         .to_string();
     tick_as_of(pool, &now_s).await
@@ -72,7 +75,14 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
         .await?;
 
         // A pass covers a booking when it is still valid ON the booking's date
-        // (valid_until is inclusive of the last day).
+        // (valid_until is inclusive of the last day). Both sides are bare
+        // `YYYY-MM-DD` calendar dates already fixed in gym-local terms — the
+        // pass's `valid_until` and the class booking's own `date` — so this is
+        // an apples-to-apples calendar-date compare with NO "today"/`date('now')`
+        // involved. The gym-local-day boundary that #205 fixes therefore does
+        // not touch this comparison; it only affects the "today"-relative pass
+        // checks (door, my_balance, log_visit) which now use
+        // `util::today_bratislava()`.
         let has_pass = match &pass_valid_until {
             Some(s) => s.as_str() >= date.as_str(),
             None => false,
