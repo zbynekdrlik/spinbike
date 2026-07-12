@@ -779,6 +779,20 @@ fn month_first(y: i32, m: u32) -> chrono::NaiveDate {
     chrono::NaiveDate::from_ymd_opt(y, m, 1).expect("first of month is always a valid date")
 }
 
+/// The first day of the month AFTER the one containing `day` (December rolls
+/// over to January of the next year). Split out as a pure fn so the year-
+/// rollover boundary is unit-testable — the stats handler derives `today` from
+/// the live wall clock, so its December branch is otherwise unreachable in a
+/// test (and its mutants survive).
+fn next_month_first(day: chrono::NaiveDate) -> chrono::NaiveDate {
+    use chrono::Datelike;
+    if day.month() == 12 {
+        month_first(day.year() + 1, 1)
+    } else {
+        month_first(day.year(), day.month() + 1)
+    }
+}
+
 async fn user_stats(
     State(state): State<AppState>,
     _: StaffUser,
@@ -805,12 +819,8 @@ async fn user_stats(
     let month_start_utc =
         |y: i32, m: u32| fmt(crate::util::bratislava_day_range_utc(month_first(y, m)).0);
     let month_start = month_start_utc(today.year(), today.month());
-    let (next_month_y, next_month_m) = if today.month() == 12 {
-        (today.year() + 1, 1)
-    } else {
-        (today.year(), today.month() + 1)
-    };
-    let month_end = month_start_utc(next_month_y, next_month_m);
+    let next_first = next_month_first(today);
+    let month_end = month_start_utc(next_first.year(), next_first.month());
     let year_start = month_start_utc(today.year(), 1);
     let year_end = month_start_utc(today.year() + 1, 1);
 
@@ -1091,6 +1101,40 @@ async fn free_user_email_route(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `next_month_first` drives the stats chart's `this_month` UPPER boundary
+    /// (`month_end`). The handler's `today` is the live wall clock, so its
+    /// December year-rollover branch is unreachable in an integration test —
+    /// these fixed-date unit tests pin every arm (kills the `== 12` / `year + 1`
+    /// / `month + 1` boundary mutants that survived otherwise).
+    #[test]
+    fn next_month_first_within_year() {
+        use chrono::NaiveDate;
+        assert_eq!(
+            next_month_first(NaiveDate::from_ymd_opt(2026, 7, 15).unwrap()),
+            NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(),
+            "July → August, same year"
+        );
+        assert_eq!(
+            next_month_first(NaiveDate::from_ymd_opt(2026, 11, 30).unwrap()),
+            NaiveDate::from_ymd_opt(2026, 12, 1).unwrap(),
+            "November → December, same year (kills month+1 mutants)"
+        );
+    }
+
+    #[test]
+    fn next_month_first_rolls_over_at_december() {
+        use chrono::NaiveDate;
+        assert_eq!(
+            next_month_first(NaiveDate::from_ymd_opt(2026, 12, 10).unwrap()),
+            NaiveDate::from_ymd_opt(2027, 1, 1).unwrap(),
+            "December → January of the NEXT year (kills the == 12 branch and year+1 mutants)"
+        );
+        assert_eq!(
+            next_month_first(NaiveDate::from_ymd_opt(2026, 12, 31).unwrap()),
+            NaiveDate::from_ymd_opt(2027, 1, 1).unwrap()
+        );
+    }
 
     #[test]
     fn default_search_limit_is_ten() {
