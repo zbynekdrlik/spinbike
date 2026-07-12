@@ -316,12 +316,91 @@ rewrite (the root-bundle regression).
 network-first'd `/` + `*.html`, so any SPA route got cache-first-pinned FOREVER
 on its first-visited version (reproduced live #201: `/login` stuck on `.65` while
 prod served `.71`). If you see a route stuck on an old version now, it is NOT this
-bug — suspect either profile-staleness (below) or **#212**: Cloudflare edge-caches
-`/sw.js` itself for 4h (`cf-cache-status: HIT`, `max-age=14400`), so a NEW SW
-script reaches users only within CF's ≤4h TTL (HTML + `manifest.json` are CF
-`DYNAMIC`, so page freshness is immediate; only the SW-script update lags). To
-force the new SW for verification, unregister + re-navigate (below) or purge CF's
-`/sw.js`.
+bug — suspect either profile-staleness (below) or the (also now fixed) **#212**
+CDN-caching issue described in the next section.
+
+## `/sw.js` needs BOTH an origin `Cache-Control` header AND a Cloudflare Cache Rule — neither alone is enough on the Free plan (#212)
+
+`/sw.js` used to be served with **no** `Cache-Control` header at all
+(`static_handler` in `crates/spinbike-server/src/routes/static_files.rs` only
+special-cased `assets/`-prefixed hashed files). Cloudflare's default
+extension-based edge caching then applied its own `max-age=14400` (4h) to it —
+confirmed live: `cf-cache-status: HIT`, `age` climbing toward 14400. A NEW SW
+script (including SW-logic fixes like #208) could take up to 4h to reach real
+users after a deploy.
+
+**Fix has TWO layers, both required — this is the non-obvious part:**
+
+1. **Origin header** — `static_handler` now special-cases the exact path
+   `sw.js` (an `else if` sibling of the `assets/` branch) and sets
+   `Cache-Control: no-cache` (not `no-store` — `no-cache` still permits cheap
+   ETag/conditional-GET revalidation; `no-store` would forbid caching
+   entirely and gains nothing here). `manifest.json` and HTML documents are
+   deliberately untouched — they were already `cf-cache-status: DYNAMIC` on
+   prod (Cloudflare doesn't classify them as cacheable by extension), so they
+   never needed this.
+2. **Cloudflare Cache Rule** — on the **Free "Website" plan**, a zone has NO
+   "respect origin Cache-Control" toggle (that's Enterprise-only). Both
+   zones this app is served from (`spinbike.sk` and the shared
+   `newlevel.media` zone, which also carries `spinbike-dev.newlevel.media`)
+   have a fixed `browser_cache_ttl = 14400` zone setting that Cloudflare
+   injects into the EDGE response for any extension it classifies as
+   cacheable (`.js` included) — **regardless of what the origin sends**.
+   Verified live: even after the origin fix deployed, `curl spinbike.sk/sw.js`
+   kept cycling `cf-cache-status: EXPIRED`/`HIT` with `cache-control:
+   max-age=14400` in the response, completely ignoring the origin's
+   `no-cache`. The origin header change alone does NOT stop Free-plan edge
+   caching for a normally-cacheable extension.
+
+   The fix: a **Cache Rule** (the modern Rulesets-API replacement for Page
+   Rules — the legacy Page Rules REST endpoint (`/zones/{id}/pagerules`)
+   rejects account-owned API tokens with `code 1011`, so use Rulesets)
+   bypassing cache entirely for `/sw.js`, which makes Cloudflare treat it
+   exactly like the already-`DYNAMIC` `manifest.json`/HTML paths — origin
+   headers pass through untouched, never edge-cached:
+   ```bash
+   # mint a scoped token (account master token can only MINT tokens, not use them
+   # directly — see reference_spinbike_infra_creds.md memory) with Zone Read +
+   # Zone/Cache Settings Read+Write + Cache Purge, then:
+   curl -X PUT "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/rulesets/phases/http_request_cache_settings/entrypoint" \
+     -H "Authorization: Bearer $SCOPED_TOKEN" -H "Content-Type: application/json" \
+     --data '{"name":"default","rules":[{
+       "expression":"(http.request.uri.path eq \"/sw.js\")",
+       "action":"set_cache_settings",
+       "action_parameters":{"cache": false}
+     }]}'
+   # then purge the already-cached copy once:
+   curl -X POST "https://api.cloudflare.com/client/v4/zones/$ZONE_ID/purge_cache" \
+     -H "Authorization: Bearer $SCOPED_TOKEN" -H "Content-Type: application/json" \
+     --data '{"files":["https://spinbike.sk/sw.js"]}'
+   ```
+   `PUT .../entrypoint` REPLACES the whole cache-settings-phase ruleset for
+   the zone — always `GET` it first to check for pre-existing rules before
+   overwriting (both zones here had none for this phase, confirmed via a 404
+   `"could not find entrypoint ruleset"` before creating it). On the shared
+   `newlevel.media` zone (hosts unrelated services too — bakerion-ai,
+   presenter, codex-bridge, etc.), scope the expression by hostname as well
+   (`and (http.host eq "spinbike.newlevel.media" or http.host eq
+   "spinbike-dev.newlevel.media")`) so the rule can't affect another
+   service's `/sw.js`. **This CDN config lives ONLY in the Cloudflare zones —
+   it is NOT in git.** If a future change ever needs to touch it again, the
+   two zone IDs are `048113ccaacb5872c9af2df65eb5f0c8` (spinbike.sk) and
+   `b9019ca528e573e62c2a110a45f45c74` (newlevel.media); mint a fresh scoped
+   token each time (temp tokens used for #212 were revoked after use — don't
+   leave a standing Cache-Settings-Write token lying around).
+
+**Verifying it actually worked** needs BOTH the origin AND the edge check —
+checking only one can lie:
+```bash
+curl -sD- -o /dev/null https://spinbike.sk/sw.js | grep -iE 'cache-control|cf-cache-status'
+# want: cache-control: no-cache  AND  cf-cache-status: DYNAMIC (never HIT/EXPIRED)
+```
+If `cf-cache-status` still cycles `HIT`/`EXPIRED`, the Cache Rule is missing
+or hasn't propagated (propagation is fast, seconds — if it's still wrong after
+~30s, check the rule actually saved: `GET
+.../rulesets/phases/http_request_cache_settings/entrypoint`). If
+`cache-control` is missing entirely, the ORIGIN fix (the code) isn't deployed
+yet — separate problem, redeploy.
 
 Separately (pure profile staleness — a long-lived MCP profile carrying a stale
 SW registration, unrelated to the fixed #208 strategy): a **long-lived Playwright
