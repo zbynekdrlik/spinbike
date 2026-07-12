@@ -3,6 +3,51 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-07-12 — #167 (tokio-tungstenite sub-item, 3/3): bump 0.24 → 0.30 — CLOSES #167
+
+- **Issue:** [#167](https://github.com/zbynekdrlik/spinbike/issues/167) —
+  dependency-currency epic. FINAL of 3 sub-items (rand + leptos already
+  merged) → this PR carried `Closes #167`; issue now CLOSED.
+- **Validated first:** re-derived the pins live (workspace `Cargo.toml`
+  `tokio-tungstenite = "0.24"`), confirmed latest stable = **0.30.0** via
+  crates.io API, and read the tungstenite changelog 0.24→0.30 — the ONLY
+  breaking change touching this code is 0.26's Message payload overhaul
+  (`Message::Text` → `Utf8Bytes`, `Binary/Ping/Pong` → `Bytes`). Features
+  (`rustls-tls-native-roots`, `connect`) unchanged in 0.30; no
+  connect_async/TLS/crypto-provider change.
+- **Change:** pin `0.24`→`0.30`; three outbound `Message::Text(<String>)`
+  sites in `ewelink/ws.rs` (userOnline, door update-press, keepalive ping)
+  wrapped `.into()`; two mock-server test sites in `tests/ewelink_ws.rs`
+  same. Received text derefs to `&str` (unchanged); Ping→Pong echo
+  `Bytes→Bytes` (unchanged). `Cargo.lock` refreshed via
+  `cargo update -p tokio-tungstenite@0.24.0 --precise 0.30.0` (metadata-only).
+- **Unrelated compile break fixed (see ci-deploy skill):** the bump dropped
+  the last transitive consumer of rand 0.8, which was silently enabling
+  `rand_core 0.6/getrandom` via feature-unification → `auth/mod.rs`'s
+  `argon2::password_hash::rand_core::OsRng` stopped resolving (E0432).
+  Fixed by declaring `password-hash = { features = ["getrandom"] }` on the
+  server explicitly. Existing `password_hash_and_verify()` test proves it.
+- **No RED→GREEN** — not a bug fix, zero behavior change; existing
+  `ewelink_ws.rs` round-trip tests (green) prove wire semantics unchanged.
+- **Commits:** `a24485c` (bump dev.86), `970fab5` (tungstenite + tests +
+  lock), `812c8d9` (password-hash getrandom fix). PR
+  [#220](https://github.com/zbynekdrlik/spinbike/pull/220), merged
+  `2905590`. Dev + main CI green incl. all 8 mutation shards, E2E,
+  Deploy+Smoke (prod).
+- **Review:** one focused senior inline pass (tiny mechanical diff, CI
+  covered the real risk) — 0 🔴 0 🟡 0 🔵.
+- **Verified LIVE on prod (v0.15.0-dev.86, `https://spinbike.sk`):** version
+  DOM = backend `/api/version` = deployed, 0 console errors. **Real door
+  actuation:** new binary's log shows `ewelink: WS connected + handshake ok`
+  (tungstenite 0.30 TLS handshake + userOnline round-trip OK); synthetic
+  staff `POST /api/door/open` → `200 {"status":"opened"}`, `/api/door/health`
+  `last_ack_ms_ago` null→2033 — device `error:0` ack received+parsed on 0.30.
+  Physical Sonoff relay buzz is user-only-observable; cloud ack is the proof.
+  Synthetic user + tx cleaned up.
+- **Playbook:** added the "dep bump drops a transitively-provided Cargo
+  FEATURE → breaks an unrelated module" gotcha + the safe prod door-actuation
+  test recipe to `ci-deploy/SKILL.md`.
+
 ## 2026-07-12 — #167 (leptos sub-item): bump leptos 0.7 → 0.8
 
 - **Issue:** [#167](https://github.com/zbynekdrlik/spinbike/issues/167) —

@@ -190,8 +190,17 @@ pub async fn patch<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> R
 #[derive(Default, Clone, PartialEq, Debug)]
 pub struct ApiError {
     pub message: String,
+    /// The server's machine-readable `error_code` (#158), when present — lets a
+    /// render site branch on the error kind (e.g. the #143 deleted-email
+    /// conflict) instead of matching on human text.
+    pub code: Option<spinbike_core::errors::ErrorCode>,
     pub conflict_name: Option<String>,
     pub conflict_card: Option<String>,
+    /// #143: id of the SOFT-DELETED account holding the submitted email — the
+    /// target of the restore / free-email resolution actions.
+    pub conflict_id: Option<i64>,
+    /// #143: when the colliding account was soft-deleted (raw server string).
+    pub conflict_deleted_at: Option<String>,
 }
 
 impl ApiError {
@@ -201,6 +210,23 @@ impl ApiError {
             ..Default::default()
         }
     }
+
+    /// #143: if this error is the soft-deleted-email conflict
+    /// (`email_belongs_to_deleted_account` WITH a `conflict_id`), return the
+    /// archived account's `(id, name, deleted_at)` so the caller can raise the
+    /// restore / free-email resolution dialog. `None` for any other error.
+    pub fn deleted_email_conflict(&self) -> Option<(i64, String, Option<String>)> {
+        if self.code == Some(spinbike_core::errors::ErrorCode::EmailBelongsToDeletedAccount)
+            && let Some(id) = self.conflict_id
+        {
+            return Some((
+                id,
+                self.conflict_name.clone().unwrap_or_default(),
+                self.conflict_deleted_at.clone(),
+            ));
+        }
+        None
+    }
 }
 
 pub async fn put_json<B: Serialize, T: DeserializeOwned>(
@@ -209,6 +235,34 @@ pub async fn put_json<B: Serialize, T: DeserializeOwned>(
 ) -> Result<T, ApiError> {
     let url = format!("{}{}", base_url(), path);
     let req = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::PUT))
+        .json(body)
+        .map_err(|e| ApiError::msg(e.to_string()))?;
+
+    let resp = req.send().await.map_err(|e| ApiError::msg(e.to_string()))?;
+
+    if !resp.ok() {
+        if handle_unauthorized(resp.status(), get_token().is_some()) {
+            return Err(ApiError::msg(session_expired_message()));
+        }
+        let text = resp.text().await.unwrap_or_default();
+        return Err(extract_api_error(&text, resp.status()));
+    }
+
+    resp.json::<T>()
+        .await
+        .map_err(|e| ApiError::msg(e.to_string()))
+}
+
+/// Like [`post`], but the `Err` is the richer [`ApiError`] (carrying the
+/// server's `error_code` and the `conflict_*` identity fields) instead of a
+/// bare `String`. Used by the create path so it can detect the #143
+/// soft-deleted-email conflict and offer the restore / free-email resolution.
+pub async fn post_json<B: Serialize, T: DeserializeOwned>(
+    path: &str,
+    body: &B,
+) -> Result<T, ApiError> {
+    let url = format!("{}{}", base_url(), path);
+    let req = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::POST))
         .json(body)
         .map_err(|e| ApiError::msg(e.to_string()))?;
 
@@ -340,21 +394,35 @@ fn extract_coded_error(body: &str, status: u16) -> CodedError {
     CodedError { code, message }
 }
 
-/// Like [`extract_error`] but also pulls the optional `conflict_name` /
-/// `conflict_card` fields the server attaches to a 409 email-collision for
-/// staff/admin callers, so the UI can name the account that holds the email.
+/// Like [`extract_error`] but also pulls the optional `error_code` and the
+/// `conflict_*` fields the server attaches to a 409 email-collision: the
+/// `conflict_name` / `conflict_card` for a LIVE collision (staff/admin only),
+/// and the `conflict_id` / `conflict_deleted_at` for the #143 soft-deleted
+/// case, so the UI can name the account and offer restore / free-email.
 fn extract_api_error(body: &str, status: u16) -> ApiError {
     #[derive(serde::Deserialize)]
     struct ErrBody {
         error: Option<String>,
+        error_code: Option<String>,
         conflict_name: Option<String>,
         conflict_card: Option<String>,
+        conflict_id: Option<i64>,
+        conflict_deleted_at: Option<String>,
     }
     if let Ok(e) = serde_json::from_str::<ErrBody>(body) {
+        // Decode error_code defensively (unknown string → None), same as
+        // extract_error_parts — version skew must not lose the human message.
+        let code = e
+            .error_code
+            .as_deref()
+            .and_then(|c| serde_json::from_value(serde_json::Value::String(c.to_string())).ok());
         return ApiError {
             message: e.error.unwrap_or_else(|| request_failed_message(status)),
+            code,
             conflict_name: e.conflict_name,
             conflict_card: e.conflict_card,
+            conflict_id: e.conflict_id,
+            conflict_deleted_at: e.conflict_deleted_at,
         };
     }
     ApiError::msg(request_failed_message(status))

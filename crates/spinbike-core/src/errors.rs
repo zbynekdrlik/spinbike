@@ -50,6 +50,12 @@ pub enum ErrorCode {
     NoActiveMonthlyPass,
     MonthlyPassExists,
     UserAlreadyDeleted,
+    /// The submitted email is held by a SOFT-DELETED account (#143). Unlike
+    /// `EmailConflict` (a live collision) this is RESOLVABLE by the staff UI:
+    /// restore the old account, or free its email. The body carries the
+    /// archived account's identity (`conflict_id` / `conflict_name` /
+    /// `conflict_deleted_at`).
+    EmailBelongsToDeletedAccount,
     // --- 400 Bad Request (the human message carries the specifics) ---
     BadRequest,
     // --- 503 Service Unavailable ---
@@ -94,6 +100,7 @@ impl ErrorCode {
             }
             ErrorCode::MonthlyPassExists => "a monthly_pass service already exists",
             ErrorCode::UserAlreadyDeleted => "User already deleted",
+            ErrorCode::EmailBelongsToDeletedAccount => "This email belongs to a deleted account",
             ErrorCode::BadRequest => "Bad request",
             ErrorCode::MailNotConfigured => "mail_not_configured",
             ErrorCode::Internal => "Internal server error",
@@ -223,6 +230,11 @@ mod tests {
             ErrorCode::UserAlreadyDeleted,
             "user_already_deleted",
             "User already deleted",
+        ),
+        (
+            ErrorCode::EmailBelongsToDeletedAccount,
+            "email_belongs_to_deleted_account",
+            "This email belongs to a deleted account",
         ),
         (ErrorCode::BadRequest, "bad_request", "Bad request"),
         (
