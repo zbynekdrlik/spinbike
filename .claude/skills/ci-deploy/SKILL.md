@@ -205,6 +205,22 @@ zero-behavior-change clippy cleanup) — it's flagged too. Bypass with
 logic; this is legitimate per the rule above, just note the trigger can be
 the BODY, not only the subject.
 
+**Alternative when the commit DOES have real test coverage and genuinely
+isn't a bug fix — skip the bypass entirely by not writing `Closes #N` in
+any COMMIT message (#164).** GitHub only needs `Closes #N`/`Fixes #N` in
+the PR BODY to auto-close an issue on merge — the pre-push hook only scans
+COMMIT messages, never the PR body. So for a mechanical/non-bug-fix change
+(a refactor, a hardening pass, a docs/test-only commit) that still needs
+the PR to close its issue: use a non-`fix`-prefixed type (`refactor:`,
+`chore:`, `test:`, `docs:`) and `Ref #N`/`See #N` (not `Closes`/`Fixes`/
+`Resolves`) in every commit message, then put the real `Closes #N` only in
+`gh pr create --body`. This sidesteps `IS_BUGFIX` entirely — no ordering
+constraint, no `[no-test:]` bypass, no audit-log entry — while GitHub still
+closes the issue on merge exactly as if the commit had said `Closes #N`.
+Only reach for the `[no-test:]` bypass when the commit truly can't carry
+tests (config-only, generated files) or when an OLD unrelated commit in the
+range is what's flagged, per the two entries above.
+
 **Update — the `[no-test: <reason>]` bypass now tolerates a hard-wrapped,
 multi-line reason.** The hook used to grep `$LAST_MSG` per-line with no `-z`,
 so a reason whose opening `[no-test:` and closing `]` landed on DIFFERENT
