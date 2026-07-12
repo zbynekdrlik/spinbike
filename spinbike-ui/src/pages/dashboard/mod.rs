@@ -7,6 +7,7 @@ pub mod action_form;
 pub mod add_person_form;
 pub mod block_button;
 pub mod card_panel;
+pub mod deleted_email_conflict;
 pub mod edit_info_form;
 pub mod helpers;
 pub mod negative_balance_list;

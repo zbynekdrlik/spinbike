@@ -241,6 +241,10 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
         | ErrorCode::NoActiveMonthlyPass
         | ErrorCode::MonthlyPassExists
         | ErrorCode::UserAlreadyDeleted
+        // #143: the staff conflict-resolution dialog builds its own copy from
+        // the conflict fields (name / date) + dedicated i18n keys — no single
+        // localized banner string, so no key here.
+        | ErrorCode::EmailBelongsToDeletedAccount
         | ErrorCode::BadRequest
         | ErrorCode::MailNotConfigured => None,
     }
@@ -933,6 +937,56 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         (
             "Tento email uz pouziva ucet: {}. Jeden email moze patrit len jednemu uctu.",
             "This email is already used by account: {}. One email can belong to only one account.",
+        ),
+    );
+
+    // #143 — soft-deleted-email conflict resolution dialog. When an email is
+    // held by an ARCHIVED (soft-deleted) account, the desk gets a clear message
+    // plus two explicit actions instead of an opaque error.
+    m.insert(
+        "deleted_email_conflict_title",
+        (
+            "Email patri zmazanemu uctu",
+            "Email belongs to a deleted account",
+        ),
+    );
+    // {} = account name, {} = deletion date.
+    m.insert(
+        "deleted_email_conflict_body",
+        (
+            "Tento email uz patri zmazanemu uctu: {} (zmazany {}). Vyber, ako pokracovat:",
+            "This email belongs to a deleted account: {} (deleted {}). Choose how to continue:",
+        ),
+    );
+    // Fallback when the deletion date is unavailable. {} = account name.
+    m.insert(
+        "deleted_email_conflict_body_nodate",
+        (
+            "Tento email uz patri zmazanemu uctu: {}. Vyber, ako pokracovat:",
+            "This email belongs to a deleted account: {}. Choose how to continue:",
+        ),
+    );
+    m.insert("deleted_email_restore", ("Obnovit ucet", "Restore account"));
+    m.insert(
+        "deleted_email_restore_help",
+        (
+            "Vrati povodny zmazany ucet aj s jeho historiou a kreditom. Tvoja rozpracovana zmena sa nedokonci.",
+            "Brings back the original deleted account with its history and credit. Your pending change is not applied.",
+        ),
+    );
+    m.insert("deleted_email_free", ("Uvolnit email", "Free the email"));
+    m.insert(
+        "deleted_email_free_help",
+        (
+            "Odstrani email zo zmazaneho uctu (ten ostane archivovany) a dokonci povodnu akciu.",
+            "Removes the email from the deleted account (it stays archived) and completes the original action.",
+        ),
+    );
+    m.insert(
+        "deleted_email_restored_ok",
+        (
+            "Povodny ucet bol obnoveny.",
+            "The original account was restored.",
         ),
     );
 

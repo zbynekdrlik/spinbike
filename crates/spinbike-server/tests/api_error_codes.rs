@@ -63,15 +63,13 @@ async fn bad_request_carries_generic_code_with_specific_message() {
 }
 
 #[tokio::test]
-async fn create_user_db_unique_fallback_returns_conflict_not_500() {
-    // The create_user pre-check for a duplicate email filters `deleted_at IS
-    // NULL`, but the `email UNIQUE` constraint covers ALL rows (incl.
-    // soft-deleted ones — delete only sets deleted_at, it keeps the email). So
-    // re-using a SOFT-DELETED user's email passes the pre-check yet hits the DB
-    // UNIQUE violation, which the map_err fallback must map to 409
-    // (email_or_card_conflict), NOT a generic 500. This covers that fallback
-    // arm — the only path where the "UNIQUE"/"unique" substring match (a
-    // case-insensitive OR, not AND) actually decides the response.
+async fn create_user_with_soft_deleted_email_returns_resolvable_409_not_500() {
+    // #143: the `email UNIQUE` constraint covers ALL rows (delete only sets
+    // deleted_at, it keeps the email), so re-using a SOFT-DELETED user's email
+    // used to slip past the (deleted-filtered) pre-check and 500 (or return a
+    // generic email_or_card_conflict). It now returns a STRUCTURED, resolvable
+    // 409 naming the archived account (id / name / deleted_at) so the staff UI
+    // can offer restore / free-email — never a 500.
     let app = TestApp::new().await;
     let email = "dup-fallback@test.com";
 
@@ -90,8 +88,8 @@ async fn create_user_db_unique_fallback_returns_conflict_not_500() {
         .await;
     assert_eq!(status, StatusCode::OK, "soft-delete A must succeed");
 
-    // Same email again: pre-check passes (A is soft-deleted), INSERT violates
-    // the email UNIQUE constraint → fallback conflict, not 500.
+    // Same email again: the soft-deleted holder is now surfaced as a resolvable
+    // conflict, not an opaque 500.
     let (status, body) = app
         .request(post_json(
             "/api/users",
@@ -102,9 +100,11 @@ async fn create_user_db_unique_fallback_returns_conflict_not_500() {
     assert_eq!(
         status,
         StatusCode::CONFLICT,
-        "re-using a soft-deleted email must hit the DB-unique fallback (409), got {status}: {body}"
+        "re-using a soft-deleted email must be a clean 409, got {status}: {body}"
     );
-    assert_eq!(body["error_code"], "email_or_card_conflict");
+    assert_eq!(body["error_code"], "email_belongs_to_deleted_account");
+    assert_eq!(body["conflict_id"].as_i64(), Some(id));
+    assert_eq!(body["conflict_name"], "Fallback A");
 }
 
 // ---- #160: role-enforcing extractors (StaffUser / AdminUser) ----

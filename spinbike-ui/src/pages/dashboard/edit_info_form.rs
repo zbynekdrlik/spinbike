@@ -10,6 +10,7 @@ use crate::components::Sheet;
 use crate::i18n::{self, Lang};
 
 use super::CardInfo;
+use super::deleted_email_conflict::DeletedEmailConflictDialog;
 use super::helpers::event_target_value;
 
 /// Non-empty-after-trim → `Some`, else `None` (name/email field semantics).
@@ -258,6 +259,8 @@ pub fn EditInfoForm(
             let on_close_btn = on_close;
             let on_close_save = on_close;
             let on_close_invite = on_close;
+            // #143: closing the sheet after the operator restores the old account.
+            let on_close_restored = on_close;
             let initial_allow_se_at_open = allow_self_entry.get_untracked();
 
             // Read a NodeRef input's current DOM value — shared by Save and by
@@ -295,8 +298,28 @@ pub fn EditInfoForm(
                 )
             };
 
-            let on_submit = move |ev: web_sys::SubmitEvent| {
-                ev.prevent_default();
+            let (invite_loading, set_invite_loading) = signal(false);
+            // #143 — soft-deleted-email conflict during a save: (archived id,
+            // name, deleted_at). When Some, the resolution dialog is shown on
+            // top of this (still-open) edit sheet, so a retry can re-read the
+            // same fields.
+            let (conflict, set_conflict) =
+                signal::<Option<(i64, String, Option<String>)>>(None);
+            // Which action to re-run after the email is freed: false = Save,
+            // true = Save-then-invite (#141).
+            let (retry_invite, set_retry_invite) = signal(false);
+
+            // The core save (optionally followed by invite). Shared by the Save
+            // button, the save-then-invite button, and the #143 free-email
+            // auto-retry — so all three persist IDENTICAL field semantics.
+            //
+            // ONE click on the invite button = persist the current field values
+            // (incl. a freshly typed email) FIRST, then invite: the invite
+            // endpoint reads the committed DB row (#141).
+            let run_save: Callback<bool> = Callback::new(move |also_invite: bool| {
+                if loading.get_untracked() || invite_loading.get_untracked() {
+                    return;
+                }
                 let (name, email, company, phone, password, allow_self_entry) = collect();
 
                 // Clear any stale alert from a previous action before this one
@@ -306,63 +329,14 @@ pub fn EditInfoForm(
                 set_msg.set(String::new());
                 set_err.set(String::new());
                 set_save_err.set(String::new());
-                set_loading.set(true);
-                let on_close_inner = on_close_save;
+                if also_invite {
+                    set_invite_loading.set(true);
+                } else {
+                    set_loading.set(true);
+                }
                 spawn_local(async move {
-                    match save_user_fields(
-                        card_id, name, email, company, phone, allow_self_entry, password,
-                    )
-                    .await
-                    {
-                        Ok(c) => {
-                            set_email_sig.set(c.email.clone().unwrap_or_default());
-                            // ORDER MATTERS (reactive_graph 0.1.8): write the
-                            // LOCAL `loading` signal BEFORE any disposal trigger.
-                            // `set_selected` rebuilds this component (parent
-                            // tracks `selected`) and `on_close` hides the sheet —
-                            // both dispose this scope synchronously, and touching
-                            // a local/component signal AFTERWARD panics ("access a
-                            // reactive value that has already been disposed"). The
-                            // panic fires after the sheet has already closed, so
-                            // it's invisible in prod but shows up as a WASM
-                            // RuntimeError in the browser console (a Playwright
-                            // clean-console failure). Local first, dispose last.
-                            set_loading.set(false);
-                            set_selected.set(Some(c));
-                            set_msg.set(i18n::t(lang.get_untracked(), "saved").to_string());
-                            on_close_inner.run(());
-                        }
-                        Err(e) => {
-                            // In-sheet red alert (the shared dashboard alert is
-                            // occluded by this sheet's backdrop). Names the
-                            // colliding account for staff/admin. Sheet stays open,
-                            // so no disposal — order is not sensitive here.
-                            set_save_err.set(save_error_text(lang.get_untracked(), e));
-                            set_loading.set(false);
-                        }
-                    }
-                });
-            };
-
-            let (invite_loading, set_invite_loading) = signal(false);
-            let on_invite_click = move |_: web_sys::MouseEvent| {
-                // ONE click = persist the current field values (incl. a freshly
-                // typed email) FIRST, then invite. The invite endpoint reads the
-                // committed DB row, so without the save it would 400 (no email)
-                // or invite against a stale address (#141).
-                let (name, email, company, phone, password, allow_self_entry) = collect();
-
-                // Same stale-alert clear as on_submit above (#126 follow-up).
-                set_msg.set(String::new());
-                set_err.set(String::new());
-                set_save_err.set(String::new());
-                set_invite_loading.set(true);
-                let on_close_after_invite = on_close_invite;
-                spawn_local(async move {
-                    // Step 1 — persist. A save failure (e.g. the 409
-                    // email-already-used conflict) STOPS here: show the in-sheet
-                    // error and keep the sheet OPEN to fix inline (exactly like
-                    // Save). Do NOT invite, do NOT close.
+                    // Step 1 — persist. A save failure keeps the sheet OPEN to
+                    // fix inline (never invites on a failed save).
                     let saved = match save_user_fields(
                         card_id, name, email, company, phone, allow_self_entry, password,
                     )
@@ -370,12 +344,44 @@ pub fn EditInfoForm(
                     {
                         Ok(c) => c,
                         Err(e) => {
-                            set_save_err.set(save_error_text(lang.get_untracked(), e));
-                            set_invite_loading.set(false);
+                            // #143: an email held by a SOFT-DELETED account opens
+                            // the restore / free-email dialog instead of a
+                            // dead-end error. The sheet stays open so the retry
+                            // re-reads the same fields. Any other error → the
+                            // usual in-sheet red alert.
+                            if let Some(c) = e.deleted_email_conflict() {
+                                set_retry_invite.set(also_invite);
+                                set_conflict.set(Some(c));
+                            } else {
+                                set_save_err.set(save_error_text(lang.get_untracked(), e));
+                            }
+                            if also_invite {
+                                set_invite_loading.set(false);
+                            } else {
+                                set_loading.set(false);
+                            }
                             return;
                         }
                     };
                     set_email_sig.set(saved.email.clone().unwrap_or_default());
+
+                    if !also_invite {
+                        // Save-only success. ORDER MATTERS (reactive_graph
+                        // 0.1.8): the LOCAL `loading` signal FIRST, then the
+                        // disposal triggers. `set_selected` rebuilds this
+                        // component (parent tracks `selected`) and `on_close`
+                        // hides the sheet — both dispose this scope
+                        // synchronously, and touching a local/component signal
+                        // AFTERWARD panics ("access a reactive value that has
+                        // already been disposed") — a WASM RuntimeError in the
+                        // console (a Playwright clean-console failure). Local
+                        // first, dispose last.
+                        set_loading.set(false);
+                        set_selected.set(Some(saved));
+                        set_msg.set(i18n::t(lang.get_untracked(), "saved").to_string());
+                        on_close_save.run(());
+                        return;
+                    }
 
                     // Step 2 — invite against the now-committed email.
                     #[derive(serde::Deserialize)]
@@ -407,22 +413,22 @@ pub fn EditInfoForm(
                         }
                     }
 
-                    // ORDER MATTERS (reactive_graph 0.1.8): write the LOCAL
-                    // `invite_loading` signal FIRST, then trigger disposal. Both
-                    // `set_selected` (rebuilds this component — parent tracks
-                    // `selected`) and `on_close` (hides the sheet) dispose this
-                    // scope synchronously; touching a local/component signal
-                    // AFTERWARD panics ("access a reactive value that has already
-                    // been disposed") — a WASM RuntimeError in the console. So:
-                    // local first, then set_selected → on_close with nothing
-                    // local after. (Reflecting the saved user to the parent so a
-                    // reopen shows the new email; closing on either invite
-                    // outcome so the shared status line clears this sheet's
-                    // z-index:200 backdrop. Invite has no fix-inline retry.)
+                    // ORDER MATTERS (reactive_graph 0.1.8): LOCAL
+                    // `invite_loading` FIRST, then disposal (set_selected +
+                    // on_close) — local first, dispose last (see above).
                     set_invite_loading.set(false);
                     set_selected.set(Some(saved));
-                    on_close_after_invite.run(());
+                    on_close_invite.run(());
                 });
+            });
+
+            let on_submit = move |ev: web_sys::SubmitEvent| {
+                ev.prevent_default();
+                run_save.run(false);
+            };
+
+            let on_invite_click = move |_: web_sys::MouseEvent| {
+                run_save.run(true);
             };
 
             view! {
@@ -612,6 +618,34 @@ pub fn EditInfoForm(
                         </div>
                     </form>
                 </Sheet>
+                {move || match conflict.get() {
+                    // #143 resolution dialog, rendered on top of the still-open
+                    // edit sheet so a free-email retry can re-read the fields.
+                    Some((cid, cname, cdel)) => view! {
+                        <DeletedEmailConflictDialog
+                            conflict_id=cid
+                            conflict_name=cname
+                            conflict_deleted_at=cdel
+                            // Email freed → re-run whichever action was pending.
+                            on_email_freed=Callback::new(move |()| {
+                                set_conflict.set(None);
+                                run_save.run(retry_invite.get_untracked());
+                            })
+                            // Old account restored → abandon this edit; close
+                            // with a confirmation.
+                            on_restored=Callback::new(move |()| {
+                                set_conflict.set(None);
+                                set_msg.set(
+                                    i18n::t(lang.get_untracked(), "deleted_email_restored_ok")
+                                        .to_string(),
+                                );
+                                on_close_restored.run(());
+                            })
+                            on_cancel=Callback::new(move |()| set_conflict.set(None))
+                        />
+                    }.into_any(),
+                    None => ().into_any(),
+                }}
             }.into_any()
         }}
     }

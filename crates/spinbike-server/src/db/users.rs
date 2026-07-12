@@ -134,6 +134,30 @@ pub async fn get_user_by_email(pool: &SqlitePool, email: &str) -> Result<Option<
     Ok(user)
 }
 
+/// Like [`get_user_by_email`] but does NOT filter out soft-deleted rows.
+///
+/// The `users.email` UNIQUE constraint counts ALL rows (soft-delete only sets
+/// `deleted_at`, it keeps the email), so an email held by a soft-deleted
+/// account still reserves the address. The create/update collision check uses
+/// this to SURFACE that case (#143) as a resolvable 409 with the archived
+/// account's identity, instead of missing it via the `deleted_at IS NULL`
+/// filter and then hitting a raw UNIQUE violation → opaque 500.
+pub async fn get_user_by_email_including_deleted(
+    pool: &SqlitePool,
+    email: &str,
+) -> Result<Option<UserRow>> {
+    let user = sqlx::query_as::<_, UserRow>(
+        "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
+                oauth_id, credit, card_code, blocked, allow_debit, search_text,
+                created_at, deleted_at, allow_self_entry
+         FROM users WHERE email = ?",
+    )
+    .bind(email)
+    .fetch_optional(pool)
+    .await?;
+    Ok(user)
+}
+
 pub async fn get_user_by_id(pool: &SqlitePool, id: i64) -> Result<Option<UserRow>> {
     let user = sqlx::query_as::<_, UserRow>(
         "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
@@ -633,6 +657,78 @@ pub async fn delete_user(pool: &SqlitePool, id: i64) -> Result<DeleteUserOutcome
         .await?;
     let deleted_at = row.0.unwrap_or_default();
     Ok(DeleteUserOutcome::Deleted { deleted_at })
+}
+
+/// Outcome of a restore (un-soft-delete) attempt.
+pub enum RestoreUserOutcome {
+    /// A soft-deleted row was reactivated (`deleted_at` cleared).
+    Restored,
+    /// No user with that id exists.
+    NotFound,
+    /// The user exists but is already active — nothing to restore (idempotent).
+    NotDeleted,
+}
+
+/// Un-soft-delete a user by clearing `deleted_at`, bringing back its history
+/// and credit (#143 "obnovit ucet"). Atomic NOT-NULL → NULL flip so only a
+/// currently soft-deleted row is affected. Restoring is always safe w.r.t. the
+/// `email` UNIQUE constraint: while the row was soft-deleted its email was
+/// still reserved, so no live row can hold the same address.
+pub async fn restore_user(pool: &SqlitePool, id: i64) -> Result<RestoreUserOutcome> {
+    let updated =
+        sqlx::query("UPDATE users SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL")
+            .bind(id)
+            .execute(pool)
+            .await?;
+    if updated.rows_affected() == 1 {
+        return Ok(RestoreUserOutcome::Restored);
+    }
+    // No row flipped — disambiguate not-found vs already-active.
+    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(if exists.is_none() {
+        RestoreUserOutcome::NotFound
+    } else {
+        RestoreUserOutcome::NotDeleted
+    })
+}
+
+/// Outcome of a free-email (clear email) attempt.
+pub enum ClearEmailOutcome {
+    /// The soft-deleted account's email was cleared (set to NULL).
+    Cleared,
+    /// No user with that id exists.
+    NotFound,
+    /// Refused: the user is ACTIVE. This path only frees the email of an
+    /// ARCHIVED (soft-deleted) account — never a live account's address.
+    NotDeleted,
+}
+
+/// Clear the `email` of a SOFT-DELETED user (set to NULL), freeing the address
+/// for reuse on another account while the old account stays archived (#143
+/// "uvolnit email"). SAFETY: the `AND deleted_at IS NOT NULL` guard means an
+/// ACTIVE account's email can NEVER be cleared through this function.
+/// `search_text` is unaffected — email is not part of it.
+pub async fn clear_user_email(pool: &SqlitePool, id: i64) -> Result<ClearEmailOutcome> {
+    let updated =
+        sqlx::query("UPDATE users SET email = NULL WHERE id = ? AND deleted_at IS NOT NULL")
+            .bind(id)
+            .execute(pool)
+            .await?;
+    if updated.rows_affected() == 1 {
+        return Ok(ClearEmailOutcome::Cleared);
+    }
+    let exists: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(if exists.is_none() {
+        ClearEmailOutcome::NotFound
+    } else {
+        ClearEmailOutcome::NotDeleted
+    })
 }
 
 #[cfg(test)]
@@ -1451,5 +1547,144 @@ mod tests {
             !u.allow_self_entry,
             "update_user_allow_self_entry(false) must persist"
         );
+    }
+
+    // ─── #143: soft-deleted email conflict resolution ──────────────────────
+
+    #[tokio::test]
+    async fn get_user_by_email_including_deleted_finds_soft_deleted_row() {
+        let pool = setup().await;
+        let id = make_user(&pool, Some("gone@example.com"), "Gone").await;
+        delete_user(&pool, id).await.unwrap();
+
+        // The deleted_at-filtered lookup misses the row...
+        assert!(
+            get_user_by_email(&pool, "gone@example.com")
+                .await
+                .unwrap()
+                .is_none(),
+            "filtered lookup must NOT see the soft-deleted row"
+        );
+        // ...but the including-deleted lookup surfaces it (the #143 case).
+        let found = get_user_by_email_including_deleted(&pool, "gone@example.com")
+            .await
+            .unwrap()
+            .expect("including-deleted lookup must find the soft-deleted row");
+        assert_eq!(found.id, id);
+        assert!(found.deleted_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn get_user_by_email_including_deleted_finds_live_row_too() {
+        let pool = setup().await;
+        let id = make_user(&pool, Some("live@example.com"), "Live").await;
+        let found = get_user_by_email_including_deleted(&pool, "live@example.com")
+            .await
+            .unwrap()
+            .expect("must find the live row");
+        assert_eq!(found.id, id);
+        assert!(found.deleted_at.is_none());
+    }
+
+    #[tokio::test]
+    async fn restore_user_clears_deleted_at_and_keeps_data() {
+        let pool = setup().await;
+        let id = create_user(
+            &pool,
+            Some("restore@example.com"),
+            None,
+            "Restore Me",
+            None,
+            Some("Acme"),
+            Some("CARD-R"),
+            "customer",
+            Some(7.5),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        delete_user(&pool, id).await.unwrap();
+        assert!(
+            get_user_by_id(&pool, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .deleted_at
+                .is_some()
+        );
+
+        assert!(matches!(
+            restore_user(&pool, id).await.unwrap(),
+            RestoreUserOutcome::Restored
+        ));
+        let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert_eq!(u.deleted_at, None, "deleted_at must be cleared");
+        // Data intact: email, credit, card_code, company all preserved.
+        assert_eq!(u.email.as_deref(), Some("restore@example.com"));
+        assert!((u.credit - 7.5).abs() < f64::EPSILON);
+        assert_eq!(u.card_code.as_deref(), Some("CARD-R"));
+        assert_eq!(u.company.as_deref(), Some("Acme"));
+    }
+
+    #[tokio::test]
+    async fn restore_user_reports_not_found_and_not_deleted() {
+        let pool = setup().await;
+        assert!(matches!(
+            restore_user(&pool, 999_999).await.unwrap(),
+            RestoreUserOutcome::NotFound
+        ));
+        let id = make_user(&pool, Some("active@example.com"), "Active").await;
+        assert!(matches!(
+            restore_user(&pool, id).await.unwrap(),
+            RestoreUserOutcome::NotDeleted
+        ));
+    }
+
+    #[tokio::test]
+    async fn clear_user_email_frees_soft_deleted_address() {
+        let pool = setup().await;
+        let old = make_user(&pool, Some("shared@example.com"), "Old").await;
+        delete_user(&pool, old).await.unwrap();
+
+        assert!(matches!(
+            clear_user_email(&pool, old).await.unwrap(),
+            ClearEmailOutcome::Cleared
+        ));
+        // The archived row keeps its deleted_at but loses the email...
+        let u = get_user_by_id(&pool, old).await.unwrap().unwrap();
+        assert_eq!(u.email, None, "email must be cleared");
+        assert!(u.deleted_at.is_some(), "row must stay archived");
+        // ...so the address is now free for a NEW user.
+        let new = make_user(&pool, Some("shared@example.com"), "New").await;
+        assert_ne!(new, old);
+    }
+
+    #[tokio::test]
+    async fn clear_user_email_refuses_active_account() {
+        let pool = setup().await;
+        let id = make_user(&pool, Some("keep@example.com"), "Keep").await;
+        assert!(
+            matches!(
+                clear_user_email(&pool, id).await.unwrap(),
+                ClearEmailOutcome::NotDeleted
+            ),
+            "must refuse to clear a LIVE account's email"
+        );
+        // Email is untouched.
+        assert_eq!(
+            get_user_by_id(&pool, id)
+                .await
+                .unwrap()
+                .unwrap()
+                .email
+                .as_deref(),
+            Some("keep@example.com")
+        );
+
+        assert!(matches!(
+            clear_user_email(&pool, 999_999).await.unwrap(),
+            ClearEmailOutcome::NotFound
+        ));
     }
 }

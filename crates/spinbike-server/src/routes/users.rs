@@ -186,6 +186,57 @@ fn user_response_from_row_with_pass(
     }
 }
 
+/// Classification of an email collision for the staff create/edit flow (#143).
+enum EmailCollision {
+    /// No OTHER user holds this email.
+    None,
+    /// A LIVE user already holds this email — a hard conflict.
+    Live(db::UserRow),
+    /// A SOFT-DELETED user still holds this email. The address is reserved (the
+    /// `email` UNIQUE constraint counts archived rows) but the block is
+    /// RESOLVABLE by staff: restore the old account, or free its email.
+    Deleted(db::UserRow),
+}
+
+/// Look up who (if anyone) holds `email` — INCLUDING soft-deleted rows — and
+/// classify it. `exclude_id` is the row being updated (its own email is never a
+/// collision); pass `None` for create. Because `email` is UNIQUE across ALL
+/// rows, at most one account can hold a given address.
+async fn classify_email_collision(
+    pool: &sqlx::SqlitePool,
+    email: &str,
+    exclude_id: Option<i64>,
+) -> Result<EmailCollision, ApiError> {
+    let Some(existing) = db::get_user_by_email_including_deleted(pool, email)
+        .await
+        .map_err(internal_error)?
+    else {
+        return Ok(EmailCollision::None);
+    };
+    if Some(existing.id) == exclude_id {
+        return Ok(EmailCollision::None);
+    }
+    Ok(if existing.deleted_at.is_some() {
+        EmailCollision::Deleted(existing)
+    } else {
+        EmailCollision::Live(existing)
+    })
+}
+
+/// Build the structured 409 for the #143 soft-deleted-email conflict: names the
+/// archived account (id / name / deleted_at) so the staff UI can offer restore
+/// or free-email as an explicit, well-defined resolution.
+fn deleted_account_conflict(u: &db::UserRow) -> ApiError {
+    ApiError::conflict_extra(
+        ErrorCode::EmailBelongsToDeletedAccount,
+        serde_json::json!({
+            "conflict_id": u.id,
+            "conflict_name": u.name,
+            "conflict_deleted_at": u.deleted_at,
+        }),
+    )
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/users", get(list_users).post(create_user))
@@ -199,6 +250,10 @@ pub fn routes() -> Router<AppState> {
             "/api/users/{id}",
             put(update_user).delete(delete_user_route),
         )
+        // #143: resolve a soft-deleted-email conflict. Staff-gated, matching the
+        // sibling account mutations (delete / block).
+        .route("/api/users/{id}/restore", post(restore_user_route))
+        .route("/api/users/{id}/free-email", post(free_user_email_route))
         .route("/api/users/{id}/transactions", get(user_transactions))
         .route("/api/users/{id}/stats", get(user_stats))
 }
@@ -261,20 +316,30 @@ async fn create_user(
         if !email.contains('@') || !email.contains('.') {
             return Err(super::bad_request("Invalid email address"));
         }
-        // Name the colliding account. This endpoint is staff/admin-only
-        // (can_manage_cards guard above), so there is no customer to leak an
-        // identity to — the name/card always go out.
-        if let Some(existing) = db::get_user_by_email(&state.pool, email)
-            .await
-            .map_err(internal_error)?
-        {
-            return Err(ApiError::conflict_extra(
-                ErrorCode::EmailConflict,
-                serde_json::json!({
-                    "conflict_name": existing.name,
-                    "conflict_card": existing.card_code,
-                }),
-            ));
+        // This endpoint is staff/admin-only (StaffUser extractor), so there is
+        // no customer to leak an identity to — the colliding account is always
+        // named. A LIVE holder is a hard conflict; a SOFT-DELETED holder is the
+        // resolvable #143 case (restore / free-email).
+        match classify_email_collision(&state.pool, email, None).await? {
+            EmailCollision::None => {}
+            EmailCollision::Live(existing) => {
+                return Err(ApiError::conflict_extra(
+                    ErrorCode::EmailConflict,
+                    serde_json::json!({
+                        "conflict_name": existing.name,
+                        "conflict_card": existing.card_code,
+                    }),
+                ));
+            }
+            EmailCollision::Deleted(existing) => {
+                tracing::info!(
+                    actor_id = claims.sub,
+                    conflict_id = existing.id,
+                    "POST /api/users: email collides with soft-deleted account #{} — returning resolvable 409",
+                    existing.id
+                );
+                return Err(deleted_account_conflict(&existing));
+            }
         }
     }
 
@@ -539,32 +604,53 @@ async fn update_user(
         if !email.contains('@') || !email.contains('.') {
             return Err(super::bad_request("Invalid email address"));
         }
-        // Collision check: another user already has this email.
-        if let Some(existing) = db::get_user_by_email(&state.pool, email)
-            .await
-            .map_err(internal_error)?
-            && existing.id != id
-        {
-            // Name the colliding account so a STAFF/ADMIN operator can go find
-            // and fix it (the reported need: the CEO just wants to see "email
-            // is already used by so-and-so", then he sorts it out himself).
-            // SECURITY: never leak another account's identity to a CUSTOMER
-            // self-editing their own row — that would turn the email field
-            // into a name-enumeration oracle. Customers get only the generic
-            // message; the name/card go out solely to staff/admin.
-            let mut extra = serde_json::Map::new();
-            if is_staff_or_admin {
-                extra.insert("conflict_name".into(), serde_json::json!(existing.name));
-                extra.insert(
-                    "conflict_card".into(),
-                    serde_json::json!(existing.card_code),
-                );
+        // Collision check now INCLUDES soft-deleted rows (#143): a live holder
+        // is a hard conflict; a soft-deleted holder is the resolvable case.
+        match classify_email_collision(&state.pool, email, Some(id)).await? {
+            EmailCollision::None => {}
+            EmailCollision::Live(existing) => {
+                // Name the colliding account so a STAFF/ADMIN operator can go
+                // find and fix it (the reported need: the CEO just wants to see
+                // "email is already used by so-and-so", then he sorts it out).
+                // SECURITY: never leak another account's identity to a CUSTOMER
+                // self-editing their own row — that would turn the email field
+                // into a name-enumeration oracle. Customers get only the
+                // generic message; the name/card go out solely to staff/admin.
+                let mut extra = serde_json::Map::new();
+                if is_staff_or_admin {
+                    extra.insert("conflict_name".into(), serde_json::json!(existing.name));
+                    extra.insert(
+                        "conflict_card".into(),
+                        serde_json::json!(existing.card_code),
+                    );
+                }
+                return Err(if extra.is_empty() {
+                    ApiError::conflict(ErrorCode::EmailConflict)
+                } else {
+                    ApiError::conflict_extra(
+                        ErrorCode::EmailConflict,
+                        serde_json::Value::Object(extra),
+                    )
+                });
             }
-            return Err(if extra.is_empty() {
-                ApiError::conflict(ErrorCode::EmailConflict)
-            } else {
-                ApiError::conflict_extra(ErrorCode::EmailConflict, serde_json::Value::Object(extra))
-            });
+            EmailCollision::Deleted(existing) => {
+                // The #143 fix: this used to fall through the (deleted-filtered)
+                // check, then hit the raw email UNIQUE constraint → opaque 500.
+                if is_staff_or_admin {
+                    tracing::info!(
+                        actor_id = claims.sub,
+                        target_id = id,
+                        conflict_id = existing.id,
+                        "PUT /api/users/{}: email collides with soft-deleted account #{} — returning resolvable 409",
+                        id,
+                        existing.id
+                    );
+                    return Err(deleted_account_conflict(&existing));
+                }
+                // Customer self-edit: no resolution dialog (restore/free-email
+                // are staff-only), and no identity leak — generic conflict.
+                return Err(ApiError::conflict(ErrorCode::EmailConflict));
+            }
         }
     }
 
@@ -587,7 +673,17 @@ async fn update_user(
         body.card_code.as_deref(),
     )
     .await
-    .map_err(internal_error)?;
+    .map_err(|e| {
+        // Defense-in-depth: the pre-checks above catch the deterministic email
+        // collision (live or soft-deleted). A UNIQUE violation still reaching
+        // here (a concurrent write, or a card_code collision with a
+        // soft-deleted row) must be a 409 — NEVER the opaque 500 that #143 was.
+        if matches!(e, crate::db::DbError::UniqueViolation) {
+            ApiError::conflict(ErrorCode::EmailOrCardConflict)
+        } else {
+            internal_error(e)
+        }
+    })?;
 
     if let Some(allow) = body.allow_self_entry {
         if claims.role != spinbike_core::auth::Role::Admin {
@@ -836,6 +932,95 @@ async fn delete_user_route(
             Err(ApiError::conflict(ErrorCode::UserAlreadyDeleted))
         }
     }
+}
+
+/// POST /api/users/{id}/restore — un-soft-delete an archived account (#143
+/// "obnovit ucet"), bringing back its history/credit/email. Staff-gated, like
+/// delete/block. Idempotent: restoring an already-active account is a no-op
+/// success. Returns the (now active) user.
+async fn restore_user_route(
+    State(state): State<AppState>,
+    StaffUser(claims): StaffUser,
+    Path(id): Path<i64>,
+) -> Result<Json<UserResponse>, ApiError> {
+    match db::restore_user(&state.pool, id)
+        .await
+        .map_err(internal_error)?
+    {
+        db::RestoreUserOutcome::Restored => {
+            tracing::info!(
+                actor_id = claims.sub,
+                target_id = id,
+                "POST /api/users/{id}/restore: soft-deleted account restored"
+            );
+        }
+        db::RestoreUserOutcome::NotDeleted => {
+            tracing::info!(
+                actor_id = claims.sub,
+                target_id = id,
+                "POST /api/users/{id}/restore: no-op, account already active"
+            );
+        }
+        db::RestoreUserOutcome::NotFound => {
+            return Err(ApiError::NotFound(ErrorCode::UserNotFound));
+        }
+    }
+
+    let user = db::get_user_by_id(&state.pool, id)
+        .await
+        .map_err(internal_error)?
+        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
+    Ok(Json(
+        user_response_from_row(&state.pool, &user)
+            .await
+            .map_err(internal_error)?,
+    ))
+}
+
+/// POST /api/users/{id}/free-email — clear the email of a SOFT-DELETED account
+/// (#143 "uvolnit email") so the address can be reused by another account while
+/// the old one stays archived. Staff-gated. Refuses to touch an ACTIVE account
+/// (safety: never strips a live account's email).
+async fn free_user_email_route(
+    State(state): State<AppState>,
+    StaffUser(claims): StaffUser,
+    Path(id): Path<i64>,
+) -> Result<Json<UserResponse>, ApiError> {
+    match db::clear_user_email(&state.pool, id)
+        .await
+        .map_err(internal_error)?
+    {
+        db::ClearEmailOutcome::Cleared => {
+            tracing::info!(
+                actor_id = claims.sub,
+                target_id = id,
+                "POST /api/users/{id}/free-email: soft-deleted account's email freed"
+            );
+        }
+        db::ClearEmailOutcome::NotFound => {
+            return Err(ApiError::NotFound(ErrorCode::UserNotFound));
+        }
+        db::ClearEmailOutcome::NotDeleted => {
+            tracing::warn!(
+                actor_id = claims.sub,
+                target_id = id,
+                "POST /api/users/{id}/free-email: REFUSED, account is active"
+            );
+            return Err(super::bad_request(
+                "Cannot free the email of an active account; this only applies to deleted accounts",
+            ));
+        }
+    }
+
+    let user = db::get_user_by_id(&state.pool, id)
+        .await
+        .map_err(internal_error)?
+        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
+    Ok(Json(
+        user_response_from_row(&state.pool, &user)
+            .await
+            .map_err(internal_error)?,
+    ))
 }
 
 #[cfg(test)]

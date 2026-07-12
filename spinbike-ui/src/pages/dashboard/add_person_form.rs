@@ -7,6 +7,7 @@ use crate::api;
 use crate::i18n::{self, Lang};
 
 use super::CardInfo;
+use super::deleted_email_conflict::DeletedEmailConflictDialog;
 use super::helpers::event_target_value;
 
 #[derive(Serialize)]
@@ -47,9 +48,14 @@ pub fn AddPersonForm(
     let (card_code, set_card_code) = signal(String::new());
     let (err, set_err) = signal(String::new());
     let (loading, set_loading) = signal(false);
+    // #143 — soft-deleted-email conflict: (archived id, name, deleted_at).
+    // When Some, the resolution dialog is shown instead of a plain error.
+    let (conflict, set_conflict) = signal::<Option<(i64, String, Option<String>)>>(None);
 
-    let on_submit = move |ev: web_sys::SubmitEvent| {
-        ev.prevent_default();
+    // The create action, reusable so the #143 free-email path can re-run it
+    // (with the same field values, now that the address is free). Reads the
+    // form signals fresh on each invocation.
+    let run_create = Callback::new(move |()| {
         if loading.get_untracked() {
             return;
         }
@@ -75,7 +81,7 @@ pub fn AddPersonForm(
             card_code: to_opt(card_code.get_untracked()),
         };
         spawn_local(async move {
-            match api::post::<CreateUserReq, UserResp>("/api/users", &body).await {
+            match api::post_json::<CreateUserReq, UserResp>("/api/users", &body).await {
                 Ok(u) => {
                     set_msg.set(i18n::tf(
                         lang.get_untracked(),
@@ -97,10 +103,23 @@ pub fn AddPersonForm(
                     }));
                     set_show.set(false);
                 }
-                Err(e) => set_err.set(e),
+                Err(e) => {
+                    // #143: an email held by a soft-deleted account opens the
+                    // restore / free-email dialog instead of a dead-end error.
+                    if let Some(c) = e.deleted_email_conflict() {
+                        set_conflict.set(Some(c));
+                    } else {
+                        set_err.set(e.message);
+                    }
+                }
             }
             set_loading.set(false);
         });
+    });
+
+    let on_submit = move |ev: web_sys::SubmitEvent| {
+        ev.prevent_default();
+        run_create.run(());
     };
 
     view! {
@@ -168,5 +187,30 @@ pub fn AddPersonForm(
                 view! { <span></span> }.into_any()
             }}
         </form>
+        {move || match conflict.get() {
+            Some((cid, cname, cdel)) => view! {
+                <DeletedEmailConflictDialog
+                    conflict_id=cid
+                    conflict_name=cname
+                    conflict_deleted_at=cdel
+                    // Email freed → retry the create; the address is now free.
+                    on_email_freed=Callback::new(move |()| {
+                        set_conflict.set(None);
+                        run_create.run(());
+                    })
+                    // Old account restored → the new-person action is abandoned;
+                    // close the form with a confirmation.
+                    on_restored=Callback::new(move |()| {
+                        set_conflict.set(None);
+                        set_msg.set(
+                            i18n::t(lang.get_untracked(), "deleted_email_restored_ok").to_string(),
+                        );
+                        set_show.set(false);
+                    })
+                    on_cancel=Callback::new(move |()| set_conflict.set(None))
+                />
+            }.into_any(),
+            None => ().into_any(),
+        }}
     }
 }
