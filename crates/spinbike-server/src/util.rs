@@ -28,7 +28,7 @@ pub fn now_bratislava() -> NaiveDateTime {
 /// timezone — see #205 (owner's decision: the pass-expiry boundary is the
 /// gym's local midnight, not SQLite's UTC `date('now')`).
 pub fn today_bratislava() -> NaiveDate {
-    now_bratislava().date_naive()
+    now_bratislava().date()
 }
 
 /// Format an integer as an English ordinal: 1 → "1st", 2 → "2nd", 3 → "3rd",
@@ -61,7 +61,7 @@ mod tests {
     fn today_bratislava_is_the_named_tz_date_not_utc() {
         let expected = Utc::now().with_timezone(&Bratislava).date_naive();
         assert_eq!(today_bratislava(), expected);
-        assert_eq!(today_bratislava(), now_bratislava().date_naive());
+        assert_eq!(today_bratislava(), now_bratislava().date());
     }
 
     /// Core #205 proof (winter / CET, UTC+1): 23:30 UTC is already 00:30 the
