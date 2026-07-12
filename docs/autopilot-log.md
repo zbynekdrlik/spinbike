@@ -3,6 +3,50 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-07-12 — #167 (leptos sub-item): bump leptos 0.7 → 0.8
+
+- **Issue:** [#167](https://github.com/zbynekdrlik/spinbike/issues/167) —
+  dependency-currency epic (rand, tokio-tungstenite, leptos all behind). SOLO
+  PR for the leptos sub-item only — issue stays OPEN (tokio-tungstenite still
+  to follow); PR body used "Part of #167", never "Closes #167".
+- **Validated first:** grep-confirmed zero `server_fn`/`#[server]`/
+  `ServerFnError`/`leptos_axum` usage anywhere (CSR-only frontend, separate
+  Axum backend) — leptos 0.8's breaking changes don't apply here.
+- **Change:** `spinbike-ui/Cargo.toml` `leptos`/`leptos_router` `"0.7"` →
+  `"0.8"` (resolves 0.8.20 / 0.8.14), `Cargo.lock` regenerated via
+  `cargo metadata` (resolution-only, no build). One clippy fix:
+  `#[allow(dead_code)]` on `class_card.rs`'s discarded booking-response `id`
+  field (0.8's stricter transitive toolchain caught a latent dead field 0.7
+  never flagged) — matched the existing idiom already used at 3 sibling
+  call sites (`upcoming_classes.rs`, `staff_dashboard.rs`,
+  `persistent_toggles.rs`).
+- **No RED→GREEN test pair** — not a bug fix, zero behavior change (same
+  reactive idioms). Used the `[no-test:]` push-gate bypass (Gate 1: `.rs`
+  changed, no test diff) citing the full E2E suite as the real regression
+  gate for a framework bump, per dispatch instructions.
+- **CI:** dev push green — Build WASM (UI), Test (UI), full E2E suite, all
+  8 mutation shards, Deploy+Smoke (dev) all passed on commit `2ec4be8`. PR
+  [#219](https://github.com/zbynekdrlik/spinbike/pull/219), merged
+  `fd293d4a`. Main CI green incl. Deploy (prod) + Smoke (prod).
+- **Review:** one focused senior pass (correctness/security/perf/
+  maintainability/style + deep requirements/hidden-breakage lens) since the
+  diff was tiny (4 functional lines) and CI already covered the real risk
+  (compile + full E2E) — 0 🔴 0 🟡 0 🔵 on `/review`; 0 🔴 0 🟡 1 🔵 on
+  `requesting-code-review` (non-blocking commit-message precision nit,
+  outside the code diff).
+- **Deployed + verified LIVE on `https://spinbike.sk` (v0.15.0-dev.84):**
+  root schedule page renders `ClassCard` (the exact modified component),
+  version DOM matches `/api/version`, 0 console errors; clicked a day-picker
+  button — Resource-driven re-render worked; synthetic customer session
+  (`autopilot-verify-167leptos@spinbike.local`, cleaned up after) confirmed
+  `/my/balance`'s data-fetch pipeline renders correctly and the global
+  `RwSignal<Lang>` context toggle (EN→SK) propagated live across nav + body
+  + footer with 0 console errors.
+- **Playbook:** added the "major dep bump can surface a latent clippy lint
+  unrelated to the crate's own API surface" gotcha to `ci-deploy/SKILL.md`
+  (continuing the #167 rand-sub-item entry) — the `#[allow(dead_code)]`
+  fix + where to find the established idiom for future dep-bump sub-items.
+
 ## 2026-07-12 — #204: enforce the active-pass invariant at the schema level (V20 trigger)
 
 - **Issue:** [#204](https://github.com/zbynekdrlik/spinbike/issues/204) —

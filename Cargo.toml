@@ -4,7 +4,7 @@ exclude = ["spinbike-ui"]
 resolver = "2"
 
 [workspace.package]
-version = "0.15.0-dev.84"
+version = "0.15.0-dev.86"
 edition = "2024"
 license = "MIT"
 
@@ -22,7 +22,7 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 futures = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
-tokio-tungstenite = { version = "0.24", default-features = false, features = ["rustls-tls-native-roots", "connect"] }
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["rustls-tls-native-roots", "connect"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json"] }
 hmac = "0.12"
 sha2 = "0.10"

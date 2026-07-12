@@ -23,6 +23,13 @@ rust-embed = { version = "8", features = ["include-exclude"] }
 mime_guess = "2"
 jsonwebtoken = "9"
 argon2 = "0.5"
+# argon2 re-exports `password_hash`; auth/mod.rs uses its rand_core-0.6 `OsRng`
+# (SaltString::generate). `OsRng` is gated behind `rand_core/getrandom`, which
+# argon2's own features never enable (its `rand` feature only pulls the
+# rand_core dep, not the getrandom feature). It was silently on via
+# tokio-tungstenite 0.24's transitive rand 0.8 until #167 bumped tungstenite to
+# 0.30 — declare it explicitly so the salt RNG can never break on a dep bump.
+password-hash = { version = "0.5", features = ["getrandom"] }
 rand = "0.10"
 unicode-normalization = "0.1"
 tokio-tungstenite = { workspace = true }
