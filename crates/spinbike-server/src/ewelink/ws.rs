@@ -269,7 +269,7 @@ async fn connect_loop_with_url_inner(
         "version": 8,
         "sequence": now_ms.to_string(),
     });
-    if let Err(e) = ws.send(Message::Text(user_online.to_string())).await {
+    if let Err(e) = ws.send(Message::Text(user_online.to_string().into())).await {
         tracing::warn!(err = %e, "ewelink: failed to send userOnline");
         return ConnectOutcome::ConnectionLost(format!("send userOnline: {e}"));
     }
@@ -354,7 +354,7 @@ async fn connect_loop_with_url_inner(
                     "selfApikey": apikey,
                 });
                 tracing::debug!(%sequence, %device_id, "ewelink: press sent");
-                if let Err(e) = ws.send(Message::Text(frame.to_string())).await {
+                if let Err(e) = ws.send(Message::Text(frame.to_string().into())).await {
                     tracing::warn!(err = %e, "ewelink: failed to send update frame");
                     let _ = req.ack.send(Err(EwelinkError::Network(format!("send: {e}"))));
                     return ConnectOutcome::ConnectionLost(format!("send update: {e}"));
@@ -380,7 +380,7 @@ async fn connect_loop_with_url_inner(
             // Outgoing ping every 60 s.
             _ = ping_interval.tick() => {
                 let ping = json!({"action": "ping"}).to_string();
-                if let Err(e) = ws.send(Message::Text(ping)).await {
+                if let Err(e) = ws.send(Message::Text(ping.into())).await {
                     tracing::warn!(err = %e, "ewelink: ping send failed");
                     return ConnectOutcome::ConnectionLost(format!("ping: {e}"));
                 }

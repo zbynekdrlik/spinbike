@@ -51,9 +51,9 @@ async fn mock_ws_round_trip() {
             .next()
             .unwrap()
             .to_string();
-        ws.send(Message::Text(format!(
-            r#"{{"error":0,"sequence":"{seq}"}}"#
-        )))
+        ws.send(Message::Text(
+            format!(r#"{{"error":0,"sequence":"{seq}"}}"#).into(),
+        ))
         .await
         .unwrap();
     });
@@ -127,9 +127,9 @@ async fn mock_ws_press_updates_last_ack_ms() {
             .next()
             .unwrap()
             .to_string();
-        ws.send(Message::Text(format!(
-            r#"{{"error":0,"sequence":"{seq}"}}"#
-        )))
+        ws.send(Message::Text(
+            format!(r#"{{"error":0,"sequence":"{seq}"}}"#).into(),
+        ))
         .await
         .unwrap();
     });
