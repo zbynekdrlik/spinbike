@@ -116,6 +116,21 @@ against the real pinned crate source, more reliable than guessing from a
 changelog). Same caution applies to #167's remaining tokio-tungstenite and
 leptos sub-items.
 
+**#167's leptos 0.7→0.8 sub-item confirmed the same lesson from a different angle: a major dep bump
+can surface a latent CLIPPY lint that has nothing to do with the crate's own API surface.** The
+issue's evidence (leptos 0.8.0's own release notes) correctly predicted zero real API breakage for
+this CSR-only frontend (no `server_fn`/`#[server]`/`ServerFnError`/`leptos_axum` usage) — and indeed
+that held: not a single compile error. But CI's `Build WASM (UI)` job still failed on
+`cargo clippy ... -D warnings`: `field 'id' is never read` in `class_card.rs`'s local `Resp`
+deserialization struct — a genuinely-dead field that 0.7's older transitive toolchain never flagged.
+Not a leptos regression — a stricter lint newly reachable through the bumped dependency tree. Three
+sibling call sites already had the fix (`#[allow(dead_code)]` on the unused field, preserving the
+struct's real wire shape rather than shrinking it to `struct Resp {}`) — grep `struct Resp` across
+`spinbike-ui/src/` for the established idiom before reaching for a different fix. **Lesson
+generalized:** after bumping any dependency, don't assume "changelog says no breaking API" means CI
+will be clean on the first push — read whatever CI's compiler/clippy diagnostic actually says (this
+one was a one-line dead-code lint, harmless once understood) rather than being surprised by it.
+
 ## AppState has THREE construction sites — wire every new field at all three
 
 `spinbike_server::AppState` is struct-literal-constructed in **three** places;
