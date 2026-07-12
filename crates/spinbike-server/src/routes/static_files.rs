@@ -27,6 +27,15 @@ pub async fn static_handler(uri: Uri) -> Response {
                 header::CACHE_CONTROL,
                 "public, max-age=31536000, immutable".parse().unwrap(),
             );
+        } else if path == "sw.js" {
+            // The service-worker script must always be revalidated so a new
+            // deploy reaches users immediately. Without an explicit header,
+            // Cloudflare's default extension-based edge caching applies its
+            // own max-age=14400 (4h) to it, delaying every future sw.js
+            // change (including SW-logic fixes) by up to 4h (#212).
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, "no-cache".parse().unwrap());
         }
 
         return response;
