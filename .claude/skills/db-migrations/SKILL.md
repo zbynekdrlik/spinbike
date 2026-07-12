@@ -274,9 +274,34 @@ valid_until       >  datetime('now')  -- ❌ off-by-one on the expiry day
 - `db/users.rs::get_user_pass_valid_until` / `get_user_pass_tx` also wrap the
   view's `valid_until` in `date(...)` before decoding into `chrono::NaiveDate`,
   defending the decode against a hypothetical future full-datetime row.
-- Day-boundary basis is **UTC** (`date('now')`). Open question #205: should it be
-  the gym's LOCAL day (Europe/Bratislava)? — must stay consistent across the
-  charger, door, and my_balance if changed.
+- Day-boundary basis is the **gym's LOCAL day (Europe/Bratislava)**, RESOLVED by
+  #205 (owner: a pass is valid THROUGH the whole of its last gym-local day).
+  Do NOT use `date('now')` (UTC) or `date('now','localtime')` (server-OS zone,
+  fragile) for a pass-expiry "today" — compute it in Rust via
+  `crate::util::today_bratislava()` (named IANA `Europe/Bratislava` via
+  `chrono-tz`, DST-correct, OS-TZ-independent) and pass it as a **bound `?`
+  param**: `date(valid_until) >= ?`. Every "today"-relative pass check uses this
+  ONE helper — `door.rs`, `my_balance.rs`, `payments.rs::log_visit`/`sell_pass`,
+  `users.rs` days_remaining, and the charger `tick()` window
+  (`util::now_bratislava()`). The charger's pass-vs-booking compare is EXEMPT:
+  it compares `valid_until` against the booking's own bare calendar date (both
+  already gym-local), no "today"/`date('now')` involved.
+
+## GOTCHA: gym-local "today" — `NaiveDateTime::date()` and the UTC-CI-runner test flake (#205)
+
+- **`NaiveDateTime` has `.date()`, NOT `.date_naive()`.** `date_naive()` is a
+  `DateTime<Tz>` method. `today_bratislava()` first wrote
+  `now_bratislava().date_naive()` (where `now_bratislava()` returns a
+  `NaiveDateTime`) → clippy `E0599`, one wasted CI cycle. Use `.date()` on a
+  `NaiveDateTime`; `.date_naive()` only on the tz-aware `DateTime<Tz>`.
+- **CI Test/E2E jobs run on `ubuntu-latest` (UTC).** Any boundary test that
+  seeds "today" via `chrono::Local::now()` or SQL `date('now')` (both = UTC on
+  the runner) and then exercises a handler that now uses `today_bratislava()`
+  will DIVERGE and FLAKE in the ~00:00–02:00 UTC window (Bratislava is already
+  the next day). Fix: seed such tests via
+  `spinbike_server::util::today_bratislava()` so test-today == handler-today on
+  ANY runner TZ. Expired-YESTERDAY guards can stay `date('now','-1 day')` —
+  robust, since Bratislava-today is always ≥ UTC-today.
 
 ## `#[derive(sqlx::FromRow)]` matches columns by NAME, not position (#164)
 

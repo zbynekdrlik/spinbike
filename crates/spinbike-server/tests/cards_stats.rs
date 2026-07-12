@@ -66,7 +66,11 @@ async fn empty_card_returns_zero_totals_and_twelve_zero_buckets() {
         assert_eq!(b.visits, 0);
         assert_eq!(b.topped_up_eur, 0.0);
     }
-    let now = chrono::Local::now();
+    // The handler builds its labels from the gym-local month (today_bratislava),
+    // so the expected newest label must use the SAME basis — NOT chrono::Local
+    // (= UTC on the CI runner), which would mismatch at a month boundary near
+    // local midnight (the #205/#222 CI-TZ flake).
+    let now = spinbike_server::util::now_bratislava();
     let expected_last = format!("{:04}-{:02}", now.year(), now.month());
     assert_eq!(resp.monthly.last().unwrap().year_month, expected_last);
 
@@ -108,8 +112,10 @@ async fn mixed_services_count_only_spinning_and_fitness_as_visits() {
     let app = TestApp::new().await;
     let card_id = app.seed_card("MIX1", 0.0, None, None, None, None).await;
 
-    let now = chrono::Local::now();
-    let today = now.format("%Y-%m-%d %H:%M:%S").to_string();
+    // created_at is stored as a UTC instant, so seed it at the real UTC "now"
+    // (runner-TZ-independent). Utc::now() always falls inside the gym's current
+    // month range the handler computes, so this_month counts it (#205/#222).
+    let today = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     seed_txn(
         &app.pool,
@@ -181,8 +187,8 @@ async fn topup_count_excludes_zero_amount_and_non_topup_actions() {
     let app = TestApp::new().await;
     let card_id = app.seed_card("MIX2", 0.0, None, None, None, None).await;
 
-    let now = chrono::Local::now();
-    let today = now.format("%Y-%m-%d %H:%M:%S").to_string();
+    // created_at is a UTC instant → seed at real UTC now (runner-independent).
+    let today = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     seed_txn(&app.pool, card_id, None, 10.0, "topup", &today).await;
     seed_txn(&app.pool, card_id, None, 25.0, "topup", &today).await;
@@ -200,7 +206,11 @@ async fn multi_month_buckets_align_correctly() {
     let app = TestApp::new().await;
     let card_id = app.seed_card("MULTI", 0.0, None, None, None, None).await;
 
-    let now = chrono::Local::now();
+    // Buckets + labels are gym-local, so seed the "15th 12:00" markers and
+    // compute the expected labels from the SAME Bratislava basis the handler
+    // uses. Mid-month at noon is far from any day boundary, so each marker
+    // buckets into its own month under either zone (#205/#222).
+    let now = spinbike_server::util::now_bratislava();
     let this_month = now.format("%Y-%m-15 12:00:00").to_string();
     seed_txn(
         &app.pool,
@@ -254,7 +264,7 @@ async fn visits_older_than_twelve_months_excluded_from_chart_but_in_all_time() {
     let app = TestApp::new().await;
     let card_id = app.seed_card("OLD", 0.0, None, None, None, None).await;
 
-    let eighteen_mo_ago = (chrono::Local::now() - chrono::Duration::days(548))
+    let eighteen_mo_ago = (spinbike_server::util::now_bratislava() - chrono::Duration::days(548))
         .format("%Y-%m-15 12:00:00")
         .to_string();
     seed_txn(
@@ -277,7 +287,7 @@ async fn visits_older_than_twelve_months_excluded_from_chart_but_in_all_time() {
 async fn soft_deleted_rows_excluded() {
     let app = TestApp::new().await;
     let card_id = app.seed_card("SOFT", 0.0, None, None, None, None).await;
-    let now_str = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let now_str = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
 
     seed_txn(
         &app.pool,

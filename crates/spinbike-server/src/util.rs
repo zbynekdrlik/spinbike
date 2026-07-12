@@ -1,6 +1,6 @@
 //! Small helpers shared across routes.
 
-use chrono::{NaiveDate, NaiveDateTime, Utc};
+use chrono::{Duration, NaiveDate, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Europe::Bratislava;
 
 /// Current wall-clock time in the gym's timezone (Europe/Bratislava), as a
@@ -29,6 +29,45 @@ pub fn now_bratislava() -> NaiveDateTime {
 /// gym's local midnight, not SQLite's UTC `date('now')`).
 pub fn today_bratislava() -> NaiveDate {
     now_bratislava().date()
+}
+
+/// The UTC instant of local midnight (00:00:00 Europe/Bratislava) on `day`.
+///
+/// DST-correct: the offset (CET +01:00 / CEST +02:00) is taken from the tz
+/// database for `day`, never a hardcoded constant. Bratislava's DST transitions
+/// happen at 02:00/03:00 local, so local MIDNIGHT is never in a spring-forward
+/// gap or a fall-back fold — `.single()`/`.earliest()` always resolves; the
+/// `.unwrap_or` fallback (treating the naive value as UTC, mirroring
+/// `routes/transactions.rs`) can never actually fire.
+fn bratislava_local_midnight_utc(day: NaiveDate) -> NaiveDateTime {
+    let local_midnight = day
+        .and_hms_opt(0, 0, 0)
+        .expect("00:00:00 is a valid time on every date");
+    Bratislava
+        .from_local_datetime(&local_midnight)
+        .earliest()
+        .map(|dt| dt.naive_utc())
+        .unwrap_or(local_midnight)
+}
+
+/// The half-open UTC instant range `[start, end)` covering the whole of the
+/// calendar `day` in the gym's timezone (Europe/Bratislava).
+///
+/// `start` is the UTC instant of `day`'s local midnight; `end` is the UTC
+/// instant of the NEXT day's local midnight (exclusive). Formatting each with
+/// `%Y-%m-%d %H:%M:%S` yields 19-char strings that bound a byte-wise TEXT
+/// comparison against a `created_at` column stored as UTC `datetime('now')`
+/// text — with NO SQL-side `date(..., 'localtime')` conversion (which reads the
+/// fragile server OS zone, the #205/#222 issue). Use it when the day-boundary
+/// decision keys off a UTC INSTANT column (`created_at`), where a naive
+/// `date(col, 'localtime') = date('now','localtime')` compare would drift with
+/// the OS zone; for a bare calendar-date column (`bookings.date`) the simpler
+/// `date_col >= today_bratislava()` bound suffices.
+pub fn bratislava_day_range_utc(day: NaiveDate) -> (NaiveDateTime, NaiveDateTime) {
+    (
+        bratislava_local_midnight_utc(day),
+        bratislava_local_midnight_utc(day + Duration::days(1)),
+    )
 }
 
 /// Format an integer as an English ordinal: 1 → "1st", 2 → "2nd", 3 → "3rd",
@@ -103,6 +142,66 @@ mod tests {
             NaiveDate::from_ymd_opt(2026, 7, 16).unwrap(),
             "22:30 UTC == 00:30 CEST — already the 16th at the gym"
         );
+    }
+
+    /// Winter (CET, UTC+1): local midnight 00:00 on 2026-01-15 is 23:00 UTC on
+    /// the PREVIOUS day; the exclusive end (next local midnight) is 23:00 UTC on
+    /// the 15th. Proves the range is the gym day expressed in real UTC instants,
+    /// with the CET offset taken from tzdata — the exact bounds `door.rs` binds
+    /// against `created_at` instead of a fragile `date(created_at,'localtime')`.
+    #[test]
+    fn day_range_utc_winter_is_utc_plus_one() {
+        let (start, end) =
+            super::bratislava_day_range_utc(NaiveDate::from_ymd_opt(2026, 1, 15).unwrap());
+        assert_eq!(
+            start,
+            NaiveDate::from_ymd_opt(2026, 1, 14)
+                .unwrap()
+                .and_hms_opt(23, 0, 0)
+                .unwrap(),
+            "00:00 CET on the 15th == 23:00 UTC on the 14th"
+        );
+        assert_eq!(
+            end,
+            NaiveDate::from_ymd_opt(2026, 1, 15)
+                .unwrap()
+                .and_hms_opt(23, 0, 0)
+                .unwrap(),
+            "00:00 CET on the 16th == 23:00 UTC on the 15th (exclusive end)"
+        );
+    }
+
+    /// Summer (CEST, UTC+2): local midnight 00:00 on 2026-07-15 is 22:00 UTC on
+    /// the previous day. A hardcoded +01:00 would place it at 23:00 — this pins
+    /// that `chrono-tz` applies the live DST offset from tzdata.
+    #[test]
+    fn day_range_utc_summer_is_utc_plus_two() {
+        let (start, end) =
+            super::bratislava_day_range_utc(NaiveDate::from_ymd_opt(2026, 7, 15).unwrap());
+        assert_eq!(
+            start,
+            NaiveDate::from_ymd_opt(2026, 7, 14)
+                .unwrap()
+                .and_hms_opt(22, 0, 0)
+                .unwrap(),
+            "00:00 CEST on the 15th == 22:00 UTC on the 14th"
+        );
+        assert_eq!(
+            end,
+            NaiveDate::from_ymd_opt(2026, 7, 15)
+                .unwrap()
+                .and_hms_opt(22, 0, 0)
+                .unwrap(),
+            "00:00 CEST on the 16th == 22:00 UTC on the 15th (exclusive end)"
+        );
+    }
+
+    /// Off a DST-transition date the gym day is exactly 24h of real time.
+    #[test]
+    fn day_range_utc_spans_exactly_24h_off_dst() {
+        let (start, end) =
+            super::bratislava_day_range_utc(NaiveDate::from_ymd_opt(2026, 7, 15).unwrap());
+        assert_eq!(end - start, chrono::Duration::hours(24));
     }
 
     #[test]
