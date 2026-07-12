@@ -3,6 +3,53 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-07-12 — #212: sw.js edge-cached by Cloudflare for 4h
+
+- **Issue:** [#212](https://github.com/zbynekdrlik/spinbike/issues/212) — found
+  during #208's post-deploy verification. Ticket-validated STILL_VALID +
+  confirmed LIVE right before work started (`curl spinbike.sk/sw.js`:
+  `cf-cache-status: HIT`, `age` growing toward 14400).
+- **Version:** bump `14c6a54` (0.15.0-dev.78 → .79).
+- **Tests (RED→GREEN):** `crates/spinbike-server/tests/static_files.rs::sw_js_gets_no_cache_control_for_revalidation`.
+  RED `8c60d96` (verified locally, scoped bypass per `ci-deploy/SKILL.md`'s
+  allowance for a bug-fix ticket: `left=None, right=Some("no-cache")`) → GREEN
+  `f747cdb` (all 6 tests pass). Two characterization tests added alongside
+  (`hashed_asset_still_gets_long_cache_immutable_header`,
+  `manifest_json_gets_no_explicit_cache_control`) guarding existing behavior.
+- **Fix:** `static_handler` (`routes/static_files.rs`) special-cases `sw.js`
+  (`else if` sibling of the `assets/` branch) → `Cache-Control: no-cache`.
+  CI's placeholder-dist step (3 call sites: `ci.yml` test + mutation-test
+  jobs, `mutation-full.yml`) extended to also create `sw.js`/`assets/`/
+  `manifest.json` placeholders so the tests can exercise real `Asset::get`.
+- **Second root-cause layer found + fixed LIVE (not in git — CDN config):**
+  the origin fix alone did NOT stop edge caching — both Cloudflare zones
+  (`spinbike.sk`, `newlevel.media`) are Free plan with a fixed
+  `browser_cache_ttl=14400` and no "respect origin headers" toggle
+  (Enterprise-only). Added a Cache Rule (Rulesets API — legacy Page Rules
+  endpoint rejects account-owned tokens, code 1011) bypassing cache for
+  `/sw.js` on both zones, via a temporary scoped API token (revoked after
+  use). Documented on the issue (comment) + `frontend-pwa/SKILL.md` (full
+  recipe + both zone IDs).
+- **Review:** self-review across correctness/removed-behavior/cross-file/
+  reuse/altitude/conventions angles (small diff, ~9 LoC real logic change) +
+  deep `superpowers:requesting-code-review` dispatch (base `dd5a282`..head
+  `35674f8`) — 0 🔴 0 🟡, one Minor (3x-duplicated CI placeholder step, noted
+  as acceptable for one extra file, not blocking).
+- **CI:** dev push green (all jobs incl. all 8 mutation shards, E2E, Deploy
+  (dev), Smoke (dev)). PR [#215](https://github.com/zbynekdrlik/spinbike/pull/215),
+  merged `ec7384d`. Main CI green incl. Deploy (prod) + Smoke (prod).
+- **Deployed + verified LIVE on `https://spinbike.sk` (v0.15.0-dev.79 then
+  .80):** DOM version matches `/api/version`; cleared a stale SW registration
+  in the long-lived Playwright profile first (per the existing gotcha below),
+  0 console errors; `curl`/in-page `fetch` both confirm `cache-control:
+  no-cache` + `cf-cache-status: DYNAMIC` (never `HIT`) on `/sw.js`.
+- **Playbook:** rewrote the `frontend-pwa/SKILL.md` #212 section from "known
+  issue, fix direction" into "fixed — two layers, here's the recipe", with
+  the Cache Rules API recipe + both zone IDs. Follow-up docs-only PR
+  [#216](https://github.com/zbynekdrlik/spinbike/pull/216) (version bump
+  `c004f2e` → 0.15.0-dev.80, merged `fc00ef4`) since #215 had already merged
+  by the time the write-up was ready.
+
 ## 2026-07-11 — #165: split routes/users.rs by concern
 
 - **Issue:** [#165](https://github.com/zbynekdrlik/spinbike/issues/165) —
