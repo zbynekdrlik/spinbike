@@ -48,6 +48,7 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
             }
             #[derive(serde::Deserialize)]
             struct Resp {
+                #[allow(dead_code)]
                 id: i64,
             }
             match api::post::<Req, Resp>("/api/bookings", &Req { template_id, date }).await {
