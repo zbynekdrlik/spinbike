@@ -117,9 +117,12 @@ async fn delete_charge_refunds_credit() {
 #[tokio::test]
 async fn patch_valid_until_updates_pass_end_date() {
     let app = TestApp::new().await;
+    // A row with valid_until set must be a monthly_pass charge (the V20
+    // trigger, #204, rejects valid_until on any other action/service).
     let tx_id = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO transactions (user_id, amount, action, valid_until)
-         VALUES (?, -35.0, 'charge', '2026-05-01') RETURNING id",
+        "INSERT INTO transactions (user_id, amount, action, service_id, valid_until)
+         SELECT ?, -35.0, 'charge', id, '2026-05-01' FROM services WHERE kind = 'monthly_pass' LIMIT 1
+         RETURNING id",
     )
     .bind(app.customer_card_id)
     .fetch_one(&app.pool)
@@ -164,9 +167,12 @@ async fn patch_valid_until_rejects_non_pass_transaction() {
 #[tokio::test]
 async fn patch_valid_until_forbidden_for_customer() {
     let app = TestApp::new().await;
+    // A row with valid_until set must be a monthly_pass charge (the V20
+    // trigger, #204, rejects valid_until on any other action/service).
     let tx_id = sqlx::query_scalar::<_, i64>(
-        "INSERT INTO transactions (user_id, amount, action, valid_until)
-         VALUES (?, -35.0, 'charge', '2026-05-01') RETURNING id",
+        "INSERT INTO transactions (user_id, amount, action, service_id, valid_until)
+         SELECT ?, -35.0, 'charge', id, '2026-05-01' FROM services WHERE kind = 'monthly_pass' LIMIT 1
+         RETURNING id",
     )
     .bind(app.customer_card_id)
     .fetch_one(&app.pool)
