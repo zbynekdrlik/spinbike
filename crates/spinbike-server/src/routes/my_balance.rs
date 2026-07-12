@@ -84,18 +84,23 @@ async fn my_balance(
     //    user lists use. The view already exposes the user's latest non-voided
     //    monthly-pass purchase; here we surface it only while it is still valid
     //    today or later (an expired pass shows as "no active pass"). The
-    //    comparison is INCLUSIVE of the last paid day and coerces both sides to
-    //    a calendar date (`date(valid_until) >= date('now')`), matching the
-    //    charger and the door route (#179). The previous
-    //    `valid_until > datetime('now')` compared a bare date against a
-    //    datetime and, via SQLite's byte-wise TEXT ordering, wrongly reported
-    //    "no active pass" from midnight of the pass's own last valid day.
+    //    comparison is INCLUSIVE of the last paid day and coerces valid_until to
+    //    a calendar date (`date(valid_until) >= ?`), matching the charger and
+    //    the door route (#179). The previous `valid_until > datetime('now')`
+    //    compared a bare date against a datetime and, via SQLite's byte-wise
+    //    TEXT ordering, wrongly reported "no active pass" from midnight of the
+    //    pass's own last valid day. "Today" is the gym's LOCAL day
+    //    (Europe/Bratislava) via `util::today_bratislava()`, bound as a
+    //    parameter — NOT SQLite's UTC `date('now')`, so the customer's balance
+    //    page agrees with the door/charger logic near local midnight (#205).
     tracing::debug!(user_id, "my_balance: querying monthly_pass_active_until");
+    let today = crate::util::today_bratislava();
     let monthly_pass_active_until: Option<String> = sqlx::query_scalar(
         "SELECT valid_until FROM user_active_pass \
-          WHERE user_id = ? AND date(valid_until) >= date('now')",
+          WHERE user_id = ? AND date(valid_until) >= ?",
     )
     .bind(user_id)
+    .bind(today)
     .fetch_optional(&state.pool)
     .await
     .map_err(internal_error)?;

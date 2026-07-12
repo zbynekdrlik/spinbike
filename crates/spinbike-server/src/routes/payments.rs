@@ -233,7 +233,10 @@ async fn sell_pass(
     if body.price < 0.0 {
         return Err(super::bad_request("Price must be zero or greater"));
     }
-    let today = chrono::Local::now().date_naive();
+    // "In the future" means after the gym's local day (Europe/Bratislava), the
+    // same basis the pass-expiry checks now use (#205) — so a pass sold late in
+    // the evening isn't judged against a UTC / OS-zone "today".
+    let today = crate::util::today_bratislava();
     if body.valid_until <= today {
         return Err(super::bad_request("valid_until must be in the future"));
     }
@@ -309,7 +312,12 @@ async fn log_visit(
     StaffUser(claims): StaffUser,
     Json(body): Json<LogVisitRequest>,
 ) -> Result<Json<LogVisitResponse>, ApiError> {
-    let today = chrono::Local::now().date_naive();
+    // Gym-local "today" (Europe/Bratislava), consistent with the door route,
+    // my_balance and the T-4h charger — a monthly pass grants a free logged
+    // visit through the whole of its last GYM-LOCAL day (#205). `chrono::Local`
+    // / SQLite `date('now')` would key this off the server OS zone / UTC and
+    // could disagree with the door near local midnight.
+    let today = crate::util::today_bratislava();
     let valid_until = users::get_user_pass_valid_until(&state.pool, body.user_id)
         .await
         .map_err(internal_error)?;

@@ -638,22 +638,22 @@ async fn my_balance_shows_pass_active_on_its_expiry_day() {
         .fetch_one(&app.pool)
         .await
         .unwrap();
-    // Pass valid_until = EXACTLY today, as a bare date (sell_pass's format).
+    // Pass valid_until = EXACTLY today at the gym (Europe/Bratislava), as a
+    // bare date (sell_pass's format). my_balance now keys the expiry boundary
+    // off the gym-local day (#205), so seed with the SAME basis — otherwise a
+    // UTC `date('now')` seed would flake near local midnight on a UTC CI runner.
+    let today = spinbike_server::util::today_bratislava();
     sqlx::query(
         "INSERT INTO transactions (user_id, service_id, amount, action, valid_until) \
-         VALUES (?, ?, -35.0, 'charge', date('now'))",
+         VALUES (?, ?, -35.0, 'charge', ?)",
     )
     .bind(app.customer_id)
     .bind(svc_id)
+    .bind(today)
     .execute(&app.pool)
     .await
     .unwrap();
-    // What the DB considers "today" — same basis the seeded date uses, so the
-    // exact-value assertion can't flake on a UTC-vs-local mismatch.
-    let today: String = sqlx::query_scalar("SELECT date('now')")
-        .fetch_one(&app.pool)
-        .await
-        .unwrap();
+    let today = today.to_string();
 
     let (status, body) = app
         .request(get("/api/my/balance", &app.customer_token))

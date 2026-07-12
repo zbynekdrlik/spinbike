@@ -163,7 +163,10 @@ fn user_response_from_row_with_pass(
     pass: Option<(i64, chrono::NaiveDate)>,
     last_visit_at: Option<String>,
 ) -> UserResponse {
-    let today = chrono::Local::now().date_naive();
+    // Gym-local "today" (Europe/Bratislava) so the staff list's days_remaining
+    // matches the door/charger/my_balance pass boundary near local midnight,
+    // independent of the server OS timezone (#205).
+    let today = crate::util::today_bratislava();
     let pass = pass.map(|(tx_id, d)| CardPass {
         valid_until: d,
         days_remaining: (d - today).num_days() as i32,
@@ -525,7 +528,10 @@ async fn negative_balance(
     let rows = db::list_negative_balance(&state.pool)
         .await
         .map_err(internal_error)?;
-    let today = chrono::Local::now().date_naive();
+    // Gym-local "today" (Europe/Bratislava) — same basis as the other pass
+    // day-boundary sites, so days_remaining is consistent near local midnight
+    // regardless of the server OS timezone (#205).
+    let today = crate::util::today_bratislava();
     let out = rows
         .into_iter()
         .map(|r| {

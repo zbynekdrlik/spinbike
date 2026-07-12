@@ -385,7 +385,9 @@ async fn sell_pass_rejects_today_as_valid_until() {
     let user_id = app
         .seed_card("SELL-TODAY", 100.0, None, None, None, None)
         .await;
-    let today = chrono::Local::now().date_naive();
+    // Gym-local (Europe/Bratislava) "today" — the basis sell_pass now validates
+    // against (#205); selling a pass expiring "today" must be rejected.
+    let today = spinbike_server::util::today_bratislava();
     let today_str = today.format("%Y-%m-%d").to_string();
     let (status, _) = app
         .request(post_json(
@@ -406,7 +408,9 @@ async fn log_visit_accepts_pass_with_valid_until_today() {
         .await;
 
     // Insert a pass expiring TODAY directly — API won't allow today via sell-pass.
-    let today = chrono::Local::now().date_naive();
+    // Use the gym-local (Europe/Bratislava) "today" that log_visit now keys off
+    // (#205), so this can't flake near local midnight on a UTC CI runner.
+    let today = spinbike_server::util::today_bratislava();
     let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
         .fetch_one(&app.pool)
         .await
@@ -441,7 +445,9 @@ async fn user_response_pass_field_when_valid_until_equals_today() {
         .seed_card("BOUNDARY-TODAY", 50.0, None, None, None, None)
         .await;
 
-    let today = chrono::Local::now().date_naive();
+    // Gym-local (Europe/Bratislava) "today" — the basis the staff-list
+    // days_remaining now uses (#205); avoids a UTC-vs-local midnight flake.
+    let today = spinbike_server::util::today_bratislava();
     let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
         .fetch_one(&app.pool)
         .await
