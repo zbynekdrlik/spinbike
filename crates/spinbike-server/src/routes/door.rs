@@ -174,15 +174,33 @@ async fn open(
     // didn't physically open the door.
     let mut tx = state.pool.begin().await.map_err(internal_error)?;
 
-    // 4. Same-day count.
+    // 4. Same-day count — how many door rows this user already has TODAY, used
+    // to label the press 1st/2nd/Nth AND (money-adjacent) to pick the path
+    // below: `n == 0` is the first press of the day and triggers the
+    // pass-check-or-charge branch. "Today" is the gym's LOCAL day
+    // (Europe/Bratislava). `created_at` is a UTC INSTANT (`datetime('now')`), so
+    // we compare it against the UTC-instant half-open RANGE of the gym day —
+    // NOT `date(created_at,'localtime') = date('now','localtime')`, whose
+    // 'localtime' reads the server OS zone. On a UTC-configured host that old
+    // form counts by the UTC day and, near local midnight, could split two
+    // same-gym-day presses across a stale rollover (making the 2nd look like a
+    // fresh 1st → a second charge) or merge two different gym days. The bound
+    // range makes the boundary exact and DST-correct (#205/#222).
+    let (day_start, day_end) =
+        crate::util::bratislava_day_range_utc(crate::util::today_bratislava());
+    let day_start = day_start.format("%Y-%m-%d %H:%M:%S").to_string();
+    let day_end = day_end.format("%Y-%m-%d %H:%M:%S").to_string();
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
          WHERE user_id = ? \
            AND note LIKE 'door:%' \
-           AND date(created_at, 'localtime') = date('now', 'localtime') \
+           AND created_at >= ? \
+           AND created_at < ? \
            AND deleted_at IS NULL",
     )
     .bind(user_id)
+    .bind(&day_start)
+    .bind(&day_end)
     .fetch_one(&mut *tx)
     .await
     .map_err(internal_error)?;

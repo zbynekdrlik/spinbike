@@ -201,16 +201,24 @@ pub async fn list_user_bookings(
     pool: &SqlitePool,
     user_id: i64,
 ) -> Result<Vec<BookingWithClassRow>> {
+    // "Upcoming" is relative to the gym's LOCAL day (Europe/Bratislava), bound
+    // as a param — NOT SQLite's `date('now')` (UTC), which near local midnight
+    // is up to 2h off from the gym's day and could drop a class dated "today"
+    // from the list early / show a stale one late (#205/#222). `b.date` is a
+    // bare `YYYY-MM-DD` calendar column, so an inclusive bare-date `>=` compare
+    // is correct.
+    let today = crate::util::today_bratislava();
     let bookings = sqlx::query_as::<_, BookingWithClassRow>(
         "SELECT b.id, b.template_id, b.date, b.user_id, \
                 ct.start_time, i.name AS instructor_name \
            FROM bookings b \
            JOIN class_templates ct ON ct.id = b.template_id \
            LEFT JOIN instructors i ON i.id = ct.instructor_id \
-          WHERE b.user_id = ? AND b.cancelled_at IS NULL AND b.date >= date('now') \
+          WHERE b.user_id = ? AND b.cancelled_at IS NULL AND b.date >= ? \
           ORDER BY b.date, b.created_at",
     )
     .bind(user_id)
+    .bind(today)
     .fetch_all(pool)
     .await?;
     Ok(bookings)
@@ -247,7 +255,11 @@ pub async fn list_upcoming_for_user(
     .fetch_all(pool)
     .await?;
 
-    let now = chrono::Local::now().naive_local();
+    // Gym-local wall clock (Europe/Bratislava) for the past/free/booked/full
+    // state — NOT `chrono::Local` (server OS zone, may be UTC on the systemd
+    // unit), which near local midnight would mark a class past/upcoming against
+    // the wrong day (#205/#222).
+    let now = crate::util::now_bratislava();
     let mut out = Vec::new();
     let span_days = (to_d - from_d).num_days().max(0);
     for offset in 0..=span_days {

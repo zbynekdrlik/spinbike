@@ -772,6 +772,13 @@ async fn user_transactions(
     ))
 }
 
+/// The first calendar day of month `m` in year `y`, as a `NaiveDate`. Used to
+/// derive the gym-local (Europe/Bratislava) month/year boundaries for the
+/// 12-month stats chart.
+fn month_first(y: i32, m: u32) -> chrono::NaiveDate {
+    chrono::NaiveDate::from_ymd_opt(y, m, 1).expect("first of month is always a valid date")
+}
+
 async fn user_stats(
     State(state): State<AppState>,
     _: StaffUser,
@@ -784,23 +791,42 @@ async fn user_stats(
     let visit_filter_sql =
         format!("service_id IN (SELECT id FROM services WHERE name_en IN ({placeholders}))");
 
+    // Gym-local (Europe/Bratislava) month/year boundaries, as UTC-instant
+    // strings bound as params — so "this month" / "this year" key off the GYM
+    // calendar, NOT SQLite's `strftime(..., 'localtime')` whose 'localtime'
+    // reads the server OS zone (UTC on the systemd unit) and would bucket a
+    // transaction into the wrong gym month/year near local midnight (#205/#222).
+    // `created_at` is a UTC instant (`datetime('now')`), so each boundary is the
+    // UTC instant of a Bratislava local midnight; a half-open `>= start AND <
+    // end` range is exact and DST-correct.
+    let today = crate::util::today_bratislava();
+    let fmt = |dt: chrono::NaiveDateTime| dt.format("%Y-%m-%d %H:%M:%S").to_string();
+    // Start-of-day (gym-local) UTC instant for the 1st of (y, m).
+    let month_start_utc =
+        |y: i32, m: u32| fmt(crate::util::bratislava_day_range_utc(month_first(y, m)).0);
+    let month_start = month_start_utc(today.year(), today.month());
+    let (next_month_y, next_month_m) = if today.month() == 12 {
+        (today.year() + 1, 1)
+    } else {
+        (today.year(), today.month() + 1)
+    };
+    let month_end = month_start_utc(next_month_y, next_month_m);
+    let year_start = month_start_utc(today.year(), 1);
+    let year_end = month_start_utc(today.year() + 1, 1);
+
     let totals_sql = format!(
         "SELECT
             COALESCE(SUM(CASE WHEN {visit_filter} AND deleted_at IS NULL
-                              AND strftime('%Y-%m', created_at, 'localtime') =
-                                  strftime('%Y-%m','now','localtime')
+                              AND created_at >= ? AND created_at < ?
                          THEN 1 ELSE 0 END), 0) AS visits_month,
             COALESCE(SUM(CASE WHEN action='topup' AND amount > 0 AND deleted_at IS NULL
-                              AND strftime('%Y-%m', created_at, 'localtime') =
-                                  strftime('%Y-%m','now','localtime')
+                              AND created_at >= ? AND created_at < ?
                          THEN amount ELSE 0.0 END), 0.0) AS topup_month,
             COALESCE(SUM(CASE WHEN {visit_filter} AND deleted_at IS NULL
-                              AND strftime('%Y',    created_at, 'localtime') =
-                                  strftime('%Y','now','localtime')
+                              AND created_at >= ? AND created_at < ?
                          THEN 1 ELSE 0 END), 0) AS visits_year,
             COALESCE(SUM(CASE WHEN action='topup' AND amount > 0 AND deleted_at IS NULL
-                              AND strftime('%Y',    created_at, 'localtime') =
-                                  strftime('%Y','now','localtime')
+                              AND created_at >= ? AND created_at < ?
                          THEN amount ELSE 0.0 END), 0.0) AS topup_year,
             COALESCE(SUM(CASE WHEN {visit_filter} AND deleted_at IS NULL
                          THEN 1 ELSE 0 END), 0) AS visits_all,
@@ -811,13 +837,23 @@ async fn user_stats(
         visit_filter = visit_filter_sql
     );
 
+    // Placeholders appear in SQL text order: [vf names] then [month range] for
+    // visits_month; [month range] for topup_month; [vf names] then [year range]
+    // for visits_year; [year range] for topup_year; [vf names] for visits_all;
+    // then `id`. Bind in exactly that order.
     let mut totals_q = sqlx::query_as::<_, (i64, f64, i64, f64, i64, f64)>(&totals_sql);
-    // The visit-filter sub-clause appears 3 times (month / year / all). Bind
-    // the class-name placeholders 3 times, in the same order.
-    for _ in 0..3 {
-        for n in CLASS_VISIT_NAMES_EN {
-            totals_q = totals_q.bind(*n);
-        }
+    for n in CLASS_VISIT_NAMES_EN {
+        totals_q = totals_q.bind(*n);
+    }
+    totals_q = totals_q.bind(&month_start).bind(&month_end); // visits_month
+    totals_q = totals_q.bind(&month_start).bind(&month_end); // topup_month
+    for n in CLASS_VISIT_NAMES_EN {
+        totals_q = totals_q.bind(*n);
+    }
+    totals_q = totals_q.bind(&year_start).bind(&year_end); // visits_year
+    totals_q = totals_q.bind(&year_start).bind(&year_end); // topup_year
+    for n in CLASS_VISIT_NAMES_EN {
+        totals_q = totals_q.bind(*n);
     }
     totals_q = totals_q.bind(id);
     let (vm, tm, vy, ty, va, ta) = totals_q
@@ -825,35 +861,58 @@ async fn user_stats(
         .await
         .map_err(internal_error)?;
 
-    let now = chrono::Local::now();
+    // Build the 12 month labels (oldest → newest) from the gym-local month, and
+    // the 13 matching UTC-instant bounds: `bounds[i]` is the UTC instant of the
+    // gym-local 1st-of-month for `labels[i]`, and `bounds[12]` the start of the
+    // month AFTER the newest label (== `month_end`), the exclusive upper bound.
     let mut labels: Vec<String> = Vec::with_capacity(12);
+    let mut bounds: Vec<String> = Vec::with_capacity(13);
     for i in (0..12).rev() {
-        let mut year = now.year();
-        let mut month = now.month() as i32 - i;
+        let mut year = today.year();
+        let mut month = today.month() as i32 - i;
         while month < 1 {
             month += 12;
             year -= 1;
         }
         labels.push(format!("{:04}-{:02}", year, month));
+        bounds.push(month_start_utc(year, month as u32));
     }
-    let oldest_label = labels.first().unwrap().clone();
+    bounds.push(month_end.clone());
+
+    // Bucket each transaction into its gym-local month by comparing the UTC
+    // instant `created_at` against the Rust-computed bounds — NOT
+    // `strftime('%Y-%m', created_at, 'localtime')`, which reads the server OS
+    // zone (#205/#222). The outer WHERE restricts rows to `[bounds[0],
+    // bounds[12])`, so the ascending `WHEN created_at < bounds[i+1] THEN
+    // labels[i]` arms assign each row to exactly one month (first match wins).
+    let mut case_arms = String::new();
+    for _ in 0..12 {
+        case_arms.push_str("WHEN created_at < ? THEN ? ");
+    }
     let bucket_sql = format!(
         "SELECT
-            strftime('%Y-%m', created_at, 'localtime') AS ym,
+            CASE {case_arms}END AS ym,
             SUM(CASE WHEN {visit_filter} THEN 1 ELSE 0 END) AS visits,
             SUM(CASE WHEN action='topup' AND amount > 0 THEN amount ELSE 0.0 END) AS topped_up
          FROM transactions
          WHERE user_id = ?
            AND deleted_at IS NULL
-           AND strftime('%Y-%m', created_at, 'localtime') >= ?
+           AND created_at >= ? AND created_at < ?
          GROUP BY ym",
+        case_arms = case_arms,
         visit_filter = visit_filter_sql
     );
+    // Placeholder order: the CASE arms first — per arm `< ?` (bounds[i+1]) then
+    // `THEN ?` (labels[i]) — then the visit-filter names, then `id`, then the
+    // outer window `>= bounds[0]` / `< bounds[12]`.
     let mut bucket_q = sqlx::query_as::<_, (String, i64, f64)>(&bucket_sql);
+    for (i, label) in labels.iter().enumerate() {
+        bucket_q = bucket_q.bind(bounds[i + 1].clone()).bind(label.clone());
+    }
     for n in CLASS_VISIT_NAMES_EN {
         bucket_q = bucket_q.bind(*n);
     }
-    bucket_q = bucket_q.bind(id).bind(&oldest_label);
+    bucket_q = bucket_q.bind(id).bind(&bounds[0]).bind(&bounds[12]);
     let bucket_rows: Vec<(String, i64, f64)> = bucket_q
         .fetch_all(&state.pool)
         .await

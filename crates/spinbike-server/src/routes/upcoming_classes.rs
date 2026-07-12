@@ -26,7 +26,10 @@ async fn upcoming(
     Query(qs): Query<Qs>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let days = qs.days.unwrap_or(14).clamp(1, 60);
-    let today = chrono::Local::now().date_naive();
+    // Gym-local "today" (Europe/Bratislava), not `chrono::Local` (server OS
+    // zone) / SQLite `date('now')` (UTC) — the window must start on the gym's
+    // day, consistent with `my_bookings` and the charger (#205/#222).
+    let today = crate::util::today_bratislava();
     let to = today + chrono::Duration::days(days);
     let rows = crate::db::classes::list_upcoming_for_user(
         &state.pool,
