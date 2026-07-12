@@ -3,6 +3,63 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-07-12 — #204: enforce the active-pass invariant at the schema level (V20 trigger)
+
+- **Issue:** [#204](https://github.com/zbynekdrlik/spinbike/issues/204) —
+  split out of #179; the "which transaction row counts as a monthly pass"
+  predicate (`action='charge' AND service kind='monthly_pass' AND valid_until
+  IS NOT NULL`, canonicalized by V18's `user_active_pass` view) was
+  application-level only. Ticket-validated STILL_VALID: 0/4671 live prod rows
+  violate the invariant (confirmed #178/#179), so this is defence-in-depth,
+  not a live-bug fix.
+- **Version:** bump `d553ab3` (0.15.0-dev.81 → .82).
+- **Migration V20:** `CREATE TRIGGER enforce_active_pass_invariant BEFORE
+  INSERT ON transactions WHEN NEW.valid_until IS NOT NULL` — `RAISE(ABORT,…)`
+  unless `action='charge'` AND `service_id` resolves to `kind='monthly_pass'`.
+  Standalone DDL (no table rebuild needed, unlike V8/V11/V16's CHECK-add
+  dance). INSERT-only: confirmed no code path UPDATEs `action`/`service_id`
+  post-insert, and `patch_valid_until` only re-dates an already-qualifying row.
+- **Tests (RED→GREEN):** `db::migrations::tests::v20_enforces_active_pass_invariant`
+  — 5 cases (bad action, bad service, NULL service_id all rejected; the
+  legitimate pass shape and a plain valid_until-NULL row both accepted). RED
+  `710d00d` → GREEN `2782ead`.
+- **Test-seed fixes (assertions unchanged, setup only):** 3 unit tests
+  (`v12_normalizes_every_legacy_pattern`, `v18_user_active_pass_view_is_canonical`,
+  `db::transactions::transaction_stores_and_retrieves_valid_until`) drop the
+  trigger for a deliberately-legacy/invalid seed or swap a hardcoded service
+  id for the real monthly_pass id. `v8_drop_rename_pattern_works_with_fk_child_rows`
+  now also drops+recreates the V20 trigger around its simulated `services`
+  rebuild (`6ea145b`) — same class as the pre-existing V18 view requirement.
+  4 integration-test seeds in `crates/spinbike-server/tests/` (a sibling of
+  `src/`, missed by the first grep sweep and the cause of a second failed CI
+  run) were non-compliant (`reports.rs`, `transactions_routes.rs` x2 left
+  `service_id` NULL; `users_delete.rs` used `action='topup'`) — fixed `c27283d`.
+- **Review:** deep `superpowers:requesting-code-review` senior pass (Opus,
+  base `63bed25`..head `c27283d`) — 0 Critical, 0 Important, 2 Minor/
+  informational (both explicitly out-of-scope, no fix needed) — plus a fast
+  `/review` pass on the PR diff, also clean.
+- **CI:** dev push green (all jobs incl. all 8 mutation shards, E2E, Deploy
+  (dev), Smoke (dev)). PR [#218](https://github.com/zbynekdrlik/spinbike/pull/218),
+  merged `7889546`. Main CI green incl. Deploy (prod) + Smoke (prod).
+- **Deployed + verified LIVE on `https://spinbike.sk` (v0.15.0-dev.82):**
+  DOM version matches `/api/version`, 0 console errors. Confirmed the trigger
+  exists on the real prod DB (`sqlite_master` query) and 0 rows violate the
+  invariant. Functionally exercised the ONE legitimate write path for real —
+  synthetic staff+customer accounts (`autopilot-verify-204-*@spinbike.local`),
+  minted JWTs, drove `POST /api/payments/sell-pass` through the live prod
+  API (transaction id 91989, `action='charge'`, `service kind='monthly_pass'`,
+  `valid_until` set) — proving the trigger accepts the real shape post-deploy.
+  All synthetic rows + secret/token scratch files deleted after.
+- **Playbook:** `.claude/skills/db-migrations/SKILL.md` — generalized the
+  "VIEW referencing services/transactions breaks the rebuild pattern" gotcha
+  to cover triggers too, and added a new gotcha documenting that a
+  schema-invariant grep sweep must independently cover `src/`, `tests/`
+  (a sibling dir invisible to a `src/`-scoped grep — the actual gap hit
+  here), and `e2e/*.spec.ts`. Committed as a small dev-only follow-up after
+  #204's own PR had already merged (version bump `9ae14fc` → 0.15.0-dev.83,
+  docs commit on top; both pushed at `f20d223`, dev CI green) — no separate
+  PR to main yet; rides the next ticket's PR.
+
 ## 2026-07-12 — #212: sw.js edge-cached by Cloudflare for 4h
 
 - **Issue:** [#212](https://github.com/zbynekdrlik/spinbike/issues/212) — found
