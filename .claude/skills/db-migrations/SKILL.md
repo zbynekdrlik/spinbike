@@ -91,23 +91,42 @@ This is real evidence — CI's in-memory SQLite can't see production data
 quirks — without touching the running service, so it's safe to do for ANY
 predicate-only change, not just ones that pass the mutation trigger above.
 
-## GOTCHA: a VIEW referencing `services`/`transactions` breaks the V8/V11/V16 rebuild pattern
+## GOTCHA: a VIEW or TRIGGER referencing `services`/`transactions` breaks the V8/V11/V16 rebuild pattern
 
-If a migration adds a `CREATE VIEW` that references `services` or
-`transactions` (e.g. V18's `user_active_pass`), any FUTURE migration that needs
-the established DROP-TABLE + CREATE-new + INSERT + RENAME rebuild pattern on
+If a migration adds a `CREATE VIEW` or `CREATE TRIGGER` that references
+`services` or `transactions` (e.g. V18's `user_active_pass` view, V20's
+`enforce_active_pass_invariant` trigger), any FUTURE migration that needs the
+established DROP-TABLE + CREATE-new + INSERT + RENAME rebuild pattern on
 EITHER of those two tables (used by V8, V11, V16 to work around SQLite's
 "can't ALTER to add a CHECK constraint") will fail with `no such table:
 main.services` (or `main.transactions`) at the `ALTER TABLE … RENAME`
-step — SQLite validates a dependent view's stored SQL during the rename, and
-at that instant the table doesn't exist yet under its final name.
+step — SQLite reparses EVERY dependent object's stored SQL during the rename
+(views AND triggers alike), and at that instant the table doesn't exist yet
+under its final name.
 
-**Fix pattern:** `DROP VIEW <name>` before the rebuild, re-run the exact
-`CREATE VIEW` statement after the `RENAME`, all inside the same migration
+**Fix pattern:** `DROP VIEW <name>` / `DROP TRIGGER <name>` for every such
+dependent object before the rebuild, re-run the exact `CREATE VIEW`/`CREATE
+TRIGGER` statement(s) after the `RENAME`, all inside the same migration
 transaction. Worked example:
 `db::migrations::tests::v8_drop_rename_pattern_works_with_fk_child_rows`
-(had to be updated when V18 landed — it manually re-simulates a future
-`services` rebuild and hit this exact failure).
+(had to be updated when V18 landed, then again when V20 landed — it manually
+re-simulates a future `services` rebuild and hit this exact failure both
+times; now drops+recreates BOTH the view and the trigger).
+
+## GOTCHA: adding a schema INVARIANT (CHECK/trigger) needs a grep sweep across THREE separate trees, not one
+
+Unlike a column rename (covered above — one `TABLE\.COLUMN\b` grep across the
+whole repo), a new value-level invariant (e.g. V20's "valid_until implies
+charge+monthly_pass") is validated per-INSERT, so you must independently sweep
+every `INSERT INTO <table>` site that could set the guarded column, in THREE
+places that do NOT share one grep root: `crates/spinbike-server/src/`
+(app code + unit tests), `crates/spinbike-server/tests/` (integration
+tests — a SIBLING of `src/`, invisible to a `src/`-scoped grep and the exact
+gap that cost a wasted CI cycle on #204), and `e2e/tests/*.spec.ts` (seeds
+via `/api/test/seed-transactions` / `/api/test/seed-expired-pass`, which pass
+through the real route so they're usually already compliant — but check).
+`grep -rn "INSERT INTO <table>" <each root> --include=*.rs` (and `*.ts` for
+e2e) separately; do not assume one root's sweep covers another.
 
 ## GOTCHA: a migration that ALTERs `schema_version` ITSELF can't be relied on inside its own INSERT, on a fresh install
 
