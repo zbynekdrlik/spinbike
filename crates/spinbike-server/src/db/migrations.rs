@@ -804,6 +804,15 @@ ALTER TABLE schema_version ADD COLUMN checksum TEXT;
 // table is renamed). The runner executes each migration via `sqlx::raw_sql`, so
 // the semicolons inside the trigger body are parsed by SQLite itself (#73).
 //
+// GOTCHA this trigger INTRODUCES (same class as the V18 view): its body
+// references `services`, so any FUTURE migration that rebuilds `services` OR
+// `transactions` via the DROP-TABLE + CREATE-new + INSERT + RENAME pattern must
+// `DROP TRIGGER enforce_active_pass_invariant` BEFORE the rebuild and re-run
+// this const AFTER the RENAME, inside the same migration transaction — otherwise
+// SQLite reparses the trigger mid-rename and the RENAME fails with "no such
+// table: main.services". Worked pattern: db::migrations::tests::
+// v8_drop_rename_pattern_works_with_fk_child_rows.
+//
 // The `SELECT RAISE(ABORT, ...) WHERE <violation>` idiom aborts the insert only
 // when the WHERE matches (a violation); for a compliant row the SELECT yields no
 // row, RAISE is never evaluated, and the insert proceeds.
@@ -1378,14 +1387,19 @@ mod tests {
             .unwrap();
         let mut tx = conn.begin().await.unwrap();
 
-        // V18's `user_active_pass` VIEW references `services`. SQLite validates
-        // a dependent view's stored SQL during ALTER TABLE ... RENAME, so a
-        // DROP+RENAME rebuild of `services` fails once the view exists ("no
-        // such table: main.services") unless the view is dropped first and
-        // recreated after. Any FUTURE real migration that needs this same
-        // rebuild pattern on `services` (or `transactions`, which the view also
-        // references) MUST do the same — this test simulates that requirement.
+        // V18's `user_active_pass` VIEW *and* V20's `enforce_active_pass_invariant`
+        // TRIGGER both reference `services`. SQLite reparses every dependent
+        // object's stored SQL during ALTER TABLE ... RENAME, so a DROP+RENAME
+        // rebuild of `services` fails once either exists ("no such table:
+        // main.services") unless BOTH are dropped first and recreated after. Any
+        // FUTURE real migration that needs this same rebuild pattern on `services`
+        // (or `transactions`, which the view AND the trigger also reference) MUST
+        // do the same — this test simulates that requirement.
         sqlx::query("DROP VIEW user_active_pass")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::query("DROP TRIGGER IF EXISTS enforce_active_pass_invariant")
             .execute(&mut *tx)
             .await
             .unwrap();
@@ -1418,9 +1432,13 @@ mod tests {
             .execute(&mut *tx)
             .await
             .unwrap();
-        // Recreate the view dropped above, mirroring how a real future
-        // migration must re-attach it after rebuilding `services`.
+        // Recreate the view AND trigger dropped above, mirroring how a real
+        // future migration must re-attach both after rebuilding `services`.
         sqlx::raw_sql(super::V18_USER_ACTIVE_PASS_VIEW)
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        sqlx::raw_sql(super::V20_ACTIVE_PASS_INVARIANT_TRIGGER)
             .execute(&mut *tx)
             .await
             .unwrap();
