@@ -116,6 +116,49 @@ against the real pinned crate source, more reliable than guessing from a
 changelog). Same caution applies to #167's remaining tokio-tungstenite and
 leptos sub-items.
 
+**A dep bump can break a TOTALLY UNRELATED module by dropping a
+transitively-provided Cargo FEATURE — not just an API rename or a lint.**
+#167's tokio-tungstenite 0.24→0.30 sub-item's ONLY code change was three
+`Message::Text(String)` → `.into()` (Utf8Bytes, the 0.26 payload overhaul) in
+`ewelink/ws.rs`. Yet CI's clippy failed in `auth/mod.rs` with
+`E0432: no OsRng in the root … gated behind the getrandom feature` on
+`argon2::password_hash::rand_core::OsRng`. Root cause = **feature
+unification**: the OLD tungstenite 0.24 transitively pulled `rand 0.8` →
+`rand_core 0.6` WITH `getrandom`, and Cargo unifies features across all refs
+to the same crate version, so that turned on `getrandom` for the SHARED
+`rand_core 0.6.4` that argon2's `password_hash` re-exports — making `OsRng`
+(`SaltString::generate`) resolve. tungstenite 0.30 dropped its `rand 0.8`
+dep, removing the last enabler → `OsRng` configured out. argon2's own
+features NEVER enable it (`argon2`'s `rand` feature only pulls the
+`password-hash/rand_core` DEP, not `password-hash/getrandom`), so the code
+had ALWAYS relied on an accidental external activation. Fix = declare the
+need explicitly: `password-hash = { version = "0.5", features = ["getrandom"] }`
+in `crates/spinbike-server/Cargo.toml` (unifies the feature on regardless of
+what else is in the tree). **Generalized: when a dep bump causes a compile
+error in a module that doesn't even use the bumped crate, suspect a dropped
+transitive feature — fix by declaring that feature on the crate that actually
+needs it, NEVER by pinning the old dep back.** (`Cargo.lock` records no
+features, only versions/edges, so the fix's real effect is invisible in the
+lock diff — it shows up only as the new `password-hash` edge + `getrandom 0.2`
+node.)
+
+**Functionally verifying the eWeLink door on PROD without polluting real
+billing (tungstenite sub-item's real acceptance bar):** you can't run a
+second WS session against the account (one-session trap, see the
+`ewelink-door` skill), so test THROUGH the running prod server. Insert a
+synthetic **STAFF** user via the `prod-verification` recipe (staff bypasses
+`allow_self_entry` AND its 1st-press-of-day is a zero-amount `visit` row —
+no credit needed, unlike a customer), mint its JWT, then
+`GET /api/door/health` (`ewelink_ws:"connected"`, `last_ack_ms_ago:null`) →
+`POST /api/door/open` (`200 {"status":"opened"}` — door.rs returns `opened`
+ONLY after the device acks; a failed press → 503) → `health` again
+(`last_ack_ms_ago` now a small number). `last_ack_ms` is set ONLY on the
+device's `error:0` ack in `handle_text_frame`, so null→N is direct proof the
+send+ack round-trip works on the new tungstenite. The `ewelink: press/ack`
+lines are `tracing::debug!` (prod logs at INFO, so they won't show) —
+`last_ack_ms_ago` + the `opened` status ARE the proof. Delete the synthetic
+`transactions` + `users` rows after; physical buzz is user-only.
+
 ## GitHub's issue auto-close linker does NOT understand negation — never write "does NOT close #N" in a PR body
 
 **A PR body sentence like *"This is a SOLO PR — it does NOT close #167"* still auto-closes #167 on
