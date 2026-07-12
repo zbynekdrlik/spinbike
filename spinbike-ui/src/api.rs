@@ -216,14 +216,14 @@ impl ApiError {
     /// archived account's `(id, name, deleted_at)` so the caller can raise the
     /// restore / free-email resolution dialog. `None` for any other error.
     pub fn deleted_email_conflict(&self) -> Option<(i64, String, Option<String>)> {
-        if self.code == Some(spinbike_core::errors::ErrorCode::EmailBelongsToDeletedAccount) {
-            if let Some(id) = self.conflict_id {
-                return Some((
-                    id,
-                    self.conflict_name.clone().unwrap_or_default(),
-                    self.conflict_deleted_at.clone(),
-                ));
-            }
+        if self.code == Some(spinbike_core::errors::ErrorCode::EmailBelongsToDeletedAccount)
+            && let Some(id) = self.conflict_id
+        {
+            return Some((
+                id,
+                self.conflict_name.clone().unwrap_or_default(),
+                self.conflict_deleted_at.clone(),
+            ));
         }
         None
     }
