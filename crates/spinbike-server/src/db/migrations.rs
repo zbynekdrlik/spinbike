@@ -79,6 +79,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "schema_version: checksum column for tamper detection",
         V19_SCHEMA_VERSION_CHECKSUM,
     ),
+    (
+        20,
+        "transactions: enforce active-pass invariant (valid_until => charge + monthly_pass)",
+        V20_ACTIVE_PASS_INVARIANT_TRIGGER,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -764,6 +769,58 @@ const V19_SCHEMA_VERSION_CHECKSUM: &str = r#"
 ALTER TABLE schema_version ADD COLUMN checksum TEXT;
 "#;
 
+// V20: enforce the active-pass invariant at the schema level (#204).
+//
+// The `user_active_pass` view (V18) and everything built on it (my_balance, the
+// door route, staff user lists, negative-balance) treat a row as a monthly pass
+// iff `action='charge' AND service_id = the kind='monthly_pass' service AND
+// valid_until IS NOT NULL`. That "which row even counts as a pass" predicate was
+// an APPLICATION-LEVEL invariant only — nothing at the DB level stopped a future
+// write path from setting valid_until on a non-monthly_pass-charge row, which
+// would then silently VANISH from the view (and thus from every consumer). This
+// is defence-in-depth, not a live-bug fix: verified during #178/#179, 0 of 4671
+// live prod rows violate the invariant, so the trigger has nothing to reject
+// retroactively — it only guards FUTURE inserts.
+//
+// Mechanism — trigger, not CHECK. A same-row CHECK could express
+// `valid_until IS NULL OR action='charge'`, but the cross-table half (the
+// service must be kind='monthly_pass') CANNOT be a CHECK: SQLite forbids
+// subqueries referencing other tables inside a CHECK body. A BEFORE INSERT
+// trigger can, and covers the whole invariant in one place, so we ship the
+// trigger alone rather than pay the table-rebuild cost a redundant CHECK would
+// require (SQLite has no ALTER TABLE ADD CONSTRAINT; adding a CHECK to an
+// existing table means the V8/V11/V16 rebuild dance).
+//
+// INSERT-only is sufficient. The only post-insert writer of valid_until is
+// routes/transactions.rs::patch_valid_until, and it is gated to re-date a row
+// that ALREADY qualifies (it 400s unless the row's valid_until is currently
+// non-NULL — i.e. an existing pass), so it can never introduce a NEW violation;
+// no code path ever UPDATEs `action` or `service_id` on an existing row. A
+// BEFORE INSERT trigger therefore closes every way a violating row could appear.
+//
+// `CREATE TRIGGER` is standalone DDL — NOT an ALTER TABLE — so it does not need
+// the V8/V11/V16 DROP-TABLE + CREATE-new + INSERT + RENAME rebuild pattern, and
+// the `user_active_pass` view does not have to be dropped/recreated here (no
+// table is renamed). The runner executes each migration via `sqlx::raw_sql`, so
+// the semicolons inside the trigger body are parsed by SQLite itself (#73).
+//
+// The `SELECT RAISE(ABORT, ...) WHERE <violation>` idiom aborts the insert only
+// when the WHERE matches (a violation); for a compliant row the SELECT yields no
+// row, RAISE is never evaluated, and the insert proceeds.
+const V20_ACTIVE_PASS_INVARIANT_TRIGGER: &str = r#"
+CREATE TRIGGER IF NOT EXISTS enforce_active_pass_invariant
+BEFORE INSERT ON transactions
+WHEN NEW.valid_until IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'valid_until requires action=charge and a monthly_pass service')
+    WHERE NEW.action != 'charge'
+       OR NOT EXISTS (
+            SELECT 1 FROM services
+            WHERE id = NEW.service_id AND kind = 'monthly_pass'
+       );
+END;
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::MIGRATIONS;
@@ -826,6 +883,17 @@ mod tests {
     async fn v18_user_active_pass_view_is_canonical() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
+
+        // This test asserts the VIEW's own `service_id = monthly_pass` filter by
+        // seeding a deliberately-invalid row (a Spinning charge carrying a
+        // valid_until) and proving the view excludes it. The V20 trigger (#204)
+        // now makes such a row impossible to INSERT — which is the point — so we
+        // drop it for this test's setup to keep exercising the view's predicate
+        // directly. The trigger itself is proven in v20_enforces_active_pass_invariant.
+        sqlx::query("DROP TRIGGER IF EXISTS enforce_active_pass_invariant")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         let pass_svc: i64 =
             sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
@@ -1660,6 +1728,20 @@ mod tests {
         use crate::db::{create_memory_pool, run_migrations};
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
+
+        // One seed pattern (id 1003: action='debit' with valid_until set) is a
+        // legacy invariant-VIOLATING row — exactly the shape V12 exists to
+        // normalize. In the real upgrade V12 ran BEFORE the V20 trigger (#204)
+        // existed, so those legacy rows predate the trigger. This test force-
+        // re-runs V12 in an environment where V20 is already applied, so we drop
+        // the trigger to reproduce that pre-V20 world and seed the legacy row.
+        // (The other seeds leave valid_until NULL, so the trigger never fires on
+        // them anyway.) The trigger's own behaviour is proven in
+        // v20_enforces_active_pass_invariant.
+        sqlx::query("DROP TRIGGER IF EXISTS enforce_active_pass_invariant")
+            .execute(&pool)
+            .await
+            .unwrap();
 
         // Seed one row of every pattern from the spec mutation table.
         // Insert raw legacy-shape rows post-migration, then force V12 to
@@ -2777,9 +2859,11 @@ mod tests {
             "test setup: schema_version must not have a checksum column yet"
         );
 
-        // Deploy the new binary: run_migrations should apply ONLY V19 (add
-        // the column via ALTER), then backfill checksums for all 19
-        // versions — no error.
+        // Deploy the new binary: run_migrations applies the outstanding
+        // migrations from v19 up (V19 adds the checksum column via ALTER; any
+        // later versions follow), then backfills checksums for every registered
+        // migration — no error. The assertions below iterate all of MIGRATIONS
+        // dynamically, so they stay correct as new versions are appended.
         run_migrations(&pool).await.unwrap();
 
         let cols_after: Vec<(String,)> =
