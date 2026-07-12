@@ -922,6 +922,105 @@ mod tests {
         assert_eq!(n, 0, "all passes voided => no active pass");
     }
 
+    /// V20 (#204): the active-pass invariant is enforced at the schema level by
+    /// a BEFORE INSERT trigger — `valid_until IS NOT NULL` requires
+    /// `action='charge'` AND a `service_id` whose service is `kind='monthly_pass'`.
+    /// This is the core regression guard proving the constraint is real, not
+    /// decorative: every violating INSERT shape must be REJECTED, and the one
+    /// legitimate pass shape (plus any row that leaves valid_until NULL) must
+    /// still be ACCEPTED.
+    #[tokio::test]
+    async fn v20_enforces_active_pass_invariant() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v20@x','V20','customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let pass_svc: i64 =
+            sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let spin_svc: i64 =
+            sqlx::query_scalar("SELECT id FROM services WHERE name_en = 'Spinning'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        // (1) valid_until with a non-'charge' action -> REJECTED.
+        let bad_action = sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until)
+             VALUES (?, ?, 0.0, 'visit', '2099-12-31')",
+        )
+        .bind(uid)
+        .bind(pass_svc)
+        .execute(&pool)
+        .await;
+        assert!(
+            bad_action.is_err(),
+            "valid_until with action != 'charge' must be rejected by the trigger"
+        );
+
+        // (2) valid_until on a non-monthly_pass service (Spinning) -> REJECTED.
+        let bad_service = sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until)
+             VALUES (?, ?, -5.0, 'charge', '2099-12-31')",
+        )
+        .bind(uid)
+        .bind(spin_svc)
+        .execute(&pool)
+        .await;
+        assert!(
+            bad_service.is_err(),
+            "valid_until on a non-monthly_pass service must be rejected by the trigger"
+        );
+
+        // (3) valid_until with a NULL service_id -> REJECTED (no monthly_pass match).
+        let bad_null_service = sqlx::query(
+            "INSERT INTO transactions (user_id, amount, action, valid_until)
+             VALUES (?, -5.0, 'charge', '2099-12-31')",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await;
+        assert!(
+            bad_null_service.is_err(),
+            "valid_until with a NULL service_id must be rejected by the trigger"
+        );
+
+        // (4) the one legitimate pass shape (charge + monthly_pass + valid_until) -> ACCEPTED.
+        let good_pass = sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until)
+             VALUES (?, ?, -35.0, 'charge', '2099-12-31')",
+        )
+        .bind(uid)
+        .bind(pass_svc)
+        .execute(&pool)
+        .await;
+        assert!(
+            good_pass.is_ok(),
+            "a valid monthly-pass charge with valid_until must be accepted"
+        );
+
+        // (5) an ordinary non-pass row (valid_until NULL) -> ACCEPTED (trigger does not fire).
+        let normal_spin_charge = sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action)
+             VALUES (?, ?, -5.0, 'charge')",
+        )
+        .bind(uid)
+        .bind(spin_svc)
+        .execute(&pool)
+        .await;
+        assert!(
+            normal_spin_charge.is_ok(),
+            "a non-pass row leaving valid_until NULL must be unaffected by the trigger"
+        );
+    }
+
     #[tokio::test]
     async fn v5_adds_booking_columns_and_persistent_table() {
         let pool = create_memory_pool().await.unwrap();
