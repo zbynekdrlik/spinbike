@@ -116,6 +116,25 @@ against the real pinned crate source, more reliable than guessing from a
 changelog). Same caution applies to #167's remaining tokio-tungstenite and
 leptos sub-items.
 
+## GitHub's issue auto-close linker does NOT understand negation — never write "does NOT close #N" in a PR body
+
+**A PR body sentence like *"This is a SOLO PR — it does NOT close #167"* still auto-closes #167 on
+merge.** GitHub's auto-linker is a dumb substring match for
+`close(s|d)?|fix(es|ed)?|resolve(s|d)?` immediately followed by `#N` — it has zero understanding of
+surrounding grammar, so the literal substring `close #167` inside "does **NOT** close #167" still
+fires. Hit exactly this on #167's leptos sub-item PR (#219): the PR body deliberately avoided
+`Closes #167` and used `Part of #167` for the actual reference, but ALSO contained the human-readable
+warning sentence above — GitHub closed #167 anyway, 1s after merge, confirmed via
+`gh api repos/OWNER/REPO/issues/N/events` (`event: closed`, `commit_id: null`, no closing keyword in
+any commit message in the merged range — the trigger was the PR-body text, not a commit). Fixed with
+`gh issue reopen` + a comment explaining the root cause.
+
+**When a multi-PR epic issue must stay open across an intermediate sub-item's merge:** reference it
+with a non-closing phrase ONLY (`Part of #N`, `Ref #N`, `See #N`) and NEVER put a closing verb
+anywhere near the same `#N` again in the same body — not even to negate it. If you need to explain
+"this doesn't finish the epic", phrase it without repeating the issue number next to the verb, e.g.
+"one more sub-item still follows" instead of "does not close #N".
+
 **#167's leptos 0.7→0.8 sub-item confirmed the same lesson from a different angle: a major dep bump
 can surface a latent CLIPPY lint that has nothing to do with the crate's own API surface.** The
 issue's evidence (leptos 0.8.0's own release notes) correctly predicted zero real API breakage for
