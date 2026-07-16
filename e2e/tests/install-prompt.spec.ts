@@ -121,6 +121,32 @@ test.describe('Install-to-home-screen component — iOS webview (in-app browser)
 
         assertCleanConsole(consoleMessages);
     });
+
+    // Deep-review regression guard (found before merge, #226): InstallPrompt
+    // also mounts on /welcome?t=<token> right after a magic-link token is
+    // redeemed, and that page never strips ?t= from the address bar
+    // afterward (single-use redemption, welcome.rs). Copying the raw
+    // location.href there would hand the user their own already-spent,
+    // now-invalid token — pasting it into Safari sends them straight back to
+    // the "invalid link" screen. The copy button must always strip the query
+    // string, regardless of which page/query state it's mounted under.
+    test('copy-URL strips the query string, never copies a leftover token', async ({ page, context }) => {
+        await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+        const consoleMessages = setupConsoleCheck(page);
+        await loginViaAPI(page, BASE_URL, 'customer@test.com', 'password123');
+        await page.goto('/my/balance?t=leftover-token-should-not-be-copied');
+        await page.waitForSelector('[data-testid="door-open-button"]', { timeout: 10000 });
+
+        await page.locator('[data-testid="install-prompt-copy-url"]').click();
+        await expect(page.locator('[data-testid="install-prompt-copy-confirm"]')).toBeVisible();
+
+        const copied = await page.evaluate(() => navigator.clipboard.readText());
+        expect(copied).not.toContain('?');
+        expect(copied).not.toContain('leftover-token-should-not-be-copied');
+        expect(copied).toContain('/my/balance');
+
+        assertCleanConsole(consoleMessages);
+    });
 });
 
 // Real iPads since iPadOS 13 default to "Request Desktop Website", so

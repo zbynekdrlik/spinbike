@@ -181,14 +181,25 @@ async fn trigger_install_prompt() {
     );
 }
 
-/// Copies the current page URL via `navigator.clipboard.writeText` — the
-/// only way to hand a webview user the real address to paste into Safari,
+/// Copies the current page's URL (origin + pathname, deliberately WITHOUT
+/// the query string — see below) via `navigator.clipboard.writeText`, the
+/// only way to hand a webview user the real address to paste into Safari
 /// since a webview has no address bar to copy from directly (#226).
 /// `navigator.clipboard` has no typed web-sys binding used elsewhere in this
 /// crate, so it's read via `Reflect` like the rest of this file. Degrades to
 /// `None` (silent no-op, never panics) if the property, the method, or the
 /// call itself is unavailable — e.g. an older webview with no Clipboard API
 /// at all, or one that denies the permission.
+///
+/// **Deliberately drops any query string** (`href` minus its `?...` suffix):
+/// `InstallPrompt` also mounts on `/welcome?t=<token>` right after a
+/// magic-link token is redeemed (`pages/welcome.rs`) — that redemption is
+/// single-use and the page never strips `?t=` from the address bar
+/// afterward, so copying the raw `href` there would hand the user their own
+/// already-spent, now-invalid token, sending them straight back to the
+/// "invalid link" screen when they paste it into Safari (deep-review finding
+/// on #226). `origin + pathname` is always the right thing to paste
+/// regardless of which page/query-string state this component is mounted in.
 ///
 /// Split from the `await` on purpose: `clipboard.writeText()` itself is
 /// dispatched HERE, synchronously, so it runs inside the same call stack as
@@ -204,11 +215,17 @@ fn start_copy_current_url() -> Option<Promise> {
         return None;
     }
     let location = get_prop(&window, "location");
-    let href = get_prop(&location, "href").as_string().unwrap_or_default();
+    let origin = get_prop(&location, "origin")
+        .as_string()
+        .unwrap_or_default();
+    let pathname = get_prop(&location, "pathname")
+        .as_string()
+        .unwrap_or_default();
+    let url = format!("{origin}{pathname}");
     let write_text_val = get_prop(&clipboard, "writeText");
     let write_text_fn = write_text_val.dyn_ref::<Function>()?;
     let result = write_text_fn
-        .call1(&clipboard, &JsValue::from_str(&href))
+        .call1(&clipboard, &JsValue::from_str(&url))
         .ok()?;
     Some(Promise::resolve(&result))
 }
