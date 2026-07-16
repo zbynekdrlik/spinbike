@@ -144,6 +144,86 @@ Always pair it with a **negative** test (`maxTouchPoints: 0`, i.e. a real
 Mac) asserting neither install surface renders — the disambiguator is easy
 to get backwards and silently show the guide to real Mac desktop users.
 
+## When two functions both need `navigator.userAgent` (or any other shared JS read): fetch it ONCE and pass it down (#226)
+
+`is_ios_ua()` and a later `is_ios_webview_ua()` (in-app-browser detection,
+#226) each independently did their own `window` -> `navigator` ->
+`userAgent` `Reflect::get` round-trip — duplicated logic AND a wasted extra
+JS/WASM FFI call on every mount for every iOS visitor. Caught by review, not
+by CI (clippy has no lint for "you re-derived the same JS value twice").
+Fix: pull the shared read into its own tiny function (`fn user_agent() ->
+String`), call it ONCE at the top of the decision function that needs both
+checks (`detect_kind()`), and pass the `&str` down to each predicate
+(`is_ios_ua(ua: &str)`, `is_ios_webview_ua(ua: &str)`). Whenever a new
+UA-sniffing (or any other `Reflect`-based) predicate is added alongside an
+existing one, check whether they read the same underlying JS property
+before writing a second independent fetch.
+
+## `navigator.clipboard.writeText()` must be dispatched SYNCHRONOUSLY from the click handler, not after a `spawn_local`/`.await` hop (#226)
+
+The natural way to wire up a "copy to clipboard" button in this codebase's
+established async-JS-interop style is `on:click = |_| spawn_local(async
+move { clipboard.writeText(...).await })` — but that puts the actual
+`writeText()` call one microtask hop AFTER the triggering click event, since
+`wasm_bindgen_futures::spawn_local`'s first poll happens on a queued
+microtask, not synchronously in the same call stack as the event handler.
+Some stricter WebKit/Safari builds only honor the Clipboard API's required
+user-activation ("this write is a direct result of a real user gesture")
+when the call is dispatched synchronously from the originating event — an
+async hop can silently lose that activation and the write fails with no
+visible error (this codebase's interop rule already requires every JS call
+to degrade to a silent no-op on failure, so a lost-activation failure looks
+exactly like "the button did nothing").
+
+**Fix: split the JS call from the await.** A sync function fires the actual
+API call and returns the resulting `Promise` (or `None` on any unavailable
+step); the click handler calls that function DIRECTLY (still inside the
+event handler, no `spawn_local` yet); only the *returned Promise* is handed
+to `spawn_local`/`.await` to update UI state once it resolves:
+
+```rust
+fn start_copy_current_url() -> Option<Promise> {
+    // ... all the get_prop/dyn_ref/call1 JS calls happen HERE, synchronously ...
+    Some(Promise::resolve(&result))
+}
+
+let on_copy_click = move |_| {
+    let Some(promise) = start_copy_current_url() else { return; };  // sync, in the click handler
+    spawn_local(async move {
+        if JsFuture::from(promise).await.is_ok() { set_copied.set(true); }  // only the AWAIT is async
+    });
+};
+```
+
+Apply this split to ANY future button that calls a user-activation-gated
+browser API (clipboard, fullscreen, payment sheets, etc.) from this
+codebase's `spawn_local`-based click-handler idiom — not just clipboard.
+
+## A component mounted on MULTIPLE pages must consider EVERY page's URL state, not just the one you're picturing
+
+`InstallPrompt` mounts on both `/welcome` (right after a magic-link token is
+redeemed) and `/my/balance`. A `start_copy_current_url()`-style "copy the
+current URL" feature that reads `location.href` verbatim copies whatever is
+in the address bar at that moment — including a one-time `?t=<token>` query
+string that `pages/welcome.rs` never strips after redeeming it (no
+`history.replaceState`/router navigate call exists there). A webview user
+tapping the resulting copy-URL button on `/welcome` would copy their own
+already-spent, now-invalid token, landing back on the "invalid link" screen
+when pasted into Safari — silently defeating the whole point of the button,
+for the EXACT page the feature was built to help with. This shipped past
+the first review round because that round's E2E-reachability check only
+covered `/my/balance` (no query string in sight); a SECOND, independent
+deep-pass review caught it by walking through the issue's own stated
+primary trigger scenario end-to-end.
+
+**Rule: when building a "copy/read/report the current URL" feature on a
+component mounted on more than one route, enumerate every mount site's
+possible query-string/hash state BEFORE deciding what to read off
+`location`.** Prefer `location.origin + location.pathname` (drops any query
+string and hash) unless the query string is provably safe to keep. Add an
+E2E test that exercises the mount site with the MOST state in its URL
+(here: a page with a leftover token param), not just the cleanest one.
+
 ## Splitting a shared status signal into two (success/error) needs a structural mutual-exclusion Effect, not point-fixes
 
 `#126` split the dashboard's single `msg`/`set_msg` status channel into
