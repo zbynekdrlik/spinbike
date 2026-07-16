@@ -14,6 +14,7 @@
 use crate::db::error::Result;
 use base64::Engine as _;
 use rand::Rng;
+use rand::RngExt;
 use sqlx::SqlitePool;
 
 /// Invite (onboarding) token lifetime: 14 days.

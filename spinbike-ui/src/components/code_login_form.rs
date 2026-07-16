@@ -237,25 +237,26 @@ pub fn CodeLoginForm() -> impl IntoView {
 pub fn CustomerLoginMethods() -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (method, set_method) = signal("link".to_string());
-    let active = Signal::derive(move || method.get());
-    let on_change = Callback::new(move |k: String| set_method.set(k));
+    // Labels read once at mount (same pattern as the admin tab bar) — the toggle
+    // is keyed by data-testid/value, not by localized text.
+    let seg_items: Vec<(String, String)> = vec![
+        (
+            "link".to_string(),
+            i18n::t(lang.get_untracked(), "login_method_link").to_string(),
+        ),
+        (
+            "code".to_string(),
+            i18n::t(lang.get_untracked(), "login_method_code").to_string(),
+        ),
+    ];
 
     view! {
-        {move || {
-            // Rebuild on language change so the tab labels localize.
-            let items = vec![
-                ("link".to_string(), i18n::t(lang.get(), "login_method_link").to_string()),
-                ("code".to_string(), i18n::t(lang.get(), "login_method_code").to_string()),
-            ];
-            view! {
-                <Segmented
-                    items=items
-                    active=active
-                    on_change=on_change
-                    testid_prefix="login-method".to_string()
-                />
-            }
-        }}
+        <Segmented
+            items=seg_items
+            active=Signal::derive(move || method.get())
+            on_change=Callback::new(move |key: String| set_method.set(key))
+            testid_prefix="login-method"
+        />
         {move || {
             if method.get() == "code" {
                 view! { <CodeLoginForm /> }.into_any()
