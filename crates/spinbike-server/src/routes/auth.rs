@@ -216,6 +216,27 @@ async fn login(
     }))
 }
 
+/// Short unaccented-Slovak iOS install-guidance appended to EVERY onboarding
+/// email — the invite, login-link, AND login-code emails all end with this
+/// same note (#228). An iPhone client hitting the installed home-screen app
+/// logged out otherwise has no idea a magic link can't complete login there
+/// (storage is partitioned from Safari); this tells them, regardless of
+/// which of the three emails is the one they happen to read, the ONE extra
+/// step: install to the home screen, then use the CODE (not a link) inside
+/// the installed app. Kept deliberately short — the app's own `/welcome` and
+/// login screens carry the detailed step-by-step guide.
+fn append_ios_install_hint(text: &str, html: &str) -> (String, String) {
+    let text = format!(
+        "{text}\n\nMas iPhone? Po prihlaseni si pridaj SpinBike na plochu (navod ti ukazeme) \
+         a v appke sa prihlas kodom."
+    );
+    let html = format!(
+        "{html}<p>Mas iPhone? Po prihlaseni si pridaj SpinBike na plochu (navod ti ukazeme) \
+         a v appke sa prihlas kodom.</p>"
+    );
+    (text, html)
+}
+
 /// Compose the unaccented-Slovak login-link email. Returns (subject, text, html).
 fn login_link_email(link: &str) -> (String, String, String) {
     let subject = "SpinBike - prihlasovaci odkaz".to_string();
@@ -228,6 +249,7 @@ fn login_link_email(link: &str) -> (String, String, String) {
          <p><a href=\"{link}\">Prihlasit sa</a></p>\
          <p>Odkaz plati 24 hodin. Ak si o prihlasenie nepoziadal, tento email ignoruj.</p>"
     );
+    let (text, html) = append_ios_install_hint(&text, &html);
     (subject, text, html)
 }
 
@@ -384,6 +406,7 @@ fn login_code_email(code: &str) -> (String, String, String) {
          <p>Kod plati 10 minut. Nikomu ho neposielaj.</p>\
          <p>Ak si o prihlasenie nepoziadal, tento email ignoruj.</p>"
     );
+    let (text, html) = append_ios_install_hint(&text, &html);
     (subject, text, html)
 }
 
@@ -577,6 +600,7 @@ fn invite_email(link: &str) -> (String, String, String) {
          <p><a href=\"{link}\">Aktivovat pristup</a></p>\
          <p>Odkaz plati 14 dni.</p>"
     );
+    let (text, html) = append_ios_install_hint(&text, &html);
     (subject, text, html)
 }
 
@@ -954,6 +978,75 @@ mod tests {
         assert!(
             html.contains("482913"),
             "html body must carry the code, got: {html}"
+        );
+        assert!(
+            text.contains("Mas iPhone?"),
+            "body must carry the #228 iOS install-guidance section, got: {text}"
+        );
+        assert!(
+            html.contains("Mas iPhone?"),
+            "html body must carry the #228 iOS install-guidance section, got: {html}"
+        );
+    }
+
+    // ── #228: iOS install-guidance section on every onboarding email ──────
+
+    /// `login_link_email` must still carry the magic link (regression guard —
+    /// #228 appends a trailing section via `append_ios_install_hint`, which
+    /// must not clobber the link built earlier in the same function) AND the
+    /// new iOS install-guidance section.
+    #[test]
+    fn login_link_email_carries_the_link_and_ios_hint() {
+        let (subject, text, html) =
+            super::login_link_email("https://test.spinbike.local/welcome?t=abc123");
+        assert!(
+            subject.contains("prihlasovaci odkaz"),
+            "subject must name the login link, got: {subject}"
+        );
+        assert!(
+            text.contains("https://test.spinbike.local/welcome?t=abc123"),
+            "plain-text body must carry the link, got: {text}"
+        );
+        assert!(
+            html.contains("https://test.spinbike.local/welcome?t=abc123"),
+            "html body must carry the link, got: {html}"
+        );
+        assert!(
+            text.contains("Mas iPhone?") && text.contains("prihlas kodom"),
+            "body must carry the #228 iOS install-guidance section, got: {text}"
+        );
+        assert!(
+            html.contains("Mas iPhone?"),
+            "html body must carry the #228 iOS install-guidance section, got: {html}"
+        );
+    }
+
+    /// `invite_email` must still carry the invite link plus the new iOS
+    /// install-guidance section (same regression-guard shape as the login-link
+    /// test above).
+    #[test]
+    fn invite_email_carries_the_link_and_ios_hint() {
+        let (subject, text, html) =
+            super::invite_email("https://test.spinbike.local/welcome?t=xyz789");
+        assert!(
+            subject.contains("SpinBike"),
+            "subject must name SpinBike, got: {subject}"
+        );
+        assert!(
+            text.contains("https://test.spinbike.local/welcome?t=xyz789"),
+            "plain-text body must carry the invite link, got: {text}"
+        );
+        assert!(
+            html.contains("https://test.spinbike.local/welcome?t=xyz789"),
+            "html body must carry the invite link, got: {html}"
+        );
+        assert!(
+            text.contains("Mas iPhone?") && text.contains("prihlas kodom"),
+            "body must carry the #228 iOS install-guidance section, got: {text}"
+        );
+        assert!(
+            html.contains("Mas iPhone?"),
+            "html body must carry the #228 iOS install-guidance section, got: {html}"
         );
     }
 }

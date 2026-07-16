@@ -4,6 +4,7 @@ pub mod components;
 pub mod dates;
 pub mod i18n;
 pub mod pages;
+pub mod platform;
 pub mod relative_date;
 pub mod router;
 pub mod util;

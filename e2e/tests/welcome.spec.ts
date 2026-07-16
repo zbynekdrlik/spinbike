@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, devices } from '@playwright/test';
 import { loginViaAPI, setupConsoleCheck, assertCleanConsole, setEnglishLanguage } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
@@ -75,6 +75,86 @@ test.describe('Magic-link welcome page (#109)', () => {
         await page.goto('/welcome');
         await page.waitForSelector('[data-testid="welcome-invalid"]', { timeout: 10000 });
         await expect(page.locator('[data-testid="login-link-form"]')).toBeVisible();
+
+        assertCleanConsole(consoleMessages);
+    });
+});
+
+// #228 — iOS-only post-install note under the install guide: an iOS
+// home-screen web app is storage-partitioned from Safari, so the magic link
+// that just logged the client in here does NOT carry over — the installed
+// app will ask them to log in once more via the emailed code (#227), not a
+// link. Android/Chromium shares storage between the browser and the
+// installed PWA, so no such note applies there.
+async function inviteAndGetWelcomeLink(page: import('@playwright/test').Page): Promise<string> {
+    const adminToken = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+    const suffix = Array.from({ length: 8 }, () =>
+        String.fromCharCode(97 + Math.floor(Math.random() * 26)),
+    ).join('');
+    const email = `welcome-ios-${suffix}@test.local`;
+
+    const createResp = await fetch(`${BASE_URL}/api/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({ name: `Welcome iOS ${suffix}`, email, card_code: `WLI-${suffix}` }),
+    });
+    if (!createResp.ok) {
+        throw new Error(`create user failed: ${createResp.status} ${await createResp.text()}`);
+    }
+    const created = await createResp.json();
+
+    const inviteResp = await fetch(`${BASE_URL}/api/users/${created.id}/invite`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    if (!inviteResp.ok) {
+        throw new Error(`invite failed: ${inviteResp.status} ${await inviteResp.text()}`);
+    }
+    const inviteBody = await inviteResp.json();
+    const testLink = inviteBody.test_link as string;
+    expect(testLink).toBeTruthy();
+    return testLink;
+}
+
+const iPhone = devices['iPhone 13'];
+
+test.describe('Welcome page — iOS post-install note (#228)', () => {
+    test.use({
+        userAgent: iPhone.userAgent,
+        viewport: iPhone.viewport,
+        isMobile: iPhone.isMobile,
+        hasTouch: iPhone.hasTouch,
+    });
+
+    test('iOS success state shows the post-install note', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        const testLink = await inviteAndGetWelcomeLink(page);
+        await setEnglishLanguage(page);
+
+        await page.goto(testLink);
+        await page.waitForSelector('[data-testid="welcome-success"]', { timeout: 10000 });
+
+        await expect(page.locator('[data-testid="welcome-ios-post-install-note"]')).toBeVisible();
+
+        assertCleanConsole(consoleMessages);
+    });
+});
+
+test.describe('Welcome page — Android does not show the iOS post-install note (#228)', () => {
+    test.use({
+        userAgent:
+            'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36',
+    });
+
+    test('Android success state does not show the note', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        const testLink = await inviteAndGetWelcomeLink(page);
+        await setEnglishLanguage(page);
+
+        await page.goto(testLink);
+        await page.waitForSelector('[data-testid="welcome-success"]', { timeout: 10000 });
+
+        await expect(page.locator('[data-testid="welcome-ios-post-install-note"]')).toHaveCount(0);
 
         assertCleanConsole(consoleMessages);
     });

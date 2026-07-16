@@ -336,6 +336,19 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "This link is invalid, expired, or already used. Enter your email and we'll send you a new one.",
         ),
     );
+    // iOS-only post-install note (#228): after installing to the home screen,
+    // an iOS home-screen web app is storage-partitioned from Safari, so the
+    // magic link that just logged the client in here does NOT carry over —
+    // the installed app will ask them to log in once more, via the emailed
+    // code (#227), not a link. Android/Chromium shares storage between the
+    // browser and the installed PWA, so no such note is needed there.
+    m.insert(
+        "welcome_ios_post_install_note",
+        (
+            "Po nainstalovani ta appka raz poziada o prihlasenie - zadaj svoj email a pride ti kod.",
+            "After you install it, the app will ask you to sign in once - enter your email and you'll get a code.",
+        ),
+    );
 
     // Install-to-home-screen prompt (#110)
     m.insert(

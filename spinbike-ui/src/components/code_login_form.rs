@@ -12,8 +12,13 @@
 //!
 //! `CustomerLoginMethods` is the shared toggle (email-link vs code) used by BOTH
 //! the login page's customer section and `/welcome`'s invalid-token fallback. It
-//! defaults to the email-link method so the existing login-link/welcome flows and
-//! their E2E selectors are unchanged; the code method is opt-in via the toggle.
+//! leads with the email-link method everywhere EXCEPT when running installed
+//! standalone on iOS (#228) — there a magic link is the dead end this whole
+//! feature exists to route around, so the code method leads instead; both
+//! methods stay reachable via the toggle regardless. Android/Chromium standalone
+//! is unaffected (shares storage with the browser, so link stays primary), and
+//! the existing login-link/welcome E2E selectors are unchanged for every
+//! non-iOS-standalone case.
 
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -23,6 +28,7 @@ use crate::api;
 use crate::auth::{self, AuthData};
 use crate::components::{LoginLinkForm, Segmented};
 use crate::i18n::{self, Lang};
+use crate::platform;
 
 #[derive(serde::Serialize)]
 struct RequestLoginCodeReq {
@@ -231,12 +237,27 @@ pub fn CodeLoginForm() -> impl IntoView {
 }
 
 /// Toggle between the two customer login methods (email link vs 6-digit code),
-/// rendering the selected form. Defaults to the email-link method. Used by the
-/// login page's customer section and `/welcome`'s invalid-token fallback.
+/// rendering the selected form. Used by the login page's customer section and
+/// `/welcome`'s invalid-token fallback.
+///
+/// The initial method is platform-aware (#228): a magic link is a dead end
+/// when running installed standalone on iOS (storage is partitioned from
+/// Safari, so the link always reopens there instead of completing login
+/// inside the installed app) — there, the code method leads. Everywhere
+/// else (a plain browser tab, or an installed Android/Chromium PWA, which
+/// shares storage with the browser and has no such dead end) the email-link
+/// method still leads, unchanged. Detected once at mount, same pattern as
+/// `InstallPrompt`'s own `detect_kind()` — the platform doesn't change while
+/// this component stays mounted.
 #[component]
 pub fn CustomerLoginMethods() -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
-    let (method, set_method) = signal("link".to_string());
+    let initial_method = if platform::is_ios_standalone() {
+        "code"
+    } else {
+        "link"
+    };
+    let (method, set_method) = signal(initial_method.to_string());
     // Labels read once at mount (same pattern as the admin tab bar) — the toggle
     // is keyed by data-testid/value, not by localized text.
     let seg_items: Vec<(String, String)> = vec![

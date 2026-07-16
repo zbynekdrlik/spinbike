@@ -16,6 +16,7 @@ use crate::api;
 use crate::auth::{self, AuthData};
 use crate::components::{CustomerLoginMethods, InstallPrompt};
 use crate::i18n::{self, Lang};
+use crate::platform;
 
 #[derive(serde::Serialize)]
 struct TokenLoginReq {
@@ -42,6 +43,13 @@ pub fn WelcomePage() -> impl IntoView {
     let query = use_query_map();
 
     let (state, set_state) = signal(WelcomeState::Loading);
+    // Detected once at mount, same as InstallPrompt's own `detect_kind()` —
+    // the UA doesn't change while this page is mounted. Gates the #228
+    // post-install note: iOS ONLY (Android/Chromium shares storage between
+    // the browser and the installed PWA, so no note is needed there). This
+    // is page-local copy (#151 rule — it's only true here, not on every
+    // InstallPrompt mount site), so it stays out of the shared component.
+    let is_ios = platform::is_ios_ua(&platform::user_agent());
 
     // Runs exactly once on mount: `get_untracked()` means this effect has NO
     // tracked reactive dependency, so it establishes and never re-fires
@@ -98,6 +106,13 @@ pub fn WelcomePage() -> impl IntoView {
                             {move || i18n::t(lang.get(), "welcome_cta")}
                         </a>
                         <InstallPrompt />
+                        {move || {
+                            is_ios.then(|| view! {
+                                <p class="text-center text-muted" data-testid="welcome-ios-post-install-note">
+                                    {move || i18n::t(lang.get(), "welcome_ios_post_install_note")}
+                                </p>
+                            })
+                        }}
                     </div>
                 }
                 .into_any(),
