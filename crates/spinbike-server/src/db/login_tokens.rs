@@ -21,10 +21,20 @@ pub const INVITE_TTL_SECS: i64 = 14 * 24 * 60 * 60;
 /// Login-link (recovery) token lifetime: 24 hours.
 pub const LOGIN_TTL_SECS: i64 = 24 * 60 * 60;
 
-/// The two token purposes. Kept as `&str` constants so callers and the SQL
-/// CHECK constraint (migration V17) stay in sync.
+/// Login-code (in-PWA numeric) token lifetime: 10 minutes (#227).
+pub const CODE_TTL_SECS: i64 = 10 * 60;
+
+/// The three token purposes. Kept as `&str` constants so callers and the SQL
+/// CHECK constraint (migration V17, widened by V21) stay in sync.
 pub const PURPOSE_INVITE: &str = "invite";
 pub const PURPOSE_LOGIN: &str = "login";
+/// Third purpose (#227): a short 6-digit numeric code the user types inside the
+/// installed PWA. Added to the CHECK by migration V21.
+pub const PURPOSE_CODE: &str = "code";
+
+/// A 6-digit code is invalidated after this many failed verify attempts — the
+/// mandatory low-entropy brute-force guard (6 digits is guessable) (#227).
+pub const MAX_CODE_ATTEMPTS: i64 = 5;
 
 /// Generate a fresh raw token: 32 cryptographically-random bytes encoded as
 /// URL-safe base64 without padding (43 chars, safe in a query string). The
@@ -39,6 +49,24 @@ pub fn generate_raw_token() -> String {
 /// SHA-256 hex of the raw token — exactly what is stored in `token_hash`.
 pub fn hash_token(raw: &str) -> String {
     crate::db::sha256_hex(raw)
+}
+
+/// Generate a fresh 6-digit login code (#227): a cryptographically-random value
+/// in `000000..=999999`, always rendered as exactly 6 digits (zero-padded, so
+/// `42` becomes `"000042"`). The return value is the ONLY place the raw code
+/// exists — store its per-user hash, email this to the user, then drop it.
+pub fn generate_code() -> String {
+    let n: u32 = rand::rng().random_range(0..1_000_000);
+    format!("{n:06}")
+}
+
+/// Per-user SHA-256 hex of a login code (#227). The code is salted with its
+/// `user_id` (`"{user_id}:{code}"`) so two users issued the SAME 6-digit value
+/// never collide on the `token_hash` UNIQUE index, and a stored code hash is
+/// bound to its own account (it can only be redeemed for the user it was issued
+/// to). Never log the raw code.
+pub fn hash_code(user_id: i64, code: &str) -> String {
+    crate::db::sha256_hex(&format!("{user_id}:{code}"))
 }
 
 /// Create a token for `user_id` with the given `purpose` and TTL, store its
@@ -99,6 +127,108 @@ pub async fn redeem(
     }
     let user_id = q.fetch_optional(pool).await?;
     Ok(user_id)
+}
+
+/// Create a fresh 6-digit login code for `user_id`, store its per-user hash with
+/// `purpose='code'` and a 10-minute TTL, and return the RAW code (for the
+/// email). Every PRIOR code row for this user is DELETED first: requesting a new
+/// code invalidates all earlier unused codes (#227), and deleting (rather than
+/// marking used) also frees the `token_hash` UNIQUE slot so a rare
+/// same-user/same-value re-issue can never trip the unique constraint on insert.
+/// Invite/login tokens are untouched. Returns the raw code — the only place it
+/// ever exists in cleartext.
+pub async fn create_code(pool: &SqlitePool, user_id: i64) -> Result<String> {
+    // A new code supersedes any earlier one for this user.
+    sqlx::query("DELETE FROM login_tokens WHERE user_id = ? AND purpose = ?")
+        .bind(user_id)
+        .bind(PURPOSE_CODE)
+        .execute(pool)
+        .await?;
+
+    let code = generate_code();
+    let hash = hash_code(user_id, &code);
+    let interval = format!("{CODE_TTL_SECS:+} seconds");
+    sqlx::query(
+        "INSERT INTO login_tokens (user_id, token_hash, purpose, expires_at)
+         VALUES (?, ?, ?, datetime('now', ?))",
+    )
+    .bind(user_id)
+    .bind(&hash)
+    .bind(PURPOSE_CODE)
+    .bind(&interval)
+    .execute(pool)
+    .await?;
+    Ok(code)
+}
+
+/// Verify a login code for `user_id` and, on success, atomically redeem it
+/// (single-use). Semantics (#227):
+/// - Considers only the user's NEWEST unused, unexpired `code` row.
+/// - Correct code → mark it used and return `Some(user_id)`.
+/// - Wrong code → increment its `attempts`; on the `MAX_CODE_ATTEMPTS`-th failed
+///   attempt the code row is INVALIDATED (marked used) so it can never be
+///   guessed further.
+/// - No live code / expired / already used / already exhausted → `Ok(None)`.
+///
+/// Every failure mode collapses to `Ok(None)`; the caller maps each `None` to a
+/// single uniform rejection, so nothing distinguishes "wrong code" from
+/// "expired" from "no code" to a client. Wrapped in a transaction so the
+/// find-then-update is one atomic unit against concurrent verifies (SQLite
+/// serialises writers).
+pub async fn verify_code(pool: &SqlitePool, user_id: i64, code: &str) -> Result<Option<i64>> {
+    let candidate = hash_code(user_id, code);
+    let mut tx = pool.begin().await?;
+
+    // Newest still-live code row for this user.
+    let row: Option<(i64, String, i64)> = sqlx::query_as(
+        "SELECT id, token_hash, attempts FROM login_tokens
+         WHERE user_id = ? AND purpose = ?
+           AND used_at IS NULL
+           AND expires_at > datetime('now')
+         ORDER BY id DESC
+         LIMIT 1",
+    )
+    .bind(user_id)
+    .bind(PURPOSE_CODE)
+    .fetch_optional(&mut *tx)
+    .await?;
+
+    let Some((row_id, stored_hash, attempts)) = row else {
+        // No live code to verify against. Commit the (empty) tx and reject.
+        tx.commit().await?;
+        return Ok(None);
+    };
+
+    if stored_hash == candidate {
+        // Correct → single-use redeem. The `used_at IS NULL` guard keeps the
+        // mark race-safe even though we already hold the row inside the tx.
+        sqlx::query(
+            "UPDATE login_tokens SET used_at = datetime('now') WHERE id = ? AND used_at IS NULL",
+        )
+        .bind(row_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        return Ok(Some(user_id));
+    }
+
+    // Wrong → count the failed attempt; invalidate the code at the cap.
+    let new_attempts = attempts + 1;
+    if new_attempts >= MAX_CODE_ATTEMPTS {
+        sqlx::query("UPDATE login_tokens SET attempts = ?, used_at = datetime('now') WHERE id = ?")
+            .bind(new_attempts)
+            .bind(row_id)
+            .execute(&mut *tx)
+            .await?;
+    } else {
+        sqlx::query("UPDATE login_tokens SET attempts = ? WHERE id = ?")
+            .bind(new_attempts)
+            .bind(row_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+    tx.commit().await?;
+    Ok(None)
 }
 
 /// Delete rows that can no longer redeem: already used, or expired.
@@ -341,5 +471,232 @@ mod tests {
 
         let removed = purge_expired_and_used(&pool).await.unwrap();
         assert_eq!(removed, 0, "a live-only table must purge nothing");
+    }
+
+    // ── login codes (#227) ────────────────────────────────────────────────
+
+    #[test]
+    fn generated_code_is_exactly_six_digits() {
+        for _ in 0..200 {
+            let c = generate_code();
+            assert_eq!(c.len(), 6, "code must be 6 chars: {c:?}");
+            assert!(
+                c.chars().all(|ch| ch.is_ascii_digit()),
+                "code must be all digits: {c:?}"
+            );
+            let n: u32 = c.parse().expect("code must parse as a number");
+            assert!(n < 1_000_000, "code must be < 1_000_000: {n}");
+        }
+    }
+
+    #[test]
+    fn code_ttl_is_ten_minutes() {
+        assert_eq!(CODE_TTL_SECS, 600, "login-code TTL must be 10 minutes");
+    }
+
+    #[test]
+    fn hash_code_is_per_user_and_deterministic() {
+        // Deterministic for the same (user, code).
+        assert_eq!(hash_code(7, "123456"), hash_code(7, "123456"));
+        // Salted by user_id: the same code hashes DIFFERENTLY for two users, so
+        // two users issued the same value never collide on token_hash.
+        assert_ne!(hash_code(7, "123456"), hash_code(8, "123456"));
+        // Different code → different hash.
+        assert_ne!(hash_code(7, "123456"), hash_code(7, "123457"));
+    }
+
+    #[tokio::test]
+    async fn create_code_returns_six_digits_and_stores_only_the_hash() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "code-create@x").await;
+
+        let code = create_code(&pool, uid).await.unwrap();
+        assert_eq!(code.len(), 6);
+
+        // The raw code is NEVER stored; only its per-user hash is.
+        let raw_present: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM login_tokens WHERE token_hash = ?")
+                .bind(&code)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert!(raw_present.is_none(), "raw code must not be stored");
+        let hash_present: Option<i64> = sqlx::query_scalar(
+            "SELECT id FROM login_tokens WHERE token_hash = ? AND purpose = 'code'",
+        )
+        .bind(hash_code(uid, &code))
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(hash_present.is_some(), "per-user hash must be stored");
+    }
+
+    #[tokio::test]
+    async fn create_code_invalidates_the_previous_code() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "code-supersede@x").await;
+
+        let first = create_code(&pool, uid).await.unwrap();
+        let second = create_code(&pool, uid).await.unwrap();
+
+        // Only one code row exists (the old one was deleted, not accumulated).
+        let count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM login_tokens WHERE user_id = ? AND purpose = 'code'",
+        )
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(count, 1, "a new code must supersede (delete) the prior one");
+
+        // The OLD code no longer verifies; the NEW one does.
+        assert_eq!(verify_code(&pool, uid, &first).await.unwrap(), None);
+        assert_eq!(verify_code(&pool, uid, &second).await.unwrap(), Some(uid));
+    }
+
+    #[tokio::test]
+    async fn verify_code_happy_path_redeems_once() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "code-happy@x").await;
+
+        let code = create_code(&pool, uid).await.unwrap();
+        assert_eq!(
+            verify_code(&pool, uid, &code).await.unwrap(),
+            Some(uid),
+            "correct code must return the user id"
+        );
+        // Single-use: a second verify with the same code fails.
+        assert_eq!(
+            verify_code(&pool, uid, &code).await.unwrap(),
+            None,
+            "a code is single-use"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_code_wrong_code_counts_an_attempt() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "code-wrong@x").await;
+
+        let code = create_code(&pool, uid).await.unwrap();
+        let wrong = wrong_code(&code);
+        assert_eq!(verify_code(&pool, uid, &wrong).await.unwrap(), None);
+        let attempts: i64 = sqlx::query_scalar(
+            "SELECT attempts FROM login_tokens WHERE user_id = ? AND purpose = 'code'",
+        )
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(attempts, 1, "a wrong verify must increment attempts");
+        // The still-live code still accepts the correct value afterwards.
+        assert_eq!(verify_code(&pool, uid, &code).await.unwrap(), Some(uid));
+    }
+
+    #[tokio::test]
+    async fn verify_code_correct_on_the_fifth_attempt_still_works() {
+        // Four wrong attempts leave the code live; a correct 5th entry succeeds.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "code-4wrong@x").await;
+
+        let code = create_code(&pool, uid).await.unwrap();
+        let wrong = wrong_code(&code);
+        for _ in 0..4 {
+            assert_eq!(verify_code(&pool, uid, &wrong).await.unwrap(), None);
+        }
+        assert_eq!(
+            verify_code(&pool, uid, &code).await.unwrap(),
+            Some(uid),
+            "the correct code must still work after 4 failed attempts"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_code_five_wrong_attempts_invalidate_the_code() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "code-5wrong@x").await;
+
+        let code = create_code(&pool, uid).await.unwrap();
+        let wrong = wrong_code(&code);
+        for _ in 0..5 {
+            assert_eq!(verify_code(&pool, uid, &wrong).await.unwrap(), None);
+        }
+        // After MAX_CODE_ATTEMPTS wrong tries the code is invalidated — even the
+        // CORRECT value no longer logs in.
+        assert_eq!(
+            verify_code(&pool, uid, &code).await.unwrap(),
+            None,
+            "5 wrong attempts must invalidate the code"
+        );
+        let used: Option<String> = sqlx::query_scalar(
+            "SELECT used_at FROM login_tokens WHERE user_id = ? AND purpose = 'code'",
+        )
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(used.is_some(), "an exhausted code must be marked used");
+    }
+
+    #[tokio::test]
+    async fn verify_code_expired_returns_none() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "code-expired@x").await;
+
+        // Insert an already-expired code row directly.
+        sqlx::query(
+            "INSERT INTO login_tokens (user_id, token_hash, purpose, expires_at)
+             VALUES (?, ?, 'code', datetime('now', '-1 minute'))",
+        )
+        .bind(uid)
+        .bind(hash_code(uid, "123456"))
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            verify_code(&pool, uid, "123456").await.unwrap(),
+            None,
+            "an expired code must not verify"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_code_with_no_code_returns_none() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "code-none@x").await;
+        assert_eq!(verify_code(&pool, uid, "123456").await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn verify_code_is_scoped_to_the_issuing_user() {
+        // A code created for user A must never verify for user B (per-user salt).
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let a = seed_customer(&pool, "code-a@x").await;
+        let b = seed_customer(&pool, "code-b@x").await;
+
+        let code = create_code(&pool, a).await.unwrap();
+        assert_eq!(
+            verify_code(&pool, b, &code).await.unwrap(),
+            None,
+            "a code must not verify for a different user"
+        );
+        // And it still works for its own user.
+        assert_eq!(verify_code(&pool, a, &code).await.unwrap(), Some(a));
+    }
+
+    /// Return a 6-digit code guaranteed to DIFFER from `code` (flip the last
+    /// digit), so "wrong code" tests never accidentally match the real one.
+    fn wrong_code(code: &str) -> String {
+        let last: u32 = code[5..6].parse().unwrap();
+        format!("{}{}", &code[..5], (last + 1) % 10)
     }
 }

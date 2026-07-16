@@ -25,6 +25,9 @@ pub enum ErrorCode {
     InvalidCredentials,
     OauthAccount,
     InvalidOrExpiredLink,
+    /// The submitted 6-digit login code is wrong, expired, already used, or
+    /// exhausted (#227). Uniform across all those causes — never leaks which.
+    InvalidOrExpiredCode,
     // --- 403 Forbidden ---
     StaffRequired,
     AdminRequired,
@@ -58,6 +61,10 @@ pub enum ErrorCode {
     EmailBelongsToDeletedAccount,
     // --- 400 Bad Request (the human message carries the specifics) ---
     BadRequest,
+    // --- 429 Too Many Requests ---
+    /// Rate limit hit on a public auth endpoint — e.g. too many login-code
+    /// verify attempts (#227). Slow down and retry later.
+    TooManyRequests,
     // --- 503 Service Unavailable ---
     MailNotConfigured,
     // --- 500 Internal ---
@@ -76,6 +83,7 @@ impl ErrorCode {
             ErrorCode::InvalidCredentials => "Invalid email or password",
             ErrorCode::OauthAccount => "Account uses OAuth login",
             ErrorCode::InvalidOrExpiredLink => "Invalid or expired link",
+            ErrorCode::InvalidOrExpiredCode => "Invalid or expired code",
             ErrorCode::StaffRequired => "Staff access required",
             ErrorCode::AdminRequired => "Admin access required",
             ErrorCode::CardCodeStaffOnly => "Only staff can modify card_code",
@@ -102,6 +110,7 @@ impl ErrorCode {
             ErrorCode::UserAlreadyDeleted => "User already deleted",
             ErrorCode::EmailBelongsToDeletedAccount => "This email belongs to a deleted account",
             ErrorCode::BadRequest => "Bad request",
+            ErrorCode::TooManyRequests => "Too many attempts, please try again later",
             ErrorCode::MailNotConfigured => "mail_not_configured",
             ErrorCode::Internal => "Internal server error",
         }
@@ -132,6 +141,11 @@ mod tests {
             ErrorCode::InvalidOrExpiredLink,
             "invalid_or_expired_link",
             "Invalid or expired link",
+        ),
+        (
+            ErrorCode::InvalidOrExpiredCode,
+            "invalid_or_expired_code",
+            "Invalid or expired code",
         ),
         (
             ErrorCode::StaffRequired,
@@ -237,6 +251,11 @@ mod tests {
             "This email belongs to a deleted account",
         ),
         (ErrorCode::BadRequest, "bad_request", "Bad request"),
+        (
+            ErrorCode::TooManyRequests,
+            "too_many_requests",
+            "Too many attempts, please try again later",
+        ),
         (
             ErrorCode::MailNotConfigured,
             "mail_not_configured",
