@@ -30,6 +30,24 @@ test.describe('Install-to-home-screen manifest eligibility (#110)', () => {
             expect(resp.headers()['content-type']).toContain('image/png');
         }
     });
+
+    // #225: iOS ignores manifest.json icons entirely for "Add to Home
+    // Screen" — it reads ONLY apple-touch-icon. This is a separate,
+    // independent check from the manifest icons above.
+    test('apple-touch-icon link tag is present and its href resolves 200 image/png', async ({ page, request }) => {
+        await page.goto(`${BASE_URL}/`);
+        const href = await page.locator('link[rel="apple-touch-icon"]').getAttribute('href');
+        expect(href).toBeTruthy();
+
+        const resp = await request.get(`${BASE_URL}${href}`);
+        expect(resp.ok(), `${href} should resolve 200`).toBe(true);
+        expect(resp.headers()['content-type']).toContain('image/png');
+
+        const appleTitle = await page
+            .locator('meta[name="apple-mobile-web-app-title"]')
+            .getAttribute('content');
+        expect(appleTitle).toBe('SpinBike');
+    });
 });
 
 // iOS Safari: no `beforeinstallprompt` event exists there at all, so the

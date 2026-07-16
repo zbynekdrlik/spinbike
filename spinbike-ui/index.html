@@ -8,6 +8,11 @@
     <title>SpinBike</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="manifest" href="/manifest.json" />
+    <!-- iOS ignores manifest.json icons for "Add to Home Screen" — it only
+         reads apple-touch-icon. Without it, A2HS uses a page-screenshot
+         thumbnail as the icon (#225). -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="SpinBike" />
     <link data-trunk rel="css" href="style.css" />
     <link data-trunk rel="copy-file" href="manifest.json" />
     <link data-trunk rel="copy-file" href="sw.js" />
@@ -16,6 +21,7 @@
     <link data-trunk rel="copy-file" href="icon-512.png" />
     <link data-trunk rel="copy-file" href="icon-192-maskable.png" />
     <link data-trunk rel="copy-file" href="icon-512-maskable.png" />
+    <link data-trunk rel="copy-file" href="apple-touch-icon.png" />
     <link data-trunk rel="rust" data-wasm-opt="z" data-integrity="none" />
 </head>
 <body>
