@@ -159,6 +159,48 @@ UA-sniffing (or any other `Reflect`-based) predicate is added alongside an
 existing one, check whether they read the same underlying JS property
 before writing a second independent fetch.
 
+## Sharing platform-detection across components: a dedicated `src/platform.rs`, not a re-export from the first component that needed it (#228)
+
+`is_standalone()`/`is_ios_ua()`/`user_agent()`/`get_prop()`/`window_value()`
+originally lived private inside `components::install_prompt` (#110/#226).
+#228 needed the SAME "installed standalone + iOS" detection from a second,
+unrelated component (`CustomerLoginMethods` in `code_login_form.rs`, to
+reorder its login-method toggle). Reaching into another component module
+(`crate::components::install_prompt::is_standalone`) would work but wires two
+components together for a concern that belongs to neither — and the fns
+would need to go from private to `pub(crate)` on a component module anyway.
+
+**Fix: promote to a crate-root module** (`spinbike-ui/src/platform.rs`,
+`pub mod platform;` in `lib.rs`, every fn `pub(crate)`) — moved VERBATIM (no
+rewrite) to avoid a refactor-introduces-a-bug risk, confirmed byte-identical
+by an independent review pass. Added one new composite,
+`is_ios_standalone() = is_standalone() && is_ios_ua(&user_agent())`, so a
+THIRD call site never has to re-derive the AND itself. Whenever a THIRD
+component needs UA/standalone detection, add to `platform.rs`, never
+re-import from whichever component happened to define it first.
+
+## E2E-testing "installed standalone PWA" state: `navigator.standalone` override is enough — `matchMedia` stubbing is NOT needed (#228)
+
+`is_standalone()` checks the legacy iOS `navigator.standalone` flag FIRST and
+only falls through to the `(display-mode: standalone)` media query if that
+flag isn't `true` — so a Playwright test simulating "installed on iOS" only
+needs the ONE override, via `page.addInitScript` (must run before the WASM
+bundle loads):
+
+```ts
+await page.addInitScript(() => {
+    Object.defineProperty(window.navigator, 'standalone', { get: () => true });
+});
+```
+
+(Codified as `setIosStandalone(page)` in `e2e/tests/helpers.ts`.) Combine
+with an iOS UA context (`devices['iPhone 13']`, same `test.use()` pattern as
+the existing iOS-Safari-guide tests) for `is_ios_standalone()` to be true, and
+ALWAYS pair with a negative case using an Android UA — since `standalone` is
+an iOS-only flag with no real meaning on Android, applying the SAME override
+under an Android UA and asserting nothing reorders proves the gate is keyed
+on the UA check, not merely on the standalone flag being true.
+
 ## `navigator.clipboard.writeText()` must be dispatched SYNCHRONOUSLY from the click handler, not after a `spawn_local`/`.await` hop (#226)
 
 The natural way to wire up a "copy to clipboard" button in this codebase's
