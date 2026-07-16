@@ -67,7 +67,7 @@ test.describe('Install-to-home-screen component — iOS Safari guide', () => {
         hasTouch: iPhone.hasTouch,
     });
 
-    test('renders the 2-step Share -> Add to Home Screen guide on /my/balance', async ({ page }) => {
+    test('renders the visual numbered Share -> Add to Home Screen guide on /my/balance', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
         await loginViaAPI(page, BASE_URL, 'customer@test.com', 'password123');
         await page.goto('/my/balance');
@@ -76,7 +76,47 @@ test.describe('Install-to-home-screen component — iOS Safari guide', () => {
         await expect(page.locator('[data-testid="install-prompt-ios"]')).toBeVisible();
         await expect(page.locator('[data-testid="install-prompt-ios-step1"]')).toBeVisible();
         await expect(page.locator('[data-testid="install-prompt-ios-step2"]')).toBeVisible();
+        // #226: the SVG glyphs (share icon, plus-square icon) render inline
+        // for each step, replacing the old emoji.
+        await expect(page.locator('[data-testid="install-prompt-ios-step1"] svg')).toHaveCount(1);
+        await expect(page.locator('[data-testid="install-prompt-ios-step2"] svg')).toHaveCount(1);
+        // #226: the share-sheet scroll hint and the permanent footer fallback.
+        await expect(page.locator('[data-testid="install-prompt-ios-scroll-hint"]')).toBeVisible();
+        await expect(page.locator('[data-testid="install-prompt-ios-footer-hint"]')).toBeVisible();
         // The Android/Chromium button must never render on iOS.
+        await expect(page.locator('[data-testid="install-prompt-android"]')).toHaveCount(0);
+
+        assertCleanConsole(consoleMessages);
+    });
+});
+
+// #226: known in-app-browsers (webviews) — Facebook/Messenger, Instagram,
+// LINE, the iOS Google app — have NO "Add to Home Screen" surface at all, so
+// showing the normal Share guide there is misleading. Detected via UA
+// substring markers; here we append the Instagram marker to a real iPhone UA
+// (in-app browsers layer their own token onto the underlying Safari/WebKit
+// UA string, they don't replace it).
+test.describe('Install-to-home-screen component — iOS webview (in-app browser)', () => {
+    test.use({
+        userAgent: `${iPhone.userAgent} Instagram 300.0.0.0.0`,
+        viewport: iPhone.viewport,
+        isMobile: iPhone.isMobile,
+        hasTouch: iPhone.hasTouch,
+    });
+
+    test('shows an open-in-Safari instruction + copy-URL button instead of the A2HS steps', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await loginViaAPI(page, BASE_URL, 'customer@test.com', 'password123');
+        await page.goto('/my/balance');
+        await page.waitForSelector('[data-testid="door-open-button"]', { timeout: 10000 });
+
+        await expect(page.locator('[data-testid="install-prompt-ios-webview"]')).toBeVisible();
+        await expect(page.locator('[data-testid="install-prompt-copy-url"]')).toBeVisible();
+        // The A2HS steps and the normal iOS guide container must NOT render —
+        // they're replaced, not merely supplemented.
+        await expect(page.locator('[data-testid="install-prompt-ios"]')).toHaveCount(0);
+        await expect(page.locator('[data-testid="install-prompt-ios-step1"]')).toHaveCount(0);
+        await expect(page.locator('[data-testid="install-prompt-ios-step2"]')).toHaveCount(0);
         await expect(page.locator('[data-testid="install-prompt-android"]')).toHaveCount(0);
 
         assertCleanConsole(consoleMessages);

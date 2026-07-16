@@ -1,12 +1,23 @@
-//! Install-to-home-screen prompt (#110). `index.html` captures the
-//! Chromium/Android `beforeinstallprompt` event into
+//! Install-to-home-screen prompt (#110, reworked in #226). `index.html`
+//! captures the Chromium/Android `beforeinstallprompt` event into
 //! `window.__deferredInstallPrompt` (the event has no typed web-sys
 //! binding); this component reads that global and shows a big "Pridat na
 //! plochu" button that re-fires the captured `.prompt()`. iOS Safari never
-//! fires that event, so on iOS we render a static 2-step Share -> "Pridat na
-//! plochu" guide instead. Renders nothing once the app is already running
-//! standalone (installed), and nothing on a browser that offers neither path
-//! (e.g. desktop, or Android before the event has fired).
+//! fires that event, so on iOS we render a visual numbered Share -> "Pridat
+//! na plochu" guide instead (SVG glyphs, not emoji — #226). Renders nothing
+//! once the app is already running standalone (installed), and nothing on a
+//! browser that offers neither path (e.g. desktop, or Android before the
+//! event has fired).
+//!
+//! **In-app browsers (webviews)** — Facebook/Messenger, Instagram, LINE, the
+//! iOS Google app — expose NO "Add to Home Screen" at all, so showing the
+//! normal Share guide there is misleading (there is no Share-sheet A2HS
+//! entry to find). #226 UA-sniffs a set of known webview markers and, when
+//! detected on iOS, replaces the A2HS steps with an "open in Safari"
+//! instruction plus a copy-current-URL button. A webview like
+//! `SFSafariViewController` is indistinguishable from real Safari via UA and
+//! is NOT caught by this — the normal Safari-guide branch carries a small
+//! permanent footer fallback hint for exactly that case.
 //!
 //! Mounted on `/welcome` (primary) and `/my/balance` (until installed).
 
@@ -23,8 +34,12 @@ enum PromptKind {
     Hidden,
     /// Chromium/Android captured a `beforeinstallprompt` event we can replay.
     AndroidChromium,
-    /// iOS Safari — no native event; show the manual Share guide.
+    /// iOS Safari (or an undetectable webview) — no native event; show the
+    /// visual Share -> Add-to-Home-Screen guide.
     Ios,
+    /// iOS, but a KNOWN in-app-browser (webview) with no A2HS surface at
+    /// all — show "open in Safari" + a copy-URL button instead.
+    IosWebview,
 }
 
 fn window_value() -> Option<JsValue> {
@@ -95,6 +110,26 @@ fn is_ios_ua() -> bool {
     platform == "MacIntel" && max_touch_points > 1.0
 }
 
+/// Known iOS in-app-browsers (webviews) — Facebook/Messenger, Instagram,
+/// LINE, and the iOS Google app's embedded browser (GSA) — none of which
+/// expose "Add to Home Screen" at all, unlike real Safari. This is a
+/// best-effort UA substring match; some webviews (notably
+/// `SFSafariViewController`-based ones) are indistinguishable from real
+/// Safari and are NOT caught here — see the footer fallback hint rendered
+/// on the normal iOS Safari-guide branch.
+fn is_ios_webview_ua() -> bool {
+    let Some(window) = window_value() else {
+        return false;
+    };
+    let navigator = get_prop(&window, "navigator");
+    let ua = get_prop(&navigator, "userAgent")
+        .as_string()
+        .unwrap_or_default();
+    ["FBAN", "FBAV", "FB_IAB", "Instagram", "Line/", "GSA/"]
+        .into_iter()
+        .any(|marker| ua.contains(marker))
+}
+
 fn detect_kind() -> PromptKind {
     if is_standalone() {
         return PromptKind::Hidden;
@@ -102,10 +137,13 @@ fn detect_kind() -> PromptKind {
     if has_deferred_prompt() {
         return PromptKind::AndroidChromium;
     }
-    if is_ios_ua() {
-        return PromptKind::Ios;
+    if !is_ios_ua() {
+        return PromptKind::Hidden;
     }
-    PromptKind::Hidden
+    if is_ios_webview_ua() {
+        return PromptKind::IosWebview;
+    }
+    PromptKind::Ios
 }
 
 /// Replays the captured `beforeinstallprompt` event: calls `.prompt()`,
@@ -137,6 +175,38 @@ async fn trigger_install_prompt() {
     );
 }
 
+/// Copies the current page URL via `navigator.clipboard.writeText` — the
+/// only way to hand a webview user the real address to paste into Safari,
+/// since a webview has no address bar to copy from directly (#226).
+/// `navigator.clipboard` has no typed web-sys binding used elsewhere in this
+/// crate, so it's read via `Reflect` like the rest of this file. Degrades to
+/// `false` (silent no-op, never panics) if the property, the method, or the
+/// call itself is unavailable — e.g. an older webview with no Clipboard API
+/// at all, or one that denies the permission.
+async fn copy_current_url() -> bool {
+    let Some(window) = window_value() else {
+        return false;
+    };
+    let navigator = get_prop(&window, "navigator");
+    let clipboard = get_prop(&navigator, "clipboard");
+    if clipboard.is_undefined() || clipboard.is_null() {
+        return false;
+    }
+    let location = get_prop(&window, "location");
+    let href = get_prop(&location, "href").as_string().unwrap_or_default();
+    let write_text_val = get_prop(&clipboard, "writeText");
+    let Some(write_text_fn) = write_text_val.dyn_ref::<Function>() else {
+        return false;
+    };
+    let Ok(result) = write_text_fn.call1(&clipboard, &JsValue::from_str(&href)) else {
+        return false;
+    };
+    JsFuture::from(Promise::resolve(&result)).await.is_ok()
+}
+
+const ICON_SHARE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5h10.5a2.25 2.25 0 0 0 2.25-2.25V13.5a.75.75 0 0 0-1.5 0v3.75a.75.75 0 0 1-.75.75H6.75a.75.75 0 0 1-.75-.75V13.5a.75.75 0 0 0-1.5 0v3.75A2.25 2.25 0 0 0 6.75 19.5Z"/></svg>"##;
+const ICON_PLUS_SQUARE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><rect x="3.75" y="3.75" width="16.5" height="16.5" rx="3" stroke-linecap="round" stroke-linejoin="round"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 8.25v7.5M8.25 12h7.5"/></svg>"##;
+
 #[component]
 pub fn InstallPrompt() -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
@@ -145,6 +215,9 @@ pub fn InstallPrompt() -> impl IntoView {
     // this component mounts, and re-checking reactively would need either
     // polling or a Rust-side event listener the design map didn't ask for.
     let (kind, set_kind) = signal(detect_kind());
+    // Local to the webview branch only — whether the copy-URL click has
+    // succeeded, so a small confirmation line can render under the button.
+    let (copied, set_copied) = signal(false);
 
     let on_install_click = move |_| {
         // Hide immediately — the captured event can only be used once, so
@@ -153,6 +226,14 @@ pub fn InstallPrompt() -> impl IntoView {
         set_kind.set(PromptKind::Hidden);
         spawn_local(async move {
             trigger_install_prompt().await;
+        });
+    };
+
+    let on_copy_click = move |_| {
+        spawn_local(async move {
+            if copy_current_url().await {
+                set_copied.set(true);
+            }
         });
     };
 
@@ -177,15 +258,45 @@ pub fn InstallPrompt() -> impl IntoView {
                         {move || i18n::t(lang.get(), "install_prompt_ios_title")}
                     </p>
                     <ol class="install-prompt__steps">
-                        <li data-testid="install-prompt-ios-step1">
-                            <span class="install-prompt__icon" aria-hidden="true">"\u{1F4E4}"</span>
-                            {move || i18n::t(lang.get(), "install_prompt_ios_step1")}
+                        <li class="install-prompt__step" data-testid="install-prompt-ios-step1">
+                            <span class="install-prompt__step-num" aria-hidden="true">"1"</span>
+                            <span class="install-prompt__icon" inner_html=ICON_SHARE></span>
+                            <span>{move || i18n::t(lang.get(), "install_prompt_ios_step1")}</span>
                         </li>
-                        <li data-testid="install-prompt-ios-step2">
-                            <span class="install-prompt__icon" aria-hidden="true">"\u{2795}"</span>
-                            {move || i18n::t(lang.get(), "install_prompt_ios_step2")}
+                        <li class="install-prompt__step" data-testid="install-prompt-ios-step2">
+                            <span class="install-prompt__step-num" aria-hidden="true">"2"</span>
+                            <span class="install-prompt__icon" inner_html=ICON_PLUS_SQUARE></span>
+                            <span>{move || i18n::t(lang.get(), "install_prompt_ios_step2")}</span>
                         </li>
                     </ol>
+                    <p class="install-prompt__scroll-hint" data-testid="install-prompt-ios-scroll-hint">
+                        {move || i18n::t(lang.get(), "install_prompt_ios_scroll_hint")}
+                    </p>
+                    <p class="install-prompt__footer-hint" data-testid="install-prompt-ios-footer-hint">
+                        {move || i18n::t(lang.get(), "install_prompt_ios_footer_hint")}
+                    </p>
+                </div>
+            }
+            .into_any(),
+            PromptKind::IosWebview => view! {
+                <div class="install-prompt install-prompt--ios install-prompt--webview" data-testid="install-prompt-ios-webview">
+                    <p class="install-prompt__title">
+                        {move || i18n::t(lang.get(), "install_prompt_webview_title")}
+                    </p>
+                    <button
+                        class="btn btn--ghost btn--block"
+                        data-testid="install-prompt-copy-url"
+                        on:click=on_copy_click
+                    >
+                        {move || i18n::t(lang.get(), "install_prompt_copy_button")}
+                    </button>
+                    {move || {
+                        copied.get().then(|| view! {
+                            <p class="install-prompt__copy-confirm" data-testid="install-prompt-copy-confirm">
+                                {move || i18n::t(lang.get(), "install_prompt_copy_confirm")}
+                            </p>
+                        })
+                    }}
                 </div>
             }
             .into_any(),
