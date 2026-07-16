@@ -797,23 +797,26 @@ async fn code_login_unknown_email_rejected_uniformly() {
 
 #[tokio::test]
 async fn code_login_non_customer_rejected() {
-    // A staff/admin account cannot log in with a code (customers-only).
+    // A staff/admin account cannot log in with a code (customers-only). Mint a
+    // code for the admin and submit the CORRECT value, so ONLY the customers-only
+    // gate (not a wrong-code rejection) can produce the 401 — this is what proves
+    // the gate itself, not verify_code, does the rejecting.
     let app = TestApp::new().await;
-    // Even minting a code row for the admin (bypassing the send gate) must not
-    // let them in through code-login.
-    login_tokens::create_code(&app.pool, app.admin_id)
+    let code = login_tokens::create_code(&app.pool, app.admin_id)
         .await
         .unwrap();
-    // We don't know the admin's code, but the point is the customers-only gate:
-    // a wrong code for a non-customer is still a uniform 401 (not a 429/500).
     let (status, _) = app
         .request(post_json(
             "/api/auth/code-login",
             "",
-            &serde_json::json!({"email": "admin@test.com", "code": "000000"}),
+            &serde_json::json!({"email": "admin@test.com", "code": code}),
         ))
         .await;
-    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a non-customer must be rejected even with the correct code"
+    );
 }
 
 #[tokio::test]

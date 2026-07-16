@@ -387,6 +387,16 @@ fn login_code_email(code: &str) -> (String, String, String) {
     (subject, text, html)
 }
 
+/// Whether a user may complete a passwordless customer login (code path, #227):
+/// role MUST be `customer` AND the account must not be blocked. Extracted as a
+/// pure predicate so its boundary is directly unit-testable — the handlers that
+/// call it are async and DB-bound, so the gate's `&&`/`==`/`!` logic would
+/// otherwise only be reachable through integration tests. `Role::from` (not
+/// `parse_role`) so an unknown legacy role is never treated as a customer.
+fn is_eligible_customer(role: &str, blocked: bool) -> bool {
+    Role::from(role) == Role::Customer && !blocked
+}
+
 /// Public passwordless-login endpoint (#227). ALWAYS returns 200
 /// `{"status":"ok"}` regardless of whether the email exists — EXACTLY the same
 /// no-enumeration semantics as `request-login-link`. A 6-digit code email is
@@ -416,9 +426,8 @@ async fn request_login_code(
     };
 
     // Customers-only; blocked accounts get nothing. (deleted_at is already
-    // filtered by get_user_by_email.) `Role::from` (not `parse_role`) so an
-    // unknown legacy role is not treated as a customer.
-    if Role::from(user.role.as_str()) != Role::Customer || user.blocked {
+    // filtered by get_user_by_email.)
+    if !is_eligible_customer(user.role.as_str(), user.blocked) {
         return ok();
     }
 
@@ -506,7 +515,7 @@ async fn code_login(
     };
 
     // Customers-only + not blocked (get_user_by_email already filters deleted).
-    if Role::from(user.role.as_str()) != Role::Customer || user.blocked {
+    if !is_eligible_customer(user.role.as_str(), user.blocked) {
         return Err(invalid());
     }
 
@@ -859,6 +868,90 @@ mod tests {
             rl.check_and_record_at("u60@x.com", t0 + Duration::from_millis(100)),
             Err("global_cap"),
             "the 61st verify inside the 60 s window must hit the global cap"
+        );
+    }
+
+    /// The verify limiter's per-email map is bounded — records N distinct emails,
+    /// evicts stale ones past the memory window. Also exercises `tracked_keys`
+    /// with a value that is neither 0 nor 1 (locks it against a constant mutant).
+    #[test]
+    fn code_login_per_email_map_is_bounded() {
+        let mut rl = CodeLoginRateLimiter::new();
+        let t0 = Instant::now();
+        for i in 0..3 {
+            rl.check_and_record_at(&format!("u{i}@x.com"), t0 + Duration::from_millis(i as u64))
+                .unwrap();
+        }
+        assert_eq!(
+            rl.tracked_keys(),
+            3,
+            "three distinct emails tracked while fresh"
+        );
+        // Past the 120 s memory window, the three stale entries are evicted.
+        rl.check_and_record_at("late@x.com", t0 + Duration::from_secs(200))
+            .unwrap();
+        assert_eq!(
+            rl.tracked_keys(),
+            1,
+            "stale per-email entries must be evicted, leaving only the recent one"
+        );
+    }
+
+    // ── customers-only gate (#227) ─────────────────────────────────────────
+
+    /// The passwordless-login eligibility gate: customer AND not blocked. Pins
+    /// every boundary (locks the `==` / `&&` / `!` operators against mutation).
+    #[test]
+    fn is_eligible_customer_gate() {
+        assert!(
+            super::is_eligible_customer("customer", false),
+            "a non-blocked customer is the ONLY eligible case"
+        );
+        assert!(
+            !super::is_eligible_customer("customer", true),
+            "a blocked customer must be rejected"
+        );
+        assert!(
+            !super::is_eligible_customer("admin", false),
+            "an admin (non-customer) must be rejected"
+        );
+        assert!(
+            !super::is_eligible_customer("staff", false),
+            "staff (non-customer) must be rejected"
+        );
+        assert!(
+            !super::is_eligible_customer("admin", true),
+            "blocked non-customer must be rejected"
+        );
+    }
+
+    // ── login-code email content (#227) ────────────────────────────────────
+
+    /// The composed email must carry the actual code plus the 10-minute validity
+    /// and the "don't share it" warning (locks `login_code_email`'s return
+    /// against a junk-tuple mutant).
+    #[test]
+    fn login_code_email_embeds_the_code_and_guidance() {
+        let (subject, text, html) = super::login_code_email("482913");
+        assert!(
+            subject.contains("prihlasovaci kod"),
+            "subject must name the login code, got: {subject}"
+        );
+        assert!(
+            text.contains("482913"),
+            "plain-text body must carry the code, got: {text}"
+        );
+        assert!(
+            text.contains("10 minut"),
+            "body must state the 10-minute validity"
+        );
+        assert!(
+            text.contains("Nikomu ho neposielaj"),
+            "body must warn not to share the code"
+        );
+        assert!(
+            html.contains("482913"),
+            "html body must carry the code, got: {html}"
         );
     }
 }
