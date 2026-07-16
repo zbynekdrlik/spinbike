@@ -374,8 +374,8 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "install_prompt_ios_footer_hint",
         (
-            "Nejde to? Otvor spinbike.sk priamo v Safari.",
-            "Not working? Open spinbike.sk directly in Safari.",
+            "Nejde to? Otvor tuto stranku priamo v Safari.",
+            "Not working? Open this page directly in Safari.",
         ),
     );
     m.insert(

@@ -83,6 +83,21 @@ fn has_deferred_prompt() -> bool {
     !v.is_undefined() && !v.is_null()
 }
 
+/// `navigator.userAgent`, fetched once and shared by `is_ios_ua` and
+/// `is_ios_webview_ua` — both used to independently re-fetch it via their own
+/// `window` -> `navigator` -> `userAgent` `Reflect` round-trip, which is both
+/// duplicated logic and a wasted extra JS/WASM FFI call per mount on every
+/// iOS visitor.
+fn user_agent() -> String {
+    let Some(window) = window_value() else {
+        return String::new();
+    };
+    let navigator = get_prop(&window, "navigator");
+    get_prop(&navigator, "userAgent")
+        .as_string()
+        .unwrap_or_default()
+}
+
 /// iOS Safari has no `beforeinstallprompt` event at all, so eligibility is
 /// UA-sniffed: `navigator.userAgent` containing `iPhone`/`iPad`. This alone
 /// misses real iPads: since iPadOS 13, Safari defaults to "Request Desktop
@@ -90,17 +105,14 @@ fn has_deferred_prompt() -> bool {
 /// (`Macintosh; Intel Mac OS X ...`) with no `iPad` substring at all. The
 /// standard disambiguator: a genuine Mac reports zero touch points, while an
 /// iPad — even UA-spoofed as a Mac — reports `navigator.maxTouchPoints > 1`.
-fn is_ios_ua() -> bool {
+fn is_ios_ua(ua: &str) -> bool {
+    if ua.contains("iPhone") || ua.contains("iPad") {
+        return true;
+    }
     let Some(window) = window_value() else {
         return false;
     };
     let navigator = get_prop(&window, "navigator");
-    let ua = get_prop(&navigator, "userAgent")
-        .as_string()
-        .unwrap_or_default();
-    if ua.contains("iPhone") || ua.contains("iPad") {
-        return true;
-    }
     let platform = get_prop(&navigator, "platform")
         .as_string()
         .unwrap_or_default();
@@ -117,14 +129,7 @@ fn is_ios_ua() -> bool {
 /// `SFSafariViewController`-based ones) are indistinguishable from real
 /// Safari and are NOT caught here — see the footer fallback hint rendered
 /// on the normal iOS Safari-guide branch.
-fn is_ios_webview_ua() -> bool {
-    let Some(window) = window_value() else {
-        return false;
-    };
-    let navigator = get_prop(&window, "navigator");
-    let ua = get_prop(&navigator, "userAgent")
-        .as_string()
-        .unwrap_or_default();
+fn is_ios_webview_ua(ua: &str) -> bool {
     ["FBAN", "FBAV", "FB_IAB", "Instagram", "Line/", "GSA/"]
         .into_iter()
         .any(|marker| ua.contains(marker))
@@ -137,10 +142,11 @@ fn detect_kind() -> PromptKind {
     if has_deferred_prompt() {
         return PromptKind::AndroidChromium;
     }
-    if !is_ios_ua() {
+    let ua = user_agent();
+    if !is_ios_ua(&ua) {
         return PromptKind::Hidden;
     }
-    if is_ios_webview_ua() {
+    if is_ios_webview_ua(&ua) {
         return PromptKind::IosWebview;
     }
     PromptKind::Ios
@@ -180,28 +186,31 @@ async fn trigger_install_prompt() {
 /// since a webview has no address bar to copy from directly (#226).
 /// `navigator.clipboard` has no typed web-sys binding used elsewhere in this
 /// crate, so it's read via `Reflect` like the rest of this file. Degrades to
-/// `false` (silent no-op, never panics) if the property, the method, or the
+/// `None` (silent no-op, never panics) if the property, the method, or the
 /// call itself is unavailable — e.g. an older webview with no Clipboard API
 /// at all, or one that denies the permission.
-async fn copy_current_url() -> bool {
-    let Some(window) = window_value() else {
-        return false;
-    };
+///
+/// Split from the `await` on purpose: `clipboard.writeText()` itself is
+/// dispatched HERE, synchronously, so it runs inside the same call stack as
+/// the triggering click — some stricter WebKit/Safari builds only honor the
+/// Clipboard API's required user-activation when the write is fired
+/// synchronously from the originating event, not after a `spawn_local`/
+/// `.await` microtask hop. The caller only awaits the returned `Promise`.
+fn start_copy_current_url() -> Option<Promise> {
+    let window = window_value()?;
     let navigator = get_prop(&window, "navigator");
     let clipboard = get_prop(&navigator, "clipboard");
     if clipboard.is_undefined() || clipboard.is_null() {
-        return false;
+        return None;
     }
     let location = get_prop(&window, "location");
     let href = get_prop(&location, "href").as_string().unwrap_or_default();
     let write_text_val = get_prop(&clipboard, "writeText");
-    let Some(write_text_fn) = write_text_val.dyn_ref::<Function>() else {
-        return false;
-    };
-    let Ok(result) = write_text_fn.call1(&clipboard, &JsValue::from_str(&href)) else {
-        return false;
-    };
-    JsFuture::from(Promise::resolve(&result)).await.is_ok()
+    let write_text_fn = write_text_val.dyn_ref::<Function>()?;
+    let result = write_text_fn
+        .call1(&clipboard, &JsValue::from_str(&href))
+        .ok()?;
+    Some(Promise::resolve(&result))
 }
 
 const ICON_SHARE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5h10.5a2.25 2.25 0 0 0 2.25-2.25V13.5a.75.75 0 0 0-1.5 0v3.75a.75.75 0 0 1-.75.75H6.75a.75.75 0 0 1-.75-.75V13.5a.75.75 0 0 0-1.5 0v3.75A2.25 2.25 0 0 0 6.75 19.5Z"/></svg>"##;
@@ -230,8 +239,15 @@ pub fn InstallPrompt() -> impl IntoView {
     };
 
     let on_copy_click = move |_| {
+        // `start_copy_current_url` fires the actual `clipboard.writeText()`
+        // call SYNCHRONOUSLY, right here in the click handler — only the
+        // `Promise` it returns is awaited inside `spawn_local` (see its
+        // doc comment for why the split matters).
+        let Some(promise) = start_copy_current_url() else {
+            return;
+        };
         spawn_local(async move {
-            if copy_current_url().await {
+            if JsFuture::from(promise).await.is_ok() {
                 set_copied.set(true);
             }
         });
@@ -258,12 +274,12 @@ pub fn InstallPrompt() -> impl IntoView {
                         {move || i18n::t(lang.get(), "install_prompt_ios_title")}
                     </p>
                     <ol class="install-prompt__steps">
-                        <li class="install-prompt__step" data-testid="install-prompt-ios-step1">
+                        <li data-testid="install-prompt-ios-step1">
                             <span class="install-prompt__step-num" aria-hidden="true">"1"</span>
                             <span class="install-prompt__icon" inner_html=ICON_SHARE></span>
                             <span>{move || i18n::t(lang.get(), "install_prompt_ios_step1")}</span>
                         </li>
-                        <li class="install-prompt__step" data-testid="install-prompt-ios-step2">
+                        <li data-testid="install-prompt-ios-step2">
                             <span class="install-prompt__step-num" aria-hidden="true">"2"</span>
                             <span class="install-prompt__icon" inner_html=ICON_PLUS_SQUARE></span>
                             <span>{move || i18n::t(lang.get(), "install_prompt_ios_step2")}</span>
@@ -292,9 +308,9 @@ pub fn InstallPrompt() -> impl IntoView {
                     </button>
                     {move || {
                         copied.get().then(|| view! {
-                            <p class="install-prompt__copy-confirm" data-testid="install-prompt-copy-confirm">
+                            <div class="alert alert-success" data-testid="install-prompt-copy-confirm">
                                 {move || i18n::t(lang.get(), "install_prompt_copy_confirm")}
-                            </p>
+                            </div>
                         })
                     }}
                 </div>

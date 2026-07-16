@@ -1563,7 +1563,6 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
     gap: 0.5rem;
 }
 .install-prompt__icon {
-    font-size: 1.1rem;
     flex-shrink: 0;
 }
 .install-prompt__icon svg {
@@ -1593,10 +1592,8 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
 .install-prompt--webview .install-prompt__title {
     margin-bottom: 0.75rem;
 }
-.install-prompt__copy-confirm {
-    font-size: 0.85rem;
-    color: var(--brand);
-    margin: 0.5rem 0 0;
+.install-prompt--webview .alert {
+    margin: 0.75rem 0 0;
 }
 
 .card-credit, .card-pass {
