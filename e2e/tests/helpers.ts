@@ -78,6 +78,21 @@ export async function setEnglishLanguage(page: Page) {
 }
 
 /**
+ * Simulate running as an installed standalone PWA on iOS (#228): overrides
+ * the legacy iOS-Safari-only `navigator.standalone` flag, which is exactly
+ * what `platform::is_standalone()` checks FIRST (see `spinbike-ui/src/platform.rs`)
+ * — no need to also stub `matchMedia`, since the standalone flag alone
+ * already satisfies that check. Must run via `addInitScript` (before the
+ * WASM bundle loads) and combined with an iOS `userAgent` context option
+ * (e.g. `devices['iPhone 13']`) for `is_ios_standalone()` to be true.
+ */
+export async function setIosStandalone(page: Page) {
+    await page.addInitScript(() => {
+        Object.defineProperty(window.navigator, 'standalone', { get: () => true });
+    });
+}
+
+/**
  * The admin/staff password-login `<form>` on /login, scoped by the ONE
  * attribute only it has: a `type="password"` input. /login also has a
  * SECOND `type="email"` input + submit button — the customer login-link

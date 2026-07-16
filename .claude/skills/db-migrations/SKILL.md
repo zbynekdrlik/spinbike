@@ -385,3 +385,27 @@ than the table's original `CREATE TABLE`), not just the original schema —
 `UserRow`'s `deleted_at`/`allow_self_entry` and `bookings`'s
 `charged_at`/`charge_transaction_id` were both added by later `ALTER TABLE`
 statements.
+
+## GOTCHA: a partial-upgrade test whose applied range includes a TRIGGER (or any internal-`;` block) must use `sqlx::raw_sql`, not `apply_sql_block`
+
+`apply_sql_block` (the test helper) strips `-- comments` then splits on `;` and runs
+each fragment — fine for single-statement migrations, but it MANGLES a
+`CREATE TRIGGER ... BEGIN ...; ...; END;` body (V20's `enforce_active_pass_invariant`)
+because the internal semicolons split the trigger into invalid fragments. The
+v19-genuine-upgrade test dodged this by applying only `<= 18`. A test that must apply
+THROUGH V20+ (e.g. V21's "preserve rows on genuine upgrade from v20") must mirror
+`run_migrations` instead: per migration `pool.acquire()` → `PRAGMA foreign_keys=OFF`
+→ `conn.begin()` → `sqlx::raw_sql(sql).execute(&mut *tx)` → INSERT schema_version →
+commit → `PRAGMA foreign_keys=ON`. `raw_sql` hands the whole block to SQLite (trigger
+bodies stay intact). Worked example: `db::migrations::tests::
+v21_preserves_existing_rows_on_genuine_upgrade_from_v20`.
+
+## login_tokens rebuild needs NO view/trigger dance (unlike a services/transactions rebuild)
+
+V21 rebuilds `login_tokens` (widen the `purpose` CHECK to add `'code'` + add an
+`attempts` column) via the V8/V11/V16 DROP-new + INSERT + RENAME pattern. Unlike a
+`services`/`transactions` rebuild, NO view or trigger references `login_tokens`
+(V18's `user_active_pass` + V20's trigger reference services/transactions only), and
+no table holds an FK INTO it — so this rebuild needs no DROP-VIEW/TRIGGER step, just
+the runner's PRAGMA foreign_keys=OFF. The INSERT lists every old column explicitly
+and OMITS the new `attempts` so pre-existing rows adopt its DEFAULT 0.

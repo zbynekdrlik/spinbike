@@ -27,6 +27,7 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 
 use crate::i18n::{self, Lang};
+use crate::platform::{get_prop, is_ios_ua, is_standalone, user_agent, window_value};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PromptKind {
@@ -42,37 +43,6 @@ enum PromptKind {
     IosWebview,
 }
 
-fn window_value() -> Option<JsValue> {
-    web_sys::window().map(JsValue::from)
-}
-
-/// `Reflect::get` with a string key, defaulting to `undefined` on any error
-/// (missing property, non-object target) rather than propagating — every
-/// caller here treats "absent" and "errored" the same way.
-fn get_prop(target: &JsValue, key: &str) -> JsValue {
-    Reflect::get(target, &JsValue::from_str(key)).unwrap_or(JsValue::UNDEFINED)
-}
-
-/// True once the app is already running installed (standalone). Checked two
-/// ways: the iOS Safari-only legacy `navigator.standalone` flag (no typed
-/// web-sys binding — non-standard), and the standard `display-mode:
-/// standalone` media query (Chromium + modern Safari), via the typed
-/// `Window::match_media` binding (`MediaQueryList` web-sys feature).
-fn is_standalone() -> bool {
-    let Some(win) = web_sys::window() else {
-        return false;
-    };
-    let window = JsValue::from(win.clone());
-    let navigator = get_prop(&window, "navigator");
-    if get_prop(&navigator, "standalone").as_bool() == Some(true) {
-        return true;
-    }
-    win.match_media("(display-mode: standalone)")
-        .ok()
-        .flatten()
-        .is_some_and(|mql| mql.matches())
-}
-
 /// True when `index.html`'s `beforeinstallprompt` listener has captured a
 /// deferred install event we can still replay (Chromium/Android eligibility).
 fn has_deferred_prompt() -> bool {
@@ -81,45 +51,6 @@ fn has_deferred_prompt() -> bool {
     };
     let v = get_prop(&window, "__deferredInstallPrompt");
     !v.is_undefined() && !v.is_null()
-}
-
-/// `navigator.userAgent`, fetched once and shared by `is_ios_ua` and
-/// `is_ios_webview_ua` — both used to independently re-fetch it via their own
-/// `window` -> `navigator` -> `userAgent` `Reflect` round-trip, which is both
-/// duplicated logic and a wasted extra JS/WASM FFI call per mount on every
-/// iOS visitor.
-fn user_agent() -> String {
-    let Some(window) = window_value() else {
-        return String::new();
-    };
-    let navigator = get_prop(&window, "navigator");
-    get_prop(&navigator, "userAgent")
-        .as_string()
-        .unwrap_or_default()
-}
-
-/// iOS Safari has no `beforeinstallprompt` event at all, so eligibility is
-/// UA-sniffed: `navigator.userAgent` containing `iPhone`/`iPad`. This alone
-/// misses real iPads: since iPadOS 13, Safari defaults to "Request Desktop
-/// Website", so `navigator.userAgent` reports as a plain Mac
-/// (`Macintosh; Intel Mac OS X ...`) with no `iPad` substring at all. The
-/// standard disambiguator: a genuine Mac reports zero touch points, while an
-/// iPad — even UA-spoofed as a Mac — reports `navigator.maxTouchPoints > 1`.
-fn is_ios_ua(ua: &str) -> bool {
-    if ua.contains("iPhone") || ua.contains("iPad") {
-        return true;
-    }
-    let Some(window) = window_value() else {
-        return false;
-    };
-    let navigator = get_prop(&window, "navigator");
-    let platform = get_prop(&navigator, "platform")
-        .as_string()
-        .unwrap_or_default();
-    let max_touch_points = get_prop(&navigator, "maxTouchPoints")
-        .as_f64()
-        .unwrap_or(0.0);
-    platform == "MacIntel" && max_touch_points > 1.0
 }
 
 /// Known iOS in-app-browsers (webviews) — Facebook/Messenger, Instagram,

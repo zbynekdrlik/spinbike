@@ -1,5 +1,11 @@
-import { test, expect } from '@playwright/test';
-import { loginViaAPI, setupConsoleCheck, assertCleanConsole, setEnglishLanguage } from './helpers';
+import { test, expect, devices } from '@playwright/test';
+import {
+    loginViaAPI,
+    setupConsoleCheck,
+    assertCleanConsole,
+    setEnglishLanguage,
+    setIosStandalone,
+} from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -106,6 +112,109 @@ test.describe('Login page — customer login-code (#227)', () => {
         expect(token).toBeFalsy();
 
         // The 401 is an expected outcome (helpers filter 4xx) — console stays clean.
+        assertCleanConsole(consoleMessages);
+    });
+});
+
+// #228 — a magic link is a dead end when running installed standalone on iOS
+// (storage is partitioned from Safari, so the link always reopens there
+// instead of completing login inside the installed app). `CustomerLoginMethods`
+// must therefore LEAD with the code method there — on `/login`'s customer
+// section AND on `/welcome`'s invalid-token fallback (same shared component).
+const iPhone = devices['iPhone 13'];
+test.describe('Customer login method ordering — installed standalone iOS (#228)', () => {
+    test.use({
+        userAgent: iPhone.userAgent,
+        viewport: iPhone.viewport,
+        isMobile: iPhone.isMobile,
+        hasTouch: iPhone.hasTouch,
+    });
+
+    test('standalone + iOS leads with the code form on /login', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await setIosStandalone(page);
+        await setEnglishLanguage(page);
+        await page.goto('/login');
+        await page.waitForSelector('h1.page-title');
+
+        await expect(page.locator('[data-testid="login-method-code"]')).toHaveAttribute(
+            'aria-selected',
+            'true',
+        );
+        await expect(page.locator('[data-testid="login-method-link"]')).toHaveAttribute(
+            'aria-selected',
+            'false',
+        );
+        await expect(page.locator('[data-testid="code-login-email-form"]')).toBeVisible();
+        await expect(page.locator('[data-testid="login-link-form"]')).toHaveCount(0);
+
+        assertCleanConsole(consoleMessages);
+    });
+
+    test('standalone + iOS leads with the code form on /welcome invalid-token fallback', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await setIosStandalone(page);
+        await setEnglishLanguage(page);
+        await page.goto('/welcome');
+        await page.waitForSelector('[data-testid="welcome-invalid"]', { timeout: 10000 });
+
+        await expect(page.locator('[data-testid="login-method-code"]')).toHaveAttribute(
+            'aria-selected',
+            'true',
+        );
+        await expect(page.locator('[data-testid="code-login-email-form"]')).toBeVisible();
+
+        assertCleanConsole(consoleMessages);
+    });
+
+    test('iOS in a plain Safari tab (NOT installed/standalone) still leads with the link form', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        // Deliberately no setIosStandalone() — a normal browser tab, not
+        // installed. The link method must stay the default here; only the
+        // installed-standalone case reorders.
+        await setEnglishLanguage(page);
+        await page.goto('/login');
+        await page.waitForSelector('h1.page-title');
+
+        await expect(page.locator('[data-testid="login-method-link"]')).toHaveAttribute(
+            'aria-selected',
+            'true',
+        );
+        await expect(page.locator('[data-testid="login-link-form"]')).toBeVisible();
+
+        assertCleanConsole(consoleMessages);
+    });
+});
+
+// Android/Chromium is explicitly UNCHANGED (#228): the browser and the
+// installed PWA share storage there, so no logged-out loop exists and the
+// link stays primary. `setIosStandalone` is applied here too (it only sets
+// `navigator.standalone`, an iOS-Safari-only flag with no real meaning on
+// Android) specifically to prove the REORDER is gated by the iOS user-agent
+// check, not merely by the standalone flag alone.
+test.describe('Customer login method ordering — Android standalone unaffected (#228)', () => {
+    test.use({
+        userAgent:
+            'Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36',
+    });
+
+    test('standalone + Android still leads with the link form', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await setIosStandalone(page);
+        await setEnglishLanguage(page);
+        await page.goto('/login');
+        await page.waitForSelector('h1.page-title');
+
+        await expect(page.locator('[data-testid="login-method-link"]')).toHaveAttribute(
+            'aria-selected',
+            'true',
+        );
+        await expect(page.locator('[data-testid="login-link-form"]')).toBeVisible();
+
         assertCleanConsole(consoleMessages);
     });
 });
