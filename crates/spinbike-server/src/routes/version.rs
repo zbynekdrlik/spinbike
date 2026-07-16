@@ -56,6 +56,9 @@ mod tests {
             login_link_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::routes::auth::LoginLinkRateLimiter::new(),
             )),
+            code_login_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::auth::CodeLoginRateLimiter::new(),
+            )),
         };
         let app = Router::new().merge(routes()).with_state(state);
 

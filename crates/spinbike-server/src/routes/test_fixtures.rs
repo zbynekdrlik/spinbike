@@ -8,7 +8,7 @@ use serde::Deserialize;
 
 use crate::AppState;
 use crate::auth::{StaffUser, hash_password};
-use crate::db::users;
+use crate::db::{login_tokens, users};
 
 // ---------------------------------------------------------------------------
 // Request types
@@ -21,6 +21,11 @@ pub struct SeedAccountRequest {
     pub name: String,
     #[serde(default = "default_seed_role")]
     pub role: String,
+}
+
+#[derive(Deserialize)]
+pub struct MintLoginCodeRequest {
+    pub email: String,
 }
 
 #[derive(Deserialize)]
@@ -77,6 +82,10 @@ pub fn routes() -> Router<AppState> {
         .route("/api/test/seed-expired-pass", post(seed_expired_pass))
         .route("/api/test/seed-transactions", post(seed_transactions))
         .route("/api/test/seed-user", post(seed_user))
+        // #227: mint a raw 6-digit login code for an existing customer so the
+        // code-login E2E can enter a known-valid code (the public
+        // request-login-code endpoint never echoes it — no enumeration).
+        .route("/api/test/mint-login-code", post(mint_login_code))
         // Legacy alias kept so E2E tests that still call seed-credit continue
         // to work; the handler interprets the body as {barcode, credit} and
         // creates/updates the matching user's credit field.
@@ -132,6 +141,26 @@ async fn find_or_create_user_by_card_code(
 
 fn default_seed_role() -> String {
     "customer".to_string()
+}
+
+/// E2E-only (#227): mint a fresh 6-digit login code for an existing customer and
+/// return the RAW code, so a Playwright spec can drive the code-entry UI with a
+/// known-valid value. The public `/api/auth/request-login-code` endpoint never
+/// echoes the code (no enumeration), so this test-only seam is how the E2E gets
+/// one. Only mounted under `SPINBIKE_TEST_MODE=1`. Returns 200 `{"code": "..."}`,
+/// or 404 when no user has that email.
+async fn mint_login_code(
+    State(state): State<AppState>,
+    Json(body): Json<MintLoginCodeRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let user = users::get_user_by_email(&state.pool, body.email.trim())
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "no such user".to_string()))?;
+    let code = login_tokens::create_code(&state.pool, user.id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "code": code })))
 }
 
 /// #172: deliberately panics so `lib.rs`'s

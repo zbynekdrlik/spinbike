@@ -3,6 +3,71 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-07-16 — #225 + #226: apple-touch-icon + iOS install guide v2 (bundled)
+
+- **Issues:** [#225](https://github.com/zbynekdrlik/spinbike/issues/225) —
+  no `apple-touch-icon`, so iOS "Add to Home Screen" used a page-screenshot
+  thumbnail. [#226](https://github.com/zbynekdrlik/spinbike/issues/226) —
+  the iOS install guide was 2 lines of plain emoji text, and in-app browsers
+  (Instagram/Facebook/etc.) have no A2HS surface at all so the guide was
+  actively misleading there. Both STILL_VALID, bundle-safe (no schema/API/
+  security overlap, <300 LoC each) → one PR.
+- **Version:** bump `7ea006a` (0.15.0-dev.93 → .94).
+- **#225** (`2b2bcee`) — new `spinbike-ui/apple-touch-icon.png` (180x180,
+  opaque `#15151a`, `convert -flatten` from icon-512.png; `git add -f` past
+  the root `.gitignore`'s `*.png` rule) + `<link rel="apple-touch-icon">` +
+  `apple-mobile-web-app-title` meta + Trunk copy-file directive in
+  `index.html`. E2E: new assertion in the manifest-eligibility spec.
+- **#226** (`81dfafe`) — reworked `install_prompt.rs`'s iOS branch: inline
+  SVG glyphs (share icon, plus-square icon) replace emoji, numbered steps,
+  a share-sheet scroll hint, a permanent footer fallback hint; new
+  `PromptKind::IosWebview` UA-sniffs known in-app-browser markers (FBAN/
+  FBAV/FB_IAB/Instagram/Line///GSA/) and swaps the A2HS steps for an
+  "open in Safari" instruction + copy-URL button
+  (`navigator.clipboard.writeText` via `js_sys::Reflect`, silent-degrade).
+  Preserved the iPadOS-13 `MacIntel`+`maxTouchPoints>1` disambiguator
+  (`c51b1ff`) untouched. New i18n keys (Sk unaccented + En). E2E: extended
+  the Safari-guide test (SVG icons + hints) + new webview describe block.
+- **Two-round parallel review before merge** (per-diff-scoped, not the full
+  repo): round 1 (correctness + cleanup angles, 2 parallel agents) found 6
+  issues — fixed in `1b458ab` (domain-agnostic footer hint; the
+  `navigator.clipboard.writeText()` call moved to fire SYNCHRONOUSLY in the
+  click handler with only the returned `Promise` awaited in `spawn_local`,
+  since some WebKit builds only honor Clipboard-API user-activation on a
+  synchronous dispatch; deduped the UA-fetch between `is_ios_ua`/
+  `is_ios_webview_ua` into one shared `user_agent()` call; 3 dead-CSS/class
+  cleanups). Round 2 (`superpowers:requesting-code-review` deep pass) caught
+  a real bug the first round missed: `InstallPrompt` also mounts on
+  `/welcome?t=<token>` right after a magic-link redemption, and that page
+  never strips `?t=` from the address bar — the copy-URL button was reading
+  raw `location.href`, so it would hand a webview user their own
+  already-spent token. Fixed in `ac2b486`: copy `location.origin +
+  location.pathname` instead, with a new E2E regression test.
+- **CI:** dev green across all 3 pushes (Lint, Test, Build WASM (UI), Test
+  (UI), all 8 mutation shards, E2E, Deploy+Smoke (dev)). PR
+  [#229](https://github.com/zbynekdrlik/spinbike/pull/229) — body `Closes
+  #225` + `Closes #226` on separate lines — merged `4374a04`. Main CI green
+  incl. Deploy (prod) + Smoke (prod).
+- **Deployed + verified LIVE on `https://spinbike.sk` (v0.15.0-dev.94):**
+  `apple-touch-icon.png` 200 `image/png`, link+meta tags present in served
+  HTML, DOM version matches `/api/version`, 0 console errors (stale SW
+  registration cleared first). Downloaded the live wasm bundle and grepped
+  for the exact new/fixed strings (all 5 new i18n keys, the webview UA
+  markers, the SVG path data, AND `origin`/`pathname` — proving the
+  query-string fix is the bytes actually deployed, not the pre-fix `href`
+  version). Synthetic customer session (id 584, cleaned up after) confirmed
+  `/my/balance` renders correctly with `InstallPrompt` mounted (renders
+  nothing on desktop Chromium UA, as expected — matches CI's own "desktop:
+  neither surface renders" case) with 0 console errors. The iOS-specific UA
+  branches (Safari guide, webview guide, iPadOS disambiguator) could not be
+  re-driven live via the Playwright MCP browser (no `addInitScript`-
+  equivalent to override `navigator.userAgent` before the WASM module
+  boots) — CI's E2E suite already drove all of them against this exact
+  byte-identical deployed build.
+- **Playbook:** noted (via this log, not yet folded into
+  `frontend-pwa/SKILL.md`) two new gotchas: the synchronous-Clipboard-write
+  timing requirement, and the shared-`user_agent()`-fetched-once pattern.
+
 ## 2026-07-12 — #167 (tokio-tungstenite sub-item, 3/3): bump 0.24 → 0.30 — CLOSES #167
 
 - **Issue:** [#167](https://github.com/zbynekdrlik/spinbike/issues/167) —
@@ -968,3 +1033,13 @@ test names, decisions, and the shared PR #. Newest entries at the top.
 - **Tests:** `bratislava_day_range_utc` unit tests (winter CET+1 / summer CEST+2 / 24h span); new `tests/local_day_boundary.rs` (door same-day count + bookings filter, deterministic via fixed 2020/2026 dates incl. the double-charge-guard case); `cards_stats.rs` re-based (created_at seeds → real UTC, month/year labels → `now_bratislava()`, the #205 CI-TZ flake). Not strict RED→GREEN (design-consistency change like #205, behavior-neutral today; tests assert the NEW semantics).
 - **Commits:** `27b80d6` (bump) · `ff35e60` (impl+tests) · `0c6678f` (mutation-kill: extract `next_month_first`), on `dev`. PR [#224](https://github.com/zbynekdrlik/spinbike/pull/224), merged `6457610`. Main CI green incl. Deploy (prod) + Smoke (prod). #222 auto-closed.
 - **Verified LIVE on `https://spinbike.sk` (v0.15.0-dev.92):** DOM version `v0.15.0-dev.92` == `/api/version`, service active, 0 console errors (1 benign wasm-bindgen init deprecation, pre-existing). **Behavior-neutral on real prod data (host OS = Europe/Bratislava):** door predicate 0 mismatches over all 8 door rows; stats this-month old `strftime('localtime')` == new UTC-range (488 == 488); bookings upcoming old(UTC) == new(gym) (0 == 0). Proven via SQLite's `datetime(<local>, 'utc')` modifier — recipe in the db-migrations skill.
+
+## 2026-07-16 — #227: 6-digit email login code — closes the iOS installed-PWA logged-out loop (dev.96)
+
+- **Why:** on iOS a home-screen web app has storage partitioned from Safari and a magic link always re-opens in Safari, so a link can never complete login INSIDE the installed app (the "install je pain" loop). Fix = a login method that completes entirely in-app: a short numeric code the user types.
+- **Migration V21** (`login_tokens` rebuild): widen `purpose` CHECK to `('invite','login','code')` + add `attempts INTEGER NOT NULL DEFAULT 0`. Table-rebuild pattern (V16 shape) since SQLite can't ALTER a CHECK. **login_tokens is referenced by NO view/trigger** (V18 view + V20 trigger reference services/transactions only), so the rebuild needs no DROP-VIEW/TRIGGER dance. Preserves existing rows (genuine-upgrade test uses `raw_sql` per-migration — `apply_sql_block`'s `;`-split mangles V20's trigger body).
+- **Token layer** (`db/login_tokens.rs`): `generate_code` (crypto 6-digit, zero-padded); `hash_code(user_id, code)` = SHA-256 of `"{user_id}:{code}"` — **per-user salt** avoids the `token_hash` UNIQUE collision two users sharing a 6-digit value would cause, and binds a code to its own account; `create_code` DELETEs the user's prior code rows (invalidates prior unused + frees the UNIQUE slot); `verify_code` transactional single-use redeem + `attempts+1`, invalidate at `MAX_CODE_ATTEMPTS=5`. All failure modes → `Ok(None)` (uniform, no leak). `CODE_TTL_SECS=600`.
+- **Endpoints** (`routes/auth.rs`): `POST /api/auth/request-login-code` mirrors request-login-link (always 200, customers-only send, **reuses** `login_link_rate_limit` — same email-send budget, `tokio::spawn` SMTP off the response path = same timing side-channel guard). `POST /api/auth/code-login` → NEW `CodeLoginRateLimiter` (per-email 10/60s + global 60/60s) keyed by submitted email BEFORE any DB lookup (429 `too_many_requests` leaks no account existence); every other failure → uniform 401 `invalid_or_expired_code`. Success → permanent customer JWT. New `ErrorCode::{InvalidOrExpiredCode, TooManyRequests}` + `ApiError::TooManyRequests`→429.
+- **UI**: `CodeLoginForm` (email → Poslat kod → `inputmode=numeric autocomplete=one-time-code` input → code-login → role-aware redirect) + `CustomerLoginMethods` toggle (email-link vs code, **default link** so existing login-link/welcome E2E + habitual flow unchanged), on login page customer section + /welcome invalid fallback. `post_public(_coded)` both endpoints. Sk/En unaccented i18n + localized banners.
+- **E2E seam**: test-fixture `POST /api/test/mint-login-code` (SPINBIKE_TEST_MODE-gated) returns a raw code so `code-login.spec.ts` enters a known-valid value after driving the real UI. Public request-login-code never echoes the code (no enumeration).
+- **Tests:** V21 migration (5) + token layer unit (11: generate/hash-per-user/create-supersede/verify happy+wrong+5-invalidate+4-then-correct+expired+no-code+scoped) + `error.rs` 429 arm + `errors.rs` code table + rate-limiter unit (4) + `auth_routes.rs` integration (11: enumeration identical-200, non-customer, blocked, code creation, happy+single-use, wrong x5 invalidate, expired, unknown-email, blocked, 429). Playwright `code-login.spec.ts` (happy via mint + wrong-code banner). Feature (not bug) → tests same PR, not strict RED→GREEN.

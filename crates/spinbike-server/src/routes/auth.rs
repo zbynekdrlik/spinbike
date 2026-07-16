@@ -32,6 +32,17 @@ pub struct TokenLoginRequest {
     pub token: String,
 }
 
+#[derive(Deserialize)]
+pub struct RequestLoginCodeRequest {
+    pub email: String,
+}
+
+#[derive(Deserialize)]
+pub struct CodeLoginRequest {
+    pub email: String,
+    pub code: String,
+}
+
 #[derive(Serialize)]
 pub struct AuthResponse {
     pub token: String,
@@ -106,11 +117,67 @@ impl Default for LoginLinkRateLimiter {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Rate limiter for /api/auth/code-login (the VERIFY path) — #227
+// ---------------------------------------------------------------------------
+
+/// In-memory rate-limit for the public login-code VERIFY endpoint, keyed by the
+/// submitted email (String). Distinct from `LoginLinkRateLimiter` (which throttles
+/// the send/REQUEST path): this bounds how many code-verify attempts a single
+/// email — and all emails together — may make per minute, a second brute-force
+/// layer on top of each code's own 5-attempt cap. Caps: ≤10 verify attempts per
+/// email per 60 s, and a global 60-per-60 s ceiling. No per-key min-gap (a
+/// legitimate user re-typing a mistyped code must not be throttled after one
+/// try; the 10/min cap + the per-code attempt cap are the real guards). Same
+/// thin typed wrapper over the shared `SlidingWindowLimiter` (#166) as the door
+/// and login-link limiters. The verify path records BEFORE any DB lookup, so an
+/// existing and a non-existent email are throttled identically — the 429 leaks
+/// no account existence.
+pub struct CodeLoginRateLimiter(SlidingWindowLimiter<String>);
+
+impl CodeLoginRateLimiter {
+    pub fn new() -> Self {
+        Self(SlidingWindowLimiter::new(RateLimitConfig {
+            per_key_window: Duration::from_secs(60),
+            per_key_min_gap: None,
+            per_key_max: Some(10),
+            per_key_cap_reason: "code_verify_cap",
+            key_memory: Duration::from_secs(120),
+            global_window: Duration::from_secs(60),
+            global_max: 60,
+        }))
+    }
+
+    /// Returns Ok and records the attempt if allowed; Err(reason) otherwise
+    /// ("code_verify_cap" / "global_cap").
+    pub fn check_and_record(&mut self, email: &str) -> Result<(), &'static str> {
+        self.0.check_and_record(email.to_string())
+    }
+
+    /// Testable variant taking the current `Instant` so tests need not sleep.
+    pub fn check_and_record_at(&mut self, email: &str, now: Instant) -> Result<(), &'static str> {
+        self.0.check_and_record_at(email.to_string(), now)
+    }
+
+    /// Number of tracked emails — for the map-bounding tests.
+    pub fn tracked_keys(&self) -> usize {
+        self.0.tracked_keys()
+    }
+}
+
+impl Default for CodeLoginRateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/auth/login", post(login))
         .route("/api/auth/request-login-link", post(request_login_link))
         .route("/api/auth/token-login", post(token_login))
+        .route("/api/auth/request-login-code", post(request_login_code))
+        .route("/api/auth/code-login", post(code_login))
         .route("/api/auth/me", get(me))
         .route("/api/users/{id}/invite", post(invite_user))
 }
@@ -301,6 +368,184 @@ async fn token_login(
     }))
 }
 
+/// Compose the unaccented-Slovak login-code email. Returns (subject, text, html).
+/// The code is shown large and prominent; the copy states the 10-minute validity
+/// and "don't share it with anyone" (#227).
+fn login_code_email(code: &str) -> (String, String, String) {
+    let subject = "SpinBike - prihlasovaci kod".to_string();
+    let text = format!(
+        "Ahoj,\n\ntvoj prihlasovaci kod do SpinBike je:\n\n{code}\n\n\
+         Kod plati 10 minut. Nikomu ho neposielaj. \
+         Ak si o prihlasenie nepoziadal, tento email ignoruj."
+    );
+    let html = format!(
+        "<p>Ahoj,</p><p>tvoj prihlasovaci kod do SpinBike je:</p>\
+         <p style=\"font-size:32px;font-weight:bold;letter-spacing:6px;margin:16px 0\">{code}</p>\
+         <p>Kod plati 10 minut. Nikomu ho neposielaj.</p>\
+         <p>Ak si o prihlasenie nepoziadal, tento email ignoruj.</p>"
+    );
+    (subject, text, html)
+}
+
+/// Whether a user may complete a passwordless customer login (code path, #227):
+/// role MUST be `customer` AND the account must not be blocked. Extracted as a
+/// pure predicate so its boundary is directly unit-testable — the handlers that
+/// call it are async and DB-bound, so the gate's `&&`/`==`/`!` logic would
+/// otherwise only be reachable through integration tests. `Role::from` (not
+/// `parse_role`) so an unknown legacy role is never treated as a customer.
+fn is_eligible_customer(role: &str, blocked: bool) -> bool {
+    Role::from(role) == Role::Customer && !blocked
+}
+
+/// Public passwordless-login endpoint (#227). ALWAYS returns 200
+/// `{"status":"ok"}` regardless of whether the email exists — EXACTLY the same
+/// no-enumeration semantics as `request-login-link`. A 6-digit code email is
+/// actually sent ONLY for an existing, non-blocked, role=customer account, and
+/// only when the shared per-email rate limiter allows. The SMTP send is
+/// `tokio::spawn`'d off the response path (same timing-side-channel reasoning as
+/// request-login-link — an existing customer must not respond measurably slower
+/// than a non-customer).
+async fn request_login_code(
+    State(state): State<AppState>,
+    Json(body): Json<RequestLoginCodeRequest>,
+) -> Json<serde_json::Value> {
+    let ok = || Json(serde_json::json!({"status": "ok"}));
+    let email = body.email.trim().to_string();
+    if email.is_empty() {
+        return ok();
+    }
+
+    // Look up the account. Any miss / error → uniform 200 (never leak which).
+    let user = match users::get_user_by_email(&state.pool, &email).await {
+        Ok(Some(u)) => u,
+        Ok(None) => return ok(),
+        Err(e) => {
+            tracing::error!(error = %e, "request-login-code: user lookup failed");
+            return ok();
+        }
+    };
+
+    // Customers-only; blocked accounts get nothing. (deleted_at is already
+    // filtered by get_user_by_email.)
+    if !is_eligible_customer(user.role.as_str(), user.blocked) {
+        return ok();
+    }
+
+    // Reuse the login-link email-send budget (per-email 60 s + global 10/min):
+    // requesting a code and requesting a link are the same "send an email to
+    // this address" operation, so they share one throttle. Throttled → still
+    // 200 ok, no send.
+    if let Err(reason) = state
+        .login_link_rate_limit
+        // #172: recover from poisoning rather than .expect(), so one panic
+        // doesn't permanently 500 this endpoint until restart.
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .check_and_record(&email)
+    {
+        tracing::warn!(%reason, "request-login-code: throttled");
+        return ok();
+    }
+
+    let code = match login_tokens::create_code(&state.pool, user.id).await {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!(error = %e, user_id = user.id, "request-login-code: code create failed");
+            return ok();
+        }
+    };
+
+    let (subject, text, html) = login_code_email(&code);
+
+    // Fire the SMTP send OFF the response path — same no-enumeration timing
+    // reasoning as request-login-link. The code row is committed synchronously
+    // above (durable); delivery is best-effort and only logged.
+    let mail = state.mail.clone();
+    let user_id = user.id;
+    tokio::spawn(async move {
+        if let Err(e) = mail.send(&email, &subject, &text, &html).await {
+            tracing::warn!(error = %e, user_id, "request-login-code: mail send failed");
+        } else {
+            tracing::info!(user_id, "request-login-code: sent");
+        }
+    });
+
+    ok()
+}
+
+/// Verify a 6-digit login code (#227) and return a JWT session. Rate-limited by
+/// the submitted email BEFORE any DB lookup (a throttled attempt returns 429 and
+/// leaks no account existence, since existing and non-existent emails are
+/// throttled identically). Every other failure — wrong/expired/used/exhausted
+/// code, non-customer, blocked/deleted user, unknown email — collapses to a
+/// single uniform 401 `invalid_or_expired_code` (no enumeration). On success the
+/// code is atomically single-use redeemed and a permanent customer session is
+/// issued.
+async fn code_login(
+    State(state): State<AppState>,
+    Json(body): Json<CodeLoginRequest>,
+) -> Result<Json<AuthResponse>, ApiError> {
+    let email = body.email.trim().to_string();
+    let code = body.code.trim().to_string();
+    let invalid = || ApiError::Unauthorized(ErrorCode::InvalidOrExpiredCode);
+
+    // Rate limit FIRST, keyed by the submitted email — recorded before any DB
+    // lookup so existing and non-existent emails behave identically. Throttled
+    // → 429 (does not leak account existence).
+    if let Err(reason) = state
+        .code_login_rate_limit
+        // #172: recover from poisoning rather than .expect().
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .check_and_record(&email)
+    {
+        tracing::warn!(%reason, "code-login: throttled");
+        return Err(ApiError::TooManyRequests(ErrorCode::TooManyRequests));
+    }
+
+    // No explicit empty-email/empty-code guard: an empty email misses
+    // get_user_by_email (→ uniform invalid) and an empty code never matches a
+    // stored hash in verify_code (→ uniform invalid), so both already resolve to
+    // the same 401 below — an explicit guard here would be a behaviourally
+    // equivalent duplicate.
+
+    // Resolve the account — a miss is a uniform invalid (no enumeration).
+    let user = match users::get_user_by_email(&state.pool, &email).await {
+        Ok(Some(u)) => u,
+        Ok(None) => return Err(invalid()),
+        Err(e) => return Err(internal_error(e)),
+    };
+
+    // Customers-only + not blocked (get_user_by_email already filters deleted).
+    if !is_eligible_customer(user.role.as_str(), user.blocked) {
+        return Err(invalid());
+    }
+
+    // Atomic verify + single-use redeem + attempt-count.
+    let redeemed = login_tokens::verify_code(&state.pool, user.id, &code)
+        .await
+        .map_err(internal_error)?;
+    if redeemed.is_none() {
+        return Err(invalid());
+    }
+
+    let role = parse_role(&user.role);
+    let email_str = user.email.as_deref().unwrap_or("");
+    let token =
+        auth::create_token(&state.jwt_secret, user.id, email_str, &role).map_err(internal_error)?;
+
+    tracing::info!(user_id = user.id, "code-login: session issued");
+    Ok(Json(AuthResponse {
+        token,
+        user: UserInfo {
+            id: user.id,
+            email: user.email.unwrap_or_default(),
+            name: user.name,
+            role: Role::from(user.role.as_str()),
+        },
+    }))
+}
+
 async fn me(AuthUser(claims): AuthUser) -> Json<serde_json::Value> {
     Json(serde_json::json!({
         "id": claims.sub,
@@ -402,7 +647,7 @@ async fn invite_user(
 
 #[cfg(test)]
 mod tests {
-    use super::LoginLinkRateLimiter;
+    use super::{CodeLoginRateLimiter, LoginLinkRateLimiter};
     use std::time::{Duration, Instant};
 
     /// Wire-compat guard (#98): the `AuthResponse.user.role` (the payload the
@@ -573,6 +818,142 @@ mod tests {
             rl.tracked_keys(),
             1,
             "the exactly-120s-old entry must be evicted (strict `<`)"
+        );
+    }
+
+    // ── code-login verify limiter (#227) ──────────────────────────────────
+
+    #[test]
+    fn code_login_first_attempt_allowed() {
+        let mut rl = CodeLoginRateLimiter::new();
+        assert!(rl.check_and_record("a@x.com").is_ok());
+    }
+
+    #[test]
+    fn code_login_per_email_cap_at_eleventh_attempt() {
+        // ≤10 verify attempts per email per 60 s; the 11th (no min-gap) hits the
+        // per-email cap, not global_cap.
+        let mut rl = CodeLoginRateLimiter::new();
+        let t0 = Instant::now();
+        for i in 0..10 {
+            rl.check_and_record_at("a@x.com", t0 + Duration::from_millis(i as u64))
+                .unwrap_or_else(|e| panic!("attempt #{i} should succeed, got {e}"));
+        }
+        assert_eq!(
+            rl.check_and_record_at("a@x.com", t0 + Duration::from_millis(50)),
+            Err("code_verify_cap"),
+            "the 11th verify for one email inside 60 s must hit the per-email cap"
+        );
+    }
+
+    #[test]
+    fn code_login_distinct_emails_are_independent() {
+        let mut rl = CodeLoginRateLimiter::new();
+        let t0 = Instant::now();
+        for _ in 0..10 {
+            rl.check_and_record_at("a@x.com", t0).unwrap();
+        }
+        rl.check_and_record_at("b@x.com", t0)
+            .expect("a different email must not be throttled by the first's cap");
+    }
+
+    #[test]
+    fn code_login_global_cap_at_61st_attempt() {
+        let mut rl = CodeLoginRateLimiter::new();
+        let t0 = Instant::now();
+        // 60 attempts spread across 60 distinct emails (each under its own cap).
+        for i in 0..60 {
+            rl.check_and_record_at(&format!("u{i}@x.com"), t0 + Duration::from_millis(i as u64))
+                .unwrap_or_else(|e| panic!("attempt #{i} should succeed, got {e}"));
+        }
+        assert_eq!(
+            rl.check_and_record_at("u60@x.com", t0 + Duration::from_millis(100)),
+            Err("global_cap"),
+            "the 61st verify inside the 60 s window must hit the global cap"
+        );
+    }
+
+    /// The verify limiter's per-email map is bounded — records N distinct emails,
+    /// evicts stale ones past the memory window. Also exercises `tracked_keys`
+    /// with a value that is neither 0 nor 1 (locks it against a constant mutant).
+    #[test]
+    fn code_login_per_email_map_is_bounded() {
+        let mut rl = CodeLoginRateLimiter::new();
+        let t0 = Instant::now();
+        for i in 0..3 {
+            rl.check_and_record_at(&format!("u{i}@x.com"), t0 + Duration::from_millis(i as u64))
+                .unwrap();
+        }
+        assert_eq!(
+            rl.tracked_keys(),
+            3,
+            "three distinct emails tracked while fresh"
+        );
+        // Past the 120 s memory window, the three stale entries are evicted.
+        rl.check_and_record_at("late@x.com", t0 + Duration::from_secs(200))
+            .unwrap();
+        assert_eq!(
+            rl.tracked_keys(),
+            1,
+            "stale per-email entries must be evicted, leaving only the recent one"
+        );
+    }
+
+    // ── customers-only gate (#227) ─────────────────────────────────────────
+
+    /// The passwordless-login eligibility gate: customer AND not blocked. Pins
+    /// every boundary (locks the `==` / `&&` / `!` operators against mutation).
+    #[test]
+    fn is_eligible_customer_gate() {
+        assert!(
+            super::is_eligible_customer("customer", false),
+            "a non-blocked customer is the ONLY eligible case"
+        );
+        assert!(
+            !super::is_eligible_customer("customer", true),
+            "a blocked customer must be rejected"
+        );
+        assert!(
+            !super::is_eligible_customer("admin", false),
+            "an admin (non-customer) must be rejected"
+        );
+        assert!(
+            !super::is_eligible_customer("staff", false),
+            "staff (non-customer) must be rejected"
+        );
+        assert!(
+            !super::is_eligible_customer("admin", true),
+            "blocked non-customer must be rejected"
+        );
+    }
+
+    // ── login-code email content (#227) ────────────────────────────────────
+
+    /// The composed email must carry the actual code plus the 10-minute validity
+    /// and the "don't share it" warning (locks `login_code_email`'s return
+    /// against a junk-tuple mutant).
+    #[test]
+    fn login_code_email_embeds_the_code_and_guidance() {
+        let (subject, text, html) = super::login_code_email("482913");
+        assert!(
+            subject.contains("prihlasovaci kod"),
+            "subject must name the login code, got: {subject}"
+        );
+        assert!(
+            text.contains("482913"),
+            "plain-text body must carry the code, got: {text}"
+        );
+        assert!(
+            text.contains("10 minut"),
+            "body must state the 10-minute validity"
+        );
+        assert!(
+            text.contains("Nikomu ho neposielaj"),
+            "body must warn not to share the code"
+        );
+        assert!(
+            html.contains("482913"),
+            "html body must carry the code, got: {html}"
         );
     }
 }

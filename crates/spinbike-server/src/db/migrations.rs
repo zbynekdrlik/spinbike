@@ -84,6 +84,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "transactions: enforce active-pass invariant (valid_until => charge + monthly_pass)",
         V20_ACTIVE_PASS_INVARIANT_TRIGGER,
     ),
+    (
+        21,
+        "login_tokens: widen purpose CHECK to include 'code' + attempts column",
+        V21_LOGIN_CODE_TOKENS,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -828,6 +833,55 @@ BEGIN
             WHERE id = NEW.service_id AND kind = 'monthly_pass'
        );
 END;
+"#;
+
+// V21: 6-digit email login code (#227).
+//
+// Adds a third member to the passwordless login family: a short numeric code
+// the user types INSIDE the installed PWA. On iOS a home-screen web app has
+// storage partitioned from Safari and a magic link always re-opens in Safari,
+// so magic links alone can never close the "installed-PWA logged-out loop" —
+// only a code entered entirely inside the app can. The code reuses this same
+// login_tokens table: a `purpose='code'` row stores the SHA-256 hash of
+// `"{user_id}:{code}"` (the per-user salt keeps token_hash globally UNIQUE even
+// when two users are issued the same 6-digit value, and binds a code to its own
+// account), TTL 10 minutes, single-use at redemption.
+//
+// Two schema changes, both needing the table rebuild:
+//   1. Widen the `purpose` CHECK from ('invite','login') to add 'code'. SQLite
+//      cannot ALTER a CHECK constraint in place, so the whole table is
+//      re-created — the exact DROP-new + INSERT + RENAME pattern of V8/V11/V16.
+//   2. Add `attempts` — the per-code failed-verify counter. 6 digits is
+//      guessable, so the code is invalidated after 5 wrong verifies (mandatory
+//      low-entropy hardening). Declared inline in the rebuilt table.
+//
+// Unlike a future `services`/`transactions` rebuild, login_tokens is referenced
+// by NO view or trigger (V18's user_active_pass and V20's
+// enforce_active_pass_invariant both reference services/transactions only), so
+// this rebuild needs no DROP VIEW/TRIGGER dance. No other table holds an FK INTO
+// login_tokens either, so the runner's PRAGMA foreign_keys=OFF around the
+// rebuild fully covers it. The INSERT lists every V17 column explicitly and
+// omits `attempts`, so pre-existing rows adopt its DEFAULT 0.
+const V21_LOGIN_CODE_TOKENS: &str = r#"
+CREATE TABLE login_tokens_new (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    token_hash  TEXT    NOT NULL UNIQUE,
+    purpose     TEXT    NOT NULL CHECK (purpose IN ('invite','login','code')),
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    expires_at  TEXT    NOT NULL,
+    used_at     TEXT,
+    attempts    INTEGER NOT NULL DEFAULT 0
+);
+
+INSERT INTO login_tokens_new (id, user_id, token_hash, purpose, created_at, expires_at, used_at)
+SELECT id, user_id, token_hash, purpose, created_at, expires_at, used_at
+  FROM login_tokens;
+
+DROP TABLE login_tokens;
+ALTER TABLE login_tokens_new RENAME TO login_tokens;
+
+CREATE INDEX IF NOT EXISTS idx_login_tokens_user ON login_tokens(user_id);
 "#;
 
 #[cfg(test)]
@@ -2908,5 +2962,236 @@ mod tests {
                 "migration v{version} must have a correct checksum after the genuine upgrade"
             );
         }
+    }
+
+    // V21 — login code purpose + attempts (#227) --------------------------
+
+    async fn seed_login_token_user(pool: &sqlx::SqlitePool, email: &str) -> i64 {
+        sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES (?, 'V21', 'customer') RETURNING id",
+        )
+        .bind(email)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn v21_purpose_check_accepts_code() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_login_token_user(&pool, "v21-code@x").await;
+        // The widened CHECK must now accept a 'code' row.
+        sqlx::query(
+            "INSERT INTO login_tokens (user_id, token_hash, purpose, expires_at)
+             VALUES (?, 'code-hash', 'code', datetime('now', '+10 minutes'))",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .expect("purpose='code' must be accepted after V21");
+    }
+
+    #[tokio::test]
+    async fn v21_still_accepts_invite_and_login_purposes() {
+        // Widening the CHECK must not drop the original two purposes.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_login_token_user(&pool, "v21-both@x").await;
+        for purpose in ["invite", "login"] {
+            sqlx::query(
+                "INSERT INTO login_tokens (user_id, token_hash, purpose, expires_at)
+                 VALUES (?, ?, ?, datetime('now', '+1 day'))",
+            )
+            .bind(uid)
+            .bind(format!("hash-{purpose}"))
+            .bind(purpose)
+            .execute(&pool)
+            .await
+            .unwrap_or_else(|e| panic!("purpose='{purpose}' must still be accepted: {e:?}"));
+        }
+    }
+
+    #[tokio::test]
+    async fn v21_purpose_check_rejects_unknown_value() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_login_token_user(&pool, "v21-bad@x").await;
+        let res = sqlx::query(
+            "INSERT INTO login_tokens (user_id, token_hash, purpose, expires_at)
+             VALUES (?, 'x', 'bogus', datetime('now', '+1 day'))",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await;
+        let msg = format!("{:?}", res.expect_err("unknown purpose must be rejected"));
+        assert!(
+            msg.to_uppercase().contains("CHECK"),
+            "expected CHECK violation, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v21_adds_attempts_column_defaulting_to_zero() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let cols: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('login_tokens')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            cols.iter().any(|(n,)| n == "attempts"),
+            "login_tokens.attempts column missing after V21; found: {cols:?}"
+        );
+        let uid = seed_login_token_user(&pool, "v21-attempts@x").await;
+        sqlx::query(
+            "INSERT INTO login_tokens (user_id, token_hash, purpose, expires_at)
+             VALUES (?, 'a', 'code', datetime('now', '+10 minutes'))",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let attempts: i64 =
+            sqlx::query_scalar("SELECT attempts FROM login_tokens WHERE token_hash = 'a'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(attempts, 0, "a fresh code row must default attempts to 0");
+    }
+
+    #[tokio::test]
+    async fn v21_is_idempotent() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let tbl: Option<(String,)> = sqlx::query_as(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='login_tokens'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(tbl.is_some(), "login_tokens must still exist after re-run");
+        // The index survives the rebuild too.
+        let idx: Vec<(String,)> = sqlx::query_as(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='login_tokens'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(
+            idx.iter().any(|(n,)| n == "idx_login_tokens_user"),
+            "idx_login_tokens_user must survive the V21 rebuild; found: {idx:?}"
+        );
+    }
+
+    /// Genuine upgrade from a real pre-V21 database (login_tokens in its V17
+    /// shape, populated with rows) — the table rebuild must PRESERVE every
+    /// existing invite/login row (id + hash + purpose + expiry intact, attempts
+    /// backfilled to 0) rather than truncating them. Mirrors the
+    /// v19-genuine-upgrade idiom: apply 1..=20 as an older binary committed
+    /// them, seed rows, THEN run_migrations applies only V21.
+    #[tokio::test]
+    async fn v21_preserves_existing_rows_on_genuine_upgrade_from_v20() {
+        use sqlx::sqlite::SqlitePoolOptions;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Apply 1..=20 the way run_migrations does — `sqlx::raw_sql` so SQLite
+        // parses each block itself (V20's trigger has internal semicolons that
+        // apply_sql_block's naive `;`-split would mangle), with foreign_keys OFF
+        // around the table-rebuild migrations.
+        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 20) {
+            let mut conn = pool.acquire().await.unwrap();
+            sqlx::query("PRAGMA foreign_keys = OFF")
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+            let mut tx = conn.begin().await.unwrap();
+            sqlx::raw_sql(sql).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
+                .bind(v)
+                .bind(desc)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            sqlx::query("PRAGMA foreign_keys = ON")
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+        }
+
+        // Pre-upgrade: login_tokens has NO attempts column yet.
+        let cols_before: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('login_tokens')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            !cols_before.iter().any(|(n,)| n == "attempts"),
+            "test setup: login_tokens must not have an attempts column before V21"
+        );
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v21-upgrade@x', 'U', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO login_tokens (user_id, token_hash, purpose, expires_at)
+             VALUES (?, 'invite-hash', 'invite', datetime('now', '+14 days')),
+                    (?, 'login-hash', 'login', datetime('now', '+1 day'))",
+        )
+        .bind(uid)
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        run_migrations(&pool).await.unwrap();
+
+        // Both pre-existing rows survive the rebuild, keeping their purpose,
+        // with attempts backfilled to 0.
+        let rows: Vec<(String, String, i64)> = sqlx::query_as(
+            "SELECT token_hash, purpose, attempts FROM login_tokens ORDER BY token_hash",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("invite-hash".to_string(), "invite".to_string(), 0),
+                ("login-hash".to_string(), "login".to_string(), 0),
+            ],
+            "V21 must preserve pre-existing invite/login rows and backfill attempts=0"
+        );
+
+        // And the widened CHECK now accepts a 'code' row.
+        sqlx::query(
+            "INSERT INTO login_tokens (user_id, token_hash, purpose, expires_at)
+             VALUES (?, 'code-hash', 'code', datetime('now', '+10 minutes'))",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .expect("purpose='code' must be accepted after the genuine V21 upgrade");
     }
 }

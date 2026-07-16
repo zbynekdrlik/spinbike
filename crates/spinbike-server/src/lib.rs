@@ -37,6 +37,11 @@ pub struct AppState {
     /// endpoint (email-keyed). Separate from `door_rate_limit`.
     pub login_link_rate_limit:
         std::sync::Arc<std::sync::Mutex<crate::routes::auth::LoginLinkRateLimiter>>,
+    /// In-memory rate-limit for the public `/api/auth/code-login` VERIFY
+    /// endpoint (email-keyed, #227). Separate from `login_link_rate_limit`
+    /// (which throttles the code/link SEND path).
+    pub code_login_rate_limit:
+        std::sync::Arc<std::sync::Mutex<crate::routes::auth::CodeLoginRateLimiter>>,
 }
 
 /// Build the CORS layer by reading the CORS_ORIGIN environment variable.
@@ -191,6 +196,9 @@ pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Re
         )),
         login_link_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
             crate::routes::auth::LoginLinkRateLimiter::new(),
+        )),
+        code_login_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+            crate::routes::auth::CodeLoginRateLimiter::new(),
         )),
     };
 
@@ -411,6 +419,9 @@ mod tests {
             login_link_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::routes::auth::LoginLinkRateLimiter::new(),
             )),
+            code_login_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::auth::CodeLoginRateLimiter::new(),
+            )),
         };
 
         // The SAME function start_server() calls, with the SAME test_mode
@@ -530,6 +541,9 @@ mod tests {
             )),
             login_link_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::routes::auth::LoginLinkRateLimiter::new(),
+            )),
+            code_login_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::auth::CodeLoginRateLimiter::new(),
             )),
         };
 

@@ -42,6 +42,8 @@ pub enum ApiError {
     },
     /// 400 — the message carries the validation specifics; code is `bad_request`.
     BadRequest(String),
+    /// 429 — rate limit hit on a public endpoint; message from the code.
+    TooManyRequests(ErrorCode),
     /// 503 — message from the code.
     ServiceUnavailable(ErrorCode),
     /// 500 — the real error is logged at construction (`routes::internal_error`);
@@ -101,6 +103,12 @@ impl ApiError {
             ApiError::BadRequest(msg) => {
                 (StatusCode::BAD_REQUEST, ErrorCode::BadRequest, msg, None)
             }
+            ApiError::TooManyRequests(c) => (
+                StatusCode::TOO_MANY_REQUESTS,
+                c,
+                c.message().to_string(),
+                None,
+            ),
             ApiError::ServiceUnavailable(c) => (
                 StatusCode::SERVICE_UNAVAILABLE,
                 c,
@@ -174,6 +182,14 @@ mod tests {
         assert_eq!(status, StatusCode::BAD_REQUEST);
         assert_eq!(body["error_code"], "bad_request");
         assert_eq!(body["error"], "Amount must be greater than zero");
+    }
+
+    #[test]
+    fn too_many_requests_maps_status_and_message() {
+        let (status, body) = parts_of(ApiError::TooManyRequests(ErrorCode::TooManyRequests));
+        assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(body["error_code"], "too_many_requests");
+        assert_eq!(body["error"], "Too many attempts, please try again later");
     }
 
     #[test]

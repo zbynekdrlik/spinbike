@@ -561,3 +561,311 @@ async fn token_login_deleted_user_rejected() {
         "deleted user must be rejected"
     );
 }
+
+// ── request-login-code (#227, public, no enumeration) ────────────────────
+
+async fn code_count(app: &TestApp, user_id: i64) -> i64 {
+    sqlx::query_scalar("SELECT COUNT(*) FROM login_tokens WHERE user_id = ? AND purpose = 'code'")
+        .bind(user_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap()
+}
+
+/// A 6-digit code guaranteed to differ from `code` (flip the last digit).
+fn wrong_code(code: &str) -> String {
+    let last: u32 = code[5..6].parse().unwrap();
+    format!("{}{}", &code[..5], (last + 1) % 10)
+}
+
+#[tokio::test]
+async fn request_login_code_existing_customer_creates_code() {
+    let app = TestApp::with_mail_mode("capture").await;
+    let (status, resp) = app
+        .request(post_json(
+            "/api/auth/request-login-code",
+            "",
+            &serde_json::json!({"email": "user@test.com"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resp["status"].as_str().unwrap(), "ok");
+    // Code row committed synchronously before the 200 returns.
+    assert_eq!(code_count(&app, app.customer_id).await, 1);
+}
+
+#[tokio::test]
+async fn request_login_code_unknown_email_is_ok_but_creates_nothing() {
+    let app = TestApp::with_mail_mode("capture").await;
+    let (status, resp) = app
+        .request(post_json(
+            "/api/auth/request-login-code",
+            "",
+            &serde_json::json!({"email": "nobody@nowhere.com"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resp["status"].as_str().unwrap(), "ok");
+    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM login_tokens WHERE purpose = 'code'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(total, 0, "unknown email must create no code");
+}
+
+/// No enumeration: an existing customer and an unknown email get a byte-identical
+/// 200 response (only the internal DB side effect differs, invisibly).
+#[tokio::test]
+async fn request_login_code_response_is_identical_for_existing_and_unknown() {
+    let app = TestApp::new().await; // Disabled mail — never echoes anything.
+    let (s_existing, r_existing) = app
+        .request(post_json(
+            "/api/auth/request-login-code",
+            "",
+            &serde_json::json!({"email": "user@test.com"}),
+        ))
+        .await;
+    let (s_unknown, r_unknown) = app
+        .request(post_json(
+            "/api/auth/request-login-code",
+            "",
+            &serde_json::json!({"email": "ghost@nowhere.com"}),
+        ))
+        .await;
+    assert_eq!(s_existing, StatusCode::OK);
+    assert_eq!(s_unknown, StatusCode::OK);
+    assert_eq!(
+        r_existing, r_unknown,
+        "response body must be identical (no enumeration)"
+    );
+    // The invisible difference: only the existing customer got a code row.
+    assert_eq!(code_count(&app, app.customer_id).await, 1);
+}
+
+#[tokio::test]
+async fn request_login_code_non_customer_creates_nothing() {
+    let app = TestApp::with_mail_mode("capture").await;
+    let (status, resp) = app
+        .request(post_json(
+            "/api/auth/request-login-code",
+            "",
+            &serde_json::json!({"email": "admin@test.com"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resp["status"].as_str().unwrap(), "ok");
+    assert_eq!(code_count(&app, app.admin_id).await, 0);
+}
+
+#[tokio::test]
+async fn request_login_code_blocked_customer_creates_nothing() {
+    let app = TestApp::with_mail_mode("capture").await;
+    let blocked_id = app
+        .seed_user("Blocked Code", Some("blocked-code@test.com"), None, None)
+        .await;
+    sqlx::query("UPDATE users SET blocked = 1 WHERE id = ?")
+        .bind(blocked_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (status, _) = app
+        .request(post_json(
+            "/api/auth/request-login-code",
+            "",
+            &serde_json::json!({"email": "blocked-code@test.com"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(code_count(&app, blocked_id).await, 0);
+}
+
+// ── code-login (#227) ────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn code_login_happy_path_returns_permanent_customer_session() {
+    let app = TestApp::new().await;
+    let code = login_tokens::create_code(&app.pool, app.customer_id)
+        .await
+        .unwrap();
+    let (status, resp) = app
+        .request(post_json(
+            "/api/auth/code-login",
+            "",
+            &serde_json::json!({"email": "user@test.com", "code": code}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let token = resp["token"].as_str().expect("JWT in response");
+    assert_eq!(resp["user"]["id"].as_i64().unwrap(), app.customer_id);
+    assert_eq!(resp["user"]["role"].as_str().unwrap(), "customer");
+    let claims = validate_token(helpers::JWT_SECRET, token).unwrap();
+    assert_eq!(
+        claims.exp - claims.iat,
+        CUSTOMER_SESSION_SECS,
+        "code-login JWT must carry the permanent (100y) customer expiry"
+    );
+    // Single-use: the same code can't log in twice.
+    let (status2, _) = app
+        .request(post_json(
+            "/api/auth/code-login",
+            "",
+            &serde_json::json!({"email": "user@test.com", "code": code}),
+        ))
+        .await;
+    assert_eq!(
+        status2,
+        StatusCode::UNAUTHORIZED,
+        "a code is single-use — reuse must 401"
+    );
+}
+
+#[tokio::test]
+async fn code_login_wrong_code_five_times_invalidates_then_correct_fails() {
+    let app = TestApp::new().await;
+    let code = login_tokens::create_code(&app.pool, app.customer_id)
+        .await
+        .unwrap();
+    let wrong = wrong_code(&code);
+    for _ in 0..5 {
+        let (status, resp) = app
+            .request(post_json(
+                "/api/auth/code-login",
+                "",
+                &serde_json::json!({"email": "user@test.com", "code": wrong}),
+            ))
+            .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(
+            resp["error_code"].as_str().unwrap(),
+            "invalid_or_expired_code"
+        );
+    }
+    // After 5 wrong attempts the code is invalidated — even the correct value 401s.
+    let (status, _) = app
+        .request(post_json(
+            "/api/auth/code-login",
+            "",
+            &serde_json::json!({"email": "user@test.com", "code": code}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "5 wrong attempts must invalidate the code"
+    );
+}
+
+#[tokio::test]
+async fn code_login_expired_code_rejected() {
+    let app = TestApp::new().await;
+    // Insert an already-expired code row directly.
+    sqlx::query(
+        "INSERT INTO login_tokens (user_id, token_hash, purpose, expires_at)
+         VALUES (?, ?, 'code', datetime('now', '-1 minute'))",
+    )
+    .bind(app.customer_id)
+    .bind(login_tokens::hash_code(app.customer_id, "123456"))
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let (status, _) = app
+        .request(post_json(
+            "/api/auth/code-login",
+            "",
+            &serde_json::json!({"email": "user@test.com", "code": "123456"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn code_login_unknown_email_rejected_uniformly() {
+    let app = TestApp::new().await;
+    let (status, resp) = app
+        .request(post_json(
+            "/api/auth/code-login",
+            "",
+            &serde_json::json!({"email": "ghost@nowhere.com", "code": "123456"}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        resp["error_code"].as_str().unwrap(),
+        "invalid_or_expired_code"
+    );
+}
+
+#[tokio::test]
+async fn code_login_non_customer_rejected() {
+    // A staff/admin account cannot log in with a code (customers-only). Mint a
+    // code for the admin and submit the CORRECT value, so ONLY the customers-only
+    // gate (not a wrong-code rejection) can produce the 401 — this is what proves
+    // the gate itself, not verify_code, does the rejecting.
+    let app = TestApp::new().await;
+    let code = login_tokens::create_code(&app.pool, app.admin_id)
+        .await
+        .unwrap();
+    let (status, _) = app
+        .request(post_json(
+            "/api/auth/code-login",
+            "",
+            &serde_json::json!({"email": "admin@test.com", "code": code}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a non-customer must be rejected even with the correct code"
+    );
+}
+
+#[tokio::test]
+async fn code_login_blocked_user_rejected() {
+    let app = TestApp::new().await;
+    let code = login_tokens::create_code(&app.pool, app.customer_id)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE users SET blocked = 1 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (status, _) = app
+        .request(post_json(
+            "/api/auth/code-login",
+            "",
+            &serde_json::json!({"email": "user@test.com", "code": code}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "blocked user must be rejected even with the correct code"
+    );
+}
+
+#[tokio::test]
+async fn code_login_rate_limited_returns_429() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"email": "user@test.com", "code": "000000"});
+    // The verify limiter allows 10 attempts/email/60 s; the 11th is 429.
+    for i in 0..10 {
+        let (status, _) = app
+            .request(post_json("/api/auth/code-login", "", &body))
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "attempt #{i} should be a normal 401, not throttled yet"
+        );
+    }
+    let (status, resp) = app
+        .request(post_json("/api/auth/code-login", "", &body))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "the 11th verify within the window must be rate-limited"
+    );
+    assert_eq!(resp["error_code"].as_str().unwrap(), "too_many_requests");
+}

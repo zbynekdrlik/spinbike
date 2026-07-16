@@ -1,5 +1,6 @@
 pub mod adaptive_nav;
 pub mod class_card;
+pub mod code_login_form;
 pub mod date_input;
 pub mod day_picker;
 pub mod door_button;
@@ -13,6 +14,7 @@ pub mod upcoming_classes;
 pub mod version_footer;
 
 pub use adaptive_nav::AdaptiveNav;
+pub use code_login_form::{CodeLoginForm, CustomerLoginMethods};
 pub use date_input::DateInput;
 pub use door_button::DoorButton;
 pub use install_prompt::InstallPrompt;
