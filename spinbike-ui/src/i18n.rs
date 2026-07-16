@@ -213,6 +213,9 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
     match code {
         ErrorCode::InvalidCredentials => Some("err_invalid_credentials"),
         ErrorCode::OauthAccount => Some("err_oauth_account"),
+        // #227 login-code flow — both are customer-facing on the code form.
+        ErrorCode::InvalidOrExpiredCode => Some("err_invalid_or_expired_code"),
+        ErrorCode::TooManyRequests => Some("err_too_many_requests"),
         ErrorCode::BookingNotFound => Some("err_booking_not_found"),
         ErrorCode::BookingNotOwned => Some("err_booking_not_owned"),
         ErrorCode::UserNotFound => Some("err_user_not_found"),
@@ -421,6 +424,28 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "If that email exists, we sent a login link",
         ),
     );
+
+    // 6-digit email login code (#227) — the in-PWA login path that closes the
+    // iOS installed-app logged-out loop. Toggle + code form on the login page's
+    // customer section and /welcome's invalid-token fallback.
+    m.insert("login_method_link", ("Odkaz emailom", "Email link"));
+    m.insert(
+        "login_method_code",
+        ("Prihlasit kodom", "Login with a code"),
+    );
+    m.insert("send_login_code", ("Poslat kod", "Send code"));
+    m.insert("sending_login_code", ("Odosielam...", "Sending..."));
+    m.insert(
+        "login_code_sent_hint",
+        (
+            "Ak email existuje, poslali sme 6-miestny kod. Zadaj ho nizsie. Kod plati 10 minut.",
+            "If that email exists, we sent a 6-digit code. Enter it below. The code is valid for 10 minutes.",
+        ),
+    );
+    m.insert("login_code_label", ("Kod z emailu", "Code from email"));
+    m.insert("login_code_submit", ("Prihlasit sa", "Log in"));
+    m.insert("logging_in_code", ("Prihlasujem...", "Signing you in..."));
+    m.insert("login_code_change_email", ("Zmenit email", "Change email"));
 
     // Class card / schedule
     m.insert("book", ("Rezervovat", "BOOK"));
@@ -1044,6 +1069,20 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         (
             "Tento ucet pouziva ine prihlasenie",
             "This account uses a different sign-in method",
+        ),
+    );
+    m.insert(
+        "err_invalid_or_expired_code",
+        (
+            "Kod je nespravny alebo uz neplati",
+            "The code is wrong or has expired",
+        ),
+    );
+    m.insert(
+        "err_too_many_requests",
+        (
+            "Prilis vela pokusov, skus to o chvilu",
+            "Too many attempts, please try again shortly",
         ),
     );
     m.insert(

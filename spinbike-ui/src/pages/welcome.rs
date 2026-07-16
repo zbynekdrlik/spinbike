@@ -14,7 +14,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
 use crate::auth::{self, AuthData};
-use crate::components::{InstallPrompt, LoginLinkForm};
+use crate::components::{CustomerLoginMethods, InstallPrompt};
 use crate::i18n::{self, Lang};
 
 #[derive(serde::Serialize)]
@@ -105,7 +105,7 @@ pub fn WelcomePage() -> impl IntoView {
                     <div data-testid="welcome-invalid">
                         <h1 class="page-title">{move || i18n::t(lang.get(), "welcome_invalid_title")}</h1>
                         <p class="text-center text-muted">{move || i18n::t(lang.get(), "welcome_invalid_message")}</p>
-                        <LoginLinkForm />
+                        <CustomerLoginMethods />
                     </div>
                 }
                 .into_any(),

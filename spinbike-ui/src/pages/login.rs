@@ -5,7 +5,7 @@ use web_sys::HtmlInputElement;
 
 use crate::api;
 use crate::auth::{self, AuthData, UserInfo};
-use crate::components::LoginLinkForm;
+use crate::components::CustomerLoginMethods;
 use crate::i18n::{self, Lang};
 
 #[derive(serde::Serialize)]
@@ -148,7 +148,7 @@ pub fn LoginPage() -> impl IntoView {
             <small class="form-help" data-testid="login-link-customer-only-help">
                 {move || i18n::t(lang.get(), "login_link_customer_only_help")}
             </small>
-            <LoginLinkForm />
+            <CustomerLoginMethods />
         </div>
     }
 }
