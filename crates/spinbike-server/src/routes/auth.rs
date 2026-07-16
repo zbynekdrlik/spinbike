@@ -503,9 +503,11 @@ async fn code_login(
         return Err(ApiError::TooManyRequests(ErrorCode::TooManyRequests));
     }
 
-    if email.is_empty() || code.is_empty() {
-        return Err(invalid());
-    }
+    // No explicit empty-email/empty-code guard: an empty email misses
+    // get_user_by_email (→ uniform invalid) and an empty code never matches a
+    // stored hash in verify_code (→ uniform invalid), so both already resolve to
+    // the same 401 below — an explicit guard here would be a behaviourally
+    // equivalent duplicate.
 
     // Resolve the account — a miss is a uniform invalid (no enumeration).
     let user = match users::get_user_by_email(&state.pool, &email).await {
