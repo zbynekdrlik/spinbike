@@ -97,3 +97,48 @@ grep -E '^(PORT|DATABASE_PATH|PUBLIC_BASE_URL|SMTP_HOST|SMTP_PORT)=' /etc/defaul
 ```
 
 Prod runs on **:8080**, DB `/opt/spinbike/prod/spinbike.db` (WAL); systemd `spinbike.service`. To act as admin on prod without a browser, mint a short-lived HS256 JWT in Python from `JWT_SECRET` (claims `{sub, email, role:"admin", iat, exp}`) — see git history / this session for the one-liner; keep exp ≤5 min and never print the token or secret.
+
+## 6-digit email login code (#227) — the in-PWA login path
+
+Third member of the `login_tokens` family (`purpose='code'`, migration V21), for the
+iOS installed-PWA logged-out loop (magic links always re-open in Safari, never in
+the home-screen app). `db/login_tokens.rs` + `routes/auth.rs`.
+
+- **Per-user hash salt is MANDATORY for a low-entropy code.** 6 digits = only 1M
+  values, so two users could be issued the same code → identical `token_hash` →
+  UNIQUE-index collision on insert. `hash_code(user_id, code) =
+  sha256("{user_id}:{code}")` (NOT `sha256(code)`) sidesteps it AND binds a code to
+  its own account (no cross-account replay). `create_code` also DELETEs the user's
+  prior `code` rows (not mark-used) so a rare same-user/same-value re-issue can't
+  trip UNIQUE either.
+- **`verify_code`** is one transaction: newest live `code` row → hash match → mark
+  used (single-use) → `Some(uid)`; wrong → `attempts+1`, invalidate at
+  `MAX_CODE_ATTEMPTS=5`; every miss → `Ok(None)` (uniform, no leak). The `attempts`
+  column (added by V21) is the per-code brute-force cap.
+- **Two limiters, distinct roles:** request-login-code REUSES
+  `login_link_rate_limit` (same "send an email to this address" budget);
+  code-login (VERIFY) gets its OWN `CodeLoginRateLimiter` (per-email 10/60s + global
+  60/60s), keyed by the submitted email BEFORE any DB lookup so a 429 leaks no
+  account existence. Verify throttle → 429 `too_many_requests`; every other failure
+  → uniform 401 `invalid_or_expired_code`.
+- **rand 0.10 gotcha (cost a CI Lint cycle):** `random_range` lives on
+  `rand::RngExt`, NOT `rand::Rng` → `use rand::RngExt;` (mirror `ewelink/auth.rs`).
+  `fill_bytes` still needs `rand::Rng`. Both traits are imported in `login_tokens.rs`.
+- **Mutation-killability for async auth handlers (RECURRING — cost 2 CI cycles):**
+  an operator (`||`/`&&`/`==`) inside a DB-bound async handler can SURVIVE the
+  diff-scoped mutation gate when a DOWNSTREAM check masks it — code_login's
+  customers-only gate `!= Customer || blocked` survived because a wrong-code test
+  still 401'd via `verify_code`. Fix: EXTRACT the predicate into a PURE fn
+  (`is_eligible_customer(role, blocked) -> bool`) and unit-test every boundary
+  combo — unit tests are guaranteed-run and directly kill the operator mutant. Same
+  for a content-composing fn (`login_code_email`): unit-test that the output
+  CONTAINS the code + the key phrases (kills the junk-tuple return mutant). And
+  REMOVE a redundant guard whose branches are behaviourally equivalent to the
+  downstream result (`if email.is_empty() || code.is_empty()` when an empty email
+  already misses `get_user_by_email` and an empty code never matches a hash) — it is
+  an unkillable EQUIVALENT mutant.
+- **E2E code seam:** `POST /api/test/mint-login-code {email} -> {code}`
+  (SPINBIKE_TEST_MODE-gated) returns a raw code so a Playwright spec can drive the
+  real UI then enter a known-valid value (the public request endpoint never echoes
+  it — no enumeration). UI: `CodeLoginForm` + `CustomerLoginMethods` toggle
+  (default = email-link, so existing login-link/welcome selectors stay green).
