@@ -360,6 +360,39 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "Choose \"Add to Home Screen\"",
         ),
     );
+    // iOS install guide v2 (#226): scroll hint under the numbered steps,
+    // a permanent footer fallback (for a webview UA sniffing can't catch,
+    // e.g. SFSafariViewController), and the separate webview-detected branch
+    // (open-in-Safari instruction + copy-URL button).
+    m.insert(
+        "install_prompt_ios_scroll_hint",
+        (
+            "Ak moznost nevidis, posun zoznam nizsie",
+            "If you don't see it, scroll down in the list",
+        ),
+    );
+    m.insert(
+        "install_prompt_ios_footer_hint",
+        (
+            "Nejde to? Otvor tuto stranku priamo v Safari.",
+            "Not working? Open this page directly in Safari.",
+        ),
+    );
+    m.insert(
+        "install_prompt_webview_title",
+        (
+            "Instalacia tu nie je mozna - otvor stranku v Safari",
+            "Installation isn't possible here - open the page in Safari",
+        ),
+    );
+    m.insert(
+        "install_prompt_copy_button",
+        ("Kopirovat odkaz", "Copy link"),
+    );
+    m.insert(
+        "install_prompt_copy_confirm",
+        ("Odkaz skopirovany", "Link copied"),
+    );
     m.insert(
         "customer_login_heading",
         ("Prihlasenie pre klientov", "Customer login"),

@@ -30,6 +30,24 @@ test.describe('Install-to-home-screen manifest eligibility (#110)', () => {
             expect(resp.headers()['content-type']).toContain('image/png');
         }
     });
+
+    // #225: iOS ignores manifest.json icons entirely for "Add to Home
+    // Screen" — it reads ONLY apple-touch-icon. This is a separate,
+    // independent check from the manifest icons above.
+    test('apple-touch-icon link tag is present and its href resolves 200 image/png', async ({ page, request }) => {
+        await page.goto(`${BASE_URL}/`);
+        const href = await page.locator('link[rel="apple-touch-icon"]').getAttribute('href');
+        expect(href).toBeTruthy();
+
+        const resp = await request.get(`${BASE_URL}${href}`);
+        expect(resp.ok(), `${href} should resolve 200`).toBe(true);
+        expect(resp.headers()['content-type']).toContain('image/png');
+
+        const appleTitle = await page
+            .locator('meta[name="apple-mobile-web-app-title"]')
+            .getAttribute('content');
+        expect(appleTitle).toBe('SpinBike');
+    });
 });
 
 // iOS Safari: no `beforeinstallprompt` event exists there at all, so the
@@ -49,7 +67,7 @@ test.describe('Install-to-home-screen component — iOS Safari guide', () => {
         hasTouch: iPhone.hasTouch,
     });
 
-    test('renders the 2-step Share -> Add to Home Screen guide on /my/balance', async ({ page }) => {
+    test('renders the visual numbered Share -> Add to Home Screen guide on /my/balance', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
         await loginViaAPI(page, BASE_URL, 'customer@test.com', 'password123');
         await page.goto('/my/balance');
@@ -58,8 +76,74 @@ test.describe('Install-to-home-screen component — iOS Safari guide', () => {
         await expect(page.locator('[data-testid="install-prompt-ios"]')).toBeVisible();
         await expect(page.locator('[data-testid="install-prompt-ios-step1"]')).toBeVisible();
         await expect(page.locator('[data-testid="install-prompt-ios-step2"]')).toBeVisible();
+        // #226: the SVG glyphs (share icon, plus-square icon) render inline
+        // for each step, replacing the old emoji.
+        await expect(page.locator('[data-testid="install-prompt-ios-step1"] svg')).toHaveCount(1);
+        await expect(page.locator('[data-testid="install-prompt-ios-step2"] svg')).toHaveCount(1);
+        // #226: the share-sheet scroll hint and the permanent footer fallback.
+        await expect(page.locator('[data-testid="install-prompt-ios-scroll-hint"]')).toBeVisible();
+        await expect(page.locator('[data-testid="install-prompt-ios-footer-hint"]')).toBeVisible();
         // The Android/Chromium button must never render on iOS.
         await expect(page.locator('[data-testid="install-prompt-android"]')).toHaveCount(0);
+
+        assertCleanConsole(consoleMessages);
+    });
+});
+
+// #226: known in-app-browsers (webviews) — Facebook/Messenger, Instagram,
+// LINE, the iOS Google app — have NO "Add to Home Screen" surface at all, so
+// showing the normal Share guide there is misleading. Detected via UA
+// substring markers; here we append the Instagram marker to a real iPhone UA
+// (in-app browsers layer their own token onto the underlying Safari/WebKit
+// UA string, they don't replace it).
+test.describe('Install-to-home-screen component — iOS webview (in-app browser)', () => {
+    test.use({
+        userAgent: `${iPhone.userAgent} Instagram 300.0.0.0.0`,
+        viewport: iPhone.viewport,
+        isMobile: iPhone.isMobile,
+        hasTouch: iPhone.hasTouch,
+    });
+
+    test('shows an open-in-Safari instruction + copy-URL button instead of the A2HS steps', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await loginViaAPI(page, BASE_URL, 'customer@test.com', 'password123');
+        await page.goto('/my/balance');
+        await page.waitForSelector('[data-testid="door-open-button"]', { timeout: 10000 });
+
+        await expect(page.locator('[data-testid="install-prompt-ios-webview"]')).toBeVisible();
+        await expect(page.locator('[data-testid="install-prompt-copy-url"]')).toBeVisible();
+        // The A2HS steps and the normal iOS guide container must NOT render —
+        // they're replaced, not merely supplemented.
+        await expect(page.locator('[data-testid="install-prompt-ios"]')).toHaveCount(0);
+        await expect(page.locator('[data-testid="install-prompt-ios-step1"]')).toHaveCount(0);
+        await expect(page.locator('[data-testid="install-prompt-ios-step2"]')).toHaveCount(0);
+        await expect(page.locator('[data-testid="install-prompt-android"]')).toHaveCount(0);
+
+        assertCleanConsole(consoleMessages);
+    });
+
+    // Deep-review regression guard (found before merge, #226): InstallPrompt
+    // also mounts on /welcome?t=<token> right after a magic-link token is
+    // redeemed, and that page never strips ?t= from the address bar
+    // afterward (single-use redemption, welcome.rs). Copying the raw
+    // location.href there would hand the user their own already-spent,
+    // now-invalid token — pasting it into Safari sends them straight back to
+    // the "invalid link" screen. The copy button must always strip the query
+    // string, regardless of which page/query state it's mounted under.
+    test('copy-URL strips the query string, never copies a leftover token', async ({ page, context }) => {
+        await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+        const consoleMessages = setupConsoleCheck(page);
+        await loginViaAPI(page, BASE_URL, 'customer@test.com', 'password123');
+        await page.goto('/my/balance?t=leftover-token-should-not-be-copied');
+        await page.waitForSelector('[data-testid="door-open-button"]', { timeout: 10000 });
+
+        await page.locator('[data-testid="install-prompt-copy-url"]').click();
+        await expect(page.locator('[data-testid="install-prompt-copy-confirm"]')).toBeVisible();
+
+        const copied = await page.evaluate(() => navigator.clipboard.readText());
+        expect(copied).not.toContain('?');
+        expect(copied).not.toContain('leftover-token-should-not-be-copied');
+        expect(copied).toContain('/my/balance');
 
         assertCleanConsole(consoleMessages);
     });

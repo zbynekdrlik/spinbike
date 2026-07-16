@@ -303,6 +303,62 @@ valid_until       >  datetime('now')  -- ❌ off-by-one on the expiry day
   ANY runner TZ. Expired-YESTERDAY guards can stay `date('now','-1 day')` —
   robust, since Bratislava-today is always ≥ UTC-today.
 
+## GOTCHA: gym-local day boundary — bare-DATE column vs UTC-INSTANT column (#222)
+
+Two DIFFERENT shapes, pick by the column's storage type:
+
+- **Bare calendar-date column** (`bookings.date` = `'YYYY-MM-DD'`): bind
+  `util::today_bratislava()` (a `NaiveDate`) and compare directly —
+  `b.date >= ?`. A byte-wise 10-char vs 10-char compare is a correct calendar
+  compare. NEVER `date('now')` (UTC) / `date('now','localtime')` (OS zone).
+- **UTC-INSTANT column** (`transactions.created_at` = `datetime('now')` =
+  `'YYYY-MM-DD HH:MM:SS'` UTC): do NOT hand-convert in SQL. `date(created_at,
+  'localtime')` reads the fragile server OS zone; a bound `today_bratislava()`
+  alone can't help because the LHS conversion is still OS-dependent. Instead
+  compute the gym day's UTC-instant half-open RANGE in Rust —
+  `util::bratislava_day_range_utc(day) -> (start, end)` (start = UTC instant of
+  the day's Bratislava local midnight, end = next day's) — `.format("%Y-%m-%d
+  %H:%M:%S")` both, and compare `created_at >= ? AND created_at < ?`. Both sides
+  are 19-char space-ISO UTC, so byte-wise == chronological. DST-correct (offset
+  from tzdata). Used at `door.rs` same-day count (MONEY-adjacent: `n==0` drives
+  the charge path — a wrong boundary double-charges or skips a pass check) and
+  `users.rs` stats month/year totals + monthly buckets (there the 12 month
+  boundaries are computed as `bratislava_day_range_utc(month_first(y,m)).0` and
+  a `CASE created_at < bound_i THEN label_i` bucketer replaces
+  `strftime(...,'localtime')`).
+
+**A wall-clock-derived rollover branch inside a handler is mutation-untestable
+→ extract it.** `user_stats` derives `today` from the live clock, so its
+December year-rollover branch (`if today.month()==12 { year+1 }`) is unreachable
+in an integration test, and widening (not narrowing) the `this_month` window
+leaves every seeded-in-current-month assertion unchanged → the `==12` / `year+1`
+mutants SURVIVE (cargo-mutants shard failed). Fix: extract the pure logic
+(`next_month_first(day)`) and unit-test every arm with fixed dates
+(July→Aug, Nov→Dec, Dec→Jan-next-year). General rule: any date/time boundary
+branch keyed off the live `now` must live in a pure `fn(today: NaiveDate)` with
+direct fixed-date unit tests, or its boundary mutants are uncatchable.
+
+**Validate a `'localtime'`→UTC-range migration is behavior-neutral on prod
+read-only** (host OS TZ IS Europe/Bratislava, so old == new today): compare the
+two predicates row-for-row with SQLite's `datetime(<local-str>, 'utc')` modifier
+(treats its LHS as localtime, converts to UTC — same instant the Rust helper
+computes on a Bratislava host). Zero disagreements + equal counts = neutral:
+```bash
+DB=/opt/spinbike/prod/spinbike.db
+# every door row falls in the gym-day range of its OWN localtime date → 0
+sqlite3 "$DB" "SELECT COUNT(*) FROM transactions WHERE note LIKE 'door:%' AND deleted_at IS NULL
+  AND NOT (created_at >= datetime(date(created_at,'localtime')||' 00:00:00','utc')
+           AND created_at < datetime(date(created_at,'localtime','+1 day')||' 00:00:00','utc'));"
+# stats this-month: old strftime-localtime == new UTC range (equal counts)
+sqlite3 "$DB" "SELECT
+ (SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL
+    AND strftime('%Y-%m',created_at,'localtime')=strftime('%Y-%m','now','localtime')),
+ (SELECT COUNT(*) FROM transactions WHERE deleted_at IS NULL
+    AND created_at >= datetime(strftime('%Y-%m-01',date('now','localtime'))||' 00:00:00','utc')
+    AND created_at <  datetime(strftime('%Y-%m-01',date('now','localtime','+1 month'))||' 00:00:00','utc'));"
+```
+Pure SELECTs → no service stop needed (the read-only-predicate validation path).
+
 ## `#[derive(sqlx::FromRow)]` matches columns by NAME, not position (#164)
 
 This codebase has zero `#[sqlx(rename = ...)]` attributes anywhere, so every
