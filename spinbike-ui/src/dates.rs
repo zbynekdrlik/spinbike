@@ -55,13 +55,8 @@ pub fn format_ddmmyyyy(d: NaiveDate) -> String {
 ///
 /// This converts through the IANA tz database (DST-aware) via
 /// `i18n::parse_to_local`, then takes the resulting local calendar date.
-// RED (review follow-up to #236): stubbed as a straight passthrough for
-// now — still takes the raw UTC date token, same bug as `parse_server_date`.
-// The GREEN commit replaces this body with the real UTC->Bratislava
-// conversion; the call sites (card_panel.rs, dashboard/mod.rs) switch to
-// this function in that same commit.
 pub fn parse_server_date_local(s: &str) -> Option<NaiveDate> {
-    parse_server_date(s)
+    crate::i18n::parse_to_local(s).map(|dt| dt.date_naive())
 }
 
 #[cfg(test)]
