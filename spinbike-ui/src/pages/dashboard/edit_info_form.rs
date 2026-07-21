@@ -276,8 +276,12 @@ pub fn EditInfoForm(
     Effect::new(move |prev_shown: Option<bool>| {
         let now_shown = show.get();
         if prev_shown == Some(true) && !now_shown {
-            if let Some(saved) = invited_saved.get_value() {
-                invited_saved.set_value(None);
+            // Not collapsed into a single nested `if let` (clippy's
+            // `collapsible_if` would want a wasm32-incompatible let-chain
+            // here) — read-then-clear-then-branch instead.
+            let saved = invited_saved.get_value();
+            invited_saved.set_value(None);
+            if let Some(saved) = saved {
                 set_selected.set(Some(saved));
             }
         }
