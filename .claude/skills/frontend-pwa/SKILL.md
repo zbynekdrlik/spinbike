@@ -691,6 +691,31 @@ use the now-`pub` `i18n::parse_to_local(&str) -> Option<DateTime<Tz>>` (DST-awar
 handles fractional-seconds + legacy MS-Access forms), then `.date_naive()` /
 format off it — don't hand-roll the `from_utc_datetime` conversion.
 
+**`dates::parse_server_date` vs `dates::parse_server_date_local` — pick by
+what the FIELD actually IS, not by habit (review follow-up to #236, #241).**
+`parse_server_date` takes the raw UTC DATE TOKEN with no timezone shift — use
+it ONLY for a field that is already a bare calendar date in server-local terms
+(`valid_until`, a booking's `date`). `parse_server_date_local` (delegates to
+`i18n::parse_to_local(...).map(|dt| dt.date_naive())`) resolves the
+Bratislava-LOCAL calendar date — use it for any field that is a UTC INSTANT
+(`created_at`, `last_visit_at = MAX(created_at)`, a soft-delete
+`deleted_at`). Feeding a UTC instant through the wrong (non-local) parser is
+invisible 22-23 hours a day and only misrenders the date/relative-bucket/
+"is this TODAY" highlight in the 00:00-02:00 Bratislava-local window
+(Bratislava runs UTC+1/+2 ahead) — exactly the bug class #236's review
+caught at TWO "today"-highlight call sites (`dashboard/mod.rs` search
+dropdown, `card_panel.rs` card title). **When you fix this bug class at one
+call site, `grep -rn 'dates::parse_server_date(' spinbike-ui/src/` and check
+EVERY hit whose argument is a UTC-instant field, not just the one(s) a
+review flagged** — the #241 fix-now PR itself only fixed 2 sites and, on its
+OWN review, still missed 3 more instances of the identical mistake
+(`negative_balance_list.rs`'s last-visit text — #240;
+`my_balance.rs`'s customer-facing recent-transactions date AND
+`deleted_email_conflict.rs`'s `conflict_deleted_at` — #242) that a plain
+grep-and-classify pass would have caught in one go. Do the grep-audit
+FIRST, not one call site at a time discovered across three separate review
+cycles.
+
 ## GOTCHA: the UI CI gate is `clippy --target wasm32 -D warnings` — `Test (UI)` passing does NOT mean the build passes
 
 `Build WASM (UI)` runs `cargo clippy --manifest-path spinbike-ui/Cargo.toml
