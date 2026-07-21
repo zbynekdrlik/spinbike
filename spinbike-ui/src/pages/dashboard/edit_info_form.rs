@@ -263,17 +263,21 @@ pub fn EditInfoForm(
             // which invite failures now also route through — see
             // `run_save` below).
             let (invite_ok, set_invite_ok) = signal(String::new());
-            // Stash for the CardInfo persisted by a successful invite while
-            // the sheet stays open (#232). `set_selected` would rebuild this
-            // whole component (the parent's `match selected.get()` — see
-            // dashboard/mod.rs), wiping in-render signals/DOM state, so it
-            // must NOT be called right after invite success. Instead the
-            // saved value is stashed here and flushed to `set_selected` on
-            // every ACTUAL close path (Cancel button, backdrop/Escape close)
-            // so the dashboard card behind reflects the new email even if
-            // the operator cancels without an explicit Save afterward. A
-            // subsequent Save success already flushes its OWN fresher
-            // CardInfo directly, so it doesn't need to consult this stash.
+            // Stash for the CardInfo persisted by the save-then-invite click
+            // while the sheet stays open (#232) — set as soon as the SAVE
+            // half commits, regardless of whether the invite call that
+            // follows then succeeds or fails (both keep the sheet open, and
+            // either way the DB already has the fresher data). `set_selected`
+            // would rebuild this whole component (the parent's `match
+            // selected.get()` — see dashboard/mod.rs), wiping in-render
+            // signals/DOM state, so it must NOT be called right after the
+            // save-then-invite click. Instead the saved value is stashed
+            // here and flushed to `set_selected` on every ACTUAL close path
+            // (Cancel button, backdrop/Escape close) so the dashboard card
+            // behind reflects the new data even if the operator cancels
+            // without an explicit Save afterward. A subsequent Save success
+            // already flushes its OWN fresher CardInfo directly, so it
+            // doesn't need to consult this stash.
             let invited_saved: StoredValue<Option<CardInfo>> = StoredValue::new(None);
             let on_close_cancel = on_close;
             let on_close_btn = on_close;
@@ -404,6 +408,14 @@ pub fn EditInfoForm(
                     }
 
                     // Step 2 — invite against the now-committed email.
+                    // Stash the saved CardInfo NOW, before attempting the
+                    // invite (#232): the SAVE half has already committed to
+                    // the DB at this point regardless of whether the invite
+                    // call below succeeds or fails, so an eventual close
+                    // (Cancel/backdrop, see the `invited_saved` comment
+                    // above) must flush this fresher data either way — not
+                    // just on invite success.
+                    invited_saved.set_value(Some(saved));
                     #[derive(serde::Deserialize)]
                     struct InviteResponse {
                         sent_to: String,
@@ -416,13 +428,8 @@ pub fn EditInfoForm(
                     {
                         Ok(resp) => {
                             // #232: the sheet STAYS OPEN on invite success —
-                            // stash the already-committed CardInfo instead of
-                            // flushing it to `set_selected` now (that would
-                            // rebuild/dispose this component — see the
-                            // `invited_saved` comment above). The in-sheet
-                            // green alert replaces the old shared-channel
-                            // message + auto-close.
-                            invited_saved.set_value(Some(saved));
+                            // the in-sheet green alert replaces the old
+                            // shared-channel message + auto-close.
                             set_invite_ok.set(i18n::tf(
                                 lang.get_untracked(),
                                 "invite_sent_in_sheet",
