@@ -95,6 +95,7 @@ Load the skill for the area you're working in — each contains the full HOW-TO:
 | Frontend PWA / JS interop / post-deploy DOM checks | `.claude/skills/frontend-pwa/SKILL.md` | Untyped browser API access (`js_sys::Reflect`), UA sniffing, manifest icons, reading a version/feature off the live DOM after deploy (service-worker cache gotcha) |
 | Auth / client onboarding | `.claude/skills/auth-onboarding/SKILL.md` | Magic-link tokens (`login_tokens`), `/api/auth/*`, `/welcome`, login/invite UI, register removal |
 | Prod functional verification | `.claude/skills/prod-verification/SKILL.md` | Post-deploy verification of a customer-facing (`/my/*`) feature on live prod |
+| E2E test writing | `.claude/skills/e2e-testing/SKILL.md` | Writing/editing `e2e/tests/*.spec.ts`, or right after adding a new 4xx/409 validation guard to any endpoint (audit existing specs for silent collisions before pushing) |
 
 ## Project-wide always-apply rules
 
