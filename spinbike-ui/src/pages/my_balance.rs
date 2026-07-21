@@ -148,9 +148,7 @@ pub fn MyBalancePage() -> impl IntoView {
                         <h2 class="recent-visits__heading">{i18n::t(lang_now, "my_balance_recent_movements")}</h2>
                         <ul class="recent-visits">
                             {recent_rows.into_iter().map(|t| {
-                                let date_label = dates::parse_server_date(&t.created_at)
-                                    .map(|d| fmt_date_short(d, lang_now))
-                                    .unwrap_or_else(|| t.created_at.clone());
+                                let date_label = format_tx_date_label(&t.created_at, lang_now);
 
                                 // Derive the movement kind from the SAME shared
                                 // classifier the admin uses, so the customer sees
@@ -226,5 +224,46 @@ pub fn MyBalancePage() -> impl IntoView {
                 }
             })
         }}
+    }
+}
+
+/// Render a recent-transaction row's display date from its raw server
+/// `created_at` (a UTC instant, the same field `last_visit_at` is derived
+/// from elsewhere). Extracted for testability — see #242.
+// RED (#242): still uses the raw-UTC dates::parse_server_date — same bug
+// as the two already-fixed staff-dashboard call sites (#236/#241). GREEN
+// commit swaps to parse_server_date_local.
+fn format_tx_date_label(created_at: &str, lang: Lang) -> String {
+    dates::parse_server_date(created_at)
+        .map(|d| fmt_date_short(d, lang))
+        .unwrap_or_else(|| created_at.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasm_bindgen_test::*;
+
+    // No wasm_bindgen_test_configure! — CI uses wasm-pack test --node (not browser).
+
+    // #242: created_at is a UTC instant. Near midnight Bratislava-local, the
+    // raw UTC date token is one day BEHIND the local wall date — the
+    // customer's OWN transaction history would show the wrong day.
+    #[wasm_bindgen_test]
+    fn format_tx_date_label_midnight_boundary_resolves_bratislava_local_date() {
+        // UTC 2026-07-20 22:30:00 = Bratislava-local 2026-07-21 00:30 (CEST).
+        assert_eq!(
+            format_tx_date_label("2026-07-20 22:30:00", Lang::Sk),
+            "21.07.",
+            "must resolve to the Bratislava-LOCAL calendar date, not the raw UTC token"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn format_tx_date_label_agrees_with_utc_token_away_from_midnight() {
+        assert_eq!(
+            format_tx_date_label("2026-07-20 12:00:00", Lang::Sk),
+            "20.07."
+        );
     }
 }
