@@ -230,11 +230,8 @@ pub fn MyBalancePage() -> impl IntoView {
 /// Render a recent-transaction row's display date from its raw server
 /// `created_at` (a UTC instant, the same field `last_visit_at` is derived
 /// from elsewhere). Extracted for testability — see #242.
-// RED (#242): still uses the raw-UTC dates::parse_server_date — same bug
-// as the two already-fixed staff-dashboard call sites (#236/#241). GREEN
-// commit swaps to parse_server_date_local.
 fn format_tx_date_label(created_at: &str, lang: Lang) -> String {
-    dates::parse_server_date(created_at)
+    dates::parse_server_date_local(created_at)
         .map(|d| fmt_date_short(d, lang))
         .unwrap_or_else(|| created_at.to_string())
 }

@@ -179,11 +179,8 @@ pub fn DeletedEmailConflictDialog(
 /// Render the conflict body text — name plus the formatted deletion date
 /// when available. Extracted for testability — see #242 (folds in the
 /// second call site the issue noted alongside my_balance.rs).
-// RED (#242): still uses the raw-UTC crate::dates::parse_server_date — same
-// bug as the two already-fixed staff-dashboard call sites (#236/#241).
-// GREEN commit swaps to parse_server_date_local.
 fn body_text_for(name: &str, deleted_at: Option<&str>, lang: Lang) -> String {
-    match deleted_at.and_then(crate::dates::parse_server_date) {
+    match deleted_at.and_then(crate::dates::parse_server_date_local) {
         Some(d) => i18n::tf(
             lang,
             "deleted_email_conflict_body",
