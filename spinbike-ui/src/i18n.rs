@@ -740,11 +740,25 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("close", ("Zatvorit", "Close"));
     m.insert("edit_info", ("Upravit udaje", "Edit info"));
 
-    // Staff invite button in edit-info form (#111)
-    m.insert("send_invite", ("Poslat pozvanku", "Send invite"));
+    // Staff invite button in edit-info form (#111). Renamed (#232): the
+    // click already saves the WHOLE form before sending the invite (#141),
+    // so the label now says so — the old "send_invite" text let the
+    // operator believe a separate Save was still needed.
     m.insert(
-        "invite_sent",
-        ("Pozvanka odoslana na {}", "Invite sent to {}"),
+        "send_invite",
+        ("Ulozit a poslat pozvanku", "Save & send invite"),
+    );
+    // In-sheet green confirmation (#232) — invite success no longer closes
+    // the sheet, so the confirmation must live INSIDE it (paired with the
+    // existing in-sheet `save_err` red alert used for invite failures too).
+    // Replaces the old "invite_sent" key, which was rendered on the shared
+    // dashboard alert that this sheet's own backdrop used to occlude.
+    m.insert(
+        "invite_sent_in_sheet",
+        (
+            "Ulozene. Pozvanka odoslana na {}.",
+            "Saved. Invite sent to {}.",
+        ),
     );
     m.insert(
         "invite_mail_not_configured",
