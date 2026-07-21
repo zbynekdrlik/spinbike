@@ -697,6 +697,18 @@ select.form-control {
     color: var(--info);
 }
 
+/* #234: staff duplicate-visit confirm — a real warning (not yet an error,
+   not a routine info), so it gets its own combo of the existing tokens
+   rather than reusing .alert-error's exact look. Stacks message + action
+   buttons vertically, unlike the icon+text .alert base (align-items: center
+   still centers the single wrapper div fine). */
+.alert-warning {
+    background: var(--warn-soft);
+    border-color: var(--warn-border);
+    color: var(--danger);
+    align-items: stretch;
+}
+
 /* ========================================================================
    15. TABLES
    ======================================================================== */

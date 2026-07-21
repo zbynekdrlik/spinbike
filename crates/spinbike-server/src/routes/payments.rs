@@ -8,6 +8,7 @@ use crate::db::users;
 use crate::error::ApiError;
 use crate::routes::internal_error;
 use spinbike_core::errors::ErrorCode;
+use spinbike_core::services::CLASS_VISIT_NAMES_EN;
 
 #[derive(Deserialize)]
 pub struct ChargeRequest {
@@ -37,6 +38,13 @@ pub struct LogVisitRequest {
     pub service_id: i64,
     #[serde(default)]
     pub note: Option<String>,
+    /// #234: when a same-day visit/entry already exists for this user, the
+    /// first call 409s (`already_visited_today`) instead of logging a
+    /// duplicate. Resubmit with `force: true` to log it anyway (a genuine
+    /// second visit in one day is legitimate — e.g. morning Fitness +
+    /// evening Spinning). Additive optional field — no API break.
+    #[serde(default)]
+    pub force: bool,
 }
 
 #[derive(Serialize)]
@@ -345,6 +353,64 @@ async fn log_visit(
         return Err(super::bad_request("Note must be 200 characters or fewer"));
     }
     let note_for_db = body.note.as_deref().filter(|s| !s.trim().is_empty());
+
+    // #234: warn (not hard-block) when this user already has a same-day
+    // visit/entry — from EITHER source. A manual log-visit and a door
+    // self-entry both land here: door rows are written against the
+    // `kind='single_entry'` services row, which migration V16 re-tags onto
+    // the SAME row as the seeded 'Fitness' service (name_en='Fitness'), so
+    // door entries are already inside the CLASS_VISIT_NAMES_EN filter below.
+    // Canonical attendance definition — the same UNION `db/reports.rs` uses
+    // (db-migrations skill): `action='visit'` OR a per-class pay-as-you-go
+    // charge (amount<0, valid_until IS NULL; excludes pass purchases and
+    // door's own Nth-press amount=0 audit rows). `force: true` skips this
+    // gate entirely — a genuine second visit in a day (e.g. morning Fitness
+    // + evening Spinning) is legitimate.
+    if !body.force {
+        let (day_start, day_end) = crate::util::bratislava_day_range_utc(today);
+        let day_start = day_start.format("%Y-%m-%d %H:%M:%S").to_string();
+        let day_end = day_end.format("%Y-%m-%d %H:%M:%S").to_string();
+        let placeholders: String = std::iter::repeat_n("?", CLASS_VISIT_NAMES_EN.len())
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!(
+            "SELECT created_at, note FROM transactions \
+             WHERE user_id = ? AND deleted_at IS NULL \
+               AND created_at >= ? AND created_at < ? \
+               AND service_id IN (SELECT id FROM services WHERE name_en IN ({placeholders})) \
+               AND ( action = 'visit' \
+                     OR (action = 'charge' AND amount < 0 AND valid_until IS NULL) ) \
+             ORDER BY created_at DESC LIMIT 1"
+        );
+        let mut q = sqlx::query_as::<_, (String, Option<String>)>(&sql)
+            .bind(body.user_id)
+            .bind(&day_start)
+            .bind(&day_end);
+        for n in CLASS_VISIT_NAMES_EN {
+            q = q.bind(*n);
+        }
+        let existing: Option<(String, Option<String>)> = q
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(internal_error)?;
+        if let Some((created_at, note)) = existing {
+            // Door rows carry the English `"door: 1st"`/`"door: 2nd"` note
+            // prefix written by routes/door.rs — anything else (including no
+            // note) is a manual log-visit.
+            let source = if note.as_deref().is_some_and(|n| n.starts_with("door:")) {
+                "door"
+            } else {
+                "manual"
+            };
+            return Err(ApiError::conflict_extra(
+                ErrorCode::AlreadyVisitedToday,
+                serde_json::json!({
+                    "last_entry_at": created_at,
+                    "source": source,
+                }),
+            ));
+        }
+    }
 
     let tx_id = crate::db::transactions::create_transaction(
         &state.pool,

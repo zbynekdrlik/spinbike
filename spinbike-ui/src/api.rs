@@ -201,6 +201,13 @@ pub struct ApiError {
     pub conflict_id: Option<i64>,
     /// #143: when the colliding account was soft-deleted (raw server string).
     pub conflict_deleted_at: Option<String>,
+    /// #234: raw UTC `created_at` of the existing same-day visit/entry, sent
+    /// on an `already_visited_today` conflict. Convert to Bratislava local
+    /// HH:MM client-side (`i18n::fmt_time_str`) before display.
+    pub last_entry_at: Option<String>,
+    /// #234: `"door"` | `"manual"` — where the existing same-day entry came
+    /// from, sent alongside `last_entry_at`.
+    pub source: Option<String>,
 }
 
 impl ApiError {
@@ -223,6 +230,20 @@ impl ApiError {
                 id,
                 self.conflict_name.clone().unwrap_or_default(),
                 self.conflict_deleted_at.clone(),
+            ));
+        }
+        None
+    }
+
+    /// #234: if this error is the same-day-duplicate-visit conflict
+    /// (`already_visited_today`), return `(last_entry_at, source)` so the
+    /// caller can render the in-form confirm ("already visited at HH:MM via
+    /// door/manual — log anyway?"). `None` for any other error.
+    pub fn already_visited_today(&self) -> Option<(String, String)> {
+        if self.code == Some(spinbike_core::errors::ErrorCode::AlreadyVisitedToday) {
+            return Some((
+                self.last_entry_at.clone().unwrap_or_default(),
+                self.source.clone().unwrap_or_default(),
             ));
         }
         None
@@ -408,6 +429,9 @@ fn extract_api_error(body: &str, status: u16) -> ApiError {
         conflict_card: Option<String>,
         conflict_id: Option<i64>,
         conflict_deleted_at: Option<String>,
+        // #234: only present on an `already_visited_today` conflict.
+        last_entry_at: Option<String>,
+        source: Option<String>,
     }
     if let Ok(e) = serde_json::from_str::<ErrBody>(body) {
         // Decode error_code defensively (unknown string → None), same as
@@ -423,6 +447,8 @@ fn extract_api_error(body: &str, status: u16) -> ApiError {
             conflict_card: e.conflict_card,
             conflict_id: e.conflict_id,
             conflict_deleted_at: e.conflict_deleted_at,
+            last_entry_at: e.last_entry_at,
+            source: e.source,
         };
     }
     ApiError::msg(request_failed_message(status))

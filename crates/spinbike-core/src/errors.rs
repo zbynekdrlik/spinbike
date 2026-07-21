@@ -53,6 +53,14 @@ pub enum ErrorCode {
     NoActiveMonthlyPass,
     MonthlyPassExists,
     UserAlreadyDeleted,
+    /// Staff logged a visit for a user who already has a same-day
+    /// visit/entry — from EITHER source: a prior manual log-visit, or a
+    /// door self-entry (#234). Warn-then-confirm, not a hard block: the 409
+    /// body additionally carries `last_entry_at` (raw UTC `created_at` of
+    /// the existing entry) and `source` (`"door"` | `"manual"`) via
+    /// `ApiError::conflict_extra`. Resubmit `log-visit` with `force: true`
+    /// to log the visit anyway.
+    AlreadyVisitedToday,
     /// The submitted email is held by a SOFT-DELETED account (#143). Unlike
     /// `EmailConflict` (a live collision) this is RESOLVABLE by the staff UI:
     /// restore the old account, or free its email. The body carries the
@@ -108,6 +116,9 @@ impl ErrorCode {
             }
             ErrorCode::MonthlyPassExists => "a monthly_pass service already exists",
             ErrorCode::UserAlreadyDeleted => "User already deleted",
+            ErrorCode::AlreadyVisitedToday => {
+                "User already has a recorded visit/entry today; pass force=true to log anyway"
+            }
             ErrorCode::EmailBelongsToDeletedAccount => "This email belongs to a deleted account",
             ErrorCode::BadRequest => "Bad request",
             ErrorCode::TooManyRequests => "Too many attempts, please try again later",
@@ -244,6 +255,11 @@ mod tests {
             ErrorCode::UserAlreadyDeleted,
             "user_already_deleted",
             "User already deleted",
+        ),
+        (
+            ErrorCode::AlreadyVisitedToday,
+            "already_visited_today",
+            "User already has a recorded visit/entry today; pass force=true to log anyway",
         ),
         (
             ErrorCode::EmailBelongsToDeletedAccount,
