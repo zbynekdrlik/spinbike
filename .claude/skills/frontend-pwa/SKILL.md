@@ -334,6 +334,15 @@ alert is in the DOM, just covered), so an E2E test asserting the shared
 `data-testid` inside the open sheet instead — that only exists once the error
 renders in-sheet.
 
+The in-sheet alert intentionally REUSES the `alert alert-error`/`alert
+alert-success` classes for visual consistency with the shared channel — so
+a broad `page.locator('.alert-success')`/`.alert-error` selector in a test
+matches BOTH the shared one and any in-sheet one (#232's invite confirmation
+hit this: an assertion meant to prove "the shared channel is unused" failed
+because the NEW in-sheet element shares its class). Always assert the
+sheet-scoped `data-testid`, never a bare class selector, when a Sheet is
+involved.
+
 ## Leptos disposal-ordering trap: write LOCAL signals BEFORE any disposal trigger
 
 `reactive_graph` (0.1.8) **panics** — `"Tried to access a reactive value that
@@ -376,6 +385,65 @@ A reviewer may claim "setting a disposed signal is a silent no-op" — it is
 **not**, it panics `unreachable`. Verify with an E2E test that clicks the
 action and asserts `expect(consoleMessages).toEqual([])` AFTER the sheet closes
 (found + fixed while shipping #141's one-click save-then-invite).
+
+## Deferring a `set_selected` flush to "every close path" — enumerate buttons and you WILL miss one; track the `show` signal itself instead (#232)
+
+#232 made the invite button keep the sheet open (in-sheet confirmation
+instead of auto-close), so the committed `CardInfo` had to be STASHED
+(`StoredValue<Option<CardInfo>>`) and flushed to `set_selected` later, on
+whichever close eventually happens — Cancel, the Sheet's backdrop/Escape,
+or the #143 restore-dialog close. The first version flushed at each of
+those two/three KNOWN buttons individually — and missed a real 4th path: 
+`card_panel.rs`'s own "Edit info" button both OPENS and CLOSES the sheet (a
+plain `show_edit.update(|v| *v = !*v)` toggle), which flips the SAME `show`
+signal EditInfoForm reads, completely bypassing every one of EditInfoForm's
+own Cancel/backdrop handlers. A code-review pass caught it; enumerating
+close buttons is inherently incomplete because any future control that
+flips the same boolean is a new bypass.
+
+**Fix: track the signal transition centrally, not the buttons.** Move the
+stash to the component's OUTER (non-`show`-gated) scope so it isn't
+disposed on every close, then add a SECOND `Effect::new(move |prev_shown:
+Option<bool>| {...})` mirroring the existing false→true refresh Effect but
+for the true→false direction — it flushes (and clears) the stash whenever
+`show` transitions from `true` to `false`, REGARDLESS of which button or
+external toggle caused it:
+
+```rust
+Effect::new(move |prev_shown: Option<bool>| {
+    let now_shown = show.get();
+    if prev_shown == Some(true) && !now_shown {
+        let saved = invited_saved.get_value();
+        invited_saved.set_value(None);
+        if let Some(saved) = saved {
+            set_selected.set(Some(saved));
+        }
+    }
+    now_shown
+});
+```
+
+Safe from the disposal trap above because BOTH `invited_saved` and this
+Effect live at the outer, non-disposed scope — reading/writing them can
+never hit an already-disposed value, and `set_selected` (the disposal
+trigger) is still the LAST thing touched. Also clear the stash at the TOP
+of any fresh save/invite action (`invited_saved.set_value(None)`) — a plain
+Save flushes its own fresher `CardInfo` directly and closes via the SAME
+`show` transition, so without this clear the new Effect would immediately
+re-flush a STALE stash right after, racing Save's own value.
+
+**Rule: whenever you'd otherwise add a flush/cleanup call at "every place
+that closes X", ask whether X is driven by one shared signal — if so,
+watch the SIGNAL's transition with one Effect instead of the buttons.**
+
+**Testing this in Playwright:** a real mouse `.click()` on a button
+visually covered by an open `Sheet`'s full-viewport backdrop FAILS
+(`<div class="sheet-backdrop"> intercepts pointer events`) — this is
+CORRECT, a real mouse user can't reach it either. The Sheet has no
+keyboard focus trap though, so the path is still reachable via keyboard:
+`await button.focus(); await page.keyboard.press('Enter');` fires the
+button's click handler without going through pointer hit-testing, exactly
+matching how a Tab-navigating keyboard user would trigger it.
 
 ## Transaction/movement rows: reuse the shared classifier, never render the raw DB `action`
 
@@ -644,3 +712,10 @@ cost a full ~15-min cycle. Write clippy-clean UI Rust the first time:
 - Multi-root `view! { <A/> {closure} }` (a fragment / tuple view) IS valid and
   compiles — if `Test (UI)` compiled it, `trunk build` will too. The wasm32
   clippy pass is the ONLY extra gate `trunk build` adds over `wasm-pack test`.
+- The let-chain fix above is preferred when the nested `if let` really is the
+  ONLY statement in the outer `if`'s body. If you need to run something
+  BETWEEN the outer condition and the inner check (e.g. clearing a stash
+  before conditionally reading it — see #232's flush Effect above), just add
+  that statement — `collapsible_if` only fires when the body is EXACTLY one
+  nested if/if-let, so extra statements before it silences the lint without
+  needing a let-chain at all.
