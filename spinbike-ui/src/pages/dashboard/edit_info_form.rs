@@ -98,10 +98,11 @@ pub fn EditInfoForm(
     card: CardInfo,
     set_selected: WriteSignal<Option<CardInfo>>,
     set_msg: WriteSignal<String>,
-    /// Red-alert channel (#126) — save/invite failures render here, not in
-    /// the green success alert. The mail_not_configured 503 counts as an
-    /// error (it means the invite was NOT sent) so it goes through this
-    /// channel too, alongside the generic invite-error case.
+    /// Shared dashboard red-alert channel (#126). No longer used by
+    /// save/invite failures inside this form (both now render in the
+    /// IN-SHEET `save_err` alert instead, #232) — kept as a prop only so
+    /// `run_save` can defensively clear any STALE alert left by another
+    /// dashboard action (e.g. Delete/Block) before this action resolves.
     set_err: WriteSignal<String>,
     /// Signal controlling visibility — the parent sets it to false to hide.
     show: Signal<bool>,
@@ -153,6 +154,27 @@ pub fn EditInfoForm(
 
     // Read the caller's role to gate the admin-only fields client-side.
     let is_admin = auth::get_user().map(|u| u.role.is_admin()).unwrap_or(false);
+
+    // Stash for the CardInfo persisted by the save-then-invite click while
+    // the sheet stays open (#232). Declared at THIS outer, non-disposed
+    // scope (not inside the `show`-gated inner closure below) so it
+    // survives independently of that closure's own teardown — see the
+    // flush Effect right below for why that matters.
+    //
+    // `set_selected` would rebuild the WHOLE `EditInfoForm` component (the
+    // parent's `match selected.get()` — see dashboard/mod.rs), wiping
+    // in-render signals/DOM state, so it must NOT be called right after the
+    // save-then-invite click while the sheet is meant to stay open. Instead
+    // the saved value is stashed here and flushed by the Effect below on
+    // every ACTUAL close (a `show` true→false transition) — Cancel, the
+    // Sheet's backdrop/Escape, AND `card_panel.rs`'s own "Edit info" toggle
+    // button (which flips `show_edit` directly and completely bypasses this
+    // component's Cancel/backdrop handlers — a 4th close path a first version
+    // of this fix missed by flushing at each button instead of centrally).
+    // A subsequent Save success flushes its OWN fresher CardInfo directly
+    // (and clears this stash at the top of `run_save`), so it never conflicts
+    // with a stale stashed value from an earlier invite.
+    let invited_saved: StoredValue<Option<CardInfo>> = StoredValue::new(None);
 
     // Refresh from server every time show transitions false→true. Sets the
     // input values via NodeRef + HtmlInputElement::set_value, so the latest
@@ -238,6 +260,34 @@ pub fn EditInfoForm(
         now_shown
     });
 
+    // #232: flush a stashed post-invite CardInfo on EVERY actual close — the
+    // MIRROR-IMAGE transition (true→false) of the refresh Effect above
+    // (which handles false→true). A single Effect here, rather than a flush
+    // call duplicated at each known close button, covers ANY current or
+    // future way of closing the sheet uniformly (Cancel, backdrop/Escape,
+    // the #143 restore-dialog close, AND `card_panel.rs`'s own toggle button
+    // — all of them just flip `show_edit`, which is all this Effect tracks).
+    // Safe from the disposal hazard this file is otherwise careful about:
+    // `invited_saved` lives at this SAME outer, non-disposed scope, so it
+    // is never torn down by the `show`-gated inner closure below — reading
+    // it here can never hit an already-disposed StoredValue. Local
+    // (`invited_saved.set_value(None)`) before the disposing `set_selected`
+    // call, same "local first, dispose last" ordering as the rest of the file.
+    Effect::new(move |prev_shown: Option<bool>| {
+        let now_shown = show.get();
+        if prev_shown == Some(true) && !now_shown {
+            // Not collapsed into a single nested `if let` (clippy's
+            // `collapsible_if` would want a wasm32-incompatible let-chain
+            // here) — read-then-clear-then-branch instead.
+            let saved = invited_saved.get_value();
+            invited_saved.set_value(None);
+            if let Some(saved) = saved {
+                set_selected.set(Some(saved));
+            }
+        }
+        now_shown
+    });
+
     view! {
         {move || {
             if !show.get() {
@@ -252,13 +302,19 @@ pub fn EditInfoForm(
             // save (e.g. the 409 email-uniqueness conflict) set the shared
             // channel, the operator saw nothing, and it read as "it just
             // didn't save". Save keeps the sheet open (to fix inline), so its
-            // error MUST live inside the sheet. (Invite closes the sheet on
-            // error, so it can use the shared channel — see on_invite_click.)
+            // error MUST live inside the sheet. Invite errors route through
+            // this SAME channel now (#232) — invite no longer closes the
+            // sheet on error either, see `run_save` below.
             let (save_err, set_save_err) = signal(String::new());
+            // In-sheet GREEN confirmation after a successful invite (#232) —
+            // the sheet no longer closes on invite completion, so success
+            // needs its own in-sheet channel (paired with `save_err` above,
+            // which invite failures now also route through — see
+            // `run_save` below).
+            let (invite_ok, set_invite_ok) = signal(String::new());
             let on_close_cancel = on_close;
             let on_close_btn = on_close;
             let on_close_save = on_close;
-            let on_close_invite = on_close;
             // #143: closing the sheet after the operator restores the old account.
             let on_close_restored = on_close;
             let initial_allow_se_at_open = allow_self_entry.get_untracked();
@@ -329,6 +385,14 @@ pub fn EditInfoForm(
                 set_msg.set(String::new());
                 set_err.set(String::new());
                 set_save_err.set(String::new());
+                set_invite_ok.set(String::new());
+                // #232: clear any STALE stash from an earlier invite before
+                // this action resolves — otherwise, if THIS action is a
+                // plain Save (which flushes its own fresher CardInfo
+                // directly and closes), the outer flush Effect would ALSO
+                // fire on that same close and overwrite it with the OLDER
+                // stashed value right after.
+                invited_saved.set_value(None);
                 if also_invite {
                     set_invite_loading.set(true);
                 } else {
@@ -384,6 +448,14 @@ pub fn EditInfoForm(
                     }
 
                     // Step 2 — invite against the now-committed email.
+                    // Stash the saved CardInfo NOW, before attempting the
+                    // invite (#232): the SAVE half has already committed to
+                    // the DB at this point regardless of whether the invite
+                    // call below succeeds or fails, so an eventual close
+                    // (Cancel/backdrop, see the `invited_saved` comment
+                    // above) must flush this fresher data either way — not
+                    // just on invite success.
+                    invited_saved.set_value(Some(saved));
                     #[derive(serde::Deserialize)]
                     struct InviteResponse {
                         sent_to: String,
@@ -395,30 +467,37 @@ pub fn EditInfoForm(
                     .await
                     {
                         Ok(resp) => {
-                            set_msg.set(i18n::tf(
+                            // #232: the sheet STAYS OPEN on invite success —
+                            // the in-sheet green alert replaces the old
+                            // shared-channel message + auto-close.
+                            set_invite_ok.set(i18n::tf(
                                 lang.get_untracked(),
-                                "invite_sent",
+                                "invite_sent_in_sheet",
                                 &[&resp.sent_to],
                             ));
                         }
                         Err(e) => {
+                            // #232: routed to the IN-SHEET red alert (same
+                            // channel Save failures use) instead of the
+                            // shared dashboard channel — the sheet no longer
+                            // closes on invite error either, so the operator
+                            // can fix the email inline and retry.
                             if e == "mail_not_configured" {
-                                set_err.set(
+                                set_save_err.set(
                                     i18n::t(lang.get_untracked(), "invite_mail_not_configured")
                                         .to_string(),
                                 );
                             } else {
-                                set_err.set(i18n::tf(lang.get_untracked(), "error_format", &[&e]));
+                                set_save_err
+                                    .set(i18n::tf(lang.get_untracked(), "error_format", &[&e]));
                             }
                         }
                     }
 
-                    // ORDER MATTERS (reactive_graph 0.1.8): LOCAL
-                    // `invite_loading` FIRST, then disposal (set_selected +
-                    // on_close) — local first, dispose last (see above).
+                    // Local only now — invite no longer disposes this scope
+                    // on either outcome (#232), so there's no ordering
+                    // constraint here anymore.
                     set_invite_loading.set(false);
-                    set_selected.set(Some(saved));
-                    on_close_invite.run(());
                 });
             });
 
@@ -450,6 +529,10 @@ pub fn EditInfoForm(
                         // Symmetric with the Cancel/Save buttons, both already
                         // disabled on `loading`.
                         if !invite_loading.get_untracked() && !loading.get_untracked() {
+                            // (#232's invited_saved flush happens centrally
+                            // in an outer Effect watching this show
+                            // true→false transition — see its declaration
+                            // above — not duplicated here.)
                             on_close_cancel.run(());
                         }
                     })
@@ -577,10 +660,26 @@ pub fn EditInfoForm(
                             ().into_any()
                         }}
                         {move || {
+                            // In-sheet GREEN invite-success confirmation
+                            // (#232) — replaces the old shared-dashboard-alert
+                            // + auto-close, so the operator sees it without
+                            // being thrown out of the sheet.
+                            let ok = invite_ok.get();
+                            if ok.is_empty() {
+                                ().into_any()
+                            } else {
+                                view! {
+                                    <div class="alert alert-success" data-testid="edit-info-invite-sent">{ok}</div>
+                                }.into_any()
+                            }
+                        }}
+                        {move || {
                             // In-sheet save error (bug: was invisible behind
                             // the sheet backdrop when routed to the shared
                             // dashboard alert). Rendered as part of the sheet
-                            // content, so it sits ABOVE the backdrop.
+                            // content, so it sits ABOVE the backdrop. Invite
+                            // errors are routed here too now (#232) since
+                            // invite no longer closes the sheet on failure.
                             let e = save_err.get();
                             if e.is_empty() {
                                 ().into_any()
@@ -602,6 +701,10 @@ pub fn EditInfoForm(
                                     let cb = on_close_btn;
                                     spawn_local(async move {
                                         gloo_timers::future::TimeoutFuture::new(0).await;
+                                        // (#232's invited_saved flush happens
+                                        // centrally in an outer Effect — see
+                                        // its declaration above — not
+                                        // duplicated here.)
                                         cb.run(());
                                     });
                                 }

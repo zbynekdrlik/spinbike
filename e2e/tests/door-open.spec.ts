@@ -438,8 +438,10 @@ test.describe('Door self-entry (#92)', () => {
         const nameInput = sheet.locator('input').first();
         await nameInput.fill(newName);
 
-        // Save.
-        await sheet.locator('button', { hasText: 'Save' }).click();
+        // Save. `button[type="submit"]` specifically — a `hasText: 'Save'`
+        // filter also matches the invite button (renamed "Save & send
+        // invite" in #232), which made this locator ambiguous.
+        await sheet.locator('button[type="submit"]').click();
         // Wait for sheet to close (the on_close callback hides it).
         await expect(sheet).not.toBeVisible({ timeout: 6000 });
 
