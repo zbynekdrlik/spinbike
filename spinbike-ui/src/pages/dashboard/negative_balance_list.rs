@@ -221,4 +221,22 @@ mod tests {
     fn meta_inline_never_label() {
         assert_eq!(meta_inline("Last visit", "never"), " (Last visit: never)");
     }
+
+    // #240: last_visit_at is a UTC instant (MAX(created_at)) — the same field
+    // dashboard/mod.rs and card_panel.rs already fixed via
+    // parse_server_date_local (#236/#241). This THIRD call site
+    // (format_optional_date) still uses the raw-UTC parse_server_date, so
+    // near midnight Bratislava-local the relative bucket text is off by one
+    // day. RED because format_optional_date hasn't been switched yet.
+    #[wasm_bindgen_test]
+    fn format_optional_date_midnight_boundary_resolves_bratislava_local_today() {
+        // UTC 2026-07-20 22:30:00 = Bratislava-local 2026-07-21 00:30 (CEST).
+        let today = NaiveDate::from_ymd_opt(2026, 7, 21).unwrap();
+        let raw = Some("2026-07-20 22:30:00".to_string());
+        assert_eq!(
+            format_optional_date(&raw, today, Lang::Sk, "nikdy"),
+            "dnes",
+            "must resolve last_visit_at through the Bratislava-local date, not the raw UTC token"
+        );
+    }
 }
