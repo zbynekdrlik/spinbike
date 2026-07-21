@@ -289,6 +289,16 @@ pub fn ActionForm(
     // in-form confirm instead of the generic red error banner.
     let do_log_visit =
         move |service_id: i64, svc_name: String, note: Option<String>, force: bool| {
+            // Re-entry guard, centralised for BOTH callers of this fn:
+            // `visit_click_for` below already checks this before calling in,
+            // but the "Pridat aj tak" force-confirm button's on:click did
+            // NOT — its `disabled=move || loading.get()` binding can lag a
+            // fast double-tap the same way a primary visit button's can,
+            // firing a duplicate log-visit POST (review follow-up to #236).
+            // Guarding here covers every caller, present and future.
+            if loading.get_untracked() {
+                return;
+            }
             set_err.set(String::new());
             set_loading.set(true);
             spawn_local(async move {
