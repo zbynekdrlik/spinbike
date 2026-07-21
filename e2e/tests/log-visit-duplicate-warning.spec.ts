@@ -142,3 +142,61 @@ test('duplicate same-day visit sourced from a door entry: warns with "via door"'
 
     assertCleanConsole(msgs);
 });
+
+// Review follow-up to #236 (#234/#235): the "Pridat aj tak" force-retry
+// button lacked the same re-entry guard the primary visit button has —
+// its `disabled=move || loading.get()` binding can lag a fast double-tap,
+// letting two POSTs through and logging a duplicate visit row. Same
+// technique as `visit-button-feedback.spec.ts`'s primary-button guard test:
+// track every POST to log-visit and assert the force-retry click fires
+// exactly one.
+test('force-retry "Add anyway" button re-entry guard: rapid double-click fires only one POST', async ({ page }) => {
+    const msgs = setupConsoleCheck(page);
+    const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+
+    const RUN_TAG = `DUPVFG${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+    const barcode = `Visit${RUN_TAG}`;
+    await seedActivePass(token, barcode);
+
+    const logVisitRequests: string[] = [];
+    page.on('request', (req) => {
+        if (req.url().endsWith('/api/payments/log-visit') && req.method() === 'POST') {
+            logVisitRequests.push(req.url());
+        }
+    });
+
+    await page.goto('/staff');
+    const search = page.locator('input[type="search"]').first();
+    await search.waitFor();
+    await search.fill(RUN_TAG);
+    await expect(page.locator('[data-testid="search-result"]')).toHaveCount(1);
+    await page.locator('[data-testid="search-result"]').first().click();
+    await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+
+    const fitnessBtn = page.locator('[data-testid="log-visit-btn"]').first();
+
+    // First click: no prior visit today — logs cleanly (1st POST).
+    await fitnessBtn.click();
+    await expect(page.locator('.alert-success')).toBeVisible({ timeout: 2000 });
+
+    // Second click, same day: raises the confirm dialog instead of logging
+    // (2nd POST, gets the 409 conflict).
+    await fitnessBtn.click();
+    const confirm = page.locator('[data-testid="visit-confirm"]');
+    await expect(confirm).toBeVisible({ timeout: 2000 });
+    expect(logVisitRequests.length).toBe(2);
+
+    const forceBtn = page.locator('[data-testid="visit-confirm-force"]');
+
+    // Two clicks dispatched back-to-back on the force-retry button. The
+    // guard must make the second a no-op — exactly one more (force) POST.
+    await forceBtn.click();
+    await forceBtn.click({ force: true });
+
+    await expect(page.locator('.alert-success')).toBeVisible({ timeout: 2000 });
+    await expect(confirm).not.toBeVisible();
+
+    expect(logVisitRequests.length).toBe(3);
+
+    assertCleanConsole(msgs);
+});
