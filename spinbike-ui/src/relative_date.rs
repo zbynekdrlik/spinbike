@@ -23,12 +23,10 @@ use chrono::NaiveDate;
 /// from `chrono::Local::now()` (the BROWSER's clock), which is only correct
 /// because every device running this dashboard happens to be set to
 /// Bratislava time; nothing enforced that assumption.
-// RED (#239): stubbed as the raw UTC calendar date for now — same bug as
-// `chrono::Local::now().date_naive()` on a non-Bratislava host. GREEN commit
-// replaces this body with the real UTC->Bratislava conversion (same pattern
-// as `i18n::parse_to_local` / `dates::parse_server_date_local`, #236/#241).
 fn today_from_utc(now_utc: chrono::DateTime<chrono::Utc>) -> NaiveDate {
-    now_utc.date_naive()
+    now_utc
+        .with_timezone(&chrono_tz::Europe::Bratislava)
+        .date_naive()
 }
 
 /// Locale-aware "today", anchored to Europe/Bratislava (not the host clock).
