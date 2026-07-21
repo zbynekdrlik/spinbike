@@ -15,11 +15,15 @@ use super::sheets::DeleteUserSheet;
 use super::transactions_list::TransactionsList;
 use super::{CardInfo, ServiceInfo};
 
-/// Parse the SQLite `created_at` shape ("YYYY-MM-DD HH:MM:SS") into a date.
-/// Returns None for a missing value or an unparseable date. Delegates the ISO
-/// parsing to the shared `dates::parse_server_date` (#168).
+/// Parse the SQLite `created_at` shape ("YYYY-MM-DD HH:MM:SS", a UTC instant)
+/// into the Bratislava-LOCAL calendar date. Returns None for a missing value
+/// or an unparseable date. Delegates to the shared, timezone-aware
+/// `dates::parse_server_date_local` (#168) — NOT the raw-UTC-token
+/// `dates::parse_server_date`, which would misclassify a visit logged
+/// 00:00-02:00 Bratislava-local time as "yesterday" (review follow-up to
+/// #236, same fix as the search-dropdown call site in dashboard/mod.rs).
 fn parse_last_visit(s: &Option<String>) -> Option<NaiveDate> {
-    crate::dates::parse_server_date(s.as_deref()?)
+    crate::dates::parse_server_date_local(s.as_deref()?)
 }
 
 #[component]

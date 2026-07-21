@@ -42,6 +42,23 @@ pub fn format_ddmmyyyy(d: NaiveDate) -> String {
     d.format("%d.%m.%Y").to_string()
 }
 
+/// Parse a server-supplied UTC timestamp (e.g. `last_visit_at`, itself a
+/// `MAX(created_at)` UTC instant) into the Bratislava-LOCAL calendar date.
+///
+/// Do NOT reach for `parse_server_date` when the value needs a "was this
+/// TODAY (Bratislava-local)?" bucket: that function takes the raw UTC date
+/// token with NO timezone conversion, so a visit logged 00:00-02:00
+/// Bratislava-local time (Bratislava runs UTC+1/+2 AHEAD of UTC) carries a
+/// UTC date ONE DAY BEHIND the local wall date — it renders "vcera"
+/// (yesterday), unhighlighted, in exactly the window the same-day
+/// duplicate-visit signal (#234/#235) must fire. Review follow-up to #236.
+///
+/// This converts through the IANA tz database (DST-aware) via
+/// `i18n::parse_to_local`, then takes the resulting local calendar date.
+pub fn parse_server_date_local(s: &str) -> Option<NaiveDate> {
+    crate::i18n::parse_to_local(s).map(|dt| dt.date_naive())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +115,44 @@ mod tests {
     fn roundtrip_parse_then_format() {
         let d = parse_server_date("2026-01-09 07:30:00").unwrap();
         assert_eq!(format_ddmmyyyy(d), "09.01.2026");
+    }
+
+    // #236 review follow-up: `last_visit_at` is a UTC instant. Near
+    // midnight Bratislava-local, the raw UTC date token and the local wall
+    // date disagree — the "today" highlight must key off the LOCAL date.
+    #[wasm_bindgen_test]
+    fn parse_server_date_local_resolves_bratislava_wall_date_not_raw_utc_token() {
+        // UTC 2026-07-20 22:30:00 = Bratislava-local 2026-07-21 00:30 (CEST,
+        // UTC+2 in July) — the exact 00:00-02:00 local window the review
+        // flagged. The OLD path (parse_server_date) takes the raw UTC date
+        // token and lands one day behind local.
+        assert_eq!(
+            parse_server_date("2026-07-20 22:30:00"),
+            ymd(2026, 7, 20),
+            "documents the bug: raw UTC date token is one day behind local"
+        );
+        assert_eq!(
+            parse_server_date_local("2026-07-20 22:30:00"),
+            ymd(2026, 7, 21),
+            "must resolve to the Bratislava-LOCAL calendar date, not the raw UTC token"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn parse_server_date_local_agrees_with_utc_token_away_from_midnight() {
+        // Mid-afternoon UTC: the UTC date token and the Bratislava-local
+        // date are the same day — the fix must not regress the common case.
+        assert_eq!(
+            parse_server_date_local("2026-07-20 12:00:00"),
+            ymd(2026, 7, 20)
+        );
+    }
+
+    // Symmetry with parse_server_date's own parse_garbage_returns_none — a
+    // missing/unparseable timestamp must degrade to None, not panic.
+    #[wasm_bindgen_test]
+    fn parse_server_date_local_garbage_returns_none() {
+        assert_eq!(parse_server_date_local("not-a-date"), None);
+        assert_eq!(parse_server_date_local(""), None);
     }
 }

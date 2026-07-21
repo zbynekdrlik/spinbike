@@ -469,9 +469,15 @@ pub fn DashboardPage() -> impl IntoView {
                     // helper the negative-balance list and card panel use —
                     // highlighted when the last visit was TODAY, the signal
                     // that helps staff avoid logging a duplicate (#234).
+                    // Review follow-up to #236: `last_visit_at` is a UTC
+                    // instant, so the "today" bucket must be derived from the
+                    // Bratislava-LOCAL date (`parse_server_date_local`), not
+                    // the raw UTC date token (`parse_server_date`) — the
+                    // latter misclassifies a visit logged 00:00-02:00 local
+                    // time as "yesterday", unhighlighted.
                     let (last_visit_text, last_visit_is_today) = match c.last_visit_at
                         .as_deref()
-                        .and_then(crate::dates::parse_server_date)
+                        .and_then(crate::dates::parse_server_date_local)
                     {
                         Some(d) => (crate::relative_date::relative(d, today, lang_now), d == today),
                         None => (never_label.clone(), false),
