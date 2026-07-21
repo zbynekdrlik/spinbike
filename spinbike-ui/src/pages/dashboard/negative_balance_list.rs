@@ -126,9 +126,10 @@ fn format_optional_date(
 ) -> String {
     match raw {
         None => never_label.to_string(),
-        // SQLite literal "YYYY-MM-DD HH:MM:SS" (or a bare ISO date) — the
-        // shared parser trims the trailing time component (#168).
-        Some(s) => match crate::dates::parse_server_date(s) {
+        // last_visit_at is a UTC instant — resolve through the
+        // Bratislava-local calendar date (#240, same fix as #236/#241),
+        // not the raw UTC date token.
+        Some(s) => match crate::dates::parse_server_date_local(s) {
             Some(d) => relative(d, today, lang),
             None => never_label.to_string(),
         },
