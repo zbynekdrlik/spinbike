@@ -130,7 +130,10 @@ mod tests {
         // Mid-afternoon UTC: the UTC date token and the Bratislava-local
         // date are the same day — the fix must not regress the common case.
         let now = utc(2026, 7, 20, 12, 0, 0);
-        assert_eq!(today_from_utc(now), NaiveDate::from_ymd_opt(2026, 7, 20).unwrap());
+        assert_eq!(
+            today_from_utc(now),
+            NaiveDate::from_ymd_opt(2026, 7, 20).unwrap()
+        );
     }
 
     fn mk(today_y: i32, today_m: u32, today_d: u32, days_ago: i64) -> (NaiveDate, NaiveDate) {
