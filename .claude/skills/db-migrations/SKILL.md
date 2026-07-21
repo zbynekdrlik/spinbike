@@ -32,6 +32,8 @@ Apply in: server SQL subqueries/joins, tests (seed BOTH branches), specs/docs.
 
 Reference implementation: `crates/spinbike-server/src/db/reports.rs` lines 72-73, 202-203.
 
+**Door `single_entry` service = the SAME row as seeded 'Fitness' (V16 retag — NOT a separate service).** Migration V16 re-tags the seeded Fitness row's `kind` to `single_entry`, keeping `name_en='Fitness'` (`migrations.rs` ~656-660; confirmed on prod: services id=2 kind=single_entry name_en=Fitness). Consequence: every `service_id IN (SELECT id FROM services WHERE name_en IN ('Fitness','Spinning'))` filter (CLASS_VISIT_NAMES_EN) ALREADY includes all door self-entry transactions — do NOT "fix" such filters to add door entries (a 2026-07-21 ticket was mis-scoped on exactly this false premise; disproved empirically on the prod DB). Door Nth-press `charge amount=0` audit rows stay excluded by the OR-pattern.
+
 ## Migration planning — exhaustive grep before scope is locked
 
 When dropping or renaming a column on a heavily-referenced table:
