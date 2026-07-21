@@ -238,13 +238,18 @@ test.describe('Staff "Send invite" button in edit-info form (#111, #141, #232)',
 
     // #232 (code-review finding): the action-panel's own "Edit info" button
     // both OPENS and CLOSES the sheet (a plain toggle in card_panel.rs) —
-    // clicking it again while the sheet is open bypasses EditInfoForm's own
-    // Cancel button AND the Sheet's backdrop/Escape handler entirely (it
-    // just flips `show_edit` directly). A first version of this fix only
-    // flushed the post-invite stash at those two known buttons and missed
-    // this THIRD way of closing — fixed by flushing centrally off the
-    // `show` signal itself instead of enumerating buttons.
-    test('closing via the "Edit info" toggle button (not Cancel/backdrop) still flushes a post-invite name change to the dashboard (#232)', async ({
+    // activating it again while the sheet is open bypasses EditInfoForm's
+    // own Cancel button AND the Sheet's backdrop/Escape handler entirely (it
+    // just flips `show_edit` directly). A MOUSE click can't actually reach
+    // it — the Sheet's full-viewport `.sheet-backdrop` visually covers it
+    // and intercepts pointer events — but the Sheet has no keyboard focus
+    // trap, so a keyboard user can still Tab back to the (still-focusable,
+    // still-in-the-DOM) button and press Enter to activate it; hence
+    // `.focus()` + Enter below rather than `.click()`. A first version of
+    // this fix only flushed the post-invite stash at the two mouse-reachable
+    // close points and missed this THIRD way of closing — fixed by flushing
+    // centrally off the `show` signal itself instead of enumerating buttons.
+    test('closing via the keyboard-activated "Edit info" toggle button (not Cancel/backdrop) still flushes a post-invite name change to the dashboard (#232)', async ({
         page,
     }) => {
         const consoleMessages = setupConsoleCheck(page);
@@ -265,11 +270,14 @@ test.describe('Staff "Send invite" button in edit-info form (#111, #141, #232)',
             timeout: 10000,
         });
 
-        // Close via the SAME "Edit info" button that OPENED the sheet.
-        await page
+        // Activate the SAME "Edit info" button that OPENED the sheet via
+        // keyboard (Enter on the focused element) — a `.click()` here would
+        // fail: the sheet backdrop intercepts pointer events over it.
+        const editInfoButton = page
             .locator('[data-testid="action-panel"] button')
-            .filter({ hasText: /edit.info|upravit/i })
-            .click();
+            .filter({ hasText: /edit.info|upravit/i });
+        await editInfoButton.focus();
+        await page.keyboard.press('Enter');
         await expect(sheet).not.toBeVisible({ timeout: 5000 });
 
         // The action-panel header renders `name` from the `card` prop it was
