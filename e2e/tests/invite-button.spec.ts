@@ -236,6 +236,53 @@ test.describe('Staff "Send invite" button in edit-info form (#111, #141, #232)',
         assertCleanConsole(consoleMessages);
     });
 
+    // #232 (code-review finding): the action-panel's own "Edit info" button
+    // both OPENS and CLOSES the sheet (a plain toggle in card_panel.rs) —
+    // clicking it again while the sheet is open bypasses EditInfoForm's own
+    // Cancel button AND the Sheet's backdrop/Escape handler entirely (it
+    // just flips `show_edit` directly). A first version of this fix only
+    // flushed the post-invite stash at those two known buttons and missed
+    // this THIRD way of closing — fixed by flushing centrally off the
+    // `show` signal itself instead of enumerating buttons.
+    test('closing via the "Edit info" toggle button (not Cancel/backdrop) still flushes a post-invite name change to the dashboard (#232)', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        const adminToken = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+
+        const email = randomEmail('toggleclose');
+        const user = await createUniqueUser(adminToken, 0, 'ToggleClose', email);
+        await openEditInfoSheet(page, user.name);
+
+        const newName = `${user.name} Edited`;
+        const sheet = page.locator('[data-testid="sheet-edit-info"]');
+        await sheet.locator('input[type="text"]').first().fill(newName);
+
+        const inviteButton = page.locator('[data-testid="user-edit-send-invite"]');
+        await expect(inviteButton).toBeEnabled();
+        await inviteButton.click();
+        await expect(sheet.locator('[data-testid="edit-info-invite-sent"]')).toBeVisible({
+            timeout: 10000,
+        });
+
+        // Close via the SAME "Edit info" button that OPENED the sheet.
+        await page
+            .locator('[data-testid="action-panel"] button')
+            .filter({ hasText: /edit.info|upravit/i })
+            .click();
+        await expect(sheet).not.toBeVisible({ timeout: 5000 });
+
+        // The action-panel header renders `name` from the `card` prop it was
+        // mounted with (mod.rs's `match selected.get()`) — it only reflects
+        // the invite-time name change if the stash was flushed to
+        // `set_selected` on THIS close path too, not just Cancel/backdrop.
+        await expect(page.locator('[data-testid="action-panel"] .card-title__name')).toHaveText(
+            newName,
+        );
+
+        assertCleanConsole(consoleMessages);
+    });
+
     test('a colliding typed email: one-click invite shows the in-sheet 409 error, stays open, sends nothing', async ({
         page,
     }) => {

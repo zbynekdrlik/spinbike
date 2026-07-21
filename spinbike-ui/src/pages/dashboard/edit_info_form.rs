@@ -155,6 +155,27 @@ pub fn EditInfoForm(
     // Read the caller's role to gate the admin-only fields client-side.
     let is_admin = auth::get_user().map(|u| u.role.is_admin()).unwrap_or(false);
 
+    // Stash for the CardInfo persisted by the save-then-invite click while
+    // the sheet stays open (#232). Declared at THIS outer, non-disposed
+    // scope (not inside the `show`-gated inner closure below) so it
+    // survives independently of that closure's own teardown — see the
+    // flush Effect right below for why that matters.
+    //
+    // `set_selected` would rebuild the WHOLE `EditInfoForm` component (the
+    // parent's `match selected.get()` — see dashboard/mod.rs), wiping
+    // in-render signals/DOM state, so it must NOT be called right after the
+    // save-then-invite click while the sheet is meant to stay open. Instead
+    // the saved value is stashed here and flushed by the Effect below on
+    // every ACTUAL close (a `show` true→false transition) — Cancel, the
+    // Sheet's backdrop/Escape, AND `card_panel.rs`'s own "Edit info" toggle
+    // button (which flips `show_edit` directly and completely bypasses this
+    // component's Cancel/backdrop handlers — a 4th close path a first version
+    // of this fix missed by flushing at each button instead of centrally).
+    // A subsequent Save success flushes its OWN fresher CardInfo directly
+    // (and clears this stash at the top of `run_save`), so it never conflicts
+    // with a stale stashed value from an earlier invite.
+    let invited_saved: StoredValue<Option<CardInfo>> = StoredValue::new(None);
+
     // Refresh from server every time show transitions false→true. Sets the
     // input values via NodeRef + HtmlInputElement::set_value, so the latest
     // saved data is what the user sees on reopen.
@@ -239,6 +260,30 @@ pub fn EditInfoForm(
         now_shown
     });
 
+    // #232: flush a stashed post-invite CardInfo on EVERY actual close — the
+    // MIRROR-IMAGE transition (true→false) of the refresh Effect above
+    // (which handles false→true). A single Effect here, rather than a flush
+    // call duplicated at each known close button, covers ANY current or
+    // future way of closing the sheet uniformly (Cancel, backdrop/Escape,
+    // the #143 restore-dialog close, AND `card_panel.rs`'s own toggle button
+    // — all of them just flip `show_edit`, which is all this Effect tracks).
+    // Safe from the disposal hazard this file is otherwise careful about:
+    // `invited_saved` lives at this SAME outer, non-disposed scope, so it
+    // is never torn down by the `show`-gated inner closure below — reading
+    // it here can never hit an already-disposed StoredValue. Local
+    // (`invited_saved.set_value(None)`) before the disposing `set_selected`
+    // call, same "local first, dispose last" ordering as the rest of the file.
+    Effect::new(move |prev_shown: Option<bool>| {
+        let now_shown = show.get();
+        if prev_shown == Some(true) && !now_shown {
+            if let Some(saved) = invited_saved.get_value() {
+                invited_saved.set_value(None);
+                set_selected.set(Some(saved));
+            }
+        }
+        now_shown
+    });
+
     view! {
         {move || {
             if !show.get() {
@@ -263,22 +308,6 @@ pub fn EditInfoForm(
             // which invite failures now also route through — see
             // `run_save` below).
             let (invite_ok, set_invite_ok) = signal(String::new());
-            // Stash for the CardInfo persisted by the save-then-invite click
-            // while the sheet stays open (#232) — set as soon as the SAVE
-            // half commits, regardless of whether the invite call that
-            // follows then succeeds or fails (both keep the sheet open, and
-            // either way the DB already has the fresher data). `set_selected`
-            // would rebuild this whole component (the parent's `match
-            // selected.get()` — see dashboard/mod.rs), wiping in-render
-            // signals/DOM state, so it must NOT be called right after the
-            // save-then-invite click. Instead the saved value is stashed
-            // here and flushed to `set_selected` on every ACTUAL close path
-            // (Cancel button, backdrop/Escape close) so the dashboard card
-            // behind reflects the new data even if the operator cancels
-            // without an explicit Save afterward. A subsequent Save success
-            // already flushes its OWN fresher CardInfo directly, so it
-            // doesn't need to consult this stash.
-            let invited_saved: StoredValue<Option<CardInfo>> = StoredValue::new(None);
             let on_close_cancel = on_close;
             let on_close_btn = on_close;
             let on_close_save = on_close;
@@ -353,6 +382,13 @@ pub fn EditInfoForm(
                 set_err.set(String::new());
                 set_save_err.set(String::new());
                 set_invite_ok.set(String::new());
+                // #232: clear any STALE stash from an earlier invite before
+                // this action resolves — otherwise, if THIS action is a
+                // plain Save (which flushes its own fresher CardInfo
+                // directly and closes), the outer flush Effect would ALSO
+                // fire on that same close and overwrite it with the OLDER
+                // stashed value right after.
+                invited_saved.set_value(None);
                 if also_invite {
                     set_invite_loading.set(true);
                 } else {
@@ -489,13 +525,10 @@ pub fn EditInfoForm(
                         // Symmetric with the Cancel/Save buttons, both already
                         // disabled on `loading`.
                         if !invite_loading.get_untracked() && !loading.get_untracked() {
-                            // #232: flush a stashed post-invite CardInfo to
-                            // the dashboard BEFORE closing, so a backdrop/
-                            // Escape close after a successful invite doesn't
-                            // leave the card behind showing the old email.
-                            if let Some(saved) = invited_saved.get_value() {
-                                set_selected.set(Some(saved));
-                            }
+                            // (#232's invited_saved flush happens centrally
+                            // in an outer Effect watching this show
+                            // true→false transition — see its declaration
+                            // above — not duplicated here.)
                             on_close_cancel.run(());
                         }
                     })
@@ -664,13 +697,10 @@ pub fn EditInfoForm(
                                     let cb = on_close_btn;
                                     spawn_local(async move {
                                         gloo_timers::future::TimeoutFuture::new(0).await;
-                                        // #232: same flush as the backdrop/Escape
-                                        // close above — Cancel after a successful
-                                        // invite must not leave the dashboard card
-                                        // behind showing the pre-invite email.
-                                        if let Some(saved) = invited_saved.get_value() {
-                                            set_selected.set(Some(saved));
-                                        }
+                                        // (#232's invited_saved flush happens
+                                        // centrally in an outer Effect — see
+                                        // its declaration above — not
+                                        // duplicated here.)
                                         cb.run(());
                                     });
                                 }
