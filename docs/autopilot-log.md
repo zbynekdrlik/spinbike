@@ -3,6 +3,57 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-07-21 — #232: edit-user invite stays in-sheet, renamed save+send (dev.100)
+
+- **Why:** "Poslat pozvanku" closed the edit sheet unconditionally on BOTH
+  invite success AND error, with no in-sheet confirmation the whole form
+  (email + `allow_self_entry`) had already been saved — operator had to
+  reopen the sheet just to tick the checkbox and Save again.
+- **Fix** (`edit_info_form.rs`): button renamed `send_invite` key text →
+  "Ulozit a poslat pozvanku"/"Save & send invite" (#141 semantics). Invite
+  success AND error both keep the sheet open now — success shows a new
+  in-sheet green alert (`invite_sent_in_sheet`, dead `invite_sent` key
+  removed), error routes to the existing in-sheet `save_err` red alert
+  instead of the shared dashboard channel.
+- **Deferred-flush architecture:** the saved `CardInfo` is stashed in an
+  OUTER-scope `StoredValue<Option<CardInfo>>` (stashed right after the SAVE
+  step commits, before the invite call — covers both invite outcomes) and
+  flushed to `set_selected` by a SINGLE `Effect` watching `show`'s
+  true→false transition centrally (mirrors the existing false→true refresh
+  Effect) — NOT enumerated per close button. A code-review pass caught a
+  real 4th close path the first (enumerated) version missed:
+  `card_panel.rs`'s own "Edit info" toggle button bypasses EditInfoForm's
+  Cancel/backdrop entirely. Stash cleared at the top of every fresh
+  save/invite action so a plain Save can't race the Effect's re-flush.
+- **Tests:** `invite-button.spec.ts` — two pre-existing tests deliberately
+  flipped (sheet used to close on invite, now stays open — justified in the
+  commit message per regression-test-first's "flip the test" allowance);
+  new invite-ERROR-path test; new combined email+checkbox+reopen test; new
+  regression test for the 4th close path (keyboard-activated toggle button,
+  since the Sheet's backdrop blocks a real mouse click on it — `.focus()` +
+  `Enter` instead of `.click()`). Collateral fix in `door-open.spec.ts`
+  (`hasText: 'Save'` now also matched the renamed invite button).
+- **Commits:** `78a3af1` (bump) · `3f0cdfb` (impl) · `668435c` (test flip) ·
+  `15dfb54`/`3734dc9`/`b0edd36`/`da82c41`/`b22c5eb` (review-driven fixes:
+  CI collateral breakage, stash-before-invite-call, centralized flush
+  Effect, clippy collapsible_if, keyboard-reachable test), on `dev`. PR
+  [#233](https://github.com/zbynekdrlik/spinbike/pull/233), merged
+  `94b465b`. Main CI green incl. Deploy (prod) + Smoke (prod). #232
+  auto-closed.
+- **Review:** two independent passes (self-review + a fresh-eyes
+  `superpowers:requesting-code-review` deep pass) each found one real bug
+  before merge — the stash-before-invite-call ordering, and the 4th
+  close-path bypass — both fixed and re-verified green before merging.
+- **Verified LIVE on `https://spinbike.sk` (v0.15.0-dev.100):** DOM version
+  matches deployed, stale SW cleared first. Minted an admin-role JWT
+  (no DB row needed — `AdminUser` extractor checks only the JWT claim),
+  created ONE throwaway customer via the real `POST /api/users`, opened
+  `/staff?card=<code>`, confirmed the edit sheet renders the renamed
+  "Save & send invite" button + the `allow_self_entry` row, zero console
+  errors. Full invite-flow already covered by CI Playwright, so no invite
+  was actually sent live. Cleaned up: soft-delete via the real API +
+  hard-delete via SQL (the endpoint only soft-deletes), zero rows left.
+
 ## 2026-07-16 — #225 + #226: apple-touch-icon + iOS install guide v2 (bundled)
 
 - **Issues:** [#225](https://github.com/zbynekdrlik/spinbike/issues/225) —

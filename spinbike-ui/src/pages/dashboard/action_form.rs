@@ -11,6 +11,20 @@ use crate::util::parse_money;
 use super::helpers::pass_is_active;
 use super::{CardInfo, CardPass, PaymentResp, ServiceInfo};
 
+/// #234: a pending "already visited today" confirm, holding what's needed to
+/// resubmit the same log-visit request with `force: true` if staff confirms.
+#[derive(Clone)]
+struct PendingVisitConfirm {
+    service_id: i64,
+    svc_name: String,
+    note: Option<String>,
+    /// Raw UTC `created_at` of the existing entry — converted to Bratislava
+    /// local HH:MM at render time via `i18n::fmt_time_str`.
+    last_entry_at: String,
+    /// `"door"` | `"manual"`.
+    source: String,
+}
+
 /// Unified action form for the staff card-detail panel.
 #[component]
 pub fn ActionForm(
@@ -61,6 +75,8 @@ pub fn ActionForm(
     let (selected_service_id, set_selected_service_id) = signal::<Option<i64>>(None);
     let (loading, set_loading) = signal(false);
     let (err, set_err) = signal(String::new());
+    // #234: Some(..) while an "already visited today" confirm is showing.
+    let (pending_visit, set_pending_visit) = signal(None::<PendingVisitConfirm>);
 
     let is_monthly_pass = move || match selected_service_id.get() {
         Some(id) => services
@@ -267,43 +283,40 @@ pub fn ActionForm(
         }
     };
 
-    let visit_click_for = move |service_id: i64, svc_name: String| {
-        move |_: web_sys::MouseEvent| {
-            // Re-entry guard: if a previous press is still in flight, the
-            // disabled binding may not have repainted yet. This protects
-            // against a fast double-tap before the next-frame disable
-            // takes effect.
-            if loading.get_untracked() {
-                return;
-            }
+    // #234: shared by the initial button click AND the "Pridat aj tak" retry
+    // — `force` is false on the first attempt, true on the confirmed retry.
+    // On an `already_visited_today` conflict (and !force) this raises the
+    // in-form confirm instead of the generic red error banner.
+    let do_log_visit =
+        move |service_id: i64, svc_name: String, note: Option<String>, force: bool| {
             set_err.set(String::new());
             set_loading.set(true);
-            let note = read_note();
-            // Clone so the outer FnMut handler can capture svc_name on every click.
-            let svc_name = svc_name.clone();
             spawn_local(async move {
                 #[derive(serde::Serialize)]
                 struct Req {
                     user_id: i64,
                     service_id: i64,
                     note: Option<String>,
+                    force: bool,
                 }
                 #[derive(serde::Deserialize)]
                 struct Resp {
                     #[allow(dead_code)]
                     transaction_id: i64,
                 }
-                match api::post::<Req, Resp>(
+                match api::post_json::<Req, Resp>(
                     "/api/payments/log-visit",
                     &Req {
                         user_id,
                         service_id,
-                        note,
+                        note: note.clone(),
+                        force,
                     },
                 )
                 .await
                 {
                     Ok(_) => {
+                        set_pending_visit.set(None);
                         let m = i18n::tf(lang.get_untracked(), "visit_added_format", &[&svc_name]);
                         set_msg.set(m.clone());
                         set_txn_refresh.update(|n| *n += 1);
@@ -319,10 +332,36 @@ pub fn ActionForm(
                             }
                         });
                     }
-                    Err(e) => set_err.set(e),
+                    Err(e) => {
+                        if let Some((last_entry_at, source)) = e.already_visited_today() {
+                            set_pending_visit.set(Some(PendingVisitConfirm {
+                                service_id,
+                                svc_name,
+                                note,
+                                last_entry_at,
+                                source,
+                            }));
+                        } else {
+                            set_err.set(e.message);
+                        }
+                    }
                 }
                 set_loading.set(false);
             });
+        };
+
+    let visit_click_for = move |service_id: i64, svc_name: String| {
+        move |_: web_sys::MouseEvent| {
+            // Re-entry guard: if a previous press is still in flight, the
+            // disabled binding may not have repainted yet. This protects
+            // against a fast double-tap before the next-frame disable
+            // takes effect.
+            if loading.get_untracked() {
+                return;
+            }
+            set_pending_visit.set(None);
+            let note = read_note();
+            do_log_visit(service_id, svc_name.clone(), note, false);
         }
     };
 
@@ -556,6 +595,57 @@ pub fn ActionForm(
                     .into_any()
             } else {
                 view! { <div></div> }.into_any()
+            }}
+
+            {move || {
+                let Some(p) = pending_visit.get() else {
+                    return view! { <div></div> }.into_any();
+                };
+                // Reuse the shared UTC→Bratislava-local HH:MM formatter (#168)
+                // rather than re-deriving parse_to_local + format here.
+                let time_str = i18n::fmt_time_str(&p.last_entry_at);
+                let source_key = if p.source == "door" {
+                    "visit_source_door"
+                } else {
+                    "visit_source_manual"
+                };
+                let source_label = i18n::t(lang.get(), source_key).to_string();
+                let message = i18n::tf(
+                    lang.get(),
+                    "already_visited_confirm_format",
+                    &[&time_str, &source_label],
+                );
+                let p_for_force = p.clone();
+                view! {
+                    <div class="alert alert-warning" data-testid="visit-confirm">
+                        <div>
+                            <div data-testid="visit-confirm-message">{message}</div>
+                            <div class="action-row mt-1">
+                                <button
+                                    type="button"
+                                    class="btn btn--primary"
+                                    data-testid="visit-confirm-force"
+                                    disabled=move || loading.get()
+                                    on:click=move |_| {
+                                        let p = p_for_force.clone();
+                                        do_log_visit(p.service_id, p.svc_name, p.note, true);
+                                    }
+                                >
+                                    {move || i18n::t(lang.get(), "visit_confirm_anyway")}
+                                </button>
+                                <button
+                                    type="button"
+                                    class="btn btn--ghost"
+                                    data-testid="visit-confirm-cancel"
+                                    disabled=move || loading.get()
+                                    on:click=move |_| set_pending_visit.set(None)
+                                >
+                                    {move || i18n::t(lang.get(), "cancel")}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                }.into_any()
             }}
 
             <div class="action-row">

@@ -103,6 +103,30 @@ with `sub` set to any non-existent id (e.g. `999999999`) and the target
 to the full synthetic-user-row recipe when the endpoint under test actually
 reads the DB row (balance, bookings, name rendering, etc.).
 
+## Verifying an ADMIN/STAFF-only page (not customer `/my/*`) — same recipe, mint an admin-role JWT (#232)
+
+This recipe reads as customer-only, but it works identically for a
+`/staff` (admin dashboard) flow — the shortcut above already establishes
+WHY: `StaffUser`/`AdminUser` extractors decide purely from the JWT's `role`
+claim, no DB lookup on the CALLER. So verifying an admin-only UI change
+(e.g. the edit-user sheet) needs:
+
+1. Mint a JWT with `role: "admin"` and any non-existent `sub` (no DB row
+   for the caller at all — the shortcut applies to the ADMIN caller too).
+2. If the change is only visible when acting ON a target user (e.g. an
+   edit-info sheet), create ONE throwaway CUSTOMER row via the real
+   `POST /api/users` endpoint (using the minted admin token) — this is
+   the "target" the admin flow operates on, not the caller.
+3. Inject `spinbike_token`/`spinbike_user`/`spinbike_lang` into
+   `localStorage` (same keys as the customer recipe) and navigate to
+   `/staff?card=<the throwaway card_code>` — the query param pre-selects
+   the card, skipping the search step.
+4. Clean up: `DELETE /api/users/{id}` only SOFT-deletes (sets
+   `deleted_at`, #143's soft-delete-conflict flow needs this) — if you
+   want ZERO rows left (not even a soft-deleted one), follow with a
+   direct `sqlite3 ... "DELETE FROM users WHERE id=..."` after confirming
+   it has no `transactions`/`bookings` rows attached.
+
 ## Gotchas
 
 - **NEVER name a shell var `UID` (or `GID`/`PPID`/`EUID`) when capturing the

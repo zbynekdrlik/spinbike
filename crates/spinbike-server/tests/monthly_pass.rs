@@ -438,6 +438,150 @@ async fn log_visit_accepts_pass_with_valid_until_today() {
     assert_eq!(status, axum::http::StatusCode::OK);
 }
 
+// ─── #234: warn on same-day duplicate visit ───────────────────────────────
+
+#[tokio::test]
+async fn log_visit_warns_on_duplicate_same_day_manual_visit() {
+    let app = TestApp::new().await;
+    let user_id = app
+        .seed_card("DUP-VISIT-1", 50.0, None, None, None, None)
+        .await;
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({ "user_id": user_id, "price": 35.0, "valid_until": "2030-01-01" }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let fitness_id = service_id(&app, "Fitness").await;
+
+    // First log-visit: succeeds, no prior entry today.
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/log-visit",
+            &app.staff_token,
+            &json!({ "user_id": user_id, "service_id": fitness_id }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    // Second log-visit, same user, same day, no force: must 409 with the
+    // structured already_visited_today body — not a second visit row.
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/log-visit",
+            &app.staff_token,
+            &json!({ "user_id": user_id, "service_id": fitness_id }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT);
+    assert_eq!(resp["error_code"], "already_visited_today");
+    assert_eq!(resp["source"], "manual");
+    assert!(
+        resp["last_entry_at"].as_str().is_some(),
+        "conflict body must carry last_entry_at"
+    );
+
+    let visit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND action = 'visit'",
+    )
+    .bind(user_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(visit_count, 1, "the rejected duplicate must not be logged");
+}
+
+#[tokio::test]
+async fn log_visit_force_true_logs_duplicate_anyway() {
+    let app = TestApp::new().await;
+    let user_id = app
+        .seed_card("DUP-VISIT-2", 50.0, None, None, None, None)
+        .await;
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({ "user_id": user_id, "price": 35.0, "valid_until": "2030-01-01" }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let fitness_id = service_id(&app, "Fitness").await;
+    let spinning_id = service_id(&app, "Spinning").await;
+
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/log-visit",
+            &app.staff_token,
+            &json!({ "user_id": user_id, "service_id": fitness_id }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    // A legitimate second visit (e.g. morning Fitness + evening Spinning) —
+    // resubmit with force: true and it must go through, not 409 again.
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/log-visit",
+            &app.staff_token,
+            &json!({ "user_id": user_id, "service_id": spinning_id, "force": true }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let visit_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND action = 'visit'",
+    )
+    .bind(user_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(visit_count, 2, "force:true must log the second visit");
+}
+
+#[tokio::test]
+async fn log_visit_duplicate_source_is_door_when_note_prefixed() {
+    let app = TestApp::new().await;
+    let user_id = app
+        .seed_card("DUP-VISIT-3", 50.0, None, None, None, None)
+        .await;
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({ "user_id": user_id, "price": 35.0, "valid_until": "2030-01-01" }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    // Fitness IS the kind='single_entry' row after migration V16 — a door
+    // press today lands on this exact service_id with a "door: 1st" note.
+    let fitness_id = service_id(&app, "Fitness").await;
+    sqlx::query(
+        "INSERT INTO transactions (user_id, service_id, amount, action, note, created_at)
+         VALUES (?, ?, 0.0, 'visit', 'door: 1st', datetime('now'))",
+    )
+    .bind(user_id)
+    .bind(fitness_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/log-visit",
+            &app.staff_token,
+            &json!({ "user_id": user_id, "service_id": fitness_id }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT);
+    assert_eq!(resp["error_code"], "already_visited_today");
+    assert_eq!(resp["source"], "door");
+}
+
 #[tokio::test]
 async fn user_response_pass_field_when_valid_until_equals_today() {
     let app = TestApp::new().await;

@@ -96,8 +96,18 @@ pub fn CardActionPanel(
                                 let today = crate::relative_date::today_local();
                                 let label = i18n::t(lang.get(), "last_visit_label");
                                 let value = format_last_visit(visited, today, lang.get());
+                                // #235: loud highlight when the last visit was
+                                // TODAY — the exact signal that prevents a
+                                // staff-logged duplicate visit (#234). Shares
+                                // the `.visited-today` class with the search
+                                // dropdown row below.
+                                let class = if visited == today {
+                                    "card-title__last-visit visited-today"
+                                } else {
+                                    "card-title__last-visit"
+                                };
                                 view! {
-                                    <div class="card-title__last-visit" data-testid="card-last-visit">
+                                    <div class=class data-testid="card-last-visit">
                                         {label} ": " {value}
                                     </div>
                                 }

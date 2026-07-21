@@ -69,6 +69,12 @@ pub struct SeedEntry {
     /// timestamps to exercise the relative-time bucket logic (issue #57).
     #[serde(default)]
     pub created_at: Option<String>,
+    /// Optional note. Used by E2E to seed a door-style `"door: 1st"` note so
+    /// a test can exercise the door-vs-manual `source` branch of the #234
+    /// duplicate-visit conflict. `None` when omitted (existing callers
+    /// unaffected).
+    #[serde(default)]
+    pub note: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -318,8 +324,8 @@ async fn seed_transactions(
         // When None is bound, COALESCE falls back to datetime('now') — same as the
         // original hard-coded default.
         sqlx::query(
-            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until, legacy_backfilled, created_at)
-             VALUES (?, ?, ?, ?, ?, 1, COALESCE(?, datetime('now')))",
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until, legacy_backfilled, created_at, note)
+             VALUES (?, ?, ?, ?, ?, 1, COALESCE(?, datetime('now')), ?)",
         )
         .bind(user_id)
         .bind(svc_id)
@@ -327,6 +333,7 @@ async fn seed_transactions(
         .bind(&e.action)
         .bind(e.valid_until)
         .bind(e.created_at.as_deref())
+        .bind(e.note.as_deref())
         .execute(&state.pool)
         .await
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;

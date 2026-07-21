@@ -244,6 +244,10 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
         | ErrorCode::NoActiveMonthlyPass
         | ErrorCode::MonthlyPassExists
         | ErrorCode::UserAlreadyDeleted
+        // #234: the staff duplicate-visit confirm dialog builds its own copy
+        // from the conflict's `last_entry_at`/`source` fields (not a plain
+        // banner) — handled by a dedicated branch in action_form.rs, no key.
+        | ErrorCode::AlreadyVisitedToday
         // #143: the staff conflict-resolution dialog builds its own copy from
         // the conflict fields (name / date) + dedicated i18n keys — no single
         // localized banner string, so no key here.
@@ -543,6 +547,18 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         "visit_added_format",
         ("Vstup pridany: {}", "Visit added: {}"),
     );
+    // #234: duplicate same-day visit confirm — {} placeholders are the local
+    // HH:MM time and the source label (visit_source_door/visit_source_manual).
+    m.insert(
+        "already_visited_confirm_format",
+        (
+            "Klient uz ma dnes evidovany vstup o {} ({}). Pridat dalsi vstup?",
+            "Client already has a recorded visit today at {} ({}). Add another visit?",
+        ),
+    );
+    m.insert("visit_source_door", ("cez dvere", "via door"));
+    m.insert("visit_source_manual", ("zapisany rucne", "logged manually"));
+    m.insert("visit_confirm_anyway", ("Pridat aj tak", "Add anyway"));
     m.insert("block_ok", ("Karta zablokovana", "Card blocked"));
     m.insert("unblock_ok", ("Karta odblokovana", "Card unblocked"));
     m.insert("saved", ("Ulozene", "Saved"));
