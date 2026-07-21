@@ -448,6 +448,11 @@ pub fn DashboardPage() -> impl IntoView {
                 if list.is_empty() {
                     return view! { <span></span> }.into_any();
                 }
+                // #235: computed once per render pass, not per row.
+                let today = crate::relative_date::today_local();
+                let lang_now = lang.get();
+                let never_label = i18n::t(lang_now, "never_label").to_string();
+                let last_visit_label = i18n::t(lang_now, "last_visit_label").to_string();
                 let items: Vec<_> = list.into_iter().enumerate().map(|(idx, c)| {
                     let card_for_pick = c.clone();
                     let name = helpers::user_display_name(&c.name, c.company.as_deref(), c.card_code.as_deref());
@@ -460,6 +465,22 @@ pub fn DashboardPage() -> impl IntoView {
                     let credit = format!("{:.2} €", credit_val);
                     let credit_class = if credit_val < 0.0 { "credit-negative" } else { "" };
                     let is_blocked = c.blocked;
+                    // #235: relative-bucket last visit ("dnes"/"vcera"/…), same
+                    // helper the negative-balance list and card panel use —
+                    // highlighted when the last visit was TODAY, the signal
+                    // that helps staff avoid logging a duplicate (#234).
+                    let (last_visit_text, last_visit_is_today) = match c.last_visit_at
+                        .as_deref()
+                        .and_then(crate::dates::parse_server_date)
+                    {
+                        Some(d) => (crate::relative_date::relative(d, today, lang_now), d == today),
+                        None => (never_label.clone(), false),
+                    };
+                    let last_visit_class = if last_visit_is_today {
+                        "search-result-last-visit visited-today"
+                    } else {
+                        "search-result-last-visit"
+                    };
                     view! {
                         <div
                             class={
@@ -486,6 +507,9 @@ pub fn DashboardPage() -> impl IntoView {
                                 <div class="search-result-meta">
                                     <code>{format!("…{tail_str}")}</code>
                                     {if !company.is_empty() { format!(" · {company}") } else { String::new() }}
+                                </div>
+                                <div class=last_visit_class data-testid="search-result-last-visit">
+                                    {format!("{last_visit_label}: {last_visit_text}")}
                                 </div>
                             </div>
                             <div class=format!("search-result-credit {credit_class}")>{credit}</div>

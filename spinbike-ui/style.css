@@ -1168,7 +1168,17 @@ table tbody tr:last-child td {
 }
 .search-result-name   { font-weight: 600; }
 .search-result-meta   { font-size: var(--fs-sm); color: var(--text-muted); }
+.search-result-last-visit { font-size: var(--fs-sm); color: var(--text-muted); }
 .search-result-credit { font-weight: 600; white-space: nowrap; }
+
+/* #235: "last visit was TODAY" — search dropdown row + card panel header
+   share this loud highlight so staff can't miss it (the exact signal that
+   helps avoid a duplicate visit, #234). Same danger+bold treatment as
+   .credit-negative for visual consistency across "needs attention" states. */
+.visited-today {
+    color: var(--danger);
+    font-weight: 700;
+}
 .search-hint          { font-size: var(--fs-sm); color: var(--text-muted); }
 .badge--inline        { margin-left: var(--s-2); }
 .badge--lock          { margin-left: 0.35rem; font-size: 0.9rem; opacity: 0.85; }
