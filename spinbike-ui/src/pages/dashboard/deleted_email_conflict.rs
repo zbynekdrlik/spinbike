@@ -48,18 +48,7 @@ pub fn DeletedEmailConflictDialog(
     let deleted_at_for_body = conflict_deleted_at;
     let body_text = move || {
         let l = lang.get();
-        let name = name_for_body.clone();
-        match deleted_at_for_body
-            .as_deref()
-            .and_then(crate::dates::parse_server_date)
-        {
-            Some(d) => i18n::tf(
-                l,
-                "deleted_email_conflict_body",
-                &[&name, &i18n::fmt_date(d, l)],
-            ),
-            None => i18n::tf(l, "deleted_email_conflict_body_nodate", &[&name]),
-        }
+        body_text_for(&name_for_body, deleted_at_for_body.as_deref(), l)
     };
 
     let on_restore = move |_: web_sys::MouseEvent| {
@@ -184,5 +173,46 @@ pub fn DeletedEmailConflictDialog(
                 </button>
             </div>
         </Sheet>
+    }
+}
+
+/// Render the conflict body text — name plus the formatted deletion date
+/// when available. Extracted for testability — see #242 (folds in the
+/// second call site the issue noted alongside my_balance.rs).
+fn body_text_for(name: &str, deleted_at: Option<&str>, lang: Lang) -> String {
+    match deleted_at.and_then(crate::dates::parse_server_date_local) {
+        Some(d) => i18n::tf(
+            lang,
+            "deleted_email_conflict_body",
+            &[name, &i18n::fmt_date(d, lang)],
+        ),
+        None => i18n::tf(lang, "deleted_email_conflict_body_nodate", &[name]),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasm_bindgen_test::*;
+
+    // No wasm_bindgen_test_configure! — CI uses wasm-pack test --node (not browser).
+
+    // #242: conflict_deleted_at is a raw server deletion timestamp (a UTC
+    // instant). Near midnight Bratislava-local, the raw UTC date token is
+    // one day BEHIND the local wall date.
+    #[wasm_bindgen_test]
+    fn body_text_for_midnight_boundary_resolves_bratislava_local_date() {
+        // UTC 2026-07-20 22:30:00 = Bratislava-local 2026-07-21 00:30 (CEST).
+        let body = body_text_for("Jana", Some("2026-07-20 22:30:00"), Lang::Sk);
+        assert!(
+            body.contains("21.07.2026"),
+            "must show the Bratislava-LOCAL deletion date, got: {body}"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn body_text_for_no_date_uses_fallback() {
+        let body = body_text_for("Jana", None, Lang::Sk);
+        assert!(!body.contains("("), "no-date fallback must not show a date");
     }
 }

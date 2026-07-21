@@ -13,11 +13,27 @@
 use crate::i18n::{self, Lang};
 use chrono::NaiveDate;
 
-/// Locale-aware "today" — wraps `chrono::Local::now().date_naive()`.
+/// Bratislava-local "today" derived from an explicit UTC instant — the
+/// testable core of `today_local()`, pinned to an instant argument so tests
+/// don't depend on the host's wall-clock timezone.
+///
+/// Do NOT reach for the raw UTC calendar date: near midnight Bratislava-local
+/// (Bratislava runs UTC+1/+2 AHEAD of UTC), the UTC date is one day BEHIND
+/// the local wall date. See #239 — `today_local()` used to derive "today"
+/// from `chrono::Local::now()` (the BROWSER's clock), which is only correct
+/// because every device running this dashboard happens to be set to
+/// Bratislava time; nothing enforced that assumption.
+fn today_from_utc(now_utc: chrono::DateTime<chrono::Utc>) -> NaiveDate {
+    now_utc
+        .with_timezone(&chrono_tz::Europe::Bratislava)
+        .date_naive()
+}
+
+/// Locale-aware "today", anchored to Europe/Bratislava (not the host clock).
 /// Centralised so future date-formatting features (and tests that mock
-/// the current day) share a single call site. See #63.
+/// the current day) share a single call site. See #63, #239.
 pub fn today_local() -> NaiveDate {
-    chrono::Local::now().date_naive()
+    today_from_utc(chrono::Utc::now())
 }
 
 /// Format `visited` as a date label combined with a relative-time hint
@@ -81,8 +97,44 @@ fn plural(n: u32, key_one: &str, key_few: &str, lang: Lang) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDate;
+    use chrono::{NaiveDate, TimeZone};
     use wasm_bindgen_test::*;
+
+    fn utc(y: i32, m: u32, d: u32, h: u32, mi: u32, s: u32) -> chrono::DateTime<chrono::Utc> {
+        chrono::Utc.with_ymd_and_hms(y, m, d, h, mi, s).unwrap()
+    }
+
+    // #239: today_local() must anchor to Europe/Bratislava, not the raw UTC
+    // calendar date (which is what the host clock returns when the browser
+    // isn't Bratislava-local). Near midnight Bratislava-local the two
+    // disagree — the exact window #236/#241 fixed for last_visit_at.
+    #[wasm_bindgen_test]
+    fn today_from_utc_resolves_bratislava_wall_date_not_raw_utc_token() {
+        // UTC 2026-07-20 22:30:00 = Bratislava-local 2026-07-21 00:30 (CEST,
+        // UTC+2 in July).
+        let now = utc(2026, 7, 20, 22, 30, 0);
+        assert_eq!(
+            now.date_naive(),
+            NaiveDate::from_ymd_opt(2026, 7, 20).unwrap(),
+            "documents the bug: raw UTC calendar date is one day behind Bratislava-local"
+        );
+        assert_eq!(
+            today_from_utc(now),
+            NaiveDate::from_ymd_opt(2026, 7, 21).unwrap(),
+            "must resolve to the Bratislava-LOCAL calendar date, not the raw UTC token"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn today_from_utc_agrees_with_utc_token_away_from_midnight() {
+        // Mid-afternoon UTC: the UTC date token and the Bratislava-local
+        // date are the same day — the fix must not regress the common case.
+        let now = utc(2026, 7, 20, 12, 0, 0);
+        assert_eq!(
+            today_from_utc(now),
+            NaiveDate::from_ymd_opt(2026, 7, 20).unwrap()
+        );
+    }
 
     fn mk(today_y: i32, today_m: u32, today_d: u32, days_ago: i64) -> (NaiveDate, NaiveDate) {
         let today = NaiveDate::from_ymd_opt(today_y, today_m, today_d).unwrap();
