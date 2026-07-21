@@ -67,11 +67,11 @@ async function postSellPass(token: string, userId: number, serviceId: number, pr
     if (!resp.ok) throw new Error(`sell-pass failed: ${resp.status} ${await resp.text()}`);
 }
 
-async function postLogVisit(token: string, userId: number, serviceId: number) {
+async function postLogVisit(token: string, userId: number, serviceId: number, force = false) {
     const resp = await fetch(`${BASE_URL}/api/payments/log-visit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ user_id: userId, service_id: serviceId }),
+        body: JSON.stringify({ user_id: userId, service_id: serviceId, force }),
     });
     if (!resp.ok) throw new Error(`log-visit failed: ${resp.status} ${await resp.text()}`);
 }
@@ -117,8 +117,15 @@ test.describe('Reports — NAVSTEVY/ATTENDANCE KPI counts class visits only (#23
         // even though the API itself doesn't require an active pass.
         const tomorrow = new Date(Date.now() + 24 * 3600_000).toISOString().slice(0, 10);
         await postSellPass(token, cardId, services.monthly_pass, 35.0, tomorrow); // counts toward passes_sold, NOT attendance
-        await postLogVisit(token, cardId, services.fitness);   // free Fitness visit
-        await postLogVisit(token, cardId, services.spinning);  // free Spinning visit
+        // #234: log-visit 409s when this user already has a same-day
+        // class-visit event — and the paid Fitness/Spinning charges above
+        // already count as one (canonical attendance definition). Both
+        // calls here are a genuine, intentional second/third entry for the
+        // same day (this test seeds several class-visit events on purpose
+        // to prove the KPI sums all of them) — force:true is the documented
+        // legitimate use, not a bypass of the guard's intent.
+        await postLogVisit(token, cardId, services.fitness, true);   // free Fitness visit
+        await postLogVisit(token, cardId, services.spinning, true);  // free Spinning visit
 
         // 4 more rows that should NOT count toward attendance (in addition to the pass-sale above).
         await postCharge(token, cardId, services.refreshments, 2.50);  // snack #1
