@@ -47,29 +47,38 @@ Skip the compile-and-verify step. If a step genuinely requires a local build (e.
 
 **Nuance (from #159): this bans making `cargo test` a routine/default TDD step in a DISPATCHED subagent's prompt — it does NOT ban the primary worker on a bug-fix ticket from using the airuleset Tier-0 bypass (`# airuleset:build-ok` inline, or `AIRULESET_ALLOW_LOCAL_BUILD=1`) for ONE scoped, targeted run to prove `regression-test-first.md`'s "watch RED fail, watch GREEN pass" requirement, when the fix is money-critical or the correctness risk is high enough that CI-only verification is not enough confidence before push.** That's a deliberate, justified, single-purpose exception — not a default habit: run the ONE specific new test (not `cargo test` unscoped), revert-to-buggy → confirm fail → restore-fix → confirm pass → move on. Never leave it running in a loop, never use it to avoid writing the fix, and always still let CI be the final authority (push and monitor the full suite regardless of what the local run showed).
 
-## `spinbike-ui` is a SEPARATE cargo workspace — root `cargo fmt --check` never sees it
+## `spinbike-ui` is a SEPARATE cargo workspace — root `cargo fmt --check` never sees it (CI DOES, but only in the `Build WASM (UI)` job — a local skip still costs a full cycle)
 
 `spinbike-ui/Cargo.toml` is its own workspace; root `Cargo.toml` has
 `exclude = ["spinbike-ui"]`. So the project's mandated local check
 (`cargo fmt --all --check`, run from the repo root per `CLAUDE.md`) — and
 CI's `Lint` job, which also runs from the root — **structurally never
-touches `spinbike-ui/`**. A real `cargo fmt` violation in
-`spinbike-ui/src/*.rs` ships completely undetected until a manual/deep
-review happens to run `cd spinbike-ui && cargo fmt --all --check` (this bit
-#109 — two mis-formatted `i18n.rs` inserts landed and passed every gate).
+touches `spinbike-ui/`**. [#122](https://github.com/zbynekdrlik/spinbike/issues/122)
+(this bit #109 — two mis-formatted `i18n.rs` inserts landed and passed every
+gate) added a scoped check to CI, and it **IS CLOSED / fixed**: the
+`Build WASM (UI)` job runs a "Check UI formatting" step —
+`cargo fmt --manifest-path spinbike-ui/Cargo.toml --all -- --check` — BEFORE
+`trunk build`/clippy, so a UI-workspace fmt violation is no longer invisible
+end-to-end; it now HARD-FAILS CI (confirmed live on #239/#240/#242: one
+mis-formatted multi-arg `assert_eq!` in a new `relative_date.rs` test failed
+`Build WASM (UI)` on the first push). **The remaining gap is COST, not
+correctness:** the root-level local pre-push check
+(`cargo fmt --all --check`, the one command `CLAUDE.md`/`ci-deploy` sanction
+locally) still does NOT run the UI-scoped variant, so skipping the manual
+double-check burns one full ~15-min CI cycle discovering a fmt nit that a
+5-second local command would have caught.
 
 **Whenever you touch a `spinbike-ui/src/*.rs` file, run the fmt check
-TWICE** — once from the root (covers the server crates), once from inside
-`spinbike-ui/`:
+TWICE before pushing** — once from the root (covers the server crates),
+once scoped to the UI workspace (matches CI's own invocation exactly):
 
 ```bash
-cargo fmt --all --check                              # root workspace
-cd spinbike-ui && cargo fmt --all --check && cd ..   # separate workspace — NOT covered by the line above
+cargo fmt --all --check                                              # root workspace
+cargo fmt --manifest-path spinbike-ui/Cargo.toml --all -- --check     # UI workspace — CI's exact command, NOT covered by the line above
 ```
 
-Tracked as a CI gap in [#122](https://github.com/zbynekdrlik/spinbike/issues/122)
-(add a `spinbike-ui`-scoped fmt/clippy step to CI) — not yet fixed, so the
-manual double-check above is the only guard until then.
+If it fails, auto-fix with the same command minus `-- --check` (i.e. drop
+`--check`) — do not hand-edit the formatting diff.
 
 ## Adding a crate dependency: regenerate + commit `Cargo.lock`
 
