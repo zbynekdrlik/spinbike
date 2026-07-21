@@ -147,4 +147,12 @@ mod tests {
             ymd(2026, 7, 20)
         );
     }
+
+    // Symmetry with parse_server_date's own parse_garbage_returns_none — a
+    // missing/unparseable timestamp must degrade to None, not panic.
+    #[wasm_bindgen_test]
+    fn parse_server_date_local_garbage_returns_none() {
+        assert_eq!(parse_server_date_local("not-a-date"), None);
+        assert_eq!(parse_server_date_local(""), None);
+    }
 }
