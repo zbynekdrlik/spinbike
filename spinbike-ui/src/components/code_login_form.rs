@@ -12,13 +12,15 @@
 //!
 //! `CustomerLoginMethods` is the shared toggle (email-link vs code) used by BOTH
 //! the login page's customer section and `/welcome`'s invalid-token fallback. It
-//! leads with the email-link method everywhere EXCEPT when running installed
-//! standalone on iOS (#228) — there a magic link is the dead end this whole
-//! feature exists to route around, so the code method leads instead; both
-//! methods stay reachable via the toggle regardless. Android/Chromium standalone
-//! is unaffected (shares storage with the browser, so link stays primary), and
-//! the existing login-link/welcome E2E selectors are unchanged for every
-//! non-iOS-standalone case.
+//! leads with the email-link method on the login page, EXCEPT when running
+//! installed standalone on iOS (#228) — there a magic link is a dead end, so the
+//! code method leads instead. On `/welcome`'s invalid-token fallback the code
+//! method ALWAYS leads (#247, `lead_code=true`): reaching that screen means the
+//! link the client just tried already failed, so leading with the very same
+//! link method would just repeat the failure — the code works regardless of why
+//! the link died. Both methods stay reachable via the toggle regardless.
+//! Android/Chromium standalone is unaffected on the login page (shares storage
+//! with the browser, so link stays primary there).
 
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -240,19 +242,24 @@ pub fn CodeLoginForm() -> impl IntoView {
 /// rendering the selected form. Used by the login page's customer section and
 /// `/welcome`'s invalid-token fallback.
 ///
-/// The initial method is platform-aware (#228): a magic link is a dead end
-/// when running installed standalone on iOS (storage is partitioned from
-/// Safari, so the link always reopens there instead of completing login
-/// inside the installed app) — there, the code method leads. Everywhere
-/// else (a plain browser tab, or an installed Android/Chromium PWA, which
-/// shares storage with the browser and has no such dead end) the email-link
-/// method still leads, unchanged. Detected once at mount, same pattern as
-/// `InstallPrompt`'s own `detect_kind()` — the platform doesn't change while
-/// this component stays mounted.
+/// The initial method is platform-aware (#228) OR explicitly forced via
+/// `lead_code` (#247): a magic link is a dead end when running installed
+/// standalone on iOS (storage is partitioned from Safari, so the link always
+/// reopens there instead of completing login inside the installed app) —
+/// there, the code method leads. `/welcome`'s invalid-token fallback ALSO
+/// leads with code regardless of platform (`lead_code=true`): landing there
+/// means the link the client just tried already failed (used / expired /
+/// opened in the wrong app), so offering the SAME link method first would
+/// repeat the exact failure — the code is the recovery path that works
+/// regardless of why the link died. Everywhere else (the login page's
+/// customer section, no `lead_code` passed) the email-link method still
+/// leads, unchanged. Detected once at mount, same pattern as `InstallPrompt`'s
+/// own `detect_kind()` — the platform doesn't change while this component
+/// stays mounted.
 #[component]
-pub fn CustomerLoginMethods() -> impl IntoView {
+pub fn CustomerLoginMethods(#[prop(optional)] lead_code: bool) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
-    let initial_method = if platform::is_ios_standalone() {
+    let initial_method = if lead_code || platform::is_ios_standalone() {
         "code"
     } else {
         "link"
