@@ -442,4 +442,74 @@ mod tests {
         // cash_in_eur sums positive-amount rows: just the topup.
         assert!((day_kpi.cash_in_eur - 10.00).abs() < 0.001);
     }
+
+    // ----- #251: day/range reports must bucket by Bratislava-LOCAL day, not
+    // raw UTC calendar date -----
+    //
+    // Bratislava-local midnight of 2026-07-15 is UTC 2026-07-14 22:00:00
+    // (CEST, UTC+2 in July). A transaction created at UTC 2026-07-14
+    // 23:00:00 is therefore on Bratislava-LOCAL day 2026-07-15 (01:00 local)
+    // but on raw-UTC-CALENDAR day 2026-07-14 — exactly the 00:00-02:00
+    // Bratislava-local window the pre-fix `date(created_at) = ?` SQL gets
+    // wrong (it matches the UTC date, not the gym's local day).
+    #[tokio::test]
+    async fn day_and_range_reports_bucket_by_bratislava_local_day_not_raw_utc_date() {
+        let (pool, user_id) = setup_pool_with_user().await;
+        let fitness_id =
+            service_id_by_name_en(&pool, spinbike_core::services::FITNESS_NAME_EN).await;
+
+        sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, created_at)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(user_id)
+        .bind(fitness_id)
+        .bind(-5.0_f64)
+        .bind("charge")
+        .bind("2026-07-14 23:00:00")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let bratislava_day = chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap();
+        let (day_kpi, day_events, _) = super::day_report(&pool, bratislava_day, 50, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            day_events.len(),
+            1,
+            "a transaction at 01:00 Bratislava-local on 2026-07-15 (23:00 UTC on \
+             2026-07-14) must appear in day_report(2026-07-15) — the Bratislava-local \
+             day, not the raw UTC calendar date"
+        );
+        assert_eq!(
+            day_kpi.attendance, 1,
+            "must count toward the Bratislava-local day's attendance"
+        );
+
+        let (range_kpi, range_events, _) =
+            super::range_report(&pool, bratislava_day, bratislava_day, 50, None)
+                .await
+                .unwrap();
+        assert_eq!(
+            range_events.len(),
+            1,
+            "range_report must agree with day_report on the same Bratislava-local day"
+        );
+        assert_eq!(range_kpi.attendance, 1);
+
+        // Must NOT also appear under the raw UTC calendar day — a range fix
+        // that widened the match to include both days would be equally wrong
+        // (double-counting), not just a different way to miss the boundary.
+        let utc_day = chrono::NaiveDate::from_ymd_opt(2026, 7, 14).unwrap();
+        let (utc_day_kpi, utc_day_events, _) =
+            super::day_report(&pool, utc_day, 50, None).await.unwrap();
+        assert_eq!(
+            utc_day_events.len(),
+            0,
+            "must NOT appear under the raw UTC calendar day — it belongs to the \
+             Bratislava-local day 2026-07-15 only"
+        );
+        assert_eq!(utc_day_kpi.attendance, 0);
+    }
 }
