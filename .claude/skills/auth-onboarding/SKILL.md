@@ -138,6 +138,7 @@ the home-screen app). `db/login_tokens.rs` + `routes/auth.rs`.
   downstream result (`if email.is_empty() || code.is_empty()` when an empty email
   already misses `get_user_by_email` and an empty code never matches a hash) — it is
   an unkillable EQUIVALENT mutant.
+- **A bare arithmetic TTL/window constant (`N * M`) ALWAYS needs its own literal-pin test (#246, cost 1 CI cycle).** `REDEEM_GRACE_SECS = 10 * 60` shipped with only behavioral tests (boundary redeems via direct `-601 seconds` backdating) — none of them pin the CONSTANT itself, so the mutation gate's `10 * 60 -> 10 + 60` (600 -> 70) mutant survived undetected; every boundary test still passed since they redefine "past grace" relative to whatever the constant happens to be. Fix: a one-line literal-equality test (`assert_eq!(REDEEM_GRACE_SECS, 600, ...)`), same pattern as the pre-existing `ttl_constants_are_exactly_14_days_and_24_hours`/`code_ttl_is_ten_minutes`. **Whenever you add a new `pub const ... = N * M;` TTL/window/limit constant to this module, add its literal-pin test in the SAME commit** — don't rely on the boundary-behavior tests to catch an arithmetic-operator mutant in the constant's own definition.
 - **E2E code seam:** `POST /api/test/mint-login-code {email} -> {code}`
   (SPINBIKE_TEST_MODE-gated) returns a raw code so a Playwright spec can drive the
   real UI then enter a known-valid value (the public request endpoint never echoes
