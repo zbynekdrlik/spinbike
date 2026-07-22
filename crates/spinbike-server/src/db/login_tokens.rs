@@ -3,11 +3,22 @@
 //! Passwordless customer onboarding + recovery. A token is 32 random bytes
 //! encoded base64url (no padding). The RAW token travels ONLY inside the
 //! emailed link; the DB stores ONLY its SHA-256 hex (`token_hash`), so a DB
-//! read never yields a usable token. Redemption is single-use and race-safe:
-//! one atomic `UPDATE ... SET used_at = datetime('now') WHERE used_at IS NULL
-//! AND expires_at > datetime('now') ... RETURNING user_id` marks and returns
-//! the row in a single statement, so two concurrent redemptions of the same
-//! token can never both succeed.
+//! read never yields a usable token. Redemption is atomic and race-safe: one
+//! `UPDATE ... SET used_at = COALESCE(used_at, datetime('now')) WHERE
+//! expires_at > datetime('now') AND (used_at IS NULL OR used_at > <10-min-ago>)
+//! ... RETURNING user_id` marks-or-confirms and returns the row in a single
+//! statement.
+//!
+//! **`invite`/`login` are re-redeemable for a 10-minute grace window after
+//! first use (#246)** — the dominant iPhone double-open (a mail-app's
+//! in-app webview redeems the link first, then the user reopens the same
+//! link in their real browser/installed PWA) no longer dead-ends on the
+//! second open. `used_at` is stamped only on the FIRST successful redeem
+//! (`COALESCE`, never overwritten), so the grace window doesn't reset or
+//! extend on repeated reuse, and the token's own TTL is still enforced
+//! independently (a token can't outlive its expiry just because it's within
+//! grace). The 6-digit `code` purpose (#227, `verify_code`) is a SEPARATE
+//! function untouched by this — it stays strictly single-use.
 //!
 //! SECURITY: never log the raw token. Log the hash if anything is logged.
 
@@ -24,6 +35,14 @@ pub const LOGIN_TTL_SECS: i64 = 24 * 60 * 60;
 
 /// Login-code (in-PWA numeric) token lifetime: 10 minutes (#227).
 pub const CODE_TTL_SECS: i64 = 10 * 60;
+
+/// Re-redeem grace window (#246): an `invite`/`login` token that has already
+/// been used remains redeemable for this many additional seconds after its
+/// FIRST successful redeem, so a double-open (mail-app webview first, real
+/// browser second) doesn't dead-end the second open. Interpolated into the
+/// SQL comparison the same `format!` way the TTL intervals are (see
+/// `create_token`), so the clock/format matches exactly.
+pub const REDEEM_GRACE_SECS: i64 = 10 * 60;
 
 /// The three token purposes. Kept as `&str` constants so callers and the SQL
 /// CHECK constraint (migration V17, widened by V21) stay in sync.
@@ -96,12 +115,17 @@ pub async fn create_token(
     Ok(raw)
 }
 
-/// Atomically redeem a raw token: mark it used and return its `user_id` iff it
-/// is (a) known, (b) not yet used, (c) not expired, and (d) has a purpose in
+/// Atomically redeem a raw token: mark it used (on first redeem) and return
+/// its `user_id` iff it is (a) known, (b) not expired, (c) either unused OR
+/// used within the last `REDEEM_GRACE_SECS` seconds, and (d) has a purpose in
 /// `allowed_purposes`. Returns `None` for any failing token (invalid / expired
-/// / already used / wrong purpose) — the caller maps all of these to a single
-/// uniform rejection so nothing is leaked. Single `UPDATE ... RETURNING` keeps
-/// mark-and-fetch atomic against concurrent redemption.
+/// / used outside grace / wrong purpose) — the caller maps all of these to a
+/// single uniform rejection so nothing is leaked. `used_at` is set via
+/// `COALESCE(used_at, datetime('now'))` so a grace-window reuse does NOT
+/// re-stamp it (the window is anchored to the FIRST redeem, never reset).
+/// Single `UPDATE ... RETURNING` keeps mark-and-fetch atomic against
+/// concurrent redemption; within the grace window, more than one redemption
+/// of the same token succeeding is the intended #246 behavior.
 pub async fn redeem(
     pool: &SqlitePool,
     raw: &str,
@@ -114,20 +138,45 @@ pub async fn redeem(
     let placeholders = std::iter::repeat_n("?", allowed_purposes.len())
         .collect::<Vec<_>>()
         .join(",");
+    // Same `format!` interpolation style as `create_token`'s TTL interval, so
+    // the grace comparison uses the exact same clock/format SQLite reads back.
+    let grace_interval = format!("{:+} seconds", -REDEEM_GRACE_SECS);
     let sql = format!(
-        "UPDATE login_tokens SET used_at = datetime('now') \
+        "UPDATE login_tokens SET used_at = COALESCE(used_at, datetime('now')) \
          WHERE token_hash = ? \
-           AND used_at IS NULL \
            AND expires_at > datetime('now') \
+           AND (used_at IS NULL OR used_at > datetime('now', ?)) \
            AND purpose IN ({placeholders}) \
          RETURNING user_id"
     );
-    let mut q = sqlx::query_scalar::<_, i64>(&sql).bind(hash);
+    let mut q = sqlx::query_scalar::<_, i64>(&sql)
+        .bind(hash)
+        .bind(grace_interval);
     for p in allowed_purposes {
         q = q.bind(*p);
     }
     let user_id = q.fetch_optional(pool).await?;
     Ok(user_id)
+}
+
+/// Whether a raw token was ALREADY used before this call (#246, observability
+/// only). Meant to be read by a caller BEFORE invoking `redeem`, so a
+/// successful login can be logged as a first-time redeem vs. a grace-window
+/// REUSE — distinguishing the two is worth logging since a reuse is a new,
+/// previously-impossible event now that redeem() accepts it. This is never a
+/// security decision on its own and is not atomic with `redeem`'s UPDATE (a
+/// concurrent redeem landing in between could make the read stale) — the
+/// atomic `redeem` call remains the sole authority on whether a redemption is
+/// accepted; this only feeds a log label.
+pub async fn is_already_used(pool: &SqlitePool, raw: &str) -> Result<bool> {
+    let hash = hash_token(raw);
+    let used: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM login_tokens WHERE token_hash = ? AND used_at IS NOT NULL",
+    )
+    .bind(hash)
+    .fetch_optional(pool)
+    .await?;
+    Ok(used.is_some())
 }
 
 /// Create a fresh 6-digit login code for `user_id`, store its per-user hash with
@@ -232,18 +281,26 @@ pub async fn verify_code(pool: &SqlitePool, user_id: i64, code: &str) -> Result<
     Ok(None)
 }
 
-/// Delete rows that can no longer redeem: already used, or expired.
-/// `redeem`'s validity check is `used_at IS NULL AND expires_at >
-/// datetime('now')` — this predicate is the exact logical negation
-/// (`used_at IS NOT NULL OR expires_at <= datetime('now')`), so it is
-/// mutually exclusive with "still redeemable": purging never removes a row
-/// `redeem` would still accept, and never leaves behind a row `redeem` would
-/// reject. Pure housekeeping; it only stops the table from growing
-/// unbounded. Returns the number of rows removed.
+/// Delete rows that can no longer redeem: expired, or used AND past the
+/// `REDEEM_GRACE_SECS` re-redeem window (#246). `redeem`'s validity check is
+/// `expires_at > datetime('now') AND (used_at IS NULL OR used_at >
+/// datetime('now', -grace))` — this predicate is the exact logical negation
+/// (`expires_at <= datetime('now') OR (used_at IS NOT NULL AND used_at <=
+/// datetime('now', -grace))`), so it is mutually exclusive with "still
+/// redeemable": purging never removes a row `redeem` would still accept
+/// (including one still inside its grace window — this job runs once at
+/// server startup, so a deploy landing mid-grace must not wipe it out), and
+/// never leaves behind a row `redeem` would reject. Pure housekeeping; it
+/// only stops the table from growing unbounded. Returns the number of rows
+/// removed.
 pub async fn purge_expired_and_used(pool: &SqlitePool) -> Result<u64> {
+    let grace_interval = format!("{:+} seconds", -REDEEM_GRACE_SECS);
     let result = sqlx::query(
-        "DELETE FROM login_tokens WHERE used_at IS NOT NULL OR expires_at <= datetime('now')",
+        "DELETE FROM login_tokens \
+         WHERE expires_at <= datetime('now') \
+            OR (used_at IS NOT NULL AND used_at <= datetime('now', ?))",
     )
+    .bind(grace_interval)
     .execute(pool)
     .await?;
     Ok(result.rows_affected())
@@ -289,6 +346,16 @@ mod tests {
     }
 
     #[test]
+    fn redeem_grace_is_exactly_ten_minutes() {
+        // Pin #246's grace window to a literal so any arithmetic drift in the
+        // constant (e.g. `10 * 60` mutated to `10 + 60`) is caught — the
+        // grace-window redeem tests above only exercise the boundary via
+        // direct `-601 seconds` backdating, which doesn't pin the constant
+        // itself.
+        assert_eq!(REDEEM_GRACE_SECS, 600, "redeem grace must be 10 minutes");
+    }
+
+    #[test]
     fn hash_is_deterministic_sha256_hex() {
         // Known SHA-256("abc") vector — pins the algorithm + hex encoding.
         assert_eq!(
@@ -327,7 +394,33 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reused_token_is_rejected() {
+    async fn is_already_used_reflects_redeem_state() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "already-used@x").await;
+
+        let raw = create_token(&pool, uid, PURPOSE_LOGIN, LOGIN_TTL_SECS)
+            .await
+            .unwrap();
+        assert!(
+            !is_already_used(&pool, &raw).await.unwrap(),
+            "a fresh token must not report as already used"
+        );
+
+        redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
+        assert!(
+            is_already_used(&pool, &raw).await.unwrap(),
+            "a redeemed token must report as already used"
+        );
+    }
+
+    #[tokio::test]
+    async fn reused_token_within_grace_is_accepted() {
+        // #246: the dominant iPhone double-open (mail-app webview redeems the
+        // link first, then the real browser reopens the SAME link) must NOT
+        // dead-end the second open. Reusing a token within the grace window
+        // is an INTENTIONAL behavior change from the old strict single-use
+        // (this replaces the old `reused_token_is_rejected` test).
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         let uid = seed_customer(&pool, "reuse@x").await;
@@ -338,7 +431,99 @@ mod tests {
         let first = redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
         assert_eq!(first, Some(uid));
         let second = redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
-        assert_eq!(second, None, "a token must be single-use");
+        assert_eq!(
+            second,
+            Some(uid),
+            "a token reused within the grace window must still redeem"
+        );
+
+        // used_at must NOT be re-stamped by the reuse — it stays pinned to
+        // the FIRST redemption so the grace window doesn't reset/extend.
+        let used_at_after_second: String =
+            sqlx::query_scalar("SELECT used_at FROM login_tokens WHERE token_hash = ?")
+                .bind(hash_token(&raw))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let third = redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
+        assert_eq!(
+            third,
+            Some(uid),
+            "a third redeem within grace must also succeed"
+        );
+        let used_at_after_third: String =
+            sqlx::query_scalar("SELECT used_at FROM login_tokens WHERE token_hash = ?")
+                .bind(hash_token(&raw))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            used_at_after_second, used_at_after_third,
+            "used_at must not be re-stamped on a grace-window reuse"
+        );
+    }
+
+    #[tokio::test]
+    async fn reused_token_after_grace_is_rejected() {
+        // Past the 10-minute grace, a reuse must be rejected again.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "reuse-stale@x").await;
+
+        let raw = create_token(&pool, uid, PURPOSE_LOGIN, LOGIN_TTL_SECS)
+            .await
+            .unwrap();
+        let first = redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
+        assert_eq!(first, Some(uid));
+
+        // Backdate used_at to just past the grace window (601s ago).
+        sqlx::query(
+            "UPDATE login_tokens SET used_at = datetime('now', '-601 seconds') \
+             WHERE token_hash = ?",
+        )
+        .bind(hash_token(&raw))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let second = redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
+        assert_eq!(
+            second, None,
+            "a token reused AFTER the grace window must be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn reused_token_still_rejected_if_expired_even_within_grace() {
+        // The TTL check is independent of the grace check — a token whose own
+        // expiry has passed must be rejected even when used_at is recent
+        // (well within the 10-minute grace).
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "reuse-expired@x").await;
+
+        let raw = create_token(&pool, uid, PURPOSE_LOGIN, LOGIN_TTL_SECS)
+            .await
+            .unwrap();
+        let first = redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
+        assert_eq!(first, Some(uid));
+
+        // Force the token's own expiry into the past while used_at stays
+        // "just now" — proves TTL and grace are ANDed, not OR'd.
+        sqlx::query(
+            "UPDATE login_tokens SET expires_at = datetime('now', '-1 seconds') \
+             WHERE token_hash = ?",
+        )
+        .bind(hash_token(&raw))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let second = redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
+        assert_eq!(
+            second, None,
+            "an expired token must be rejected even within the grace window"
+        );
     }
 
     #[tokio::test]
@@ -423,16 +608,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn purge_removes_used_and_expired_but_keeps_live_token() {
+    async fn purge_removes_expired_and_stale_used_but_keeps_live_and_in_grace_tokens() {
+        // #246: a used token now stays alive for the grace window, so purge
+        // must NOT remove it immediately — only once it's past grace.
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         let uid = seed_customer(&pool, "purge@x").await;
 
-        // Used: create + redeem so used_at gets stamped.
-        let used_raw = create_token(&pool, uid, PURPOSE_LOGIN, LOGIN_TTL_SECS)
+        // Used, PAST grace: redeem, then backdate used_at outside the window.
+        let stale_used_raw = create_token(&pool, uid, PURPOSE_LOGIN, LOGIN_TTL_SECS)
             .await
             .unwrap();
-        redeem(&pool, &used_raw, &[PURPOSE_LOGIN]).await.unwrap();
+        redeem(&pool, &stale_used_raw, &[PURPOSE_LOGIN])
+            .await
+            .unwrap();
+        sqlx::query(
+            "UPDATE login_tokens SET used_at = datetime('now', '-601 seconds') \
+             WHERE token_hash = ?",
+        )
+        .bind(hash_token(&stale_used_raw))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Used, WITHIN grace: used_at stays "just now" — must survive a purge
+        // pass (e.g. the startup purge landing mid-grace on a deploy).
+        let fresh_used_raw = create_token(&pool, uid, PURPOSE_LOGIN, LOGIN_TTL_SECS)
+            .await
+            .unwrap();
+        redeem(&pool, &fresh_used_raw, &[PURPOSE_LOGIN])
+            .await
+            .unwrap();
 
         // Expired: negative TTL puts expires_at in the past, never redeemed.
         create_token(&pool, uid, PURPOSE_INVITE, -10).await.unwrap();
@@ -443,13 +649,16 @@ mod tests {
             .unwrap();
 
         let removed = purge_expired_and_used(&pool).await.unwrap();
-        assert_eq!(removed, 2, "used + expired rows must be removed");
+        assert_eq!(removed, 2, "stale-used + expired rows must be removed");
 
         let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM login_tokens")
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(remaining, 1, "only the live token should remain");
+        assert_eq!(
+            remaining, 2,
+            "the live token and the still-in-grace used token must remain"
+        );
 
         // The purge must not have touched redeem behavior: the live token
         // still redeems successfully afterwards.
@@ -458,6 +667,16 @@ mod tests {
             redeemed,
             Some(uid),
             "live token must still redeem after a purge"
+        );
+
+        // And the in-grace used token must STILL redeem after the purge pass.
+        let redeemed_in_grace = redeem(&pool, &fresh_used_raw, &[PURPOSE_LOGIN])
+            .await
+            .unwrap();
+        assert_eq!(
+            redeemed_in_grace,
+            Some(uid),
+            "a used-but-in-grace token must still redeem after a purge pass"
         );
     }
 

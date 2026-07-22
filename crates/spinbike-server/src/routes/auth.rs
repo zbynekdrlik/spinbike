@@ -352,6 +352,16 @@ async fn token_login(
 ) -> Result<Json<AuthResponse>, ApiError> {
     let invalid = || ApiError::Unauthorized(ErrorCode::InvalidOrExpiredLink);
 
+    // Observability only (#246): read BEFORE the atomic redeem below so a
+    // successful login can be logged as a first-time redeem vs. a
+    // grace-window REUSE. Never a security decision — `redeem`'s atomic
+    // UPDATE alone decides whether the token is accepted; a read failure here
+    // just falls back to "not already used" (worst case, an under-labeled
+    // log line, never a wrong auth outcome).
+    let was_already_used = login_tokens::is_already_used(&state.pool, &body.token)
+        .await
+        .unwrap_or(false);
+
     // Both purposes authorize login: an 'invite' token logs a client in the
     // first time; a 'login' token is the recovery path.
     let user_id = login_tokens::redeem(
@@ -378,6 +388,12 @@ async fn token_login(
     let token =
         auth::create_token(&state.jwt_secret, user.id, email_str, &role).map_err(internal_error)?;
 
+    if was_already_used {
+        tracing::info!(
+            user_id = user.id,
+            "token-login: grace-window reuse redeemed (#246)"
+        );
+    }
     tracing::info!(user_id = user.id, "token-login: session issued");
     Ok(Json(AuthResponse {
         token,
