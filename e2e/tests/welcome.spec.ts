@@ -4,7 +4,7 @@ import { loginViaAPI, setupConsoleCheck, assertCleanConsole, setEnglishLanguage 
 const BASE_URL = 'http://localhost:8099';
 
 test.describe('Magic-link welcome page (#109)', () => {
-    test('invite link logs the customer in and lands on my/balance; reused link shows invalid + email form', async ({
+    test('invite link logs the customer in and lands on my/balance; reused link within grace also succeeds (#246)', async ({
         page,
     }) => {
         const consoleMessages = setupConsoleCheck(page);
@@ -58,12 +58,18 @@ test.describe('Magic-link welcome page (#109)', () => {
         await page.waitForURL('**/my/balance', { timeout: 10000 });
         await expect(page.locator('[data-testid="door-open-button"]')).toBeVisible({ timeout: 10000 });
 
-        // Re-use the SAME (now-used) link — must show the friendly invalid
-        // state + the request-login-link email form, never a crash.
+        // Re-use the SAME (now-used) link within the 10-min grace window
+        // (#246) — the dominant iPhone double-open (mail-app webview opens
+        // it first, the real browser/installed PWA reopens it second) must
+        // NOT dead-end: the second open succeeds too, same as the first.
+        // Post-grace rejection is covered at the server unit-test level
+        // (login_tokens.rs backdates used_at directly) — an E2E test cannot
+        // wait 10 minutes.
         await page.goto(testLink);
-        await page.waitForSelector('[data-testid="welcome-invalid"]', { timeout: 10000 });
-        await expect(page.locator('[data-testid="login-link-form"]')).toBeVisible();
-        await expect(page.locator('[data-testid="login-link-email"]')).toBeVisible();
+        await page.waitForSelector('[data-testid="welcome-success"]', { timeout: 10000 });
+        await expect(page.locator('[data-testid="welcome-cta"]')).toBeVisible();
+        const tokenAfterReuse = await page.evaluate(() => localStorage.getItem('spinbike_token'));
+        expect(tokenAfterReuse).toBeTruthy();
 
         assertCleanConsole(consoleMessages);
     });
