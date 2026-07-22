@@ -58,6 +58,54 @@ assertions to make an unrelated existing spec pass — the guard is doing
 its job; the OLD spec's assumption (never having imagined this state) is
 what's stale.
 
+## `today`/`tomorrow` for a day/range-bucketed endpoint: use `bratislavaToday()`/`bratislavaDateOffset()`, never `new Date().toISOString()` (#251)
+
+Any endpoint that buckets by the GYM-LOCAL day (`/api/reports/day`,
+`/api/reports/range`, `sell-pass`'s `valid_until` future-check, and any
+future one — see the `db-migrations` skill's Bratislava-day-boundary
+gotchas) compares against `today_bratislava()` server-side, NOT a raw UTC
+date. A spec deriving "today"/"tomorrow" via
+`new Date().toISOString().slice(0, 10)` or `Date.now() + N * 3600_000`
+silently disagrees with the server during the 00:00-02:00 Bratislava-local
+window (a UTC CI runner can still be on yesterday's UTC date while
+Bratislava has already rolled over) — an intermittent, CI-only flake
+(confirmed live, #251): a `sell-pass` call rejected a genuinely-future date
+as "must be in the future", and separately a before/after attendance delta
+read 0 instead of 4 because the before/after snapshots and the seeded
+transactions landed in DIFFERENT Bratislava-day buckets than the UTC date
+string the test queried.
+
+**Fix: use the shared `helpers.ts` exports, never hand-roll the date.**
+
+```ts
+import { bratislavaToday, bratislavaDateOffset } from './helpers';
+
+const today = bratislavaToday();          // 'YYYY-MM-DD', Intl-based, mirrors today_bratislava()
+const tomorrow = bratislavaDateOffset(1);  // pure calendar-date arithmetic, no UTC-instant ambiguity
+```
+
+**A wider UTC-instant margin (e.g. `Date.now() + 48 * 3600_000`) is a
+band-aid, not a fix** — it happened to mask the FIRST symptom (the sell-pass
+rejection) live during #251's own investigation, but the SECOND symptom
+(the before/after delta reading the wrong day's bucket) still failed right
+after, because the underlying `today` used for the query was still a raw
+UTC date. Fix the DATE DERIVATION itself (Bratislava-anchored), not the
+size of an offset.
+
+**When you touch ANY spec computing a date for a reports/day-bucketed
+assertion, grep for the anti-pattern first:**
+
+```bash
+grep -n "toISOString().slice(0, 10)\|Date.now() + .* 3600" e2e/tests/*.spec.ts
+```
+
+Not every hit needs fixing — a spec using fixed historical dates
+(`reports-range.spec.ts`) or one that never computes its own date (relies
+on the frontend's own Bratislava-anchored default, like
+`reports-day.spec.ts`/`txn-note.spec.ts`) is unaffected. Only a spec that
+computes "today"/"tomorrow" itself AND asserts against a Bratislava-bucketed
+endpoint needs the helper.
+
 ## Router
 Add a line to the project `CLAUDE.md` `## Playbook router` pointing here so a
 future guard-adding ticket loads this BEFORE pushing, not after CI turns red.

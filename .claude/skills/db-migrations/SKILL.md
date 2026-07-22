@@ -304,6 +304,39 @@ valid_until       >  datetime('now')  -- ❌ off-by-one on the expiry day
   `spinbike_server::util::today_bratislava()` so test-today == handler-today on
   ANY runner TZ. Expired-YESTERDAY guards can stay `date('now','-1 day')` —
   robust, since Bratislava-today is always ≥ UTC-today.
+- **This bites `chrono::Local::now()` on the DEV BOX too, invisibly, if the box
+  itself runs `Europe/Bratislava`** (this repo's dev machine does) — a test
+  using `chrono::Local` then PASSES locally (dev-box TZ happens to already
+  match the handler's Bratislava anchor) and only flakes on the UTC CI runner,
+  during the exact 00:00-02:00 Bratislava window. Confirmed live (#251):
+  `attendance_counts_only_fitness_and_spinning_visits` passed every local run
+  and failed on CI the moment a push landed in that window. **Never trust "it
+  passed when I ran it locally" as proof a `chrono::Local`-seeded test is
+  CI-safe** — grep for `chrono::Local::now()` in any test touching
+  day-bucketed data and replace with `today_bratislava()`, regardless of
+  whether it currently passes on your box.
+- **The #239-242 "exhaustive" audit only grepped `spinbike-ui/` (frontend
+  display parsers) — it MISSED the SERVER's own raw SQL bucketing.** #251
+  found `db/reports.rs`'s `day_report`/`range_report` still doing
+  `WHERE date(t.created_at) = ?` / `BETWEEN ? AND ?` (the exact anti-pattern
+  the "bare-DATE vs UTC-INSTANT column" gotcha below describes) — a real,
+  live business-impact bug (the Reports page under-counts attendance/cash-in
+  for up to 2h after Bratislava midnight), never caught because nobody grepped
+  `crates/spinbike-server/src/db/*.rs` for `date(` alongside the UI-side
+  `parse_server_date(` sweep. **When auditing this bug class, grep BOTH
+  halves of the codebase** — `grep -rn 'date(.*created_at\|date(.*_at)' crates/spinbike-server/src/db/` for the server's raw SQL, not just the UI's date parsers.
+- **The bug class extends to E2E specs, not just Rust tests — same fix
+  shape, TypeScript side.** A Playwright spec computing "today"/"tomorrow" via
+  `new Date().toISOString().slice(0, 10)` (or `Date.now() + N * 3600_000`)
+  disagrees with `today_bratislava()` in the same window, for the same
+  reason. `e2e/tests/helpers.ts` now exports `bratislavaToday()` (Intl-based:
+  `new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Bratislava' })`)
+  and `bratislavaDateOffset(days)` (pure calendar-date arithmetic via
+  `Date.UTC` on the broken-down Y/M/D — no UTC-instant-arithmetic ambiguity).
+  Use these for ANY E2E assertion against a day/range-bucketed endpoint;
+  never widen a UTC-instant margin (e.g. "+48h") as a substitute — that masks
+  the symptom without fixing the actual date the test asserts against (see
+  the `e2e-testing` skill's own entry for the live before/after example).
 
 ## GOTCHA: gym-local day boundary — bare-DATE column vs UTC-INSTANT column (#222)
 

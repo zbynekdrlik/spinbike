@@ -744,3 +744,26 @@ cost a full ~15-min cycle. Write clippy-clean UI Rust the first time:
   that statement — `collapsible_if` only fires when the body is EXACTLY one
   nested if/if-let, so extra statements before it silences the lint without
   needing a let-chain at all.
+
+## Extracting a combined-class markup block into its own component: check EVERY class it used to share, not just the ones that still make semantic sense (#248)
+
+`install_prompt.rs`'s webview branch used to render
+`class="install-prompt install-prompt--ios install-prompt--webview"` — TWO
+modifier classes together. `#248` generalized the branch to cover Android too
+and extracted it into a standalone `InAppBrowserBanner` component; dropping
+`install-prompt--ios` was the RIGHT call semantically (an Android webview
+banner isn't "ios"). But `style.css` had `.install-prompt--ios` supplying the
+shared "card" look (background/padding/border-radius/box-shadow) — `
+--webview` only ever added its OWN title/alert spacing on TOP of that. Losing
+`--ios` silently lost the card background too — a real visual regression
+(caught by an independent review pass before merge, not by any test — no
+Playwright assertion in this repo checks computed CSS background/shadow).
+
+**When extracting/generalizing a component that used to render with MULTIPLE
+combined classes, check what EACH class actually contributed in `style.css`**
+before dropping any of them — `grep -n '\.install-prompt--ios\b' style.css`
+(or the equivalent for any modifier class) and read every declaration block,
+not just the one whose NAME still makes sense for the new, broader case. Fix
+here: give the surviving class (`.install-prompt--webview`) its own copy of
+the shared styling (`.install-prompt--ios, .install-prompt--webview { … }`),
+independent of the class being dropped.

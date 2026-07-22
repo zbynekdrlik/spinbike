@@ -924,3 +924,27 @@ modified but your diff has no `Cargo.toml`/dependency change, just leave it
 unstaged — it doesn't block CI (no `--locked`) and isn't part of your PR's
 scope. Only stage it deliberately when you actually bumped/added a
 dependency (per the `cargo metadata` recipe above).
+
+## `gh pr edit`/`gh pr view -F` can fail with a "Projects (classic)" GraphQL error unrelated to anything you're doing
+
+Updating an already-open PR's body after discovering additional work mid-PR
+(#251, discovered while driving #250 green) hit: `gh pr edit 250 -F
+body.md` → `GraphQL: Projects (classic) is being deprecated ...
+(repository.pullRequest.projectCards)`. This is `gh` v2.45.0's `pr edit`
+mutation requesting a deprecated GraphQL field as part of its response
+shape — nothing to do with Projects actually being used on the PR/repo, and
+not fixable from this side (not a flag, not a retry-worthy transient). Same
+error on a plain `gh pr view` in some `gh` versions too.
+
+**Fix: use the REST API directly instead of the `gh pr` subcommand:**
+
+```bash
+python3 -c "import json; print(json.dumps({'body': open('body.md').read()}))" > payload.json
+gh api repos/OWNER/REPO/pulls/NUMBER -X PATCH --input payload.json -q '.number'
+```
+
+`gh api ... -X PATCH` hits the REST endpoint directly (no GraphQL, no
+`projectCards` field), and reading the body back afterward
+(`gh api .../pulls/NUMBER -q '.body'`) confirms it landed. Reach for this
+whenever `gh pr edit`/`gh pr view` throws a "Projects (classic)" error —
+don't retry the same `gh pr` command, it will fail identically every time.
