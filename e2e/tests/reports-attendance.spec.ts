@@ -115,7 +115,16 @@ test.describe('Reports — NAVSTEVY/ATTENDANCE KPI counts class visits only (#23
         await postCharge(token, cardId, services.spinning, 5.0);  // paid Spinning
         // Sell a pass first so the log-visit calls reflect the real staff workflow,
         // even though the API itself doesn't require an active pass.
-        const tomorrow = new Date(Date.now() + 24 * 3600_000).toISOString().slice(0, 10);
+        // #251: the server validates valid_until against the Bratislava-LOCAL
+        // "today" (today_bratislava()), not raw UTC — so a naive UTC+24h
+        // "tomorrow" can land on the SAME Bratislava-local day the server
+        // sees as "today" during the 00:00-02:00 Bratislava window (CI runs
+        // in UTC), making a perfectly-valid future date get rejected as
+        // "must be in the future". +48h is comfortably more than the max
+        // real-world UTC/Bratislava offset (+2h CEST / +1h CET) plus a full
+        // day, so it always lands strictly after Bratislava's current day
+        // regardless of when in the day this test happens to run.
+        const tomorrow = new Date(Date.now() + 2 * 24 * 3600_000).toISOString().slice(0, 10);
         await postSellPass(token, cardId, services.monthly_pass, 35.0, tomorrow); // counts toward passes_sold, NOT attendance
         // #234: log-visit 409s when this user already has a same-day
         // class-visit event — and the paid Fitness/Spinning charges above
