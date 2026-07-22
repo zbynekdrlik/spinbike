@@ -159,6 +159,26 @@ pub async fn redeem(
     Ok(user_id)
 }
 
+/// Whether a raw token was ALREADY used before this call (#246, observability
+/// only). Meant to be read by a caller BEFORE invoking `redeem`, so a
+/// successful login can be logged as a first-time redeem vs. a grace-window
+/// REUSE — distinguishing the two is worth logging since a reuse is a new,
+/// previously-impossible event now that redeem() accepts it. This is never a
+/// security decision on its own and is not atomic with `redeem`'s UPDATE (a
+/// concurrent redeem landing in between could make the read stale) — the
+/// atomic `redeem` call remains the sole authority on whether a redemption is
+/// accepted; this only feeds a log label.
+pub async fn is_already_used(pool: &SqlitePool, raw: &str) -> Result<bool> {
+    let hash = hash_token(raw);
+    let used: Option<i64> = sqlx::query_scalar(
+        "SELECT 1 FROM login_tokens WHERE token_hash = ? AND used_at IS NOT NULL",
+    )
+    .bind(hash)
+    .fetch_optional(pool)
+    .await?;
+    Ok(used.is_some())
+}
+
 /// Create a fresh 6-digit login code for `user_id`, store its per-user hash with
 /// `purpose='code'` and a 10-minute TTL, and return the RAW code (for the
 /// email). Every PRIOR code row for this user is DELETED first: requesting a new
@@ -371,6 +391,27 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(redeemed, Some(uid), "valid token must return its user_id");
+    }
+
+    #[tokio::test]
+    async fn is_already_used_reflects_redeem_state() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "already-used@x").await;
+
+        let raw = create_token(&pool, uid, PURPOSE_LOGIN, LOGIN_TTL_SECS)
+            .await
+            .unwrap();
+        assert!(
+            !is_already_used(&pool, &raw).await.unwrap(),
+            "a fresh token must not report as already used"
+        );
+
+        redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
+        assert!(
+            is_already_used(&pool, &raw).await.unwrap(),
+            "a redeemed token must report as already used"
+        );
     }
 
     #[tokio::test]
