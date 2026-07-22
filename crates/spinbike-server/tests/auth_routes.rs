@@ -487,7 +487,9 @@ async fn token_login_expired_token_rejected() {
 }
 
 #[tokio::test]
-async fn token_login_reused_token_rejected() {
+async fn token_login_reused_token_within_grace_accepted() {
+    // #246: a double-open (mail-app webview redeems first, real browser
+    // reopens the SAME link second) must not dead-end the second open.
     let app = TestApp::new().await;
     let raw = login_tokens::create_token(&app.pool, app.customer_id, PURPOSE_LOGIN, LOGIN_TTL_SECS)
         .await
@@ -500,7 +502,7 @@ async fn token_login_reused_token_rejected() {
         ))
         .await;
     assert_eq!(s1, StatusCode::OK);
-    // Second use of the same token must fail (single-use).
+    // Second use of the same token within the grace window must ALSO succeed.
     let (s2, _) = app
         .request(post_json(
             "/api/auth/token-login",
@@ -508,7 +510,50 @@ async fn token_login_reused_token_rejected() {
             &serde_json::json!({"token": raw}),
         ))
         .await;
-    assert_eq!(s2, StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        s2,
+        StatusCode::OK,
+        "a token reused within the grace window must still log in"
+    );
+}
+
+#[tokio::test]
+async fn token_login_reused_token_after_grace_rejected() {
+    let app = TestApp::new().await;
+    let raw = login_tokens::create_token(&app.pool, app.customer_id, PURPOSE_LOGIN, LOGIN_TTL_SECS)
+        .await
+        .unwrap();
+    let (s1, _) = app
+        .request(post_json(
+            "/api/auth/token-login",
+            "",
+            &serde_json::json!({"token": raw}),
+        ))
+        .await;
+    assert_eq!(s1, StatusCode::OK);
+
+    // Backdate used_at to just past the 10-minute grace window.
+    sqlx::query(
+        "UPDATE login_tokens SET used_at = datetime('now', '-601 seconds') \
+         WHERE token_hash = ?",
+    )
+    .bind(login_tokens::hash_token(&raw))
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (s2, _) = app
+        .request(post_json(
+            "/api/auth/token-login",
+            "",
+            &serde_json::json!({"token": raw}),
+        ))
+        .await;
+    assert_eq!(
+        s2,
+        StatusCode::UNAUTHORIZED,
+        "a token reused AFTER the grace window must be rejected"
+    );
 }
 
 #[tokio::test]
