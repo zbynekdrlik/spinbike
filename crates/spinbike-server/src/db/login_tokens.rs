@@ -327,7 +327,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn reused_token_is_rejected() {
+    async fn reused_token_within_grace_is_accepted() {
+        // #246: the dominant iPhone double-open (mail-app webview redeems the
+        // link first, then the real browser reopens the SAME link) must NOT
+        // dead-end the second open. Reusing a token within the grace window
+        // is an INTENTIONAL behavior change from the old strict single-use
+        // (this replaces the old `reused_token_is_rejected` test).
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         let uid = seed_customer(&pool, "reuse@x").await;
@@ -338,7 +343,99 @@ mod tests {
         let first = redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
         assert_eq!(first, Some(uid));
         let second = redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
-        assert_eq!(second, None, "a token must be single-use");
+        assert_eq!(
+            second,
+            Some(uid),
+            "a token reused within the grace window must still redeem"
+        );
+
+        // used_at must NOT be re-stamped by the reuse — it stays pinned to
+        // the FIRST redemption so the grace window doesn't reset/extend.
+        let used_at_after_second: String =
+            sqlx::query_scalar("SELECT used_at FROM login_tokens WHERE token_hash = ?")
+                .bind(hash_token(&raw))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let third = redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
+        assert_eq!(
+            third,
+            Some(uid),
+            "a third redeem within grace must also succeed"
+        );
+        let used_at_after_third: String =
+            sqlx::query_scalar("SELECT used_at FROM login_tokens WHERE token_hash = ?")
+                .bind(hash_token(&raw))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            used_at_after_second, used_at_after_third,
+            "used_at must not be re-stamped on a grace-window reuse"
+        );
+    }
+
+    #[tokio::test]
+    async fn reused_token_after_grace_is_rejected() {
+        // Past the 10-minute grace, a reuse must be rejected again.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "reuse-stale@x").await;
+
+        let raw = create_token(&pool, uid, PURPOSE_LOGIN, LOGIN_TTL_SECS)
+            .await
+            .unwrap();
+        let first = redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
+        assert_eq!(first, Some(uid));
+
+        // Backdate used_at to just past the grace window (601s ago).
+        sqlx::query(
+            "UPDATE login_tokens SET used_at = datetime('now', '-601 seconds') \
+             WHERE token_hash = ?",
+        )
+        .bind(hash_token(&raw))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let second = redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
+        assert_eq!(
+            second, None,
+            "a token reused AFTER the grace window must be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn reused_token_still_rejected_if_expired_even_within_grace() {
+        // The TTL check is independent of the grace check — a token whose own
+        // expiry has passed must be rejected even when used_at is recent
+        // (well within the 10-minute grace).
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "reuse-expired@x").await;
+
+        let raw = create_token(&pool, uid, PURPOSE_LOGIN, LOGIN_TTL_SECS)
+            .await
+            .unwrap();
+        let first = redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
+        assert_eq!(first, Some(uid));
+
+        // Force the token's own expiry into the past while used_at stays
+        // "just now" — proves TTL and grace are ANDed, not OR'd.
+        sqlx::query(
+            "UPDATE login_tokens SET expires_at = datetime('now', '-1 seconds') \
+             WHERE token_hash = ?",
+        )
+        .bind(hash_token(&raw))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let second = redeem(&pool, &raw, &[PURPOSE_LOGIN]).await.unwrap();
+        assert_eq!(
+            second, None,
+            "an expired token must be rejected even within the grace window"
+        );
     }
 
     #[tokio::test]
