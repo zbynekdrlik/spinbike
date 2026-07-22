@@ -667,9 +667,11 @@ UPDATE services
 // read never exposes a usable token. `token_hash` is UNIQUE (a hash collision
 // or a duplicate insert is rejected). `purpose` is CHECK-constrained to the two
 // flows: 'invite' (14-day onboarding link) and 'login' (24-hour recovery link).
-// Single-use is enforced at redemption time by the atomic
-// `UPDATE ... SET used_at = datetime('now') WHERE used_at IS NULL ...` in
-// db::login_tokens::redeem. Idempotent (IF NOT EXISTS) like every migration.
+// Redemption is enforced atomically at redemption time in
+// db::login_tokens::redeem (as of #246, invite/login tokens are re-redeemable
+// for a short grace window after first use — see that module's doc comment
+// for the exact current predicate). Idempotent (IF NOT EXISTS) like every
+// migration.
 const V17_LOGIN_TOKENS: &str = r#"
 CREATE TABLE IF NOT EXISTS login_tokens (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
