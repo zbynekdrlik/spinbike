@@ -326,6 +326,16 @@ mod tests {
     }
 
     #[test]
+    fn redeem_grace_is_exactly_ten_minutes() {
+        // Pin #246's grace window to a literal so any arithmetic drift in the
+        // constant (e.g. `10 * 60` mutated to `10 + 60`) is caught — the
+        // grace-window redeem tests above only exercise the boundary via
+        // direct `-601 seconds` backdating, which doesn't pin the constant
+        // itself.
+        assert_eq!(REDEEM_GRACE_SECS, 600, "redeem grace must be 10 minutes");
+    }
+
+    #[test]
     fn hash_is_deterministic_sha256_hex() {
         // Known SHA-256("abc") vector — pins the algorithm + hex encoding.
         assert_eq!(
