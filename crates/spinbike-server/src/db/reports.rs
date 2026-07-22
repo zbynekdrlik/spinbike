@@ -431,8 +431,15 @@ mod tests {
             .unwrap();
 
         // Use today's date — all `create_transaction*` calls default
-        // `created_at = datetime('now')`, so day_report(today) sees them all.
-        let today = chrono::Local::now().naive_local().date();
+        // `created_at = datetime('now')` (a UTC instant), and day_report now
+        // buckets by the Bratislava-LOCAL day (#251) — so "today" here MUST
+        // be `today_bratislava()`, the same anchor the code under test uses,
+        // not `chrono::Local` (the OS/runner timezone: agrees with Bratislava
+        // on a Bratislava-TZ dev box, but disagrees with it on a UTC CI
+        // runner during the 00:00-02:00 Bratislava window — which is exactly
+        // how this test flaked live on CI run 29962390657, in the same
+        // ~22:00-24:00 UTC slice that exposed #251 itself).
+        let today = crate::util::today_bratislava();
 
         let (day_kpi, _, _) = super::day_report(&pool, today, 50, None).await.unwrap();
         assert_eq!(

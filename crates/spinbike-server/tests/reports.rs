@@ -50,8 +50,12 @@ async fn day_report_aggregates_charges_topups_passes_and_excludes_voided() {
     .unwrap();
 
     // Call /api/reports/day for today
-    let today = chrono::Local::now()
-        .date_naive()
+    // #251: reports.rs now buckets by the Bratislava-LOCAL day, not the raw
+    // UTC calendar date — "today" here must be `today_bratislava()` (the
+    // same anchor the endpoint under test uses), not `chrono::Local` (the
+    // OS/runner timezone, which disagrees with Bratislava on a UTC CI
+    // runner during the 00:00-02:00 Bratislava window).
+    let today = spinbike_server::util::today_bratislava()
         .format("%Y-%m-%d")
         .to_string();
     let (status, body) = app
@@ -108,7 +112,8 @@ async fn range_report_aggregates_across_days_and_rejects_over_93_days() {
     .await
     .unwrap();
 
-    let today = chrono::Local::now().date_naive();
+    // #251: same Bratislava-local anchor as above.
+    let today = spinbike_server::util::today_bratislava();
     let from = (today - chrono::Duration::days(5))
         .format("%Y-%m-%d")
         .to_string();
@@ -150,8 +155,12 @@ async fn day_report_pagination_has_more_true_when_more_than_limit() {
         .await
         .unwrap();
     }
-    let today = chrono::Local::now()
-        .date_naive()
+    // #251: reports.rs now buckets by the Bratislava-LOCAL day, not the raw
+    // UTC calendar date — "today" here must be `today_bratislava()` (the
+    // same anchor the endpoint under test uses), not `chrono::Local` (the
+    // OS/runner timezone, which disagrees with Bratislava on a UTC CI
+    // runner during the 00:00-02:00 Bratislava window).
+    let today = spinbike_server::util::today_bratislava()
         .format("%Y-%m-%d")
         .to_string();
 
@@ -195,8 +204,12 @@ async fn day_report_card_name_is_null_when_names_empty() {
     .execute(&app.pool)
     .await
     .unwrap();
-    let today = chrono::Local::now()
-        .date_naive()
+    // #251: reports.rs now buckets by the Bratislava-LOCAL day, not the raw
+    // UTC calendar date — "today" here must be `today_bratislava()` (the
+    // same anchor the endpoint under test uses), not `chrono::Local` (the
+    // OS/runner timezone, which disagrees with Bratislava on a UTC CI
+    // runner during the 00:00-02:00 Bratislava window).
+    let today = spinbike_server::util::today_bratislava()
         .format("%Y-%m-%d")
         .to_string();
     let (status, body) = app
@@ -239,8 +252,12 @@ async fn day_report_pagination_does_not_drop_rows_with_duplicate_timestamps() {
     .execute(&app.pool)
     .await
     .unwrap();
-    let today = chrono::Local::now()
-        .date_naive()
+    // #251: reports.rs now buckets by the Bratislava-LOCAL day, not the raw
+    // UTC calendar date — "today" here must be `today_bratislava()` (the
+    // same anchor the endpoint under test uses), not `chrono::Local` (the
+    // OS/runner timezone, which disagrees with Bratislava on a UTC CI
+    // runner during the 00:00-02:00 Bratislava window).
+    let today = spinbike_server::util::today_bratislava()
         .format("%Y-%m-%d")
         .to_string();
 
@@ -310,7 +327,8 @@ async fn range_report_pagination_has_more_true_when_more_than_limit() {
         .await
         .unwrap();
     }
-    let today = chrono::Local::now().date_naive();
+    // #251: same Bratislava-local anchor as above.
+    let today = spinbike_server::util::today_bratislava();
     let from = (today - chrono::Duration::days(7))
         .format("%Y-%m-%d")
         .to_string();
@@ -341,8 +359,12 @@ async fn range_report_pagination_has_more_true_when_more_than_limit() {
 #[tokio::test]
 async fn non_admin_gets_403_on_reports_day() {
     let app = TestApp::new().await;
-    let today = chrono::Local::now()
-        .date_naive()
+    // #251: reports.rs now buckets by the Bratislava-LOCAL day, not the raw
+    // UTC calendar date — "today" here must be `today_bratislava()` (the
+    // same anchor the endpoint under test uses), not `chrono::Local` (the
+    // OS/runner timezone, which disagrees with Bratislava on a UTC CI
+    // runner during the 00:00-02:00 Bratislava window).
+    let today = spinbike_server::util::today_bratislava()
         .format("%Y-%m-%d")
         .to_string();
     // staff token is Role::Staff, not Admin — must be rejected.
