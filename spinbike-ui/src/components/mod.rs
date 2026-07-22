@@ -17,7 +17,7 @@ pub use adaptive_nav::AdaptiveNav;
 pub use code_login_form::{CodeLoginForm, CustomerLoginMethods};
 pub use date_input::DateInput;
 pub use door_button::DoorButton;
-pub use install_prompt::InstallPrompt;
+pub use install_prompt::{InAppBrowserBanner, InstallPrompt};
 pub use login_link_form::LoginLinkForm;
 pub use persistent_toggles::PersistentToggles;
 pub use segmented::Segmented;

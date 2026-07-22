@@ -410,6 +410,16 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "Installation isn't possible here - open the page in Safari",
         ),
     );
+    // #248: same in-app-browser banner, non-iOS copy — Android in-app
+    // browsers (Facebook/Messenger/Instagram/generic WebView) have no Safari;
+    // Chrome is the safe universal recommendation there.
+    m.insert(
+        "install_prompt_webview_title_other",
+        (
+            "Instalacia tu nie je mozna - otvor stranku v prehliadaci (Chrome)",
+            "Installation isn't possible here - open the page in a browser (Chrome)",
+        ),
+    );
     m.insert(
         "install_prompt_copy_button",
         ("Kopirovat odkaz", "Copy link"),
