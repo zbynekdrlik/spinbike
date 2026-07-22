@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
+import { setupConsoleCheck, assertCleanConsole, loginViaAPI, bratislavaToday, bratislavaDateOffset } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -102,7 +102,14 @@ test.describe('Reports — NAVSTEVY/ATTENDANCE KPI counts class visits only (#23
         // Capture the before-count so the test is robust against pre-existing
         // class-visit transactions in the shared E2E DB. We assert that our
         // 4 seeded class-visit rows produced an exact +4 delta.
-        const today = new Date().toISOString().slice(0, 10);
+        // #251: /api/reports/day buckets by the Bratislava-LOCAL day
+        // (today_bratislava()) — "today" here MUST agree with that anchor,
+        // never a raw `new Date().toISOString()` (a UTC date), which
+        // disagrees with Bratislava during the 00:00-02:00 Bratislava-local
+        // window (a UTC CI runner can still be on yesterday's UTC date while
+        // Bratislava has already rolled over — this is exactly how the
+        // before/after delta went 0 instead of 4 on a real CI run).
+        const today = bratislavaToday();
         const beforeResp = await fetch(`${BASE_URL}/api/reports/day?date=${today}`, {
             headers: { Authorization: `Bearer ${token}` },
         });
@@ -114,8 +121,11 @@ test.describe('Reports — NAVSTEVY/ATTENDANCE KPI counts class visits only (#23
         await postCharge(token, cardId, services.fitness, 5.0);   // paid Fitness
         await postCharge(token, cardId, services.spinning, 5.0);  // paid Spinning
         // Sell a pass first so the log-visit calls reflect the real staff workflow,
-        // even though the API itself doesn't require an active pass.
-        const tomorrow = new Date(Date.now() + 24 * 3600_000).toISOString().slice(0, 10);
+        // even though the API itself doesn't require an active pass. Pure
+        // calendar-date arithmetic on `today` (not UTC-instant arithmetic) —
+        // always exactly one Bratislava-local calendar day after `today`,
+        // so it's never ambiguous regardless of what time of day this runs.
+        const tomorrow = bratislavaDateOffset(1);
         await postSellPass(token, cardId, services.monthly_pass, 35.0, tomorrow); // counts toward passes_sold, NOT attendance
         // #234: log-visit 409s when this user already has a same-day
         // class-visit event — and the paid Fitness/Spinning charges above

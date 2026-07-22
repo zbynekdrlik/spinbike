@@ -10,14 +10,23 @@
 //! event has fired).
 //!
 //! **In-app browsers (webviews)** — Facebook/Messenger, Instagram, LINE, the
-//! iOS Google app — expose NO "Add to Home Screen" at all, so showing the
-//! normal Share guide there is misleading (there is no Share-sheet A2HS
-//! entry to find). #226 UA-sniffs a set of known webview markers and, when
-//! detected on iOS, replaces the A2HS steps with an "open in Safari"
-//! instruction plus a copy-current-URL button. A webview like
-//! `SFSafariViewController` is indistinguishable from real Safari via UA and
-//! is NOT caught by this — the normal Safari-guide branch carries a small
-//! permanent footer fallback hint for exactly that case.
+//! iOS Google app, and a generic Android in-app WebView — expose NO "Add to
+//! Home Screen" at all, so showing the normal Share guide there is misleading
+//! (there is no Share-sheet A2HS entry to find, and on Android there's no
+//! install prompt to replay either). The shared [`InAppBrowserBanner`]
+//! component UA-sniffs a set of known webview markers
+//! (`platform::is_in_app_browser_ua`, #226/#248) and, when detected, shows an
+//! "open in a real browser" instruction plus a copy-current-URL button
+//! instead — on EITHER platform, not just iOS (#248 lifted this out of the
+//! iOS-only gate: an Android in-app browser used to get no guidance at all).
+//! A webview like iOS `SFSafariViewController` is indistinguishable from real
+//! Safari via UA and is NOT caught by this — the normal Safari-guide branch
+//! carries a small permanent footer fallback hint for exactly that case.
+//!
+//! `InAppBrowserBanner` is self-contained (detects + renders independently)
+//! so it can mount standalone on `/login` (#248 — webview guidance ONLY
+//! there, no full A2HS prompt) in addition to being `InstallPrompt`'s own
+//! webview branch on `/welcome` and `/my/balance`.
 //!
 //! Mounted on `/welcome` (primary) and `/my/balance` (until installed).
 
@@ -27,20 +36,21 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 
 use crate::i18n::{self, Lang};
-use crate::platform::{get_prop, is_ios_ua, is_standalone, user_agent, window_value};
+use crate::platform::{
+    get_prop, is_in_app_browser_ua, is_ios_ua, is_standalone, user_agent, window_value,
+};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PromptKind {
-    /// Already installed, or neither install path is available here.
+    /// Already installed, running inside a known in-app browser (handled
+    /// separately by `InAppBrowserBanner`), or neither install path is
+    /// available here.
     Hidden,
     /// Chromium/Android captured a `beforeinstallprompt` event we can replay.
     AndroidChromium,
     /// iOS Safari (or an undetectable webview) — no native event; show the
     /// visual Share -> Add-to-Home-Screen guide.
     Ios,
-    /// iOS, but a KNOWN in-app-browser (webview) with no A2HS surface at
-    /// all — show "open in Safari" + a copy-URL button instead.
-    IosWebview,
 }
 
 /// True when `index.html`'s `beforeinstallprompt` listener has captured a
@@ -53,32 +63,24 @@ fn has_deferred_prompt() -> bool {
     !v.is_undefined() && !v.is_null()
 }
 
-/// Known iOS in-app-browsers (webviews) — Facebook/Messenger, Instagram,
-/// LINE, and the iOS Google app's embedded browser (GSA) — none of which
-/// expose "Add to Home Screen" at all, unlike real Safari. This is a
-/// best-effort UA substring match; some webviews (notably
-/// `SFSafariViewController`-based ones) are indistinguishable from real
-/// Safari and are NOT caught here — see the footer fallback hint rendered
-/// on the normal iOS Safari-guide branch.
-fn is_ios_webview_ua(ua: &str) -> bool {
-    ["FBAN", "FBAV", "FB_IAB", "Instagram", "Line/", "GSA/"]
-        .into_iter()
-        .any(|marker| ua.contains(marker))
-}
-
 fn detect_kind() -> PromptKind {
     if is_standalone() {
+        return PromptKind::Hidden;
+    }
+    let ua = user_agent();
+    // A known in-app browser is handled entirely by `InAppBrowserBanner`
+    // (mounted alongside this component) — checked BEFORE the deferred-
+    // prompt/iOS branches, and unconditionally (not gated behind "is this
+    // iOS"), so an Android webview short-circuits here exactly like an iOS
+    // one instead of falling through to the Android-Chromium install button.
+    if is_in_app_browser_ua(&ua) {
         return PromptKind::Hidden;
     }
     if has_deferred_prompt() {
         return PromptKind::AndroidChromium;
     }
-    let ua = user_agent();
     if !is_ios_ua(&ua) {
         return PromptKind::Hidden;
-    }
-    if is_ios_webview_ua(&ua) {
-        return PromptKind::IosWebview;
     }
     PromptKind::Ios
 }
@@ -164,27 +166,31 @@ fn start_copy_current_url() -> Option<Promise> {
 const ICON_SHARE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5h10.5a2.25 2.25 0 0 0 2.25-2.25V13.5a.75.75 0 0 0-1.5 0v3.75a.75.75 0 0 1-.75.75H6.75a.75.75 0 0 1-.75-.75V13.5a.75.75 0 0 0-1.5 0v3.75A2.25 2.25 0 0 0 6.75 19.5Z"/></svg>"##;
 const ICON_PLUS_SQUARE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.8" stroke="currentColor" aria-hidden="true"><rect x="3.75" y="3.75" width="16.5" height="16.5" rx="3" stroke-linecap="round" stroke-linejoin="round"/><path stroke-linecap="round" stroke-linejoin="round" d="M12 8.25v7.5M8.25 12h7.5"/></svg>"##;
 
+/// "Open in a real browser" banner shown when this page is being viewed
+/// inside a known in-app browser (#226/#248 — see the module doc). Detected
+/// once at mount (the UA doesn't change while a page stays mounted) and
+/// renders nothing when not applicable, so it's safe to mount UNCONDITIONALLY
+/// anywhere: standalone on `/login` (#248, webview guidance ONLY — no full
+/// A2HS prompt there), and as `InstallPrompt`'s own webview branch below.
+///
+/// Copy differs by platform (#248): the iOS copy says "open in Safari" (the
+/// only browser that can complete an A2HS install there); the non-iOS
+/// (Android in-app-browser) copy says "open in Chrome" instead — Safari
+/// guidance would be actively wrong on Android.
 #[component]
-pub fn InstallPrompt() -> impl IntoView {
+pub fn InAppBrowserBanner() -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
-    // Detected once at mount — the deferred event (if any) has virtually
-    // always already fired by the time our WASM bundle finishes loading and
-    // this component mounts, and re-checking reactively would need either
-    // polling or a Rust-side event listener the design map didn't ask for.
-    let (kind, set_kind) = signal(detect_kind());
-    // Local to the webview branch only — whether the copy-URL click has
-    // succeeded, so a small confirmation line can render under the button.
-    let (copied, set_copied) = signal(false);
-
-    let on_install_click = move |_| {
-        // Hide immediately — the captured event can only be used once, so
-        // there is nothing useful to show after this click regardless of
-        // the user's choice in the native dialog.
-        set_kind.set(PromptKind::Hidden);
-        spawn_local(async move {
-            trigger_install_prompt().await;
-        });
+    let ua = user_agent();
+    if is_standalone() || !is_in_app_browser_ua(&ua) {
+        return ().into_any();
+    }
+    let ios = is_ios_ua(&ua);
+    let title_key = if ios {
+        "install_prompt_webview_title"
+    } else {
+        "install_prompt_webview_title_other"
     };
+    let (copied, set_copied) = signal(false);
 
     let on_copy_click = move |_| {
         // `start_copy_current_url` fires the actual `clipboard.writeText()`
@@ -202,6 +208,54 @@ pub fn InstallPrompt() -> impl IntoView {
     };
 
     view! {
+        <div class="install-prompt install-prompt--webview" data-testid="install-prompt-webview">
+            <p class="install-prompt__title">
+                {move || i18n::t(lang.get(), title_key)}
+            </p>
+            <button
+                class="btn btn--ghost btn--block"
+                data-testid="install-prompt-copy-url"
+                on:click=on_copy_click
+            >
+                {move || i18n::t(lang.get(), "install_prompt_copy_button")}
+            </button>
+            {move || {
+                copied.get().then(|| view! {
+                    <div class="alert alert-success" data-testid="install-prompt-copy-confirm">
+                        {move || i18n::t(lang.get(), "install_prompt_copy_confirm")}
+                    </div>
+                })
+            }}
+        </div>
+    }
+    .into_any()
+}
+
+#[component]
+pub fn InstallPrompt() -> impl IntoView {
+    let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
+    // Detected once at mount — the deferred event (if any) has virtually
+    // always already fired by the time our WASM bundle finishes loading and
+    // this component mounts, and re-checking reactively would need either
+    // polling or a Rust-side event listener the design map didn't ask for.
+    let (kind, set_kind) = signal(detect_kind());
+
+    let on_install_click = move |_| {
+        // Hide immediately — the captured event can only be used once, so
+        // there is nothing useful to show after this click regardless of
+        // the user's choice in the native dialog.
+        set_kind.set(PromptKind::Hidden);
+        spawn_local(async move {
+            trigger_install_prompt().await;
+        });
+    };
+
+    view! {
+        // A known in-app browser is handled entirely by `InAppBrowserBanner`
+        // — `detect_kind()` returns `Hidden` for that case (see its doc), so
+        // this never renders alongside the Android/iOS branches below, only
+        // in place of them.
+        <InAppBrowserBanner />
         {move || match kind.get() {
             PromptKind::Hidden => ().into_any(),
             PromptKind::AndroidChromium => view! {
@@ -239,28 +293,6 @@ pub fn InstallPrompt() -> impl IntoView {
                     <p class="install-prompt__footer-hint" data-testid="install-prompt-ios-footer-hint">
                         {move || i18n::t(lang.get(), "install_prompt_ios_footer_hint")}
                     </p>
-                </div>
-            }
-            .into_any(),
-            PromptKind::IosWebview => view! {
-                <div class="install-prompt install-prompt--ios install-prompt--webview" data-testid="install-prompt-ios-webview">
-                    <p class="install-prompt__title">
-                        {move || i18n::t(lang.get(), "install_prompt_webview_title")}
-                    </p>
-                    <button
-                        class="btn btn--ghost btn--block"
-                        data-testid="install-prompt-copy-url"
-                        on:click=on_copy_click
-                    >
-                        {move || i18n::t(lang.get(), "install_prompt_copy_button")}
-                    </button>
-                    {move || {
-                        copied.get().then(|| view! {
-                            <div class="alert alert-success" data-testid="install-prompt-copy-confirm">
-                                {move || i18n::t(lang.get(), "install_prompt_copy_confirm")}
-                            </div>
-                        })
-                    }}
                 </div>
             }
             .into_any(),

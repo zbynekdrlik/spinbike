@@ -92,3 +92,90 @@ pub(crate) fn is_ios_ua(ua: &str) -> bool {
 pub(crate) fn is_ios_standalone() -> bool {
     is_standalone() && is_ios_ua(&user_agent())
 }
+
+/// Known in-app browsers (webviews) that expose NO "Add to Home Screen" /
+/// "open in system browser" surface at all — Facebook/Messenger, Instagram,
+/// LINE, the iOS Google app (GSA), and a generic Android in-app WebView
+/// (`"; wv)"` — the standard Android `WebView`-UA marker every Chromium-based
+/// in-app browser adds, e.g. Facebook/Instagram's Android webview, distinct
+/// from the iOS-only markers above it). This is a best-effort UA substring
+/// match; some webviews (notably iOS `SFSafariViewController`-based ones) are
+/// indistinguishable from real Safari and are NOT caught here.
+///
+/// **Single shared marker list (#248):** originally lived private in
+/// `components::install_prompt` as `is_ios_webview_ua`, checked only inside
+/// an iOS-only gate — an Android in-app browser (same apps, same webview
+/// problem) got NO banner at all, since a non-iOS UA short-circuited before
+/// the check ever ran. Promoted here (same `platform.rs` pattern as
+/// `is_ios_standalone` above) so it can be checked UNCONDITIONALLY —
+/// `install_prompt.rs`'s `InAppBrowserBanner` and any future call site share
+/// this ONE list; a marker added for one platform is automatically covered
+/// for the other.
+pub(crate) fn is_in_app_browser_ua(ua: &str) -> bool {
+    [
+        "FBAN",
+        "FBAV",
+        "FB_IAB",
+        "Instagram",
+        "Line/",
+        "GSA/",
+        "Messenger",
+        "; wv)",
+    ]
+    .into_iter()
+    .any(|marker| ua.contains(marker))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_in_app_browser_ua;
+    use wasm_bindgen_test::*;
+
+    const SAFARI_IOS: &str = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.4 Mobile/15E148 Safari/604.1";
+    const CHROME_ANDROID: &str = "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36";
+    const DESKTOP_CHROME: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
+    const ANDROID_WEBVIEW: &str = "Mozilla/5.0 (Linux; Android 14; Pixel 7 Build/UQ1A.240205.004; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Mobile Safari/537.36";
+
+    #[wasm_bindgen_test]
+    fn detects_every_known_in_app_browser_marker() {
+        let cases: [(&str, String); 8] = [
+            (
+                "FBAN (iOS Facebook)",
+                format!("{SAFARI_IOS} [FBAN/FBIOS;FBAV/300.0]"),
+            ),
+            (
+                "FBAV (Android Facebook)",
+                format!("{CHROME_ANDROID} FBAV/300.0.0.0.0"),
+            ),
+            ("FB_IAB", format!("{SAFARI_IOS} FB_IAB/FB4A")),
+            ("Instagram", format!("{SAFARI_IOS} Instagram 300.0.0.0.0")),
+            ("Line/", format!("{SAFARI_IOS} Line/13.0.0")),
+            (
+                "GSA/ (iOS Google app)",
+                format!("{SAFARI_IOS} GSA/300.0.123456"),
+            ),
+            ("Messenger", format!("{CHROME_ANDROID} Messenger")),
+            ("Android WebView (; wv))", ANDROID_WEBVIEW.to_string()),
+        ];
+        for (label, ua) in cases {
+            assert!(
+                is_in_app_browser_ua(&ua),
+                "expected {label} UA to match: {ua}"
+            );
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn plain_browsers_do_not_match() {
+        for (label, ua) in [
+            ("plain Safari iOS", SAFARI_IOS),
+            ("plain Chrome Android", CHROME_ANDROID),
+            ("plain desktop Chrome", DESKTOP_CHROME),
+        ] {
+            assert!(
+                !is_in_app_browser_ua(ua),
+                "expected {label} UA NOT to match: {ua}"
+            );
+        }
+    }
+}

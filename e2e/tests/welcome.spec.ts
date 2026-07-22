@@ -74,13 +74,28 @@ test.describe('Magic-link welcome page (#109)', () => {
         assertCleanConsole(consoleMessages);
     });
 
-    test('missing token shows the invalid state with the email form directly', async ({ page }) => {
+    // #247: the invalid-token screen now ALWAYS leads with the code method
+    // (regardless of platform) — the link the client just tried already
+    // failed, so re-offering the same link method first would repeat the
+    // exact failure. The link method stays reachable via the toggle.
+    test('missing token shows the invalid state, leading with the code form (#247)', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
         await setEnglishLanguage(page);
 
         await page.goto('/welcome');
         await page.waitForSelector('[data-testid="welcome-invalid"]', { timeout: 10000 });
+
+        await expect(page.locator('[data-testid="login-method-code"]')).toHaveAttribute(
+            'aria-selected',
+            'true',
+        );
+        await expect(page.locator('[data-testid="code-login-email-form"]')).toBeVisible();
+        await expect(page.locator('[data-testid="login-link-form"]')).toHaveCount(0);
+
+        // The link method stays reachable via the toggle.
+        await page.click('[data-testid="login-method-link"]');
         await expect(page.locator('[data-testid="login-link-form"]')).toBeVisible();
+        await expect(page.locator('[data-testid="code-login-email-form"]')).toHaveCount(0);
 
         assertCleanConsole(consoleMessages);
     });

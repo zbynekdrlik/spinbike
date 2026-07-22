@@ -120,7 +120,13 @@ pub fn WelcomePage() -> impl IntoView {
                     <div data-testid="welcome-invalid">
                         <h1 class="page-title">{move || i18n::t(lang.get(), "welcome_invalid_title")}</h1>
                         <p class="text-center text-muted">{move || i18n::t(lang.get(), "welcome_invalid_message")}</p>
-                        <CustomerLoginMethods />
+                        // #247: always lead with the code method here — the
+                        // link the client just tried already failed (used /
+                        // expired / opened in the wrong app), so re-offering
+                        // the same link method first would just repeat the
+                        // failure. The code is the recovery path regardless
+                        // of platform or why the link died.
+                        <CustomerLoginMethods lead_code=true />
                     </div>
                 }
                 .into_any(),

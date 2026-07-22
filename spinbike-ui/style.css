@@ -1561,7 +1561,8 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
 .install-prompt {
     margin: 1rem 0;
 }
-.install-prompt--ios {
+.install-prompt--ios,
+.install-prompt--webview {
     background: var(--surface, #fff);
     border-radius: 10px;
     padding: 1rem;

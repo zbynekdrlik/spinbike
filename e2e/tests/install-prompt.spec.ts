@@ -1,5 +1,5 @@
 import { test, expect, devices } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
+import { setupConsoleCheck, assertCleanConsole, loginViaAPI, setEnglishLanguage } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -90,12 +90,15 @@ test.describe('Install-to-home-screen component — iOS Safari guide', () => {
     });
 });
 
-// #226: known in-app-browsers (webviews) — Facebook/Messenger, Instagram,
-// LINE, the iOS Google app — have NO "Add to Home Screen" surface at all, so
-// showing the normal Share guide there is misleading. Detected via UA
-// substring markers; here we append the Instagram marker to a real iPhone UA
-// (in-app browsers layer their own token onto the underlying Safari/WebKit
-// UA string, they don't replace it).
+// #226/#248: known in-app-browsers (webviews) — Facebook/Messenger,
+// Instagram, LINE, the iOS Google app, and a generic Android in-app
+// WebView — have NO "Add to Home Screen" surface at all, so showing the
+// normal Share guide there is misleading. Detected via UA substring markers;
+// here we append the Instagram marker to a real iPhone UA (in-app browsers
+// layer their own token onto the underlying Safari/WebKit UA string, they
+// don't replace it). NOTE (#248): the testid was renamed from
+// `install-prompt-ios-webview` to `install-prompt-webview` when the check
+// was lifted out of the iOS-only gate to also cover Android.
 test.describe('Install-to-home-screen component — iOS webview (in-app browser)', () => {
     test.use({
         userAgent: `${iPhone.userAgent} Instagram 300.0.0.0.0`,
@@ -110,7 +113,9 @@ test.describe('Install-to-home-screen component — iOS webview (in-app browser)
         await page.goto('/my/balance');
         await page.waitForSelector('[data-testid="door-open-button"]', { timeout: 10000 });
 
-        await expect(page.locator('[data-testid="install-prompt-ios-webview"]')).toBeVisible();
+        const banner = page.locator('[data-testid="install-prompt-webview"]');
+        await expect(banner).toBeVisible();
+        await expect(banner).toContainText('Safari');
         await expect(page.locator('[data-testid="install-prompt-copy-url"]')).toBeVisible();
         // The A2HS steps and the normal iOS guide container must NOT render —
         // they're replaced, not merely supplemented.
@@ -144,6 +149,101 @@ test.describe('Install-to-home-screen component — iOS webview (in-app browser)
         expect(copied).not.toContain('?');
         expect(copied).not.toContain('leftover-token-should-not-be-copied');
         expect(copied).toContain('/my/balance');
+
+        assertCleanConsole(consoleMessages);
+    });
+});
+
+// #248: `detect_kind()`'s in-app-browser check used to be gated behind an
+// iOS-only UA check — a non-iOS UA short-circuited to Hidden before the
+// webview markers were ever checked, so an Android in-app browser got ZERO
+// guidance. The lifted-out, platform-agnostic `is_in_app_browser_ua`
+// predicate now also fires for the standard Android in-app-WebView UA
+// marker (`"; wv)"`, added by every Chromium-based in-app browser —
+// Facebook/Instagram/Messenger's own Android webviews included). Copy is
+// the non-iOS variant (recommends Chrome, not Safari).
+test.describe('Install-to-home-screen component — Android webview (in-app browser, #248)', () => {
+    test.use({
+        userAgent:
+            'Mozilla/5.0 (Linux; Android 14; Pixel 7 Build/UQ1A.240205.004; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/126.0.0.0 Mobile Safari/537.36',
+    });
+
+    test('shows the open-in-Chrome banner (not Safari) on /my/balance', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await loginViaAPI(page, BASE_URL, 'customer@test.com', 'password123');
+        await page.goto('/my/balance');
+        await page.waitForSelector('[data-testid="door-open-button"]', { timeout: 10000 });
+
+        const banner = page.locator('[data-testid="install-prompt-webview"]');
+        await expect(banner).toBeVisible();
+        await expect(banner).toContainText('Chrome');
+        await expect(banner).not.toContainText('Safari');
+        await expect(page.locator('[data-testid="install-prompt-copy-url"]')).toBeVisible();
+        // Neither the normal Android button nor the iOS guide render —
+        // replaced, not supplemented.
+        await expect(page.locator('[data-testid="install-prompt-android"]')).toHaveCount(0);
+        await expect(page.locator('[data-testid="install-prompt-ios"]')).toHaveCount(0);
+
+        assertCleanConsole(consoleMessages);
+    });
+
+    // #248 item 2: /login previously had NO in-app-browser guidance at all —
+    // the webview banner mounts there STANDALONE (no full A2HS install
+    // prompt, only the "open in a real browser" guidance).
+    test('shows the same banner standalone on /login (webview banner only, no full install prompt)', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await setEnglishLanguage(page);
+        await page.goto('/login');
+        await page.waitForSelector('h1.page-title');
+
+        const banner = page.locator('[data-testid="install-prompt-webview"]');
+        await expect(banner).toBeVisible();
+        await expect(banner).toContainText('Chrome');
+        await expect(page.locator('[data-testid="install-prompt-android"]')).toHaveCount(0);
+        await expect(page.locator('[data-testid="install-prompt-ios"]')).toHaveCount(0);
+
+        assertCleanConsole(consoleMessages);
+    });
+});
+
+// #248: the iOS in-app-browser banner ALSO now mounts standalone on /login
+// (previously only reachable via InstallPrompt on /welcome and /my/balance).
+test.describe('Install-to-home-screen component — iOS webview banner on /login (#248)', () => {
+    test.use({
+        userAgent: `${iPhone.userAgent} Instagram 300.0.0.0.0`,
+        viewport: iPhone.viewport,
+        isMobile: iPhone.isMobile,
+        hasTouch: iPhone.hasTouch,
+    });
+
+    test('shows the open-in-Safari banner on /login', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await setEnglishLanguage(page);
+        await page.goto('/login');
+        await page.waitForSelector('h1.page-title');
+
+        const banner = page.locator('[data-testid="install-prompt-webview"]');
+        await expect(banner).toBeVisible();
+        await expect(banner).toContainText('Safari');
+
+        assertCleanConsole(consoleMessages);
+    });
+});
+
+// A plain (non-webview) UA must show NOTHING on /login — the default
+// Playwright UA carries no in-app-browser marker at all (#248 audit per the
+// e2e-testing skill: verify the untouched case explicitly, not just imply it).
+test.describe('Install-to-home-screen component — normal UA on /login (#248)', () => {
+    test('shows no webview banner on /login', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await setEnglishLanguage(page);
+        await page.goto('/login');
+        await page.waitForSelector('h1.page-title');
+
+        await expect(page.locator('[data-testid="install-prompt-webview"]')).toHaveCount(0);
+        await expect(page.locator('[data-testid="install-prompt-copy-url"]')).toHaveCount(0);
 
         assertCleanConsole(consoleMessages);
     });

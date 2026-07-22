@@ -5,7 +5,7 @@ use web_sys::HtmlInputElement;
 
 use crate::api;
 use crate::auth::{self, AuthData, UserInfo};
-use crate::components::CustomerLoginMethods;
+use crate::components::{CustomerLoginMethods, InAppBrowserBanner};
 use crate::i18n::{self, Lang};
 
 #[derive(serde::Serialize)]
@@ -110,6 +110,12 @@ pub fn LoginPage() -> impl IntoView {
 
     view! {
         <div class="page-form">
+            // #248: webview guidance ONLY — a client landing here inside a
+            // known in-app browser (Facebook/Instagram/Messenger/Android
+            // WebView) gets told to open a real browser BEFORE trying either
+            // login form. `/login` deliberately does NOT mount the full
+            // `InstallPrompt` (no A2HS install button/guide belongs here).
+            <InAppBrowserBanner />
             <h1 class="page-title">{move || i18n::t(lang.get(), "login")}</h1>
             {move || {
                 match error.get() {

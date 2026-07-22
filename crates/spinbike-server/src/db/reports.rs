@@ -15,13 +15,23 @@ pub fn parse_before_cursor(before: &str) -> Option<(String, i64)> {
 
 /// Fetch all non-voided transactions for a single day, joined with card + service data.
 /// Returns events sorted by (created_at, id) DESC and a KpiSummary aggregated over the whole day.
+///
+/// `date` is the GYM-LOCAL (Europe/Bratislava) calendar day — bucketed via
+/// `util::bratislava_day_range_utc`'s half-open UTC-instant range against the
+/// UTC-instant `created_at` column, never a raw `date(created_at)` (#251:
+/// that compared the UTC calendar date directly, silently hiding/miscounting
+/// any transaction created 00:00-02:00 Bratislava-local until the UTC date
+/// caught up — the same bug class #239/#240/#242/#246 already fixed at
+/// every other call site, missed here).
 pub async fn day_report(
     pool: &SqlitePool,
     date: chrono::NaiveDate,
     limit: i64,
     before: Option<String>,
 ) -> Result<(KpiSummary, Vec<ReportEvent>, bool)> {
-    let date_str = date.format("%Y-%m-%d").to_string();
+    let (start, end) = crate::util::bratislava_day_range_utc(date);
+    let start_str = start.format("%Y-%m-%d %H:%M:%S").to_string();
+    let end_str = end.format("%Y-%m-%d %H:%M:%S").to_string();
     let before_parsed = before.as_deref().and_then(parse_before_cursor);
 
     // Events — paginated with composite (created_at, id) cursor for stable
@@ -34,7 +44,7 @@ pub async fn day_report(
          FROM transactions t
          LEFT JOIN users u ON u.id = t.user_id  -- no deleted_at filter: historical txns for soft-deleted users still display (name/code shows blank)
          LEFT JOIN services s ON s.id = t.service_id
-         WHERE date(t.created_at) = ?
+         WHERE t.created_at >= ? AND t.created_at < ?
            AND t.deleted_at IS NULL",
     );
     if before_parsed.is_some() {
@@ -43,7 +53,9 @@ pub async fn day_report(
     }
     query.push_str(" ORDER BY t.created_at DESC, t.id DESC LIMIT ?");
 
-    let mut q = sqlx::query_as::<_, DbEventRow>(&query).bind(&date_str);
+    let mut q = sqlx::query_as::<_, DbEventRow>(&query)
+        .bind(&start_str)
+        .bind(&end_str);
     if let Some((ref ts, id)) = before_parsed {
         q = q.bind(ts).bind(ts).bind(id);
     }
@@ -56,8 +68,8 @@ pub async fn day_report(
     }
     let events: Vec<ReportEvent> = rows.into_iter().map(Into::into).collect();
 
-    // Class-visit names bound from spinbike_core::services constants — `?2`
-    // is Spinning (for the new spinning_visits aggregate) and `?3` is
+    // Class-visit names bound from spinbike_core::services constants — `?3`
+    // is Spinning (for the new spinning_visits aggregate) and `?4` is
     // Fitness (so the attendance aggregate still counts both).
     // NOTE: `ELSE 0.0` (not `ELSE 0`) is required for cash_in_eur — otherwise
     // SQLite returns INTEGER for the SUM when no rows match and sqlx refuses
@@ -66,7 +78,7 @@ pub async fn day_report(
         "SELECT
             COALESCE(SUM(
               CASE
-                WHEN service_id IN (SELECT id FROM services WHERE name_en = ?2)
+                WHEN service_id IN (SELECT id FROM services WHERE name_en = ?3)
                  AND (
                    (action = 'charge' AND amount < 0 AND valid_until IS NULL)
                    OR action = 'visit'
@@ -76,7 +88,7 @@ pub async fn day_report(
             ), 0) AS spinning_visits,
             COALESCE(SUM(
               CASE
-                WHEN service_id IN (SELECT id FROM services WHERE name_en IN (?2, ?3))
+                WHEN service_id IN (SELECT id FROM services WHERE name_en IN (?3, ?4))
                  AND (
                    (action = 'charge' AND amount < 0 AND valid_until IS NULL)
                    OR action = 'visit'
@@ -87,9 +99,10 @@ pub async fn day_report(
             COALESCE(SUM(CASE WHEN valid_until IS NOT NULL THEN 1 ELSE 0 END), 0) AS passes_sold,
             COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0.0 END), 0.0) AS cash_in_eur
          FROM transactions
-         WHERE date(created_at) = ?1 AND deleted_at IS NULL",
+         WHERE created_at >= ?1 AND created_at < ?2 AND deleted_at IS NULL",
     )
-    .bind(&date_str)
+    .bind(&start_str)
+    .bind(&end_str)
     .bind(spinbike_core::services::SPINNING_NAME_EN)
     .bind(spinbike_core::services::FITNESS_NAME_EN)
     .fetch_one(pool)
@@ -157,6 +170,11 @@ pub const RANGE_MAX_DAYS: i64 = 93;
 
 /// Fetch all non-voided transactions across a date range, aggregated.
 /// Caller is responsible for enforcing `RANGE_MAX_DAYS`.
+///
+/// `from`/`to` are GYM-LOCAL (Europe/Bratislava) calendar days — bucketed via
+/// the combined half-open UTC-instant range `[bratislava_day_range_utc(from).0,
+/// bratislava_day_range_utc(to).1)`, never a raw `date(created_at) BETWEEN`
+/// (#251 — see `day_report`'s doc comment for the full bug).
 pub async fn range_report(
     pool: &SqlitePool,
     from: chrono::NaiveDate,
@@ -164,8 +182,10 @@ pub async fn range_report(
     limit: i64,
     before: Option<String>,
 ) -> Result<(KpiSummary, Vec<ReportEvent>, bool)> {
-    let from_str = from.format("%Y-%m-%d").to_string();
-    let to_str = to.format("%Y-%m-%d").to_string();
+    let (from_start, _) = crate::util::bratislava_day_range_utc(from);
+    let (_, to_end) = crate::util::bratislava_day_range_utc(to);
+    let from_str = from_start.format("%Y-%m-%d %H:%M:%S").to_string();
+    let to_str = to_end.format("%Y-%m-%d %H:%M:%S").to_string();
     let before_parsed = before.as_deref().and_then(parse_before_cursor);
 
     let mut query = String::from(
@@ -176,7 +196,7 @@ pub async fn range_report(
          FROM transactions t
          LEFT JOIN users u ON u.id = t.user_id  -- no deleted_at filter: historical txns for soft-deleted users still display (name/code shows blank)
          LEFT JOIN services s ON s.id = t.service_id
-         WHERE date(t.created_at) BETWEEN ? AND ?
+         WHERE t.created_at >= ? AND t.created_at < ?
            AND t.deleted_at IS NULL",
     );
     if before_parsed.is_some() {
@@ -226,7 +246,7 @@ pub async fn range_report(
             COALESCE(SUM(CASE WHEN valid_until IS NOT NULL THEN 1 ELSE 0 END), 0) AS passes_sold,
             COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0.0 END), 0.0) AS cash_in_eur
          FROM transactions
-         WHERE date(created_at) BETWEEN ?1 AND ?2 AND deleted_at IS NULL",
+         WHERE created_at >= ?1 AND created_at < ?2 AND deleted_at IS NULL",
     )
     .bind(&from_str)
     .bind(&to_str)
@@ -411,8 +431,15 @@ mod tests {
             .unwrap();
 
         // Use today's date — all `create_transaction*` calls default
-        // `created_at = datetime('now')`, so day_report(today) sees them all.
-        let today = chrono::Local::now().naive_local().date();
+        // `created_at = datetime('now')` (a UTC instant), and day_report now
+        // buckets by the Bratislava-LOCAL day (#251) — so "today" here MUST
+        // be `today_bratislava()`, the same anchor the code under test uses,
+        // not `chrono::Local` (the OS/runner timezone: agrees with Bratislava
+        // on a Bratislava-TZ dev box, but disagrees with it on a UTC CI
+        // runner during the 00:00-02:00 Bratislava window — which is exactly
+        // how this test flaked live on CI run 29962390657, in the same
+        // ~22:00-24:00 UTC slice that exposed #251 itself).
+        let today = crate::util::today_bratislava();
 
         let (day_kpi, _, _) = super::day_report(&pool, today, 50, None).await.unwrap();
         assert_eq!(
@@ -441,5 +468,75 @@ mod tests {
         assert_eq!(day_kpi.passes_sold, 1);
         // cash_in_eur sums positive-amount rows: just the topup.
         assert!((day_kpi.cash_in_eur - 10.00).abs() < 0.001);
+    }
+
+    // ----- #251: day/range reports must bucket by Bratislava-LOCAL day, not
+    // raw UTC calendar date -----
+    //
+    // Bratislava-local midnight of 2026-07-15 is UTC 2026-07-14 22:00:00
+    // (CEST, UTC+2 in July). A transaction created at UTC 2026-07-14
+    // 23:00:00 is therefore on Bratislava-LOCAL day 2026-07-15 (01:00 local)
+    // but on raw-UTC-CALENDAR day 2026-07-14 — exactly the 00:00-02:00
+    // Bratislava-local window the pre-fix `date(created_at) = ?` SQL gets
+    // wrong (it matches the UTC date, not the gym's local day).
+    #[tokio::test]
+    async fn day_and_range_reports_bucket_by_bratislava_local_day_not_raw_utc_date() {
+        let (pool, user_id) = setup_pool_with_user().await;
+        let fitness_id =
+            service_id_by_name_en(&pool, spinbike_core::services::FITNESS_NAME_EN).await;
+
+        sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, created_at)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(user_id)
+        .bind(fitness_id)
+        .bind(-5.0_f64)
+        .bind("charge")
+        .bind("2026-07-14 23:00:00")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let bratislava_day = chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap();
+        let (day_kpi, day_events, _) = super::day_report(&pool, bratislava_day, 50, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            day_events.len(),
+            1,
+            "a transaction at 01:00 Bratislava-local on 2026-07-15 (23:00 UTC on \
+             2026-07-14) must appear in day_report(2026-07-15) — the Bratislava-local \
+             day, not the raw UTC calendar date"
+        );
+        assert_eq!(
+            day_kpi.attendance, 1,
+            "must count toward the Bratislava-local day's attendance"
+        );
+
+        let (range_kpi, range_events, _) =
+            super::range_report(&pool, bratislava_day, bratislava_day, 50, None)
+                .await
+                .unwrap();
+        assert_eq!(
+            range_events.len(),
+            1,
+            "range_report must agree with day_report on the same Bratislava-local day"
+        );
+        assert_eq!(range_kpi.attendance, 1);
+
+        // Must NOT also appear under the raw UTC calendar day — a range fix
+        // that widened the match to include both days would be equally wrong
+        // (double-counting), not just a different way to miss the boundary.
+        let utc_day = chrono::NaiveDate::from_ymd_opt(2026, 7, 14).unwrap();
+        let (utc_day_kpi, utc_day_events, _) =
+            super::day_report(&pool, utc_day, 50, None).await.unwrap();
+        assert_eq!(
+            utc_day_events.len(),
+            0,
+            "must NOT appear under the raw UTC calendar day — it belongs to the \
+             Bratislava-local day 2026-07-15 only"
+        );
+        assert_eq!(utc_day_kpi.attendance, 0);
     }
 }

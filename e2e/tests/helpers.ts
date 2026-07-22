@@ -1,6 +1,33 @@
 import { Page, expect } from '@playwright/test';
 
 /**
+ * Today's date in Europe/Bratislava, as YYYY-MM-DD — matches the server's
+ * `util::today_bratislava()` anchor. `spinbike-server`'s day/range reports
+ * (and several other endpoints) bucket transactions by the GYM-LOCAL day,
+ * not raw UTC (#251) — so any E2E test that needs "today" to agree with the
+ * server's own day-boundary decision MUST use this, never
+ * `new Date().toISOString().slice(0, 10)` (a UTC date). The two disagree
+ * during the 00:00-02:00 Bratislava-local window (a UTC CI runner can still
+ * be on the previous UTC day while Bratislava has already rolled over) —
+ * an intermittent, CI-only flake that's hard to reproduce on a non-UTC dev
+ * machine (#251 surfaced exactly this way).
+ */
+export function bratislavaToday(): string {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'Europe/Bratislava' });
+}
+
+/**
+ * `bratislavaToday()` shifted by `days` CALENDAR days (negative = past).
+ * Pure calendar-date arithmetic (via `Date.UTC` on the broken-down Y/M/D,
+ * which normalizes month/day overflow) — no timezone ambiguity, unlike
+ * adding milliseconds to `Date.now()` and re-deriving a UTC date from that.
+ */
+export function bratislavaDateOffset(days: number): string {
+    const [y, m, d] = bratislavaToday().split('-').map(Number);
+    return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
+}
+
+/**
  * Set up console error/warning collection on a page.
  * Returns an array that accumulates messages during the test.
  *

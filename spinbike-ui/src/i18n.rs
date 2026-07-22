@@ -333,11 +333,16 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         "welcome_invalid_title",
         ("Odkaz nie je platny", "This link isn't valid"),
     );
+    // #247: plain-language recovery copy. Says WHY the link likely died (it
+    // was already opened once — e.g. by a mail app's own in-app webview
+    // before the real browser got to it — or it's simply old) in human
+    // terms, and leads with the code as the recommended fix (the form below
+    // this text now defaults to the code method via `lead_code=true`).
     m.insert(
         "welcome_invalid_message",
         (
-            "Odkaz je bud neplatny, expirovany, alebo uz bol pouzity. Zadaj svoj email a poslime ti novy.",
-            "This link is invalid, expired, or already used. Enter your email and we'll send you a new one.",
+            "Tento odkaz uz bol pouzity alebo sa otvoril v inej aplikacii (napr. v Gmaile). Najjednoduchsie: nechaj si poslat 6-miestny kod a zadaj ho tu.",
+            "This link was already used or opened in a different app (e.g. Gmail). Easiest fix: get a 6-digit code sent to you and enter it here.",
         ),
     );
     // iOS-only post-install note (#228): after installing to the home screen,
@@ -403,6 +408,16 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         (
             "Instalacia tu nie je mozna - otvor stranku v Safari",
             "Installation isn't possible here - open the page in Safari",
+        ),
+    );
+    // #248: same in-app-browser banner, non-iOS copy — Android in-app
+    // browsers (Facebook/Messenger/Instagram/generic WebView) have no Safari;
+    // Chrome is the safe universal recommendation there.
+    m.insert(
+        "install_prompt_webview_title_other",
+        (
+            "Instalacia tu nie je mozna - otvor stranku v prehliadaci (Chrome)",
+            "Installation isn't possible here - open the page in a browser (Chrome)",
         ),
     );
     m.insert(
