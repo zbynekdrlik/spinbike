@@ -2,8 +2,9 @@
 //! query string via `POST /api/auth/token-login`, stores the session exactly
 //! like the login page does, and shows a welcome message + CTA. An
 //! invalid/expired/already-used token (or a missing `t` param) falls back to
-//! a friendly message plus the shared [`LoginLinkForm`] — the client can
-//! always ask for a fresh link.
+//! the shared [`CustomerLoginMethods`] (code-first per #247 — both the
+//! 6-digit code and the login-link request are reachable via toggle) — the
+//! client can always ask for a fresh link.
 //!
 //! Public route — the token itself is the authentication, so there is no
 //! auth gate here (see router.rs).

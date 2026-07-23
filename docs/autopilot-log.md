@@ -3,6 +3,18 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-07-23 — #253: welcome.rs module doc fixed to match current Invalid-branch behavior (dev.111)
+
+- **Why:** doc comment (lines ~1-6) still claimed the invalid/expired/missing
+  token fallback rendered "a friendly message plus the shared `LoginLinkForm`"
+  — stale since the #247/#230 code-login work replaced that fallback with
+  `CustomerLoginMethods`. Found by the post-merge deep review of PR #250.
+- **Fix**: rewrote the doc sentence to say the Invalid branch renders the
+  shared `CustomerLoginMethods` (code-first per #247, both methods reachable
+  via toggle). Docs-only, no behavior change — `[no-test: doc-comment-only
+  change, no logic]`.
+- **Commit**: `docs(ui): fix stale welcome.rs module header ...` (solo PR).
+
 ## 2026-07-21 — #232: edit-user invite stays in-sheet, renamed save+send (dev.100)
 
 - **Why:** "Poslat pozvanku" closed the edit sheet unconditionally on BOTH
