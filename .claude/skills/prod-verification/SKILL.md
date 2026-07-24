@@ -133,12 +133,39 @@ claim, no DB lookup on the CALLER. So verifying an admin-only UI change
   synthetic user id.** `UID` is a bash READONLY (= the OS uid, `1000` here), so
   `UID=$(sqlite3 ... "SELECT id FROM users WHERE email=...")` **silently fails**
   ("readonly variable"), and every later `user_id=$UID` INSERT attaches to a
-  dangling `user_id=1000` (no such user row → SQLite's default `PRAGMA
-  foreign_keys=OFF` lets it through), NOT your synthetic user. Discovered on
-  #168 verify — the movements/booking landed on a non-existent user 1000 and had
-  to be re-inserted. Use a distinctive name (`SYN_ID`), and after inserting
-  ALWAYS assert the rows are on the real synthetic id
+  dangling `user_id=1000` (no such user row — a raw `sqlite3` CLI session
+  defaults `PRAGMA foreign_keys=OFF`, so it lets a dangling FK through
+  silently), NOT your synthetic user. Discovered on #168 verify — the
+  movements/booking landed on a non-existent user 1000 and had to be
+  re-inserted. Use a distinctive name (`SYN_ID`), and after inserting ALWAYS
+  assert the rows are on the real synthetic id
   (`SELECT count(*) ... WHERE user_id=$SYN_ID`) before driving the API.
+  **This "FK off" default is specific to a raw `sqlite3` CLI session — see
+  the very different behavior through the real app below.**
+- **The APP's OWN connections run `PRAGMA foreign_keys=ON` (`db/mod.rs:45,69`
+  — `.foreign_keys(true)` on both the read and write `SqliteConnectOptions`),
+  UNLIKE a raw `sqlite3` CLI session (FK off by default, see above).** So the
+  "admin/staff shortcut — mint a JWT with a non-existent `sub`, no DB row
+  needed" (two sections above) holds ONLY while nothing you drive through
+  that token ever WRITES a `transactions` row attributing the action to that
+  actor. `transactions.staff_id INTEGER REFERENCES users(id)` is a REAL,
+  enforced FK on this connection pool. Any real write endpoint that stamps
+  `staff_id`/`created_by` from the JWT's `sub` — `POST /api/payments/charge`,
+  `POST /api/payments/topup`, `POST /api/users` with `initial_credit > 0`
+  (logs a `topup` transaction) — will 500 `FOREIGN KEY constraint failed`
+  the instant `sub` doesn't resolve to a real row (confirmed live on #255:
+  `journalctl -u spinbike.service` showed the exact SQLite error `code: 787`).
+  Note the partial-commit trap this causes: `POST /api/users` inserts the
+  `users` row FIRST (succeeds, since `users` has no FK on itself) and only
+  THEN attempts the topup transaction insert (fails) — so you're left with a
+  real user row whose `credit` column already reflects the requested
+  `initial_credit` (bound directly at INSERT time) but with NO matching
+  audit-trail transaction row; still safe to use for further verification,
+  just don't be surprised by the missing topup row when cleaning up.
+  **Fix: insert ONE throwaway STAFF row directly via SQL FIRST** (same
+  pattern as the customer recipe above, just `role='staff'`), mint the JWT's
+  `sub` against ITS real id, THEN drive the write endpoints. Clean up both
+  rows (and anything they created) after.
 - **Booking a real class occurrence via raw SQL** needs a valid `template_id`
   (from `class_templates`) + a future `date` matching a real occurrence — get
   the id from `GET /api/classes?from=&to=` (public), e.g. template 1 recurs
