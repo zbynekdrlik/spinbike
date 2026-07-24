@@ -838,6 +838,13 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("kpi_passes", ("PERMANENTKY", "PASSES"));
     m.insert("kpi_cash_in", ("VKLADY", "CASH IN"));
 
+    // Reports — category revenue breakdown (#255)
+    m.insert(
+        "category_revenue_heading",
+        ("Trzby po kategoriach", "Revenue by category"),
+    );
+    m.insert("category_revenue_total", ("Spolu", "Total"));
+
     // Reports — filters
     m.insert("filters_label", ("Filtre", "Filters"));
     m.insert("filters_reset", ("Zrusit filtre", "Reset"));

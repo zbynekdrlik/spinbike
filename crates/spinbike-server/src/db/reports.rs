@@ -1,7 +1,7 @@
 use crate::db::error::Result;
 use sqlx::SqlitePool;
 
-use spinbike_core::reports::{KpiSummary, ReportEvent};
+use spinbike_core::reports::{CategoryRevenue, KpiSummary, ReportEvent};
 
 /// Pagination cursor: `(created_at, id)` from the last row of the prior page.
 /// Encoded over the wire as `"<created_at>|<id>"`. Composite key avoids
@@ -28,7 +28,7 @@ pub async fn day_report(
     date: chrono::NaiveDate,
     limit: i64,
     before: Option<String>,
-) -> Result<(KpiSummary, Vec<ReportEvent>, bool)> {
+) -> Result<(KpiSummary, Vec<CategoryRevenue>, Vec<ReportEvent>, bool)> {
     let (start, end) = crate::util::bratislava_day_range_utc(date);
     let start_str = start.format("%Y-%m-%d %H:%M:%S").to_string();
     let end_str = end.format("%Y-%m-%d %H:%M:%S").to_string();
@@ -115,7 +115,61 @@ pub async fn day_report(
         cash_in_eur: kpi_row.cash_in_eur,
     };
 
-    Ok((kpi, events, has_more))
+    let category_revenue = category_revenue_between(pool, &start_str, &end_str).await?;
+
+    Ok((kpi, category_revenue, events, has_more))
+}
+
+/// Revenue per active service over the half-open UTC-instant range
+/// `[start_str, end_str)` — same bound shape as the KPI aggregate above
+/// (`#251`: never a raw `date(created_at)` compare). LEFT JOIN so every
+/// active service appears even with zero sales in the period (`total_eur:
+/// 0.0`). Only `action='charge' AND amount < 0` counts — excludes `visit`
+/// (amount 0, free door entry) and `topup` (already covered by the
+/// cash_in_eur KPI tile); `storno` rows have `service_id IS NULL` so they
+/// never join to a service row at all. See `#255`.
+async fn category_revenue_between(
+    pool: &SqlitePool,
+    start_str: &str,
+    end_str: &str,
+) -> Result<Vec<CategoryRevenue>> {
+    let rows: Vec<DbCategoryRow> = sqlx::query_as::<_, DbCategoryRow>(
+        "SELECT s.id AS service_id, s.name_sk, s.name_en,
+                COALESCE(ROUND(SUM(CASE WHEN t.action = 'charge' AND t.amount < 0 THEN -t.amount ELSE 0.0 END), 2), 0.0) AS total_eur
+         FROM services s
+         LEFT JOIN transactions t
+                ON t.service_id = s.id
+               AND t.created_at >= ?1 AND t.created_at < ?2
+               AND t.deleted_at IS NULL
+         WHERE s.active = 1
+         GROUP BY s.id
+         ORDER BY total_eur DESC, s.name_sk",
+    )
+    .bind(start_str)
+    .bind(end_str)
+    .fetch_all(pool)
+    .await?;
+
+    Ok(rows.into_iter().map(Into::into).collect())
+}
+
+#[derive(sqlx::FromRow)]
+struct DbCategoryRow {
+    service_id: i64,
+    name_sk: String,
+    name_en: String,
+    total_eur: f64,
+}
+
+impl From<DbCategoryRow> for CategoryRevenue {
+    fn from(r: DbCategoryRow) -> Self {
+        CategoryRevenue {
+            service_id: r.service_id,
+            name_sk: r.name_sk,
+            name_en: r.name_en,
+            total_eur: r.total_eur,
+        }
+    }
 }
 
 #[derive(sqlx::FromRow)]
@@ -181,7 +235,7 @@ pub async fn range_report(
     to: chrono::NaiveDate,
     limit: i64,
     before: Option<String>,
-) -> Result<(KpiSummary, Vec<ReportEvent>, bool)> {
+) -> Result<(KpiSummary, Vec<CategoryRevenue>, Vec<ReportEvent>, bool)> {
     let (from_start, _) = crate::util::bratislava_day_range_utc(from);
     let (_, to_end) = crate::util::bratislava_day_range_utc(to);
     let from_str = from_start.format("%Y-%m-%d %H:%M:%S").to_string();
@@ -255,6 +309,8 @@ pub async fn range_report(
     .fetch_one(pool)
     .await?;
 
+    let category_revenue = category_revenue_between(pool, &from_str, &to_str).await?;
+
     Ok((
         KpiSummary {
             spinning_visits: kpi_row.spinning_visits,
@@ -262,6 +318,7 @@ pub async fn range_report(
             passes_sold: kpi_row.passes_sold,
             cash_in_eur: kpi_row.cash_in_eur,
         },
+        category_revenue,
         events,
         has_more,
     ))
@@ -441,7 +498,7 @@ mod tests {
         // ~22:00-24:00 UTC slice that exposed #251 itself).
         let today = crate::util::today_bratislava();
 
-        let (day_kpi, _, _) = super::day_report(&pool, today, 50, None).await.unwrap();
+        let (day_kpi, _, _, _) = super::day_report(&pool, today, 50, None).await.unwrap();
         assert_eq!(
             day_kpi.attendance, 4,
             "day_report attendance must count only Fitness/Spinning paid+visit rows"
@@ -451,7 +508,7 @@ mod tests {
             "day_report spinning_visits = 1 paid Spinning charge + 1 zero-amount Spinning visit"
         );
 
-        let (range_kpi, _, _) = super::range_report(&pool, today, today, 50, None)
+        let (range_kpi, _, _, _) = super::range_report(&pool, today, today, 50, None)
             .await
             .unwrap();
         assert_eq!(
@@ -499,7 +556,7 @@ mod tests {
         .unwrap();
 
         let bratislava_day = chrono::NaiveDate::from_ymd_opt(2026, 7, 15).unwrap();
-        let (day_kpi, day_events, _) = super::day_report(&pool, bratislava_day, 50, None)
+        let (day_kpi, _, day_events, _) = super::day_report(&pool, bratislava_day, 50, None)
             .await
             .unwrap();
         assert_eq!(
@@ -514,7 +571,7 @@ mod tests {
             "must count toward the Bratislava-local day's attendance"
         );
 
-        let (range_kpi, range_events, _) =
+        let (range_kpi, _, range_events, _) =
             super::range_report(&pool, bratislava_day, bratislava_day, 50, None)
                 .await
                 .unwrap();
@@ -529,7 +586,7 @@ mod tests {
         // that widened the match to include both days would be equally wrong
         // (double-counting), not just a different way to miss the boundary.
         let utc_day = chrono::NaiveDate::from_ymd_opt(2026, 7, 14).unwrap();
-        let (utc_day_kpi, utc_day_events, _) =
+        let (utc_day_kpi, _, utc_day_events, _) =
             super::day_report(&pool, utc_day, 50, None).await.unwrap();
         assert_eq!(
             utc_day_events.len(),
@@ -538,5 +595,189 @@ mod tests {
              Bratislava-local day 2026-07-15 only"
         );
         assert_eq!(utc_day_kpi.attendance, 0);
+    }
+
+    // ----- #255: revenue-per-category breakdown -----
+    //
+    // Full per-active-service breakdown (Doplnky vyzivy is one row among all
+    // active services, not its own KPI tile — see the CEO decision on #255).
+    // Discriminating fixture: charges on >=2 services, a zero-amount `visit`,
+    // a `topup` (no service), and a €0 monthly-pass sale — proving the SUM
+    // only counts `action='charge' AND amount<0`, every active service
+    // appears (LEFT JOIN, 0.0 for no sales), and the rows are sorted
+    // total_eur DESC. Checked against BOTH day_report and range_report on
+    // the same day.
+    #[tokio::test]
+    async fn category_revenue_sums_charges_per_service_excludes_visit_and_topup() {
+        let (pool, user_id) = setup_pool_with_user().await;
+
+        let fitness_id =
+            service_id_by_name_en(&pool, spinbike_core::services::FITNESS_NAME_EN).await;
+        let supplements_id = service_id_by_name_en(&pool, "Supplements").await;
+        let monthly_pass_id = service_id_by_name_en(&pool, "Monthly pass").await;
+
+        // Two charges on Fitness: 5.0 + 2.5 = 7.5.
+        create_transaction(
+            &pool,
+            Some(user_id),
+            None,
+            Some(fitness_id),
+            -5.0,
+            "charge",
+            None,
+        )
+        .await
+        .unwrap();
+        create_transaction(
+            &pool,
+            Some(user_id),
+            None,
+            Some(fitness_id),
+            -2.5,
+            "charge",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // One charge on Supplements (Doplnky vyzivy): 3.0.
+        create_transaction(
+            &pool,
+            Some(user_id),
+            None,
+            Some(supplements_id),
+            -3.0,
+            "charge",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // A free (€0) monthly-pass sale — amount is not < 0, so it must NOT
+        // add to Monthly pass revenue even though it's a real sale event.
+        let valid_until = chrono::NaiveDate::from_ymd_opt(2030, 1, 1).unwrap();
+        create_transaction_with_valid_until(
+            &pool,
+            Some(user_id),
+            None,
+            Some(monthly_pass_id),
+            0.0,
+            "charge",
+            Some(valid_until),
+            None,
+        )
+        .await
+        .unwrap();
+
+        // A zero-amount `visit` on Fitness — must NOT add to Fitness revenue
+        // (action != 'charge', even though it's the same service).
+        create_transaction(
+            &pool,
+            Some(user_id),
+            None,
+            Some(fitness_id),
+            0.0,
+            "visit",
+            None,
+        )
+        .await
+        .unwrap();
+
+        // A topup — positive amount, no service_id — must not count anywhere
+        // (it's already covered by the separate cash_in_eur KPI tile).
+        create_transaction(&pool, Some(user_id), None, None, 10.0, "topup", None)
+            .await
+            .unwrap();
+
+        let active_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE active = 1")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        let today = crate::util::today_bratislava();
+
+        let (_, day_category, _, _) = super::day_report(&pool, today, 50, None).await.unwrap();
+        assert_category_revenue_fixture(
+            &day_category,
+            active_count,
+            fitness_id,
+            supplements_id,
+            monthly_pass_id,
+        );
+
+        let (_, range_category, _, _) = super::range_report(&pool, today, today, 50, None)
+            .await
+            .unwrap();
+        assert_category_revenue_fixture(
+            &range_category,
+            active_count,
+            fitness_id,
+            supplements_id,
+            monthly_pass_id,
+        );
+    }
+
+    fn assert_category_revenue_fixture(
+        rows: &[spinbike_core::reports::CategoryRevenue],
+        active_count: i64,
+        fitness_id: i64,
+        supplements_id: i64,
+        monthly_pass_id: i64,
+    ) {
+        assert_eq!(
+            rows.len() as i64,
+            active_count,
+            "every active service must appear via LEFT JOIN, even with zero sales"
+        );
+
+        let by_id = |id: i64| {
+            rows.iter()
+                .find(|r| r.service_id == id)
+                .unwrap_or_else(|| panic!("service {id} missing from category_revenue"))
+        };
+
+        let fitness = by_id(fitness_id);
+        assert!(
+            (fitness.total_eur - 7.5).abs() < 0.001,
+            "fitness revenue must be 5.0 + 2.5 = 7.5, excluding the zero-amount visit; got {}",
+            fitness.total_eur
+        );
+
+        let supplements = by_id(supplements_id);
+        assert!(
+            (supplements.total_eur - 3.0).abs() < 0.001,
+            "supplements revenue must be 3.0; got {}",
+            supplements.total_eur
+        );
+        assert_eq!(supplements.name_en, "Supplements");
+
+        let monthly_pass = by_id(monthly_pass_id);
+        assert_eq!(
+            monthly_pass.total_eur, 0.0,
+            "a free (€0) monthly-pass sale must contribute 0 to its category total"
+        );
+
+        // Every other active service with no sales this period is present at 0.0.
+        for r in rows
+            .iter()
+            .filter(|r| r.service_id != fitness_id && r.service_id != supplements_id)
+        {
+            assert_eq!(
+                r.total_eur, 0.0,
+                "service {} had no charges this period and must read 0.0",
+                r.service_id
+            );
+        }
+
+        // Sorted by total_eur DESC.
+        for w in rows.windows(2) {
+            assert!(
+                w[0].total_eur >= w[1].total_eur,
+                "category_revenue rows must be sorted total_eur DESC: {} then {}",
+                w[0].total_eur,
+                w[1].total_eur
+            );
+        }
     }
 }
