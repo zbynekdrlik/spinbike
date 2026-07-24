@@ -106,6 +106,40 @@ on the frontend's own Bratislava-anchored default, like
 computes "today"/"tomorrow" itself AND asserts against a Bratislava-bucketed
 endpoint needs the helper.
 
+## `loginViaAPI` STORES a session — a "reads localStorage session" change collides with welcome/invite specs that look logged-out (#258)
+
+`loginViaAPI(page, ..., 'admin@test.com', ...)` in `helpers.ts` does NOT
+just return a JWT — it also `page.goto('/')` and writes `spinbike_token` /
+`spinbike_user` into localStorage. The welcome/invite specs
+(`welcome.spec.ts`, `inviteAndGetWelcomeLink`) call it ONLY to reach the
+admin `POST /api/users` + `/invite` APIs, then navigate to the emailed
+`testLink` — but they are NOT logged-out at that point, they carry the ADMIN
+session. This is invisible until a change READS that session before acting.
+
+#258 added a `/welcome` session short-circuit (a stored session redirects
+home instead of redeeming `?t`). That silently broke 3 existing welcome
+specs: their FIRST `goto(testLink)` short-circuited to `/staff` on the admin
+session instead of redeeming the invite → `welcome-success` never appeared.
+
+**Rule: any change that branches on "is a session already in localStorage"
+(a short-circuit, an auth gate, a redirect) must audit every spec that
+redeems a magic link / `?t` and clear the session first** — the invite must
+redeem from a genuinely logged-out state (a real customer clicking their
+emailed link is not logged in). The clear (already the established pattern in
+`code-login.spec.ts`):
+
+```ts
+await page.evaluate(() => {
+    localStorage.removeItem('spinbike_token');
+    localStorage.removeItem('spinbike_user');
+});
+```
+
+`grep -n "loginViaAPI" e2e/tests/*.spec.ts` and for each hit that later
+`goto`s a `/welcome`/`?t` link, confirm the session is cleared between them.
+The ticket author's "existing specs start clean" assumption is FALSE for any
+spec that used `loginViaAPI` for setup.
+
 ## Router
 Add a line to the project `CLAUDE.md` `## Playbook router` pointing here so a
 future guard-adding ticket loads this BEFORE pushing, not after CI turns red.
