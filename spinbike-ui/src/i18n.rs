@@ -354,8 +354,8 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "welcome_ios_post_install_note",
         (
-            "Po nainstalovani ta appka raz poziada o prihlasenie - zadaj svoj email a pride ti kod.",
-            "After you install it, the app will ask you to sign in once - enter your email and you'll get a code.",
+            "Ked si appku pridas na plochu, otvori sa uz prihlasena. Keby nie, prihlas sa v nej kodom (email -> kod).",
+            "Once you add the app to your home screen, it opens already signed in. If not, sign in with a code (email -> code).",
         ),
     );
 
@@ -399,8 +399,8 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "install_prompt_ios_footer_hint",
         (
-            "Nejde to? Otvor tuto stranku priamo v Safari.",
-            "Not working? Open this page directly in Safari.",
+            "Funguje v Safari aj v Chrome. Ak moznost nevidis, otvor tuto stranku v Safari.",
+            "Works in Safari and Chrome. If you don't see the option, open this page in Safari.",
         ),
     );
     m.insert(

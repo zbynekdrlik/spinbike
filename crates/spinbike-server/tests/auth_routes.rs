@@ -914,3 +914,82 @@ async fn code_login_rate_limited_returns_429() {
     );
     assert_eq!(resp["error_code"].as_str().unwrap(), "too_many_requests");
 }
+
+// ── install-token (#258) ─────────────────────────────────────────────────
+
+/// A customer minting an install token for their OWN session: 200 + a raw
+/// token, and that token is a valid `purpose='login'` token that redeems
+/// through the existing `/api/auth/token-login` path (proving the install
+/// token IS a login token — no new kind, no migration).
+#[tokio::test]
+async fn install_token_customer_mints_own_redeemable_login_token() {
+    let app = TestApp::new().await;
+    let (status, resp) = app
+        .request(post_json(
+            "/api/auth/install-token",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let install_token = resp["token"].as_str().expect("raw token in response");
+    assert!(!install_token.is_empty(), "install token must be non-empty");
+
+    // The minted token must be minted for the CALLER's own account — redeem it
+    // and confirm it logs in as the customer, carrying the install source.
+    let (redeem_status, redeemed) = app
+        .request(post_json(
+            "/api/auth/token-login",
+            "",
+            &serde_json::json!({"token": install_token, "source": "install"}),
+        ))
+        .await;
+    assert_eq!(redeem_status, StatusCode::OK);
+    assert_eq!(redeemed["user"]["id"].as_i64().unwrap(), app.customer_id);
+    assert_eq!(redeemed["user"]["role"].as_str().unwrap(), "customer");
+}
+
+/// The endpoint is open to any authenticated role — an admin can mint one for
+/// their own session too (mint is always for `claims.sub`, never a
+/// caller-supplied id).
+#[tokio::test]
+async fn install_token_admin_can_mint_for_self() {
+    let app = TestApp::new().await;
+    let (status, resp) = app
+        .request(post_json(
+            "/api/auth/install-token",
+            &app.admin_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let install_token = resp["token"].as_str().expect("raw token in response");
+
+    // Redeeming the admin's install token logs in as the admin.
+    let (redeem_status, redeemed) = app
+        .request(post_json(
+            "/api/auth/token-login",
+            "",
+            &serde_json::json!({"token": install_token}),
+        ))
+        .await;
+    assert_eq!(redeem_status, StatusCode::OK);
+    assert_eq!(redeemed["user"]["id"].as_i64().unwrap(), app.admin_id);
+    assert_eq!(redeemed["user"]["role"].as_str().unwrap(), "admin");
+}
+
+/// Unauthenticated → 401. The mint endpoint requires a valid session (an empty
+/// bearer token fails `AuthUser` extraction); no anonymous caller can mint a
+/// login token.
+#[tokio::test]
+async fn install_token_requires_authentication() {
+    let app = TestApp::new().await;
+    let (status, _) = app
+        .request(post_json(
+            "/api/auth/install-token",
+            "",
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}

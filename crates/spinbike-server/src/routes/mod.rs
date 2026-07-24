@@ -2,6 +2,7 @@ pub mod admin;
 pub mod auth;
 pub mod classes;
 pub mod door;
+pub mod manifest;
 pub mod my_balance;
 pub mod payments;
 pub mod persistent_bookings;
@@ -53,10 +54,15 @@ pub fn api_routes() -> Router<AppState> {
         .merge(version::routes())
 }
 
-/// All routes: API + WebSocket + static file serving.
+/// All routes: API + WebSocket + dynamic manifest + static file serving.
 pub fn all_routes() -> Router<AppState> {
     Router::new()
         .merge(api_routes())
         .route("/api/ws", axum::routing::get(crate::ws::ws_handler))
+        // The dynamic `/manifest.json` handler (#258) must be registered as an
+        // explicit route so it takes precedence over the static fallback below
+        // (which would otherwise serve the embedded manifest verbatim, with no
+        // install-token `start_url` rewrite).
+        .merge(manifest::routes())
         .fallback(static_files::static_handler)
 }

@@ -90,6 +90,53 @@ test.describe('Install-to-home-screen component — iOS Safari guide', () => {
     });
 });
 
+// #258: on iOS, after login, InstallPrompt mints a one-time install token and
+// repoints the manifest link at /manifest.json?it=<token>. iOS reads that
+// manifest's start_url at "Add to Home Screen" time, so the installed app opens
+// already signed in. Here we verify the live swap: the manifest link href
+// carries an install token, and GETting that manifest returns the token-bearing
+// start_url.
+test.describe('Install-to-home-screen — iOS manifest install-token swap (#258)', () => {
+    test.use({
+        userAgent: iPhone.userAgent,
+        viewport: iPhone.viewport,
+        isMobile: iPhone.isMobile,
+        hasTouch: iPhone.hasTouch,
+    });
+
+    test('iOS + logged in: manifest link points at ?it=<token> and that manifest carries the install start_url', async ({
+        page,
+        request,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await loginViaAPI(page, BASE_URL, 'customer@test.com', 'password123');
+        await page.goto('/my/balance');
+        await page.waitForSelector('[data-testid="door-open-button"]', { timeout: 10000 });
+
+        // The mint + swap fires in an Effect after mount — poll until the
+        // manifest link is repointed at the install-token manifest.
+        await expect
+            .poll(() => page.locator('link[rel="manifest"]').getAttribute('href'), { timeout: 10000 })
+            .toContain('/manifest.json?it=');
+
+        const href = await page.locator('link[rel="manifest"]').getAttribute('href');
+        expect(href).toBeTruthy();
+        const token = new URL(href!, BASE_URL).searchParams.get('it');
+        expect(token).toBeTruthy();
+
+        // GET the swapped manifest — its start_url must carry that exact token,
+        // and the icons must survive (still install-eligible).
+        const manifestResp = await request.get(`${BASE_URL}${href}`);
+        expect(manifestResp.ok()).toBe(true);
+        const manifest = await manifestResp.json();
+        expect(manifest.start_url).toBe(`/welcome?t=${token}&src=install`);
+        expect(Array.isArray(manifest.icons)).toBe(true);
+        expect(manifest.icons.length).toBeGreaterThanOrEqual(5);
+
+        assertCleanConsole(consoleMessages);
+    });
+});
+
 // #226/#248: known in-app-browsers (webviews) — Facebook/Messenger,
 // Instagram, LINE, the iOS Google app, and a generic Android in-app
 // WebView — have NO "Add to Home Screen" surface at all, so showing the
@@ -309,6 +356,26 @@ test.describe('Install-to-home-screen component — desktop Chromium', () => {
 
         await expect(page.locator('[data-testid="install-prompt-ios"]')).toHaveCount(0);
         await expect(page.locator('[data-testid="install-prompt-android"]')).toHaveCount(0);
+
+        assertCleanConsole(consoleMessages);
+    });
+
+    // #258 (case d): a non-iOS UA must NEVER swap the manifest link — the mint
+    // + swap is iOS-only (Android shares storage with the installed PWA, so no
+    // logged-out loop, and mutating the manifest could disturb its own
+    // beforeinstallprompt eligibility). The link stays the plain static
+    // manifest even while logged in.
+    test('non-iOS: the manifest link is never swapped to an install token', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await loginViaAPI(page, BASE_URL, 'customer@test.com', 'password123');
+        await page.goto('/my/balance');
+        await page.waitForSelector('[data-testid="door-open-button"]', { timeout: 10000 });
+
+        // Give any (erroneous) swap Effect time to run, then confirm the link
+        // still points at the plain static manifest.
+        await page.waitForTimeout(500);
+        const href = await page.locator('link[rel="manifest"]').getAttribute('href');
+        expect(href).toBe('/manifest.json');
 
         assertCleanConsole(consoleMessages);
     });

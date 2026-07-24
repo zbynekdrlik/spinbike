@@ -4,7 +4,7 @@ import { loginViaAPI, setupConsoleCheck, assertCleanConsole, setEnglishLanguage 
 const BASE_URL = 'http://localhost:8099';
 
 test.describe('Magic-link welcome page (#109)', () => {
-    test('invite link logs the customer in and lands on my/balance; reused link within grace also succeeds (#246)', async ({
+    test('invite link logs the customer in and lands on my/balance; reopening the used link while logged in short-circuits home (#258)', async ({
         page,
     }) => {
         const consoleMessages = setupConsoleCheck(page);
@@ -42,6 +42,16 @@ test.describe('Magic-link welcome page (#109)', () => {
         // but keeps console/date formatting consistent with other specs).
         await setEnglishLanguage(page);
 
+        // loginViaAPI stored the ADMIN session in localStorage (used only to
+        // reach the create-user + invite APIs); clear it so the invite link is
+        // redeemed from a LOGGED-OUT state — exactly like a real customer
+        // clicking their emailed link. Otherwise #258's session short-circuit
+        // would skip redemption and send the existing admin session home.
+        await page.evaluate(() => {
+            localStorage.removeItem('spinbike_token');
+            localStorage.removeItem('spinbike_user');
+        });
+
         // First visit — token is fresh: redeems it, stores the session, shows
         // the welcome CTA.
         await page.goto(testLink);
@@ -58,18 +68,65 @@ test.describe('Magic-link welcome page (#109)', () => {
         await page.waitForURL('**/my/balance', { timeout: 10000 });
         await expect(page.locator('[data-testid="door-open-button"]')).toBeVisible({ timeout: 10000 });
 
-        // Re-use the SAME (now-used) link within the 10-min grace window
-        // (#246) — the dominant iPhone double-open (mail-app webview opens
-        // it first, the real browser/installed PWA reopens it second) must
-        // NOT dead-end: the second open succeeds too, same as the first.
-        // Post-grace rejection is covered at the server unit-test level
-        // (login_tokens.rs backdates used_at directly) — an E2E test cannot
-        // wait 10 minutes.
+        // #258 session short-circuit: reopening the SAME (now-used) link while
+        // a session is ALREADY stored no longer re-redeems the token — the
+        // welcome page short-circuits straight to the role home (customer -> /
+        // -> RootRoute bounce to /my/balance). This is exactly what an
+        // installed home-screen app does on every launch after the first (its
+        // start_url permanently carries the spent install token). The
+        // grace-window server behavior itself (#246) stays covered by server
+        // unit + integration tests (login_tokens.rs / auth_routes.rs) — the
+        // front-end simply never re-POSTs the token once a session exists, so
+        // there is no invalid-link dead end and no wasted grace burn.
         await page.goto(testLink);
+        await page.waitForURL('**/my/balance', { timeout: 10000 });
+        await expect(page.locator('[data-testid="door-open-button"]')).toBeVisible({ timeout: 10000 });
+        await expect(page.locator('[data-testid="welcome-invalid"]')).toHaveCount(0);
+        const tokenAfterReopen = await page.evaluate(() => localStorage.getItem('spinbike_token'));
+        expect(tokenAfterReopen).toBeTruthy();
+
+        assertCleanConsole(consoleMessages);
+    });
+
+    // #258: simulated FIRST launch of the installed home-screen app. The app
+    // opens its manifest `start_url` (`/welcome?t=<install token>&src=install`)
+    // from a clean, logged-out context — the install token is the only
+    // credential. Proves the whole install-token -> auto-login chain end to end,
+    // minus the one thing no browser can simulate: the physical iOS "Add to
+    // Home Screen" tap.
+    test('simulated first launch: a minted install token on /welcome signs the app in (#258)', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+
+        // Mint an install token for a real customer session the way the UI
+        // does (authenticated POST /api/auth/install-token) — but WITHOUT
+        // storing that session in the browser, so the /welcome open below
+        // starts logged out, exactly like the installed app's first launch.
+        const loginResp = await fetch(`${BASE_URL}/api/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: 'customer@test.com', password: 'password123' }),
+        });
+        expect(loginResp.ok).toBeTruthy();
+        const jwt = (await loginResp.json()).token as string;
+
+        const mintResp = await fetch(`${BASE_URL}/api/auth/install-token`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${jwt}` },
+        });
+        expect(mintResp.ok).toBeTruthy();
+        const installToken = (await mintResp.json()).token as string;
+        expect(installToken).toBeTruthy();
+
+        // Clean context (no stored session) — the install token in start_url is
+        // the ONLY credential.
+        await setEnglishLanguage(page);
+        await page.goto(`/welcome?t=${installToken}&src=install`);
         await page.waitForSelector('[data-testid="welcome-success"]', { timeout: 10000 });
-        await expect(page.locator('[data-testid="welcome-cta"]')).toBeVisible();
-        const tokenAfterReuse = await page.evaluate(() => localStorage.getItem('spinbike_token'));
-        expect(tokenAfterReuse).toBeTruthy();
+
+        const token = await page.evaluate(() => localStorage.getItem('spinbike_token'));
+        expect(token).toBeTruthy();
 
         assertCleanConsole(consoleMessages);
     });
@@ -151,6 +208,13 @@ test.describe('Welcome page — iOS post-install note (#228)', () => {
         const consoleMessages = setupConsoleCheck(page);
         const testLink = await inviteAndGetWelcomeLink(page);
         await setEnglishLanguage(page);
+        // Clear the admin session loginViaAPI stored (see test #1) so the invite
+        // link redeems from a logged-out state and #258's short-circuit doesn't
+        // send the existing session home instead of showing welcome-success.
+        await page.evaluate(() => {
+            localStorage.removeItem('spinbike_token');
+            localStorage.removeItem('spinbike_user');
+        });
 
         await page.goto(testLink);
         await page.waitForSelector('[data-testid="welcome-success"]', { timeout: 10000 });
@@ -171,6 +235,13 @@ test.describe('Welcome page — Android does not show the iOS post-install note 
         const consoleMessages = setupConsoleCheck(page);
         const testLink = await inviteAndGetWelcomeLink(page);
         await setEnglishLanguage(page);
+        // Clear the admin session loginViaAPI stored (see test #1) so the invite
+        // link redeems from a logged-out state and #258's short-circuit doesn't
+        // send the existing session home instead of showing welcome-success.
+        await page.evaluate(() => {
+            localStorage.removeItem('spinbike_token');
+            localStorage.removeItem('spinbike_user');
+        });
 
         await page.goto(testLink);
         await page.waitForSelector('[data-testid="welcome-success"]', { timeout: 10000 });

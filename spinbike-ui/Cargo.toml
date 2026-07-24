@@ -1,6 +1,6 @@
 [package]
 name = "spinbike-ui"
-version = "0.15.0-dev.113"
+version = "0.15.0-dev.114"
 edition = "2024"
 
 [workspace]
@@ -25,8 +25,11 @@ web-sys = { version = "0.3", features = [
     "Location",
     "Window",
     "Storage",
+    "Document",
+    "Element",
     "HtmlInputElement",
     "HtmlSelectElement",
+    "HtmlLinkElement",
     "KeyboardEvent",
     "MediaQueryList",
 ] }
