@@ -129,6 +129,27 @@ claim, no DB lookup on the CALLER. So verifying an admin-only UI change
 
 ## Gotchas
 
+- **Scripted API calls to the PUBLIC host `https://spinbike.sk` are blocked by
+  Cloudflare (HTTP 403, `error code: 1010` — "banned based on browser
+  signature").** Cloudflare fingerprints non-browser clients, so a `curl` /
+  `urllib` / `requests` probe with a default (or absent) User-Agent gets 1010,
+  NOT your app's response — a silent false-negative if you read it as "the
+  endpoint is down". Two fixes, use the right one per layer:
+  - **Scripted API verification → hit the LOCAL origin `http://127.0.0.1:8080`**
+    (prod runs local on :8080 behind the Cloudflare tunnel — see `ci-deploy`
+    skill). It bypasses Cloudflare entirely, so the exact same JWT + JSON body
+    works. This is the correct target for any `python`/`curl` API assertion
+    (login, sell-pass, reports, password-set, etc.).
+  - **DOM / real-user-path verification → drive a REAL browser (Playwright).**
+    A genuine browser passes Cloudflare, so `https://spinbike.sk` loads
+    normally; and for a login you can even skip minting a JWT — `fetch()` the
+    real `/api/auth/login` in-page and set `spinbike_token`/`spinbike_user`/
+    `spinbike_lang` in `localStorage` (the `loginViaAPI` keys), which is more
+    faithful AND keeps no admin token in the transcript.
+  (Hit twice on 2026-07-24 verifying the login-password-reset and the
+  category-revenue reports feature — the 1010 on the public host looked like an
+  outage until switched to the :8080 origin.)
+
 - **NEVER name a shell var `UID` (or `GID`/`PPID`/`EUID`) when capturing the
   synthetic user id.** `UID` is a bash READONLY (= the OS uid, `1000` here), so
   `UID=$(sqlite3 ... "SELECT id FROM users WHERE email=...")` **silently fails**
