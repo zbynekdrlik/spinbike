@@ -32,11 +32,13 @@ async fn day(
     Query(q): Query<DayQuery>,
 ) -> Result<Json<ReportResponse>, ApiError> {
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let (kpi, events, has_more) = db::reports::day_report(&state.pool, q.date, limit, q.before)
-        .await
-        .map_err(internal_error)?;
+    let (kpi, category_revenue, events, has_more) =
+        db::reports::day_report(&state.pool, q.date, limit, q.before)
+            .await
+            .map_err(internal_error)?;
     Ok(Json(ReportResponse {
         kpi,
+        category_revenue,
         events,
         has_more,
     }))
@@ -63,12 +65,13 @@ async fn range(
         return Err(super::bad_request("range too large (max 93 days)"));
     }
     let limit = q.limit.unwrap_or(50).clamp(1, 200);
-    let (kpi, events, has_more) =
+    let (kpi, category_revenue, events, has_more) =
         db::reports::range_report(&state.pool, q.from, q.to, limit, q.before)
             .await
             .map_err(internal_error)?;
     Ok(Json(ReportResponse {
         kpi,
+        category_revenue,
         events,
         has_more,
     }))

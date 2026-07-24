@@ -12,6 +12,18 @@ pub struct KpiSummary {
     pub cash_in_eur: f64,
 }
 
+/// Revenue for a single active service over the reported period. One row per
+/// active service (LEFT JOIN — a service with zero sales still appears with
+/// `total_eur: 0.0`). See `#255` — full per-category breakdown (Doplnky
+/// vyzivy is one row among all active services, not its own KPI tile).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct CategoryRevenue {
+    pub service_id: i64,
+    pub name_sk: String,
+    pub name_en: String,
+    pub total_eur: f64,
+}
+
 /// One row in the activity feed.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReportEvent {
@@ -86,6 +98,10 @@ impl ReportEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReportResponse {
     pub kpi: KpiSummary,
+    /// Additive field (#255) — revenue per active service over the reported
+    /// period, ordered by total desc then name_sk. Never breaks older
+    /// clients since JSON field addition is backward-compatible.
+    pub category_revenue: Vec<CategoryRevenue>,
     pub events: Vec<ReportEvent>,
     pub has_more: bool,
 }
