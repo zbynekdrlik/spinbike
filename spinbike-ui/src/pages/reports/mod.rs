@@ -3,15 +3,19 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
 use crate::i18n::{self, Lang};
-use spinbike_core::reports::{KpiSummary, ReportEvent, ReportResponse};
+use spinbike_core::reports::{
+    CategoryRevenue as CategoryRevenueRow, KpiSummary, ReportEvent, ReportResponse,
+};
 
 mod activity_feed;
+mod category_revenue;
 mod filters_bar;
 mod kpi_cards;
 mod sheets;
 mod users_by_movement;
 
 pub use activity_feed::ActivityFeed;
+pub use category_revenue::CategoryRevenue;
 pub use filters_bar::{FiltersBar, FiltersState};
 pub use kpi_cards::KpiCards;
 use sheets::calendar_picker::CalendarPickerSheet;
@@ -45,6 +49,7 @@ pub fn ReportsPage() -> impl IntoView {
         passes_sold: 0,
         cash_in_eur: 0.0,
     });
+    let (category_revenue, set_category_revenue) = signal::<Vec<CategoryRevenueRow>>(Vec::new());
     let (events, set_events) = signal::<Vec<ReportEvent>>(Vec::new());
     let (loading, set_loading) = signal(true);
     let (has_more, set_has_more) = signal(false);
@@ -80,6 +85,7 @@ pub fn ReportsPage() -> impl IntoView {
             match api::get::<ReportResponse>(&url).await {
                 Ok(r) => {
                     set_kpi.set(r.kpi);
+                    set_category_revenue.set(r.category_revenue);
                     set_events.set(r.events);
                     set_has_more.set(r.has_more);
                 }
@@ -179,6 +185,7 @@ pub fn ReportsPage() -> impl IntoView {
                     } else { ().into_any() }}
 
                     <KpiCards kpi=kpi />
+                    <CategoryRevenue rows=category_revenue />
                     <FiltersBar filters=filters set_filters=set_filters />
                     <ActivityFeed events=events loading=loading has_more=has_more filters=filters anchor=anchor mode=mode set_events=set_events set_has_more=set_has_more />
 
