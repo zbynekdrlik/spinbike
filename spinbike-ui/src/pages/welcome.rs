@@ -22,6 +22,11 @@ use crate::platform;
 #[derive(serde::Serialize)]
 struct TokenLoginReq {
     token: String,
+    /// #258: forward the `src` query param (e.g. `install`) so the server can
+    /// distinguish install-token redemptions from email-link opens in its
+    /// journal. Omitted from the body entirely when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    source: Option<String>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -60,13 +65,35 @@ pub fn WelcomePage() -> impl IntoView {
     // token if the memo ever re-notifies while mounted — flipping a user who
     // just logged in successfully back to the invalid-link screen.
     Effect::new(move |_| {
-        let token = query.get_untracked().get("t").filter(|t| !t.is_empty());
+        // #258 session short-circuit: if a session is ALREADY stored, do NOT
+        // redeem `?t` — redirect straight to the role home. This is required
+        // for repeat opens of the installed home-screen app: its `start_url`
+        // permanently carries the (now-spent) install token, so every launch
+        // after the first would otherwise re-hit token-login with a used token
+        // and needlessly burn the #246 grace window (or, once past grace, land
+        // on the invalid screen). Uses the same target logic as login.rs's
+        // `navigate_role_home` / `save_and_redirect`: staff/admin -> /staff,
+        // customer -> / (RootRoute then bounces to /my/balance).
+        if auth::get_token().is_some() {
+            let target = if auth::is_staff_or_admin() {
+                "/staff"
+            } else {
+                "/"
+            };
+            if let Some(w) = web_sys::window() {
+                let _ = w.location().set_href(target);
+            }
+            return;
+        }
+        let params = query.get_untracked();
+        let token = params.get("t").filter(|t| !t.is_empty());
+        let source = params.get("src").filter(|s| !s.is_empty());
         match token {
             Some(t) => {
                 spawn_local(async move {
                     match api::post_public::<TokenLoginReq, AuthData>(
                         "/api/auth/token-login",
-                        &TokenLoginReq { token: t },
+                        &TokenLoginReq { token: t, source },
                     )
                     .await
                     {

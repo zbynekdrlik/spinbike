@@ -32,6 +32,7 @@
 
 use js_sys::{Function, Promise, Reflect};
 use leptos::prelude::*;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 
@@ -39,6 +40,34 @@ use crate::i18n::{self, Lang};
 use crate::platform::{
     get_prop, is_in_app_browser_ua, is_ios_ua, is_standalone, user_agent, window_value,
 };
+use crate::{api, auth};
+
+/// Empty body for the authenticated install-token mint (#258). The server
+/// mints for the caller's own session (`claims.sub`); no fields are needed.
+#[derive(Serialize)]
+struct InstallTokenReq {}
+
+#[derive(Deserialize)]
+struct InstallTokenResp {
+    token: String,
+}
+
+/// Point the document's `<link rel="manifest">` at the dynamic install-token
+/// manifest (`/manifest.json?it=<token>`) so iOS reads the token-bearing
+/// `start_url` at "Add to Home Screen" time (#258). Typed web-sys throughout
+/// (`HtmlLinkElement::set_href`); every step degrades to a silent no-op if a
+/// browser API is unavailable — never panics.
+fn swap_manifest_link(token: &str) {
+    let href = format!("/manifest.json?it={token}");
+    let Some(document) = web_sys::window().and_then(|w| w.document()) else {
+        return;
+    };
+    if let Ok(Some(element)) = document.query_selector("link[rel=\"manifest\"]")
+        && let Ok(link) = element.dyn_into::<web_sys::HtmlLinkElement>()
+    {
+        link.set_href(&href);
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PromptKind {
@@ -238,7 +267,33 @@ pub fn InstallPrompt() -> impl IntoView {
     // always already fired by the time our WASM bundle finishes loading and
     // this component mounts, and re-checking reactively would need either
     // polling or a Rust-side event listener the design map didn't ask for.
-    let (kind, set_kind) = signal(detect_kind());
+    let initial_kind = detect_kind();
+    let (kind, set_kind) = signal(initial_kind);
+
+    // #258: on iOS specifically (detect_kind() already returns Hidden when
+    // standalone, so PromptKind::Ios implies "iOS AND not yet installed") AND
+    // while logged in, mint a one-time install token and repoint the manifest
+    // link at /manifest.json?it=<token>. iOS reads that manifest's start_url at
+    // "Add to Home Screen" time, so the installed home-screen app opens already
+    // signed in on first launch (#258). iOS ONLY: Android shares storage
+    // between browser and installed PWA (no logged-out loop) and mutating the
+    // manifest at runtime could disturb its beforeinstallprompt eligibility.
+    // Fires once on mount; the mint is an authenticated call (api::post) and
+    // both the mint and the link swap degrade to a silent no-op on any failure.
+    if initial_kind == PromptKind::Ios && auth::get_token().is_some() {
+        Effect::new(move |_| {
+            spawn_local(async move {
+                if let Ok(resp) = api::post::<InstallTokenReq, InstallTokenResp>(
+                    "/api/auth/install-token",
+                    &InstallTokenReq {},
+                )
+                .await
+                {
+                    swap_manifest_link(&resp.token);
+                }
+            });
+        });
+    }
 
     let on_install_click = move |_| {
         // Hide immediately — the captured event can only be used once, so

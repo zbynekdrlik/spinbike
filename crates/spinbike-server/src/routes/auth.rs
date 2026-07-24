@@ -30,6 +30,21 @@ pub struct RequestLoginLinkRequest {
 #[derive(Deserialize)]
 pub struct TokenLoginRequest {
     pub token: String,
+    /// Optional free-form origin label (#258, observability only): e.g.
+    /// `"install"` when the redemption arrives from an installed home-screen
+    /// app's `start_url`, vs an email-link open. Never a security decision —
+    /// only logged, so install redemptions are distinguishable from email-link
+    /// redemptions in the journal. Absent → `None`.
+    #[serde(default)]
+    pub source: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct InstallTokenResponse {
+    /// The raw one-time install token — a `purpose='login'` magic-link token
+    /// minted for the caller's OWN session. The caller embeds it in the
+    /// dynamic manifest's `start_url` (`/manifest.json?it=<token>`).
+    pub token: String,
 }
 
 #[derive(Deserialize)]
@@ -176,6 +191,7 @@ pub fn routes() -> Router<AppState> {
         .route("/api/auth/login", post(login))
         .route("/api/auth/request-login-link", post(request_login_link))
         .route("/api/auth/token-login", post(token_login))
+        .route("/api/auth/install-token", post(install_token))
         .route("/api/auth/request-login-code", post(request_login_code))
         .route("/api/auth/code-login", post(code_login))
         .route("/api/auth/me", get(me))
@@ -218,21 +234,21 @@ async fn login(
 
 /// Short unaccented-Slovak iOS install-guidance appended to EVERY onboarding
 /// email — the invite, login-link, AND login-code emails all end with this
-/// same note (#228). An iPhone client hitting the installed home-screen app
-/// logged out otherwise has no idea a magic link can't complete login there
-/// (storage is partitioned from Safari); this tells them, regardless of
-/// which of the three emails is the one they happen to read, the ONE extra
-/// step: install to the home screen, then use the CODE (not a link) inside
-/// the installed app. Kept deliberately short — the app's own `/welcome` and
-/// login screens carry the detailed step-by-step guide.
+/// same note (#228, reworded for #258). Since #258 the installed home-screen
+/// app opens ALREADY signed in (a one-time install token is embedded in the
+/// dynamic manifest's `start_url`), so the old "log in again with the code
+/// inside the app" step is gone for the common case. This tells the iPhone
+/// client the new truth: after adding SpinBike to the home screen it opens
+/// already logged in, and the code stays only as a fallback. Kept deliberately
+/// short — the app's own `/welcome` and login screens carry the detailed guide.
 fn append_ios_install_hint(text: &str, html: &str) -> (String, String) {
     let text = format!(
-        "{text}\n\nMas iPhone? Po prihlaseni si pridaj SpinBike na plochu (navod ti ukazeme) \
-         a v appke sa prihlas kodom."
+        "{text}\n\nMas iPhone? Ked si SpinBike pridas na plochu (navod ti ukazeme), \
+         appka sa otvori uz prihlasena. Keby nie, prihlasis sa v nej kodom."
     );
     let html = format!(
-        "{html}<p>Mas iPhone? Po prihlaseni si pridaj SpinBike na plochu (navod ti ukazeme) \
-         a v appke sa prihlas kodom.</p>"
+        "{html}<p>Mas iPhone? Ked si SpinBike pridas na plochu (navod ti ukazeme), \
+         appka sa otvori uz prihlasena. Keby nie, prihlasis sa v nej kodom.</p>"
     );
     (text, html)
 }
@@ -394,7 +410,14 @@ async fn token_login(
             "token-login: grace-window reuse redeemed (#246)"
         );
     }
-    tracing::info!(user_id = user.id, "token-login: session issued");
+    // #258: log the optional `source` label so install-token redemptions (from
+    // an installed home-screen app's start_url) are distinguishable from
+    // email-link redemptions in the journal. `source` is observability only.
+    tracing::info!(
+        user_id = user.id,
+        source = body.source.as_deref().unwrap_or("email-link"),
+        "token-login: session issued"
+    );
     Ok(Json(AuthResponse {
         token,
         user: UserInfo {
@@ -404,6 +427,38 @@ async fn token_login(
             role: Role::from(user.role.as_str()),
         },
     }))
+}
+
+/// Mint a one-time install token for the CALLER's own session (#258).
+///
+/// Authenticated (`AuthUser`, any role) — the token is always minted for
+/// `claims.sub`, never a caller-supplied id, so no one can mint a login token
+/// for someone else's account. It is a plain `purpose='login'` magic-link token
+/// (same 24h TTL + #246 grace as an emailed login link — NO migration, NO new
+/// token kind, NO change to the security model): the install token IS a login
+/// token. The client embeds the returned raw token in the dynamic manifest's
+/// `start_url` (`/manifest.json?it=<token>`), so the installed home-screen app
+/// opens already signed in on first launch. Redemption is the existing
+/// `POST /api/auth/token-login` path.
+///
+/// No new rate limiter: this is authenticated and only requested when the
+/// install prompt is shown (low-volume). The atomic redeem + the account's own
+/// permanent session already bound any abuse.
+async fn install_token(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+) -> Result<Json<InstallTokenResponse>, ApiError> {
+    let raw = login_tokens::create_token(
+        &state.pool,
+        claims.sub,
+        login_tokens::PURPOSE_LOGIN,
+        login_tokens::LOGIN_TTL_SECS,
+    )
+    .await
+    .map_err(internal_error)?;
+
+    tracing::info!(user_id = claims.sub, "install-token: minted");
+    Ok(Json(InstallTokenResponse { token: raw }))
 }
 
 /// Compose the unaccented-Slovak login-code email. Returns (subject, text, html).
@@ -1028,12 +1083,12 @@ mod tests {
             "html body must carry the link, got: {html}"
         );
         assert!(
-            text.contains("Mas iPhone?") && text.contains("prihlas kodom"),
-            "body must carry the #228 iOS install-guidance section, got: {text}"
+            text.contains("Mas iPhone?") && text.contains("otvori uz prihlasena"),
+            "body must carry the #258 iOS auto-login guidance section, got: {text}"
         );
         assert!(
             html.contains("Mas iPhone?"),
-            "html body must carry the #228 iOS install-guidance section, got: {html}"
+            "html body must carry the #258 iOS auto-login guidance section, got: {html}"
         );
     }
 
@@ -1057,12 +1112,12 @@ mod tests {
             "html body must carry the invite link, got: {html}"
         );
         assert!(
-            text.contains("Mas iPhone?") && text.contains("prihlas kodom"),
-            "body must carry the #228 iOS install-guidance section, got: {text}"
+            text.contains("Mas iPhone?") && text.contains("otvori uz prihlasena"),
+            "body must carry the #258 iOS auto-login guidance section, got: {text}"
         );
         assert!(
             html.contains("Mas iPhone?"),
-            "html body must carry the #228 iOS install-guidance section, got: {html}"
+            "html body must carry the #258 iOS auto-login guidance section, got: {html}"
         );
     }
 }
