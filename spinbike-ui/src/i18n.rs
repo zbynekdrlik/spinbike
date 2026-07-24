@@ -354,7 +354,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "welcome_ios_post_install_note",
         (
-            "Ked si appku pridas na plochu, otvori sa uz prihlaseny. Keby nie, prihlas sa v nej kodom (email -> kod).",
+            "Ked si appku pridas na plochu, otvori sa uz prihlasena. Keby nie, prihlas sa v nej kodom (email -> kod).",
             "Once you add the app to your home screen, it opens already signed in. If not, sign in with a code (email -> code).",
         ),
     );
