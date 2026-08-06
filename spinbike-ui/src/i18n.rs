@@ -253,7 +253,15 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
         // localized banner string, so no key here.
         | ErrorCode::EmailBelongsToDeletedAccount
         | ErrorCode::BadRequest
-        | ErrorCode::MailNotConfigured => None,
+        | ErrorCode::MailNotConfigured
+        // #268: never actually reaches this fallback in practice — every
+        // caller uses `api::get`/`get_coded` (add_auth-attached), whose
+        // shared `handle_unauthorized` intercepts ANY 401 while a token is
+        // stored and overwrites the error with the localized
+        // `err_session_expired` text before redirecting to /login. No
+        // dedicated key needed here; left unmapped like the other
+        // never-surfaced-raw codes above.
+        | ErrorCode::SessionInvalid => None,
     }
 }
 
