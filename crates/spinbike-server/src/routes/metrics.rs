@@ -24,15 +24,20 @@ use std::time::Duration;
 
 use crate::AppState;
 use crate::rate_limit::{RateLimitConfig, SlidingWindowLimiter};
+use spinbike_core::redact::redact_query;
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/api/metrics/launch", post(launch))
 }
 
-/// Body the frontend sends. `query_redacted` arrives ALREADY redacted by the
-/// client (`spinbike_core::redact::redact_query`, the same function this
-/// server uses in `request_log`) — the server never receives a raw token via
-/// this endpoint either way.
+/// Body the frontend sends. `query_redacted` is EXPECTED to arrive already
+/// redacted by the client (`spinbike_core::redact::redact_query`, the same
+/// function this server uses in `request_log`) — but this is a public,
+/// unauthenticated endpoint, so nothing enforces that client-side promise at
+/// the boundary. The handler re-applies `redact_query` before logging (a
+/// no-op on already-redacted text — the truncated `key=prefix...` shape
+/// round-trips unchanged), so a regressed/hand-crafted client can never make
+/// a full token reach the journal through this route either.
 #[derive(Deserialize)]
 struct LaunchBeaconRequest {
     path: String,
@@ -128,9 +133,14 @@ async fn launch(
         return StatusCode::TOO_MANY_REQUESTS;
     }
 
+    // Defense in depth (code review finding on #260): re-apply redact_query
+    // server-side rather than trusting the client's own redaction. A no-op
+    // on already-redacted text — see the LaunchBeaconRequest doc comment.
+    let query = redact_query(&payload.query_redacted);
+
     tracing::info!(
         path = %payload.path,
-        query = %payload.query_redacted,
+        %query,
         had_token = payload.had_token,
         had_session = payload.had_session,
         src = ?payload.src,
@@ -181,5 +191,27 @@ mod tests {
     fn blank_cf_header_falls_through_to_x_forwarded_for() {
         let headers = headers_with(&[("cf-connecting-ip", "  "), ("x-forwarded-for", "7.7.7.7")]);
         assert_eq!(client_ip_key(&headers), "7.7.7.7");
+    }
+
+    // ---- server-side re-redaction defense (code review finding on #260) ----
+    // `launch()` calls `redact_query(&payload.query_redacted)` before logging
+    // rather than trusting the client's own redaction — these tests exercise
+    // that exact call, independent of the tracing/log plumbing.
+
+    #[test]
+    fn query_redaction_is_idempotent_on_already_redacted_text() {
+        let already = redact_query("t=abcdefgh12345");
+        assert_eq!(redact_query(&already), already);
+    }
+
+    #[test]
+    fn server_catches_a_hypothetical_unredacted_client_payload() {
+        // Simulates a regressed/hand-crafted client that skipped its own
+        // redaction — the server-side re-application must still catch it
+        // before the value reaches the journal.
+        let raw = "t=abcdefghijklmnopqrstuvwxyz0123456789";
+        let redacted = redact_query(raw);
+        assert_eq!(redacted, "t=abcdefgh...");
+        assert!(!redacted.contains("ijklmnopqrstuvwxyz0123456789"));
     }
 }
