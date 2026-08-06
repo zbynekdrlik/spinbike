@@ -13,6 +13,7 @@ pub mod helpers;
 pub mod negative_balance_list;
 pub mod overview_tab;
 pub mod pass_banner;
+pub mod revoke_install_button;
 pub mod sheets;
 pub mod transactions_list;
 
