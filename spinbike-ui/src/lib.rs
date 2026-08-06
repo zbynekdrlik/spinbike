@@ -3,6 +3,7 @@ pub mod auth;
 pub mod components;
 pub mod dates;
 pub mod i18n;
+pub mod launch_beacon;
 pub mod pages;
 pub mod platform;
 pub mod relative_date;
@@ -20,5 +21,6 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(start)]
 pub fn main() {
     console_error_panic_hook::set_once();
+    launch_beacon::maybe_fire();
     leptos::mount::mount_to_body(router::App);
 }

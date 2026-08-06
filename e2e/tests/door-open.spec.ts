@@ -153,6 +153,67 @@ test.describe('Door self-entry (#92)', () => {
         assertCleanConsole(messages);
     });
 
+    test('a quick tap does NOT open the door — the hold guard is enforced (#266)', async ({ page, baseURL }) => {
+        const messages = setupConsoleCheck(page);
+        const adminToken = await loginViaAPI(page, baseURL!, 'admin@test.com', 'admin123');
+        const customer = await createSelfEntryCustomer(adminToken, 'QT');
+
+        const cardCode = `QT-pass-${customer.user_id}`;
+        await assignCardCode(adminToken, customer.user_id, cardCode);
+        await seedActiveMonthlyPass(adminToken, cardCode);
+
+        await page.evaluate(() => { localStorage.clear(); });
+        await loginViaAPI(page, baseURL!, customer.email, customer.password);
+
+        // Track every POST to /api/door/open — the direct proof a quick tap
+        // never even ATTEMPTS to open the door, not just that no success
+        // banner happened to appear.
+        const doorOpenRequests: string[] = [];
+        page.on('request', (req) => {
+            if (req.url().endsWith('/api/door/open') && req.method() === 'POST') {
+                doorOpenRequests.push(req.url());
+            }
+        });
+
+        await page.goto('/my/balance');
+        const btn = page.locator('[data-testid="door-open-button"]');
+        await expect(btn).toBeVisible();
+
+        // Quick tap: well UNDER the 1s (HOLD_DURATION_MS) threshold — 300ms
+        // leaves a 700ms margin, so this is a deterministic boundary check,
+        // not a timing coin-flip.
+        await btn.dispatchEvent('pointerdown');
+        await page.waitForTimeout(300);
+        await btn.dispatchEvent('pointerup');
+        // Give any (nonexistent, if the guard holds) in-flight request a
+        // moment to have shown up before asserting on it.
+        await page.waitForTimeout(200);
+
+        expect(doorOpenRequests.length).toBe(0);
+        await expect(page.locator('[data-testid="door-banner"]')).toHaveCount(0);
+
+        // The progress fill must have reset to 0, not stayed part-filled.
+        const progress = btn.locator('.door-btn__progress');
+        await expect
+            .poll(() => progress.evaluate((el) => (el as HTMLElement).style.width))
+            .toBe('0%');
+
+        // The boundary is REAL, not incidental: release just before the
+        // threshold does nothing (proven above); the SAME button, held past
+        // the threshold right after, still opens the door normally.
+        await btn.dispatchEvent('pointerdown');
+        await page.waitForTimeout(1200);
+        await btn.dispatchEvent('pointerup');
+
+        await expect(page.locator('[data-testid="door-banner"]')).toContainText(
+            'Door open',
+            { timeout: 5000 },
+        );
+        expect(doorOpenRequests.length).toBe(1);
+
+        assertCleanConsole(messages);
+    });
+
     test('door entry note renders localized in Slovak — "Vstup c. 1" (#144)', async ({ page, baseURL }) => {
         const messages = setupConsoleCheck(page);
         const adminToken = await loginViaAPI(page, baseURL!, 'admin@test.com', 'admin123');
