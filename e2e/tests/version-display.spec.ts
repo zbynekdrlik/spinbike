@@ -33,6 +33,17 @@ test.describe('Version display @smoke', () => {
         expect(typeof apiBody.version).toBe('string');
         expect(labelText).toBe(`v${apiBody.version}`);
 
+        // Regression guard for #267: the label used to be a `position: fixed`
+        // dark chip floating over app content ("hnusny sivy obdlznik ktory
+        // prepisuje appku"). It must render in normal document flow with no
+        // background box.
+        const computed = await label.evaluate((el) => {
+            const cs = getComputedStyle(el);
+            return { position: cs.position, backgroundColor: cs.backgroundColor };
+        });
+        expect(computed.position).not.toBe('fixed');
+        expect(computed.backgroundColor).toMatch(/^rgba\(0, 0, 0, 0\)$|^transparent$/);
+
         assertCleanConsole(msgs);
     });
 
