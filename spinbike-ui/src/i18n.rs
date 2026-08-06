@@ -1001,13 +1001,16 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "monthly_pass_active_until",
         (
-            "Mesacny preplatok aktivny do {}",
+            "Mesacna permanentka platna do {}",
             "Monthly pass active until {}",
         ),
     );
     m.insert(
         "monthly_pass_not_active",
-        ("Mesacny preplatok neaktivny", "Monthly pass not active"),
+        (
+            "Nemas aktivnu mesacnu permanentku",
+            "Monthly pass not active",
+        ),
     );
     m.insert("my_balance_hello", ("Ahoj, {}", "Hello, {}"));
     m.insert("my_balance_credit", ("Zostatok", "Credit"));
