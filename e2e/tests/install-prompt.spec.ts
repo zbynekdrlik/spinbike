@@ -125,13 +125,93 @@ test.describe('Install-to-home-screen — iOS manifest install-token swap (#258)
         expect(token).toBeTruthy();
 
         // GET the swapped manifest — its start_url must carry that exact token,
-        // and the icons must survive (still install-eligible).
+        // the icons must survive (still install-eligible), and the response
+        // must never be cached (#261 — a cached stale manifest is a silent
+        // fourth failure mode).
         const manifestResp = await request.get(`${BASE_URL}${href}`);
         expect(manifestResp.ok()).toBe(true);
+        expect(manifestResp.headers()['cache-control']).toBe('no-store');
         const manifest = await manifestResp.json();
         expect(manifest.start_url).toBe(`/welcome?t=${token}&src=install`);
         expect(Array.isArray(manifest.icons)).toBe(true);
         expect(manifest.icons.length).toBeGreaterThanOrEqual(5);
+
+        assertCleanConsole(consoleMessages);
+    });
+});
+
+// #261: round-5 belt-and-braces — the sessionStorage mint guard AND the
+// history.replaceState leg (leg 2, the new primary carrier). Playwright
+// cannot simulate the physical iOS "Add to Home Screen" tap — these tests
+// prove everything that CAN be verified: the guard fires the mint POST
+// exactly once per browser session, and both legs (manifest link + address
+// bar) end up armed with the exact same token.
+test.describe('Install-to-home-screen — round-5 mint guard + replaceState (#261)', () => {
+    test.use({
+        userAgent: iPhone.userAgent,
+        viewport: iPhone.viewport,
+        isMobile: iPhone.isMobile,
+        hasTouch: iPhone.hasTouch,
+    });
+
+    test('sessionStorage guard: a reload reuses the same token and mints only once', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        let mintCount = 0;
+        page.on('request', (req) => {
+            if (req.url().includes('/api/auth/install-token') && req.method() === 'POST') {
+                mintCount += 1;
+            }
+        });
+
+        await loginViaAPI(page, BASE_URL, 'customer@test.com', 'password123');
+        await page.goto('/my/balance');
+        await page.waitForSelector('[data-testid="door-open-button"]', { timeout: 10000 });
+        await expect
+            .poll(() => page.locator('link[rel="manifest"]').getAttribute('href'), { timeout: 10000 })
+            .toContain('/manifest.json?it=');
+        const firstHref = await page.locator('link[rel="manifest"]').getAttribute('href');
+        const firstToken = new URL(firstHref!, BASE_URL).searchParams.get('it');
+        expect(mintCount).toBe(1);
+
+        // Same-tab reload — sessionStorage survives, InstallPrompt re-mounts
+        // fresh (this is exactly the prod double-mint shape: a second mount
+        // of the same component in the same session).
+        await page.reload();
+        await page.waitForSelector('[data-testid="door-open-button"]', { timeout: 10000 });
+        await expect
+            .poll(() => page.locator('link[rel="manifest"]').getAttribute('href'), { timeout: 10000 })
+            .toContain('/manifest.json?it=');
+        const secondHref = await page.locator('link[rel="manifest"]').getAttribute('href');
+        const secondToken = new URL(secondHref!, BASE_URL).searchParams.get('it');
+
+        expect(secondToken).toBe(firstToken);
+        expect(mintCount).toBe(1);
+
+        assertCleanConsole(consoleMessages);
+    });
+
+    test('both legs are armed with the same token: manifest link AND the address bar (replaceState)', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await loginViaAPI(page, BASE_URL, 'customer@test.com', 'password123');
+        await page.goto('/my/balance');
+        await page.waitForSelector('[data-testid="door-open-button"]', { timeout: 10000 });
+
+        await expect
+            .poll(() => page.locator('link[rel="manifest"]').getAttribute('href'), { timeout: 10000 })
+            .toContain('/manifest.json?it=');
+        const manifestHref = await page.locator('link[rel="manifest"]').getAttribute('href');
+        const token = new URL(manifestHref!, BASE_URL).searchParams.get('it');
+        expect(token).toBeTruthy();
+
+        // Leg 2: the address bar itself must now carry the exact install URL —
+        // this is what iOS captures even if it never re-reads the manifest.
+        await expect
+            .poll(() => new URL(page.url()).pathname + new URL(page.url()).search, { timeout: 10000 })
+            .toBe(`/welcome?t=${token}&src=install`);
 
         assertCleanConsole(consoleMessages);
     });
