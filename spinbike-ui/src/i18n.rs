@@ -968,7 +968,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     // Door self-entry (#92)
     m.insert(
         "door_button_idle",
-        ("Otvorit dvere - drz 2s", "Hold to open door"),
+        ("Otvorit dvere - drz 1s", "Hold to open door"),
     );
     m.insert("door_button_holding", ("Drz...", "Hold..."));
     m.insert("door_button_firing", ("Otvaram...", "Opening..."));
