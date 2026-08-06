@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { loginViaAPI, createUniqueUser, setupConsoleCheck, assertCleanConsole, passwordLoginForm } from './helpers';
+import { createUniqueUser, setupConsoleCheck, assertCleanConsole, passwordLoginForm } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -16,8 +16,23 @@ test.describe('Login page — blocked account (#276)', () => {
         const consoleMessages = setupConsoleCheck(page);
 
         // Seed a throwaway customer with a known password, then block it —
-        // admin/staff-only APIs, driven via a real admin session.
-        const adminToken = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+        // admin/staff-only APIs. A RAW fetch for the admin login (NOT
+        // loginViaAPI on this page): loginViaAPI's setEnglishLanguage uses
+        // page.addInitScript, which persists for the page's whole lifetime
+        // and would silently re-force English on every later navigation —
+        // including the anonymous /login visit below, which must render the
+        // DEFAULT Slovak locale a first-time visitor sees. The admin token
+        // is only needed for API calls; the browser never needs to carry
+        // that session at all.
+        const adminLoginResp = await fetch(`${BASE_URL}/api/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: 'admin@test.com', password: 'admin123' }),
+        });
+        if (!adminLoginResp.ok) {
+            throw new Error(`admin login failed: ${adminLoginResp.status} ${await adminLoginResp.text()}`);
+        }
+        const { token: adminToken } = await adminLoginResp.json();
         const suffix = Array.from({ length: 8 }, () =>
             String.fromCharCode(97 + Math.floor(Math.random() * 26)),
         ).join('');
@@ -43,17 +58,8 @@ test.describe('Login page — blocked account (#276)', () => {
             throw new Error(`block failed: ${blockResp.status} ${await blockResp.text()}`);
         }
 
-        // loginViaAPI stored the ADMIN session AND forced English
-        // (setEnglishLanguage internally, for its own callers' convenience)
-        // — clear all three so the login attempt below runs as a genuinely
-        // fresh anonymous browser (the real scenario) in the DEFAULT Slovak
-        // locale a first-time visitor sees (no spinbike_lang saved).
-        await page.evaluate(() => {
-            localStorage.removeItem('spinbike_token');
-            localStorage.removeItem('spinbike_user');
-            localStorage.removeItem('spinbike_lang');
-        });
-
+        // The page has never navigated or touched localStorage yet — a
+        // genuinely fresh anonymous browser, default Slovak locale.
         await page.goto('/login');
         await page.waitForSelector('h1.page-title');
 
