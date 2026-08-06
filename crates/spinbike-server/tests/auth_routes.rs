@@ -1177,3 +1177,29 @@ async fn token_login_throttles_repeated_redeem_of_the_same_token() {
         "the 11th redeem of the same token within a minute must be throttled"
     );
 }
+
+/// Review follow-up (#261): a per-token-only rate limit is trivially evaded
+/// by submitting many DISTINCT garbage tokens instead of reusing one — this
+/// proves the source (client-IP-keyed, best-effort) is bounded too, so an
+/// attacker can't sidestep the per-token cap just by varying the token.
+#[tokio::test]
+async fn token_login_throttles_many_distinct_garbage_tokens_from_one_source() {
+    let app = TestApp::new().await;
+
+    let mut last_status = StatusCode::OK;
+    for i in 0..11 {
+        let (status, _) = app
+            .request(post_json(
+                "/api/auth/token-login",
+                "",
+                &serde_json::json!({"token": format!("never-issued-{i}")}),
+            ))
+            .await;
+        last_status = status;
+    }
+    assert_eq!(
+        last_status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "the 11th distinct-token redeem attempt from one source within a minute must be throttled"
+    );
+}

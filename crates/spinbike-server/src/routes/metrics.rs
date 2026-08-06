@@ -90,7 +90,7 @@ impl Default for LaunchRateLimiter {
 /// `X-Forwarded-For`, then a fixed `"unknown"` bucket (still rate-limited —
 /// just shared by every caller with neither header, e.g. a direct
 /// `127.0.0.1:8080` request in local dev/tests).
-fn client_ip_key(headers: &HeaderMap) -> String {
+pub(crate) fn client_ip_key(headers: &HeaderMap) -> String {
     if let Some(v) = headers
         .get("cf-connecting-ip")
         .and_then(|v| v.to_str().ok())

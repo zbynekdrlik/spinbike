@@ -425,22 +425,38 @@ async fn request_login_link(
 /// rejected even with an otherwise-valid token.
 async fn token_login(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(body): Json<TokenLoginRequest>,
 ) -> Result<Json<AuthResponse>, ApiError> {
     let invalid = || ApiError::Unauthorized(ErrorCode::InvalidOrExpiredLink);
 
-    // #261: rate-limit BEFORE any DB lookup, keyed by the submitted token's
-    // hash — bounds the one permanent, multi-use credential (install) to
-    // ~10 redeem attempts/min; harmless for invite/login tokens, which are
-    // redeemed at most a couple of times in their whole life.
+    // #261: rate-limit BEFORE any DB lookup, on TWO independent keys sharing
+    // the SAME limiter (distinct key prefixes so they can never collide with
+    // each other or with a real 64-hex token hash):
+    //   - the submitted token's hash — bounds the one permanent, multi-use
+    //     credential (install) to ~10 redeem attempts/min; harmless for
+    //     invite/login tokens, which are redeemed at most a couple of times
+    //     in their whole life.
+    //   - the caller's best-effort client IP (review follow-up, #261) — a
+    //     per-token-only limit is trivially evaded by submitting many
+    //     DISTINCT garbage tokens from one source; this bounds a single
+    //     source's total redeem attempts regardless of how many different
+    //     tokens it tries, without cross-throttling OTHER sources the way
+    //     the shared global cap alone would.
     let token_hash = login_tokens::hash_token(&body.token);
-    if let Err(reason) = state
-        .install_redeem_rate_limit
-        // #172: recover from poisoning rather than .expect().
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
-        .check_and_record(&token_hash)
-    {
+    let ip_key = format!("ip:{}", crate::routes::metrics::client_ip_key(&headers));
+    let throttled = {
+        let mut limiter = state
+            .install_redeem_rate_limit
+            // #172: recover from poisoning rather than .expect().
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        match limiter.check_and_record(&ip_key) {
+            Ok(()) => limiter.check_and_record(&token_hash),
+            Err(e) => Err(e),
+        }
+    };
+    if let Err(reason) = throttled {
         tracing::warn!(%reason, "token-login: throttled");
         return Err(ApiError::TooManyRequests(ErrorCode::TooManyRequests));
     }

@@ -207,13 +207,20 @@ pub async fn is_already_used(pool: &SqlitePool, raw: &str) -> Result<bool> {
 /// `created_at ASC, id ASC` so ties within the same second's timestamp
 /// resolution still break correctly on insertion order (`id` is
 /// monotonically increasing regardless of clock granularity).
+/// Review follow-up (#261): the count-then-evict-then-insert sequence runs
+/// inside a SINGLE transaction (SQLite serialises writers, so this is also
+/// enough to make the whole sequence atomic against a genuinely concurrent
+/// second mint for the same user — no two mints can both observe the
+/// pre-eviction count and both insert past the cap).
 pub async fn create_install_token(pool: &SqlitePool, user_id: i64) -> Result<String> {
+    let mut tx = pool.begin().await?;
+
     let live_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM login_tokens WHERE user_id = ? AND purpose = ? AND revoked_at IS NULL",
     )
     .bind(user_id)
     .bind(PURPOSE_INSTALL)
-    .fetch_one(pool)
+    .fetch_one(&mut *tx)
     .await?;
 
     if live_count >= INSTALL_TOKEN_CAP {
@@ -228,11 +235,26 @@ pub async fn create_install_token(pool: &SqlitePool, user_id: i64) -> Result<Str
         )
         .bind(user_id)
         .bind(PURPOSE_INSTALL)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
 
-    create_token(pool, user_id, PURPOSE_INSTALL, INSTALL_TTL_SECS).await
+    let raw = generate_raw_token();
+    let hash = hash_token(&raw);
+    let interval = format!("{INSTALL_TTL_SECS:+} seconds");
+    sqlx::query(
+        "INSERT INTO login_tokens (user_id, token_hash, purpose, expires_at)
+         VALUES (?, ?, ?, datetime('now', ?))",
+    )
+    .bind(user_id)
+    .bind(&hash)
+    .bind(PURPOSE_INSTALL)
+    .bind(&interval)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+    Ok(raw)
 }
 
 /// Redeem a `purpose='install'` token (#261). MULTI-USE: unlike `redeem()`,
