@@ -28,6 +28,15 @@ pub enum ErrorCode {
     /// The submitted 6-digit login code is wrong, expired, already used, or
     /// exhausted (#227). Uniform across all those causes — never leaks which.
     InvalidOrExpiredCode,
+    /// A syntactically-valid, unexpired JWT whose `sub` no longer resolves to
+    /// a live account: the user row is missing (hard-deleted), soft-deleted
+    /// (`deleted_at` set), or blocked (#268). The permanent-customer-session
+    /// design means the JWT itself can't be revoked, so security-sensitive
+    /// authenticated handlers re-check the DB and surface this — 401, not
+    /// 404, because the *session* is invalid, not a *resource* missing.
+    /// Mirrors the `deleted_at.is_some() || blocked` gate `token_login`
+    /// already applies before issuing a session.
+    SessionInvalid,
     // --- 403 Forbidden ---
     StaffRequired,
     AdminRequired,
@@ -92,6 +101,7 @@ impl ErrorCode {
             ErrorCode::OauthAccount => "Account uses OAuth login",
             ErrorCode::InvalidOrExpiredLink => "Invalid or expired link",
             ErrorCode::InvalidOrExpiredCode => "Invalid or expired code",
+            ErrorCode::SessionInvalid => "Session no longer valid, please log in again",
             ErrorCode::StaffRequired => "Staff access required",
             ErrorCode::AdminRequired => "Admin access required",
             ErrorCode::CardCodeStaffOnly => "Only staff can modify card_code",
@@ -157,6 +167,11 @@ mod tests {
             ErrorCode::InvalidOrExpiredCode,
             "invalid_or_expired_code",
             "Invalid or expired code",
+        ),
+        (
+            ErrorCode::SessionInvalid,
+            "session_invalid",
+            "Session no longer valid, please log in again",
         ),
         (
             ErrorCode::StaffRequired,

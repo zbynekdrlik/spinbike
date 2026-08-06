@@ -47,22 +47,46 @@ async fn my_balance(
     let user_id = claims.sub;
     tracing::debug!(user_id, "my_balance: loading user row");
 
-    // 1. User row — includes the new allow_self_entry column.
-    // SQLite stores allow_self_entry as INTEGER (0/1); fetch as i64 here and
-    // map to bool below — sqlx tuple destructuring is stricter about types
-    // than `#[derive(FromRow)]`, so we avoid the bool type entirely at the
-    // query boundary.
-    let user_row: Option<(i64, String, f64, Option<String>, i64)> = sqlx::query_as(
-        "SELECT id, name, credit, card_code, allow_self_entry \
-         FROM users WHERE id = ? AND deleted_at IS NULL",
+    // 1. User row — includes the new allow_self_entry column. Deliberately
+    // NOT filtered by `deleted_at IS NULL` here (unlike before #268): a
+    // soft-deleted row must still be FETCHED so it can be distinguished from
+    // "no row at all" and rejected with the same 401 as every other
+    // session-invalid case below, instead of silently falling into the
+    // missing-row branch with no way to tell the two apart.
+    // SQLite stores allow_self_entry/blocked as INTEGER (0/1); fetch as i64
+    // here and map to bool below — sqlx tuple destructuring is stricter
+    // about types than `#[derive(FromRow)]`, so we avoid the bool type
+    // entirely at the query boundary.
+    // (id, name, credit, card_code, allow_self_entry, blocked, deleted_at)
+    type UserBalanceRow = (i64, String, f64, Option<String>, i64, i64, Option<String>);
+    let user_row: Option<UserBalanceRow> = sqlx::query_as(
+        "SELECT id, name, credit, card_code, allow_self_entry, blocked, deleted_at \
+         FROM users WHERE id = ?",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await
     .map_err(internal_error)?;
 
+    // #268: a syntactically-valid, unexpired JWT for a user that is missing
+    // (hard-deleted / never existed), soft-deleted, or blocked no longer
+    // represents a live session. This is a 401 (session invalid), NOT a 404
+    // (resource not found) — 404 left the customer on a broken page instead
+    // of triggering the client's generic 401-clears-session redirect
+    // (`api::get_coded`'s `handle_unauthorized`). Mirrors the exact
+    // eligibility gate `token_login` already applies before issuing a
+    // session (`user.deleted_at.is_some() || user.blocked`, routes/auth.rs).
     let (id, name, credit, card_code, allow_self_entry) = match user_row {
-        Some((id, name, credit, card_code, ase)) => {
+        Some((id, name, credit, card_code, ase, blocked, deleted_at)) => {
+            if blocked != 0 || deleted_at.is_some() {
+                tracing::warn!(
+                    user_id,
+                    blocked = blocked != 0,
+                    deleted = deleted_at.is_some(),
+                    "my_balance: session invalid — blocked or deleted user"
+                );
+                return Err(ApiError::Unauthorized(ErrorCode::SessionInvalid));
+            }
             // Admin/staff always see the door button enabled — they bypass
             // the per-user opt-in toggle (they manage the place). Stored
             // flag stays as-is; this is just the effective UI value.
@@ -74,8 +98,11 @@ async fn my_balance(
             (id, name, credit, card_code, effective_ase)
         }
         None => {
-            tracing::warn!(user_id, "my_balance: user not found or soft-deleted");
-            return Err(ApiError::NotFound(ErrorCode::UserNotFound));
+            tracing::warn!(
+                user_id,
+                "my_balance: session invalid — user no longer exists"
+            );
+            return Err(ApiError::Unauthorized(ErrorCode::SessionInvalid));
         }
     };
 
