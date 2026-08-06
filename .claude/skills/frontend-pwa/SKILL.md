@@ -796,3 +796,28 @@ DYNAMIC manifest (e.g. #258's `/manifest.json?it=<install token>` that swaps
   JSON); validation is redemption (`token-login`). Serving an
   invalid/expired token yields a manifest whose `start_url` just fails to
   redeem later — no oracle, no DB touch.
+
+## A new pure-logic module in `spinbike-ui` needs `#[wasm_bindgen_test]`, never bare `#[test]` — and any fn called ONLY from `main()`'s `#[cfg(not(test))]` block must be `pub` (#260)
+
+Two related traps hit writing `spinbike-ui/src/launch_beacon.rs` (a new,
+non-component module with its own pure unit tests, boot-fired from `lib.rs`
+`main()`):
+
+- **CI runs `wasm-pack test --node spinbike-ui`** (`ci.yml`, `Test (UI)`
+  job) — the WHOLE crate compiles to wasm, so a plain `#[test]` inside
+  `#[cfg(test)] mod tests` never executes; it must be `#[wasm_bindgen_test]`
+  (`use wasm_bindgen_test::*;`), matching every existing test module in this
+  crate (`dates.rs`, `i18n.rs`, `platform.rs`). No
+  `wasm_bindgen_test_configure!` needed — Node has no browser to configure.
+  A wrong `#[test]` here doesn't fail loudly; it silently never runs (no
+  compile error, just a test that contributes nothing).
+- **`lib.rs`'s `main()` is `#[cfg(not(test))]`-gated** (so the wasm-pack node
+  harness doesn't see two `main` symbols). Any function called ONLY from
+  inside that block — e.g. a new `launch_beacon::maybe_fire()` fired at
+  boot — has NO caller at all under a `cfg(test)` build, which would trip
+  `clippy --all-targets -- -D warnings`' dead-code lint UNLESS the function
+  is `pub`. Rust's dead-code lint exempts `pub` items (an external
+  consumer might use them) regardless of internal callers — the same reason
+  `router::App` (also called only from that one `main()` line) is `pub fn
+  App`. Mirror that: make the boot-only function `pub`, not `pub(crate)`,
+  and add its module as `pub mod` in `lib.rs`'s module list.

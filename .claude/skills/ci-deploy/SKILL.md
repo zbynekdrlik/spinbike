@@ -202,21 +202,43 @@ generalized:** after bumping any dependency, don't assume "changelog says no bre
 will be clean on the first push — read whatever CI's compiler/clippy diagnostic actually says (this
 one was a one-line dead-code lint, harmless once understood) rather than being surprised by it.
 
-## AppState has THREE construction sites — wire every new field at all three
+## AppState has FIVE construction sites across THREE files — wire every new field at all five (updated #260: the count was undercounted)
 
-`spinbike_server::AppState` is struct-literal-constructed in **three** places;
-add a new field to `AppState` and you MUST add it to all three or the build /
-tests break (the issue text for #107 named only two — the third was found by
-grepping):
+`spinbike_server::AppState` is struct-literal-constructed **five** times
+across **three** files; add a new field to `AppState` and you MUST add it to
+all five literals or the build / tests break. `grep -rln 'AppState {'` alone
+only finds the three FILES — it hides that `lib.rs` contains THREE separate
+literals, not one (#260 found this the hard way: the #107-era entry here
+said "three places" and described `lib.rs` as a single site, which is
+stale/wrong — its own `#[cfg(test)] mod tests` block builds AppState twice
+more, for `production_router_does_not_expose_test_fixtures` and the
+`test_mode=true` panic-route test). Count literal occurrences, not files:
 
 ```bash
-grep -rn 'AppState {' crates/spinbike-server/src crates/spinbike-server/tests
+grep -c 'AppState {' crates/spinbike-server/src/lib.rs \
+  crates/spinbike-server/src/routes/version.rs \
+  crates/spinbike-server/tests/helpers/mod.rs
+# -> lib.rs:3  routes/version.rs:1  tests/helpers/mod.rs:1
 ```
 
-1. `crates/spinbike-server/src/lib.rs` — `start_server()` (production).
+1. `crates/spinbike-server/src/lib.rs` — **three** literals: `start_server()`
+   (production), and TWO inside `#[cfg(test)] mod tests` (search for
+   `let state = AppState {` — `grep -n` finds all three at once).
 2. `crates/spinbike-server/src/routes/version.rs` — the `#[cfg(test)]` builder
    (clear any relevant `*_TEST_MODE` env before the handle's `spawn()`).
 3. `crates/spinbike-server/tests/helpers/mod.rs` — `TestApp` integration harness.
+
+Fastest safe edit for a same-shaped field (e.g. another
+`Arc<Mutex<SomeRateLimiter>>`, same pattern as `door_rate_limit`/
+`login_link_rate_limit`/`launch_rate_limit`): find the LAST existing
+`*_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(...)),` block at
+each of the 5 sites and insert the new field's block right after it — the
+closing `};`/`)),` text differs only in indentation between `lib.rs`'s
+`start_server()` (top-level, 8-space) and every other site (nested, 12-space),
+so a single `sed`/regex across all 3 files will get the indentation wrong for
+one of them; edit `lib.rs`'s `start_server()` block separately from its two
+test blocks, or verify with `cargo fmt --all --check` after (which WILL catch
+a misindented field, unlike a stray missing field which is a compile error).
 
 Env-driven external-service modules mirror `src/ewelink/`: a `Handle::spawn()`
 that reads env once, a `None`/absent-transport **Disabled** fast-path (missing
@@ -507,6 +529,8 @@ advanced) and start your own ticket.
 ## Live post-deploy Playwright verification against `spinbike-dev`/`spinbike.sk`
 
 **Prod app is served at `https://spinbike.sk`** (primary, since 2026-07-08). `https://spinbike.newlevel.media` still works (same Cloudflare tunnel, same origin :8080) — both are fine to verify against; prefer `spinbike.sk`. Dev stays `https://spinbike-dev.newlevel.media`. All three are Cloudflare-tunnel hostnames → `localhost:8080/8081` (ingress in `/home/newlevel/.cloudflared/config.yml`, tunnel `4093c494-…`; no local nginx/caddy).
+
+**Consequence for any future feature needing the real client IP (#260):** `axum::serve(listener, app)` in `start_server()` has no `into_make_service_with_connect_info::<SocketAddr>()` wiring, so `ConnectInfo<SocketAddr>` is unavailable — and even if it were, the TCP peer would always be `cloudflared`'s own local hop, never the real visitor (no local nginx/caddy in front to preserve it either). The only real-client-IP signal is Cloudflare's own `Cf-Connecting-Ip` request header (set on every proxied request), with `X-Forwarded-For`'s first hop as a fallback for anything hitting `127.0.0.1:8080` directly (local dev, tests, or a bypass of the tunnel). See `crate::routes::metrics::client_ip_key` for the pattern (prefer `Cf-Connecting-Ip` → first `X-Forwarded-For` hop → a shared fallback bucket).
 
 Two gotchas, both hit during #111's live verification:
 
