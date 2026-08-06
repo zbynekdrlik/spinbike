@@ -792,6 +792,74 @@ async fn my_balance_staff_with_flag_off_reports_effective_true() {
     );
 }
 
+// ─── /api/my/balance session-invalidation (#268) ──────────────────────────────
+//
+// A still-valid, unexpired JWT for a user that no longer exists (hard-deleted,
+// soft-deleted, or blocked) must return 401 (session invalid), never 404 —
+// 404 left the client on a broken page instead of triggering the generic
+// 401-clears-session redirect (`api::get_coded`'s `handle_unauthorized`).
+// Mirrors the exact eligibility condition `token_login` already uses:
+// `user.deleted_at.is_some() || user.blocked` (routes/auth.rs).
+
+#[tokio::test]
+async fn my_balance_missing_user_returns_401_not_404() {
+    let app = TestApp::new().await;
+    // A token whose `sub` never resolved to any row — the hard-delete /
+    // "never existed" case. No DB row is created for this id.
+    let ghost_token = spinbike_server::auth::create_token(
+        helpers::JWT_SECRET,
+        999_999_999,
+        "ghost@test.com",
+        &spinbike_core::auth::Role::Customer,
+    )
+    .unwrap();
+    let (status, body) = app.request(get("/api/my/balance", &ghost_token)).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "missing user must be 401, not 404 — got body {body}"
+    );
+    assert_eq!(body["error_code"], "session_invalid");
+}
+
+#[tokio::test]
+async fn my_balance_soft_deleted_user_returns_401_not_404() {
+    let app = TestApp::new().await;
+    let outcome = spinbike_server::db::users::delete_user(&app.pool, app.customer_id)
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        spinbike_server::db::users::DeleteUserOutcome::Deleted { .. }
+    ));
+    let (status, body) = app
+        .request(get("/api/my/balance", &app.customer_token))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "soft-deleted user must be 401, not 404 — got body {body}"
+    );
+    assert_eq!(body["error_code"], "session_invalid");
+}
+
+#[tokio::test]
+async fn my_balance_blocked_user_returns_401_not_200() {
+    let app = TestApp::new().await;
+    spinbike_server::db::users::set_blocked(&app.pool, app.customer_id, true)
+        .await
+        .unwrap();
+    let (status, body) = app
+        .request(get("/api/my/balance", &app.customer_token))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "blocked user must be 401 — got body {body}"
+    );
+    assert_eq!(body["error_code"], "session_invalid");
+}
+
 // ─── negative-balance boundary tests ─────────────────────────────────────────
 
 #[tokio::test]
