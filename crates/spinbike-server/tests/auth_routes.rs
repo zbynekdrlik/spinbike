@@ -915,12 +915,12 @@ async fn code_login_rate_limited_returns_429() {
     assert_eq!(resp["error_code"].as_str().unwrap(), "too_many_requests");
 }
 
-// ── install-token (#258) ─────────────────────────────────────────────────
+// ── install-token (#258, redesigned round-5 #261) ──────────────────────────
 
 /// A customer minting an install token for their OWN session: 200 + a raw
-/// token, and that token is a valid `purpose='login'` token that redeems
-/// through the existing `/api/auth/token-login` path (proving the install
-/// token IS a login token — no new kind, no migration).
+/// token, and that token is a valid, redeemable `purpose='install'` token
+/// through the existing `/api/auth/token-login` path (now purpose-aware —
+/// it tries the install-redeem path first).
 #[tokio::test]
 async fn install_token_customer_mints_own_redeemable_login_token() {
     let app = TestApp::new().await;
@@ -992,4 +992,152 @@ async fn install_token_requires_authentication() {
         ))
         .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+/// #261 core behavior: the install token is genuinely MULTI-USE — redeeming
+/// it a second time (simulating the installed icon's SECOND launch, well
+/// after any grace window) must succeed again, `used_at` stays NULL, and the
+/// session issued both times is the same account.
+#[tokio::test]
+async fn install_token_redeems_multiple_times_from_clean_contexts() {
+    let app = TestApp::new().await;
+    let (_, resp) = app
+        .request(post_json(
+            "/api/auth/install-token",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    let install_token = resp["token"].as_str().unwrap().to_string();
+
+    for attempt in 0..2 {
+        let (status, redeemed) = app
+            .request(post_json(
+                "/api/auth/token-login",
+                "",
+                &serde_json::json!({"token": install_token, "source": "install"}),
+            ))
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "install redeem attempt #{attempt} must succeed"
+        );
+        assert_eq!(redeemed["user"]["id"].as_i64().unwrap(), app.customer_id);
+    }
+
+    let used_at: Option<String> =
+        sqlx::query_scalar("SELECT used_at FROM login_tokens WHERE token_hash = ?")
+            .bind(spinbike_server::db::login_tokens::hash_token(
+                &install_token,
+            ))
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert!(
+        used_at.is_none(),
+        "an install token must never stamp used_at — it is multi-use by design"
+    );
+}
+
+/// A revoked install token must fail redemption with a plain 401 (same
+/// uniform rejection as every other dead-token case) and never touch an
+/// existing session.
+#[tokio::test]
+async fn install_token_revoked_by_staff_no_longer_redeems() {
+    let app = TestApp::new().await;
+    let (_, resp) = app
+        .request(post_json(
+            "/api/auth/install-token",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    let install_token = resp["token"].as_str().unwrap().to_string();
+
+    let (revoke_status, revoke_resp) = app
+        .request(post_json(
+            &format!("/api/users/{}/revoke-install-tokens", app.customer_id),
+            &app.staff_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(revoke_status, StatusCode::OK);
+    assert_eq!(revoke_resp["revoked"].as_u64(), Some(1));
+
+    let (status, _) = app
+        .request(post_json(
+            "/api/auth/token-login",
+            "",
+            &serde_json::json!({"token": install_token, "source": "install"}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a revoked install token must be rejected, same uniform 401 as any dead token"
+    );
+}
+
+/// A non-staff caller (a customer) may not revoke another user's install
+/// tokens — 403.
+#[tokio::test]
+async fn revoke_install_tokens_requires_staff() {
+    let app = TestApp::new().await;
+    let (status, _) = app
+        .request(post_json(
+            &format!("/api/users/{}/revoke-install-tokens", app.customer_id),
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+/// Revoking a user with no live install tokens is a safe no-op (0 revoked,
+/// not an error).
+#[tokio::test]
+async fn revoke_install_tokens_is_a_noop_with_none_live() {
+    let app = TestApp::new().await;
+    let (status, resp) = app
+        .request(post_json(
+            &format!("/api/users/{}/revoke-install-tokens", app.customer_id),
+            &app.staff_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(resp["revoked"].as_u64(), Some(0));
+}
+
+/// #261: a redeem attempt hammering the SAME token past ~10/min gets
+/// rate-limited (429), independent of the token's own validity.
+#[tokio::test]
+async fn token_login_throttles_repeated_redeem_of_the_same_token() {
+    let app = TestApp::new().await;
+    let (_, resp) = app
+        .request(post_json(
+            "/api/auth/install-token",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    let install_token = resp["token"].as_str().unwrap().to_string();
+
+    let mut last_status = StatusCode::OK;
+    for _ in 0..11 {
+        let (status, _) = app
+            .request(post_json(
+                "/api/auth/token-login",
+                "",
+                &serde_json::json!({"token": install_token, "source": "install"}),
+            ))
+            .await;
+        last_status = status;
+    }
+    assert_eq!(
+        last_status,
+        StatusCode::TOO_MANY_REQUESTS,
+        "the 11th redeem of the same token within a minute must be throttled"
+    );
 }

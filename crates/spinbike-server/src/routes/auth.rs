@@ -41,9 +41,11 @@ pub struct TokenLoginRequest {
 
 #[derive(Serialize)]
 pub struct InstallTokenResponse {
-    /// The raw one-time install token — a `purpose='login'` magic-link token
+    /// The raw install token — a `purpose='install'` magic-link token (#261:
+    /// 365-day TTL, multi-use, capped at `INSTALL_TOKEN_CAP` per user)
     /// minted for the caller's OWN session. The caller embeds it in the
-    /// dynamic manifest's `start_url` (`/manifest.json?it=<token>`).
+    /// dynamic manifest's `start_url` (`/manifest.json?it=<token>`) AND arms
+    /// the address bar via `history.replaceState`.
     pub token: String,
 }
 
@@ -186,6 +188,60 @@ impl Default for CodeLoginRateLimiter {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Rate limiter for /api/auth/token-login redeem attempts (#261, round-5)
+// ---------------------------------------------------------------------------
+
+/// In-memory rate-limit for `POST /api/auth/token-login`, keyed by the
+/// SUBMITTED token's hash (String — never the raw token, same discipline as
+/// storage). The install-purpose credential (#261) is permanent and
+/// multi-use, so it is the one token kind that could otherwise be replayed
+/// without limit; this caps it at ~10 redeem attempts/min per token. Applied
+/// to every token-login call regardless of purpose — invite/login tokens are
+/// redeemed at most a couple of times in their whole life, so this is
+/// harmless defense-in-depth for them too, never a realistic false-positive.
+pub struct InstallRedeemRateLimiter(SlidingWindowLimiter<String>);
+
+impl InstallRedeemRateLimiter {
+    pub fn new() -> Self {
+        Self(SlidingWindowLimiter::new(RateLimitConfig {
+            per_key_window: Duration::from_secs(60),
+            per_key_min_gap: None,
+            per_key_max: Some(10),
+            per_key_cap_reason: "install_redeem_cap",
+            key_memory: Duration::from_secs(120),
+            global_window: Duration::from_secs(60),
+            global_max: 300,
+        }))
+    }
+
+    /// Returns Ok and records the attempt if allowed; Err(reason) otherwise
+    /// ("install_redeem_cap" / "global_cap").
+    pub fn check_and_record(&mut self, token_hash: &str) -> Result<(), &'static str> {
+        self.0.check_and_record(token_hash.to_string())
+    }
+
+    /// Testable variant taking the current `Instant` so tests need not sleep.
+    pub fn check_and_record_at(
+        &mut self,
+        token_hash: &str,
+        now: Instant,
+    ) -> Result<(), &'static str> {
+        self.0.check_and_record_at(token_hash.to_string(), now)
+    }
+
+    /// Number of tracked token hashes — for the map-bounding tests.
+    pub fn tracked_keys(&self) -> usize {
+        self.0.tracked_keys()
+    }
+}
+
+impl Default for InstallRedeemRateLimiter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/auth/login", post(login))
@@ -196,6 +252,10 @@ pub fn routes() -> Router<AppState> {
         .route("/api/auth/code-login", post(code_login))
         .route("/api/auth/me", get(me))
         .route("/api/users/{id}/invite", post(invite_user))
+        .route(
+            "/api/users/{id}/revoke-install-tokens",
+            post(revoke_install_tokens),
+        )
 }
 
 async fn login(
@@ -359,14 +419,69 @@ async fn request_login_link(
     ok()
 }
 
-/// Redeem a magic-link token (invite OR login) and return a JWT session. All
-/// failure paths return a single uniform 401 (no enumeration). Blocked/deleted
-/// users are rejected even with an otherwise-valid token.
+/// Redeem a magic-link token (invite/login, OR the #261 long-lived
+/// install-purpose credential) and return a JWT session. All failure paths
+/// return a single uniform 401 (no enumeration). Blocked/deleted users are
+/// rejected even with an otherwise-valid token.
 async fn token_login(
     State(state): State<AppState>,
     Json(body): Json<TokenLoginRequest>,
 ) -> Result<Json<AuthResponse>, ApiError> {
     let invalid = || ApiError::Unauthorized(ErrorCode::InvalidOrExpiredLink);
+
+    // #261: rate-limit BEFORE any DB lookup, keyed by the submitted token's
+    // hash — bounds the one permanent, multi-use credential (install) to
+    // ~10 redeem attempts/min; harmless for invite/login tokens, which are
+    // redeemed at most a couple of times in their whole life.
+    let token_hash = login_tokens::hash_token(&body.token);
+    if let Err(reason) = state
+        .install_redeem_rate_limit
+        // #172: recover from poisoning rather than .expect().
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .check_and_record(&token_hash)
+    {
+        tracing::warn!(%reason, "token-login: throttled");
+        return Err(ApiError::TooManyRequests(ErrorCode::TooManyRequests));
+    }
+
+    // #261: try the long-lived, MULTI-USE install-purpose credential first —
+    // distinct redeem path from the invite/login used_at/grace semantics
+    // below (see `login_tokens::redeem_install`'s doc comment for why).
+    if let Some(user_id) = login_tokens::redeem_install(&state.pool, &body.token)
+        .await
+        .map_err(internal_error)?
+    {
+        let user = users::get_user_by_id(&state.pool, user_id)
+            .await
+            .map_err(internal_error)?
+            .ok_or_else(invalid)?;
+        if user.deleted_at.is_some() || user.blocked {
+            tracing::warn!(
+                user_id,
+                "token-login: rejected — blocked or deleted user (install)"
+            );
+            return Err(invalid());
+        }
+        let role = parse_role(&user.role);
+        let email_str = user.email.as_deref().unwrap_or("");
+        let token = auth::create_token(&state.jwt_secret, user.id, email_str, &role)
+            .map_err(internal_error)?;
+        tracing::info!(
+            user_id = user.id,
+            source = body.source.as_deref().unwrap_or("install"),
+            "token-login: session issued (install, multi-use)"
+        );
+        return Ok(Json(AuthResponse {
+            token,
+            user: UserInfo {
+                id: user.id,
+                email: user.email.unwrap_or_default(),
+                name: user.name,
+                role: Role::from(user.role.as_str()),
+            },
+        }));
+    }
 
     // Observability only (#246): read BEFORE the atomic redeem below so a
     // successful login can be logged as a first-time redeem vs. a
@@ -429,36 +544,68 @@ async fn token_login(
     }))
 }
 
-/// Mint a one-time install token for the CALLER's own session (#258).
+/// Mint a long-lived, multi-use install token for the CALLER's own session
+/// (#258, round-5 redesign #261).
 ///
 /// Authenticated (`AuthUser`, any role) — the token is always minted for
-/// `claims.sub`, never a caller-supplied id, so no one can mint a login token
-/// for someone else's account. It is a plain `purpose='login'` magic-link token
-/// (same 24h TTL + #246 grace as an emailed login link — NO migration, NO new
-/// token kind, NO change to the security model): the install token IS a login
-/// token. The client embeds the returned raw token in the dynamic manifest's
-/// `start_url` (`/manifest.json?it=<token>`), so the installed home-screen app
-/// opens already signed in on first launch. Redemption is the existing
-/// `POST /api/auth/token-login` path.
+/// `claims.sub`, never a caller-supplied id, so no one can mint a token for
+/// someone else's account. `purpose='install'`: 365-day TTL, multi-use at
+/// redemption (see `login_tokens::redeem_install`), capped at
+/// `INSTALL_TOKEN_CAP` live tokens per user (oldest evicted past the cap).
+/// The client embeds the returned raw token in the dynamic manifest's
+/// `start_url` (`/manifest.json?it=<token>`) AND, since #261, arms the
+/// address bar directly via `history.replaceState` — the launch URL is
+/// permanent (the installed icon reopens it on EVERY launch), so the
+/// credential must survive that, unlike the old 24h single-use `login`
+/// token this replaces. Redemption is the existing `POST
+/// /api/auth/token-login` path (now purpose-aware, tries install first).
 ///
-/// No new rate limiter: this is authenticated and only requested when the
-/// install prompt is shown (low-volume). The atomic redeem + the account's own
-/// permanent session already bound any abuse.
+/// No new mint-side rate limiter: this is authenticated and only requested
+/// when the install prompt is shown (low-volume) — the client-side
+/// sessionStorage mint guard (#261) is what actually stops the double-mint
+/// prod evidence showed. Redemption gets its own limiter
+/// (`InstallRedeemRateLimiter`) since a permanent multi-use credential is the
+/// one replayable surface here.
 async fn install_token(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<InstallTokenResponse>, ApiError> {
-    let raw = login_tokens::create_token(
-        &state.pool,
-        claims.sub,
-        login_tokens::PURPOSE_LOGIN,
-        login_tokens::LOGIN_TTL_SECS,
-    )
-    .await
-    .map_err(internal_error)?;
+    let raw = login_tokens::create_install_token(&state.pool, claims.sub)
+        .await
+        .map_err(internal_error)?;
 
-    tracing::info!(user_id = claims.sub, "install-token: minted");
+    tracing::info!(
+        user_id = claims.sub,
+        "install-token: minted (purpose=install, 365d, multi-use)"
+    );
     Ok(Json(InstallTokenResponse { token: raw }))
+}
+
+/// Admin/staff-only: revoke every LIVE install token for `id` — the "Odhlasit
+/// zariadenia" action (#261). Idempotent; returns how many rows were
+/// actually revoked. A solo-operator desk action — there is no per-device
+/// list, this simply cuts every install credential the user currently has,
+/// forcing any installed home-screen app to fall back to the in-app
+/// email-code login (leg 3 of the round-5 ladder) on its next open.
+async fn revoke_install_tokens(
+    State(state): State<AppState>,
+    _: StaffUser,
+    Path(id): Path<i64>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let existing = users::get_user_by_id(&state.pool, id)
+        .await
+        .map_err(internal_error)?
+        .ok_or(ApiError::NotFound(ErrorCode::UserNotFound))?;
+    if existing.deleted_at.is_some() {
+        return Err(ApiError::NotFound(ErrorCode::UserNotFound));
+    }
+
+    let revoked = login_tokens::revoke_user_install_tokens(&state.pool, id)
+        .await
+        .map_err(internal_error)?;
+
+    tracing::info!(user_id = id, revoked, "install-tokens: revoked by staff");
+    Ok(Json(serde_json::json!({ "revoked": revoked })))
 }
 
 /// Compose the unaccented-Slovak login-code email. Returns (subject, text, html).
@@ -742,7 +889,7 @@ async fn invite_user(
 
 #[cfg(test)]
 mod tests {
-    use super::{CodeLoginRateLimiter, LoginLinkRateLimiter};
+    use super::{CodeLoginRateLimiter, InstallRedeemRateLimiter, LoginLinkRateLimiter};
     use std::time::{Duration, Instant};
 
     /// Wire-compat guard (#98): the `AuthResponse.user.role` (the payload the
@@ -991,6 +1138,62 @@ mod tests {
             rl.tracked_keys(),
             1,
             "stale per-email entries must be evicted, leaving only the recent one"
+        );
+    }
+
+    // ── install-token redeem limiter (#261) ────────────────────────────────
+
+    #[test]
+    fn install_redeem_first_attempt_allowed() {
+        let mut rl = InstallRedeemRateLimiter::new();
+        assert!(rl.check_and_record("hash-a").is_ok());
+    }
+
+    #[test]
+    fn install_redeem_per_token_cap_at_eleventh_attempt() {
+        let mut rl = InstallRedeemRateLimiter::new();
+        let t0 = Instant::now();
+        for i in 0..10 {
+            rl.check_and_record_at("hash-a", t0 + Duration::from_millis(i as u64))
+                .unwrap_or_else(|e| panic!("attempt #{i} should succeed, got {e}"));
+        }
+        assert_eq!(
+            rl.check_and_record_at("hash-a", t0 + Duration::from_millis(50)),
+            Err("install_redeem_cap"),
+            "the 11th redeem attempt for one token inside 60 s must hit the per-token cap"
+        );
+    }
+
+    #[test]
+    fn install_redeem_distinct_tokens_are_independent() {
+        let mut rl = InstallRedeemRateLimiter::new();
+        let t0 = Instant::now();
+        for _ in 0..10 {
+            rl.check_and_record_at("hash-a", t0).unwrap();
+        }
+        rl.check_and_record_at("hash-b", t0)
+            .expect("a different token must not be throttled by another token's cap");
+    }
+
+    #[test]
+    fn install_redeem_per_token_map_is_bounded() {
+        let mut rl = InstallRedeemRateLimiter::new();
+        let t0 = Instant::now();
+        for i in 0..3 {
+            rl.check_and_record_at(&format!("hash-{i}"), t0 + Duration::from_millis(i as u64))
+                .unwrap();
+        }
+        assert_eq!(
+            rl.tracked_keys(),
+            3,
+            "three distinct tokens tracked while fresh"
+        );
+        rl.check_and_record_at("late-hash", t0 + Duration::from_secs(200))
+            .unwrap();
+        assert_eq!(
+            rl.tracked_keys(),
+            1,
+            "stale per-token entries must be evicted, leaving only the recent one"
         );
     }
 

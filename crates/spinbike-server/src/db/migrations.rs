@@ -3379,20 +3379,8 @@ mod tests {
         assert_eq!(
             rows,
             vec![
-                (
-                    "code-hash".to_string(),
-                    "code".to_string(),
-                    2,
-                    None,
-                    None
-                ),
-                (
-                    "login-hash".to_string(),
-                    "login".to_string(),
-                    0,
-                    None,
-                    None
-                ),
+                ("code-hash".to_string(), "code".to_string(), 2, None, None),
+                ("login-hash".to_string(), "login".to_string(), 0, None, None),
             ],
             "V22 must preserve pre-existing rows and backfill last_used_at/revoked_at=NULL"
         );

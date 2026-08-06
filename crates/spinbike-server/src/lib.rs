@@ -48,6 +48,14 @@ pub struct AppState {
     /// Separate from the others — no user/email key exists for this route.
     pub launch_rate_limit:
         std::sync::Arc<std::sync::Mutex<crate::routes::metrics::LaunchRateLimiter>>,
+    /// In-memory rate-limit for `POST /api/auth/token-login` redeem attempts
+    /// (#261), keyed by the SUBMITTED token's hash — bounds a single
+    /// install-purpose token (permanent, multi-use) to ~10 redeem attempts
+    /// per minute. Applied to every token-login call regardless of purpose
+    /// (invite/login tokens are redeemed at most a couple of times ever, so
+    /// this is harmless defense-in-depth for them too).
+    pub install_redeem_rate_limit:
+        std::sync::Arc<std::sync::Mutex<crate::routes::auth::InstallRedeemRateLimiter>>,
 }
 
 /// Build the CORS layer by reading the CORS_ORIGIN environment variable.
@@ -216,6 +224,9 @@ pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Re
         )),
         launch_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
             crate::routes::metrics::LaunchRateLimiter::new(),
+        )),
+        install_redeem_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+            crate::routes::auth::InstallRedeemRateLimiter::new(),
         )),
     };
 
@@ -442,6 +453,9 @@ mod tests {
             launch_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::routes::metrics::LaunchRateLimiter::new(),
             )),
+            install_redeem_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::auth::InstallRedeemRateLimiter::new(),
+            )),
         };
 
         // The SAME function start_server() calls, with the SAME test_mode
@@ -567,6 +581,9 @@ mod tests {
             )),
             launch_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::routes::metrics::LaunchRateLimiter::new(),
+            )),
+            install_redeem_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::auth::InstallRedeemRateLimiter::new(),
             )),
         };
 

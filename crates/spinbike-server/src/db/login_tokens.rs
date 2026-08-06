@@ -816,13 +816,12 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        let far_future_check: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 WHERE ? > datetime('now', '+300 days')",
-        )
-        .bind(&expires_at)
-        .fetch_optional(&pool)
-        .await
-        .unwrap();
+        let far_future_check: Option<i64> =
+            sqlx::query_scalar("SELECT 1 WHERE ? > datetime('now', '+300 days')")
+                .bind(&expires_at)
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
         assert!(
             far_future_check.is_some(),
             "install token must expire >300 days out (365-day TTL), got expires_at={expires_at}"
@@ -902,7 +901,9 @@ mod tests {
         run_migrations(&pool).await.unwrap();
         let uid = seed_customer(&pool, "install-expired@x").await;
 
-        let raw = create_token(&pool, uid, PURPOSE_INSTALL, -10).await.unwrap();
+        let raw = create_token(&pool, uid, PURPOSE_INSTALL, -10)
+            .await
+            .unwrap();
         assert_eq!(
             redeem_install(&pool, &raw).await.unwrap(),
             None,

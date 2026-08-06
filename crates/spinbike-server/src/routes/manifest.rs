@@ -85,8 +85,21 @@ fn manifest_with_install_start_url(token: &str) -> Result<String, serde_json::Er
     serde_json::to_string(&value)
 }
 
+/// `no-store` on EVERY manifest response, token-bearing or not (#261). A
+/// cached tokenless manifest served after a token was minted — or a cached
+/// stale install-token manifest served past that token's real state — is a
+/// silent fourth failure mode the design explicitly calls out; the manifest
+/// body is cheap to rebuild on every request (`include_str!` + one JSON
+/// field swap), so there is no reason to ever cache it.
 fn manifest_response(body: impl Into<axum::body::Body>) -> Response {
-    ([(header::CONTENT_TYPE, MANIFEST_CONTENT_TYPE)], body.into()).into_response()
+    (
+        [
+            (header::CONTENT_TYPE, MANIFEST_CONTENT_TYPE),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        body.into(),
+    )
+        .into_response()
 }
 
 /// `GET /manifest.json[?it=<raw>]`. See the module doc for the two branches.
@@ -110,6 +123,19 @@ async fn manifest(Query(query): Query<ManifestQuery>) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn manifest_response_always_sets_cache_control_no_store() {
+        // Body content is irrelevant here — only the header matters.
+        let resp = manifest_response("{}");
+        assert_eq!(
+            resp.headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
+            Some("no-store"),
+            "every manifest response must set Cache-Control: no-store (#261)"
+        );
+    }
 
     #[test]
     fn static_manifest_is_valid_json_with_expected_fields() {

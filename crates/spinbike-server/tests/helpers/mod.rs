@@ -217,6 +217,9 @@ impl TestApp {
             launch_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 spinbike_server::routes::metrics::LaunchRateLimiter::new(),
             )),
+            install_redeem_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                spinbike_server::routes::auth::InstallRedeemRateLimiter::new(),
+            )),
         };
         // TestApp always merges test_fixtures regardless of SPINBIKE_TEST_MODE —
         // the harness knows it's a test context. start_server() in production uses

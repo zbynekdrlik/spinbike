@@ -29,6 +29,21 @@
 //! webview branch on `/welcome` and `/my/balance`.
 //!
 //! Mounted on `/welcome` (primary) and `/my/balance` (until installed).
+//!
+//! **iOS auto-login ladder, round 5 (#261)** — on iOS while logged in, this
+//! component arms TWO independent legs of a belt-and-braces credential
+//! (a third, unrelated leg — the in-app email-code login — is the fallback
+//! rendered by `CustomerLoginMethods`/`CodeLoginForm` when neither of these
+//! fires): the manifest `start_url` swap (leg 1, kept from #258) AND
+//! `history.replaceState`-arming the address bar itself (leg 2, the new
+//! primary carrier — works regardless of whether iOS re-reads the manifest
+//! or just captures the page's live URL at "Add to Home Screen" time). A
+//! `sessionStorage` guard (`sb_install_token`) ensures only the FIRST mount
+//! per browser session mints a token — round 4 minted unconditionally on
+//! every mount, which prod evidence showed firing twice per install session.
+//! The credential itself (`purpose='install'`, minted server-side) is now
+//! 365-day, multi-use, and capped at 5 live tokens/user — see
+//! `db/login_tokens.rs`'s `create_install_token`/`redeem_install`.
 
 use js_sys::{Function, Promise, Reflect};
 use leptos::prelude::*;
@@ -41,6 +56,24 @@ use crate::platform::{
     get_prop, is_in_app_browser_ua, is_ios_ua, is_standalone, user_agent, window_value,
 };
 use crate::{api, auth};
+
+/// `sessionStorage` key the round-5 (#261) mint guard reads/writes. Kept in
+/// sessionStorage (not localStorage) deliberately — it only needs to survive
+/// within the SAME browser tab's session (across the two `InstallPrompt`
+/// mount points, `/welcome` and `/my/balance`, and a same-tab reload), never
+/// across tabs or devices; a stray leftover key in localStorage would be a
+/// worse footgun to clean up later.
+const INSTALL_TOKEN_STORAGE_KEY: &str = "sb_install_token";
+
+/// The `/welcome` URL an install token arms — the SAME formula the server's
+/// `manifest.rs::install_start_url` produces for the manifest `start_url`,
+/// duplicated client-side (not fetched) so `history.replaceState` can arm
+/// the address bar synchronously, in the same effect, with zero extra round
+/// trip. Kept as its own pure fn (mirrors the server-side test) so the
+/// formula is unit-tested independently of any DOM/JS interop.
+fn install_welcome_url(token: &str) -> String {
+    format!("/welcome?t={token}&src=install")
+}
 
 /// Empty body for the authenticated install-token mint (#258). The server
 /// mints for the caller's own session (`claims.sub`); no fields are needed.
@@ -67,6 +100,66 @@ fn swap_manifest_link(token: &str) {
     {
         link.set_href(&href);
     }
+}
+
+/// Read the sessionStorage mint guard (#261). `Some(token)` means a token was
+/// already minted THIS session — reuse it, skip the mint POST entirely. This
+/// is the fix for the prod double-mint: `InstallPrompt` mounts on BOTH
+/// `/welcome` and `/my/balance`, each mount previously fired its own
+/// unconditional mint. Degrades to `None` (treated exactly like "not minted
+/// yet") on any unavailable step — sessionStorage can legitimately be absent
+/// (private browsing, a security exception) and must never panic.
+fn stored_install_token() -> Option<String> {
+    web_sys::window()?
+        .session_storage()
+        .ok()??
+        .get_item(INSTALL_TOKEN_STORAGE_KEY)
+        .ok()?
+}
+
+/// Persist a freshly-minted install token into the sessionStorage guard.
+/// Silent no-op on any failure (same interop discipline as every other JS
+/// call in this module) — losing the guard only means a future mount in
+/// this tab might mint again, not a correctness break.
+fn store_install_token(token: &str) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Ok(Some(storage)) = window.session_storage() else {
+        return;
+    };
+    let _ = storage.set_item(INSTALL_TOKEN_STORAGE_KEY, token);
+}
+
+/// Arm BOTH remaining legs of the round-5 (#261) ladder for an install
+/// token, given a token already minted (or reused from the sessionStorage
+/// guard):
+///
+/// - Leg 1 (kept from #258): swap the manifest `<link>` so iOS versions that
+///   re-read the manifest at "Add to Home Screen" time pick up the
+///   token-bearing `start_url`.
+/// - Leg 2 (new, #261, the PRIMARY carrier): `history.replaceState` the
+///   current address bar to the exact install URL. Whether iOS captures the
+///   page's live URL (H1) or a stale manifest parse (H2) at A2HS time, the
+///   captured URL is already the auto-login URL — no manifest-read
+///   dependency needed for this leg to work. `replaceState` adds no history
+///   entry, so the back button is unaffected. Typed `web_sys::History` API
+///   (no `Reflect` needed — `History` is a normal DOM interface).
+///
+/// Called on EVERY mount that has a token available (fresh mint or reused
+/// from storage) — `InstallPrompt` mounts on both `/welcome` and
+/// `/my/balance`, so both pages get both legs armed, per the design's
+/// requirement.
+fn arm_install_credential(token: &str) {
+    swap_manifest_link(token);
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    let Ok(history) = window.history() else {
+        return;
+    };
+    let url = install_welcome_url(token);
+    let _ = history.replace_state_with_url(&JsValue::NULL, "", Some(&url));
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -270,18 +363,32 @@ pub fn InstallPrompt() -> impl IntoView {
     let initial_kind = detect_kind();
     let (kind, set_kind) = signal(initial_kind);
 
-    // #258: on iOS specifically (detect_kind() already returns Hidden when
-    // standalone, so PromptKind::Ios implies "iOS AND not yet installed") AND
-    // while logged in, mint a one-time install token and repoint the manifest
-    // link at /manifest.json?it=<token>. iOS reads that manifest's start_url at
-    // "Add to Home Screen" time, so the installed home-screen app opens already
-    // signed in on first launch (#258). iOS ONLY: Android shares storage
-    // between browser and installed PWA (no logged-out loop) and mutating the
-    // manifest at runtime could disturb its beforeinstallprompt eligibility.
+    // #258, round-5 redesign #261: on iOS specifically (detect_kind() already
+    // returns Hidden when standalone, so PromptKind::Ios implies "iOS AND not
+    // yet installed") AND while logged in, arm both remaining legs of the
+    // belt-and-braces ladder — the manifest swap (leg 1) AND
+    // history.replaceState (leg 2, the primary carrier since #261; leg 3 is
+    // the in-app code-login fallback, unrelated to this component). iOS
+    // ONLY: Android shares storage between browser and installed PWA (no
+    // logged-out loop) and mutating the manifest/address-bar at runtime
+    // could disturb its own beforeinstallprompt eligibility.
+    //
+    // #261 mint guard: check sessionStorage FIRST. `InstallPrompt` mounts on
+    // BOTH `/welcome` and `/my/balance` — without this guard each mount
+    // fires its own unconditional mint POST, which is exactly the prod
+    // double-mint evidence (#261: two `install-token: minted` log lines 16
+    // minutes apart for the same user, no re-entrancy guard). A stored token
+    // is reused and re-armed on every mount (including a same-tab reload);
+    // only the FIRST mount in a session actually POSTs.
+    //
     // Fires once on mount; the mint is an authenticated call (api::post) and
-    // both the mint and the link swap degrade to a silent no-op on any failure.
+    // every step degrades to a silent no-op on failure.
     if initial_kind == PromptKind::Ios && auth::get_token().is_some() {
         Effect::new(move |_| {
+            if let Some(token) = stored_install_token() {
+                arm_install_credential(&token);
+                return;
+            }
             spawn_local(async move {
                 if let Ok(resp) = api::post::<InstallTokenReq, InstallTokenResp>(
                     "/api/auth/install-token",
@@ -289,7 +396,8 @@ pub fn InstallPrompt() -> impl IntoView {
                 )
                 .await
                 {
-                    swap_manifest_link(&resp.token);
+                    store_install_token(&resp.token);
+                    arm_install_credential(&resp.token);
                 }
             });
         });
@@ -352,5 +460,23 @@ pub fn InstallPrompt() -> impl IntoView {
             }
             .into_any(),
         }}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::install_welcome_url;
+    use wasm_bindgen_test::*;
+
+    /// Mirrors the server-side `manifest.rs::install_start_url` formula
+    /// exactly (#261) — both sides must agree byte-for-byte since `/welcome`
+    /// is reached via EITHER the manifest's `start_url` (server-built) or
+    /// `history.replaceState` (client-built, this fn).
+    #[wasm_bindgen_test]
+    fn install_welcome_url_matches_the_server_formula() {
+        assert_eq!(
+            install_welcome_url("abc-123_XYZ"),
+            "/welcome?t=abc-123_XYZ&src=install"
+        );
     }
 }
