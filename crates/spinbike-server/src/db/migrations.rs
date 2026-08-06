@@ -3369,7 +3369,10 @@ mod tests {
 
         run_migrations(&pool).await.unwrap();
 
-        let rows: Vec<(String, String, i64, Option<String>, Option<String>)> = sqlx::query_as(
+        // clippy::type_complexity: name the row shape instead of a bare
+        // 5-element tuple type.
+        type V22Row = (String, String, i64, Option<String>, Option<String>);
+        let rows: Vec<V22Row> = sqlx::query_as(
             "SELECT token_hash, purpose, attempts, last_used_at, revoked_at
              FROM login_tokens ORDER BY token_hash",
         )
