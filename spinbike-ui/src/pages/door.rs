@@ -1,4 +1,4 @@
-//! Dedicated door-open page at `/door`. Shows ONLY the hold-2s button —
+//! Dedicated door-open page at `/door`. Shows ONLY the hold-1s button —
 //! no balance / pass / recent-visits clutter. Used by admin and staff who
 //! reach it via the AdaptiveNav "More" sheet, and by anyone who navigates
 //! to /door directly.

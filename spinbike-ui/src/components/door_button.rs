@@ -8,7 +8,7 @@
 //! |--------------------|----------------------------------------|
 //! | `Idle`             | default                                |
 //! | `Holding`          | pointerdown                            |
-//! | `Firing`           | hold reached 2 s, request in flight    |
+//! | `Firing`           | hold reached 1 s, request in flight    |
 //! | `Success`          | 200 response                           |
 //! | `ErrorUnavailable` | 503 (or any unexpected error)          |
 //! | `ErrorRateLimited` | 429                                    |
@@ -60,10 +60,10 @@ impl DoorState {
     }
 }
 
-const HOLD_DURATION_MS: f64 = 2000.0;
+const HOLD_DURATION_MS: f64 = 1000.0;
 const TICK_MS: u32 = 16;
 
-/// Hold-2s door button + status banner. Caller provides:
+/// Hold-1s door button + status banner. Caller provides:
 /// - `allowed` — derived from the user's `allow_self_entry` flag. When false,
 ///   button renders disabled with the "Ask reception" label.
 /// - `on_success` — called after a successful press so the parent can refresh

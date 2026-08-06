@@ -968,7 +968,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     // Door self-entry (#92)
     m.insert(
         "door_button_idle",
-        ("Otvorit dvere - drz 2s", "Hold to open door"),
+        ("Otvorit dvere - drz 1s", "Hold to open door"),
     );
     m.insert("door_button_holding", ("Drz...", "Hold..."));
     m.insert("door_button_firing", ("Otvaram...", "Opening..."));
@@ -1001,13 +1001,16 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "monthly_pass_active_until",
         (
-            "Mesacny preplatok aktivny do {}",
+            "Mesacna permanentka platna do {}",
             "Monthly pass active until {}",
         ),
     );
     m.insert(
         "monthly_pass_not_active",
-        ("Mesacny preplatok neaktivny", "Monthly pass not active"),
+        (
+            "Nemas aktivnu mesacnu permanentku",
+            "Monthly pass not active",
+        ),
     );
     m.insert("my_balance_hello", ("Ahoj, {}", "Hello, {}"));
     m.insert("my_balance_credit", ("Zostatok", "Credit"));

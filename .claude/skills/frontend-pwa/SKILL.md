@@ -767,3 +767,32 @@ not just the one whose NAME still makes sense for the new, broader case. Fix
 here: give the surviving class (`.install-prompt--webview`) its own copy of
 the shared styling (`.install-prompt--ios, .install-prompt--webview { … }`),
 independent of the class being dropped.
+
+## Dynamic `/manifest.json` handler — register BEFORE the static fallback, and `include_str!` the body (not `Asset::get`) (#258)
+
+The manifest is normally served verbatim by the rust-embed static fallback
+(`static_files.rs`, `#[folder = "../../spinbike-ui/dist/"]`). To serve a
+DYNAMIC manifest (e.g. #258's `/manifest.json?it=<install token>` that swaps
+`start_url`), two things matter:
+
+- **Route precedence:** register `.route("/manifest.json", get(handler))` as
+  an explicit route merged into `all_routes()` BEFORE `.fallback(static_files
+  ::static_handler)` (`routes/manifest.rs` + `routes/mod.rs`). An explicit
+  route always wins over the fallback for that exact path. Its own
+  `Content-Type: application/manifest+json` (vs the fallback's mime_guess
+  `application/json`) is a handy proof-in-tests that the handler took over.
+- **Compile the manifest body in via `include_str!("../../../../spinbike-ui/
+  manifest.json")`, NOT `Asset::get("manifest.json")`.** The `Test (server)`
+  CI job builds against the PLACEHOLDER dist (ci.yml writes
+  `dist/manifest.json = {"name":"spinbike-test"}`), so `Asset::get` there
+  returns the stub, not the real manifest with icons — the handler + its
+  tests would be non-deterministic. `include_str!` of the SOURCE manifest
+  (the same file Trunk copies into dist) is always the real content, so the
+  handler serves identical bytes in prod and CI, and unit tests can assert
+  real icons/`start_url`. The include path is relative to the SOURCE FILE
+  (`crates/spinbike-server/src/routes/manifest.rs` → 4×`../` → repo root).
+- **Don't validate the token when serving** — the manifest handler is a pure
+  string substitution (set `start_url` via `serde_json`, never splice raw
+  JSON); validation is redemption (`token-login`). Serving an
+  invalid/expired token yields a manifest whose `start_url` just fails to
+  redeem later — no oracle, no DB touch.

@@ -115,7 +115,7 @@ async function assignCardCode(
 // ---------------------------------------------------------------------------
 
 test.describe('Door self-entry (#92)', () => {
-    test('customer holds 2s and door opens — banner + recent visit row appear', async ({ page, baseURL }) => {
+    test('customer holds 1s and door opens — banner + recent visit row appear', async ({ page, baseURL }) => {
         const messages = setupConsoleCheck(page);
         const adminToken = await loginViaAPI(page, baseURL!, 'admin@test.com', 'admin123');
         const customer = await createSelfEntryCustomer(adminToken, 'DE');
@@ -133,9 +133,9 @@ test.describe('Door self-entry (#92)', () => {
         const btn = page.locator('[data-testid="door-open-button"]');
         await expect(btn).toBeVisible();
 
-        // Simulate a 2-second hold: pointerdown then wait, then pointerup.
+        // Simulate a 1-second hold: pointerdown then wait, then pointerup.
         await btn.dispatchEvent('pointerdown');
-        await page.waitForTimeout(2200);
+        await page.waitForTimeout(1200);
         await btn.dispatchEvent('pointerup');
 
         // Banner shows success.
@@ -174,7 +174,7 @@ test.describe('Door self-entry (#92)', () => {
         await expect(btn).toBeVisible();
 
         await btn.dispatchEvent('pointerdown');
-        await page.waitForTimeout(2200);
+        await page.waitForTimeout(1200);
         await btn.dispatchEvent('pointerup');
 
         // The stored note is "door: 1st"; in Slovak the customer row shows it via
@@ -240,7 +240,7 @@ test.describe('Door self-entry (#92)', () => {
         await expect(btn).toBeVisible();
 
         await btn.dispatchEvent('pointerdown');
-        await page.waitForTimeout(2200);
+        await page.waitForTimeout(1200);
         await btn.dispatchEvent('pointerup');
 
         // Error banner shows "unavailable" or "reception" (the i18n key is
