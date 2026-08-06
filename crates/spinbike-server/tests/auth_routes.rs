@@ -1040,6 +1040,42 @@ async fn install_token_redeems_multiple_times_from_clean_contexts() {
     );
 }
 
+/// A BLOCKED (but not deleted) user's still-valid install token must be
+/// rejected. Pins the `||` in `deleted_at.is_some() || blocked` — a blocked
+/// user alone (deleted stays false) already must reject, which a
+/// mutation-flipped `&&` would wrongly accept.
+#[tokio::test]
+async fn install_token_blocked_user_rejected() {
+    let app = TestApp::new().await;
+    let (_, resp) = app
+        .request(post_json(
+            "/api/auth/install-token",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    let install_token = resp["token"].as_str().unwrap().to_string();
+
+    sqlx::query("UPDATE users SET blocked = 1 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    let (status, _) = app
+        .request(post_json(
+            "/api/auth/token-login",
+            "",
+            &serde_json::json!({"token": install_token, "source": "install"}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "a blocked user's install token must be rejected even though it isn't deleted"
+    );
+}
+
 /// A revoked install token must fail redemption with a plain 401 (same
 /// uniform rejection as every other dead-token case) and never touch an
 /// existing session.
