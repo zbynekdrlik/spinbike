@@ -156,6 +156,83 @@ test.describe('Magic-link welcome page (#109)', () => {
 
         assertCleanConsole(consoleMessages);
     });
+
+    // #261 round-5 ladder, leg 3: a DEAD token (unknown/garbage — the same
+    // uniform-rejection shape a revoked or expired install token produces)
+    // opened WITHOUT an existing session must land on the recovery screen —
+    // never a raw error, never a bare login form. This is the "no session,
+    // token present, redeem failed" branch of Decision 3.
+    test('a dead token without a session lands on the recovery screen, no raw error (#261)', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await setEnglishLanguage(page);
+
+        await page.goto('/welcome?t=this-token-was-never-issued&src=install');
+        await page.waitForSelector('[data-testid="welcome-invalid"]', { timeout: 10000 });
+
+        await expect(page.locator('[data-testid="login-method-code"]')).toHaveAttribute(
+            'aria-selected',
+            'true',
+        );
+        await expect(page.locator('[data-testid="code-login-email-form"]')).toBeVisible();
+        // No raw error text/dump anywhere on the page.
+        await expect(page.locator('body')).not.toContainText('invalid_or_expired_link');
+        await expect(page.locator('body')).not.toContainText('401');
+
+        const token = await page.evaluate(() => localStorage.getItem('spinbike_token'));
+        expect(token).toBeNull();
+
+        assertCleanConsole(consoleMessages);
+    });
+
+    // #261 core design requirement: the install token is MULTI-USE — it must
+    // sign the app in again on a SECOND simulated launch (a fresh, clean,
+    // logged-out context — storage cleared exactly like the first-launch
+    // test above), not just the first. This is what actually differs from
+    // round 4's 24h single-use token.
+    test('the SAME install token signs the app in on a second simulated launch (#261 multi-use)', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+
+        const loginResp = await fetch(`${BASE_URL}/api/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: 'customer@test.com', password: 'password123' }),
+        });
+        expect(loginResp.ok).toBeTruthy();
+        const jwt = (await loginResp.json()).token as string;
+
+        const mintResp = await fetch(`${BASE_URL}/api/auth/install-token`, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${jwt}` },
+        });
+        expect(mintResp.ok).toBeTruthy();
+        const installToken = (await mintResp.json()).token as string;
+
+        await setEnglishLanguage(page);
+
+        // Launch #1 — clean, logged-out context.
+        await page.goto(`/welcome?t=${installToken}&src=install`);
+        await page.waitForSelector('[data-testid="welcome-success"]', { timeout: 10000 });
+        expect(await page.evaluate(() => localStorage.getItem('spinbike_token'))).toBeTruthy();
+
+        // Simulate the SAME icon being reopened after storage was cleared
+        // (a real re-install, or the app being force-quit and storage
+        // evicted) — a genuinely clean context redeeming the SAME token
+        // again. Round 4's 24h single-use token would already be consumed
+        // (used_at set) and reject this; round 5's install token must not.
+        await page.evaluate(() => {
+            localStorage.removeItem('spinbike_token');
+            localStorage.removeItem('spinbike_user');
+        });
+        await page.goto(`/welcome?t=${installToken}&src=install`);
+        await page.waitForSelector('[data-testid="welcome-success"]', { timeout: 10000 });
+        expect(await page.evaluate(() => localStorage.getItem('spinbike_token'))).toBeTruthy();
+
+        assertCleanConsole(consoleMessages);
+    });
 });
 
 // #228 — iOS-only post-install note under the install guide: an iOS

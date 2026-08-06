@@ -89,6 +89,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "login_tokens: widen purpose CHECK to include 'code' + attempts column",
         V21_LOGIN_CODE_TOKENS,
     ),
+    (
+        22,
+        "login_tokens: widen purpose CHECK to include 'install' + last_used_at/revoked_at columns",
+        V22_INSTALL_TOKENS,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -878,6 +883,51 @@ CREATE TABLE login_tokens_new (
 
 INSERT INTO login_tokens_new (id, user_id, token_hash, purpose, created_at, expires_at, used_at)
 SELECT id, user_id, token_hash, purpose, created_at, expires_at, used_at
+  FROM login_tokens;
+
+DROP TABLE login_tokens;
+ALTER TABLE login_tokens_new RENAME TO login_tokens;
+
+CREATE INDEX IF NOT EXISTS idx_login_tokens_user ON login_tokens(user_id);
+"#;
+
+// V22: long-lived, multi-use install credential (#261, round-5 belt-and-braces).
+//
+// Round 4 (#258) baked a plain `purpose='login'` token (24h TTL, single-use
+// via `used_at`) into the manifest `start_url` — but the installed home-screen
+// icon opens that SAME url on EVERY launch, forever, not just the first. A
+// single-use 24h token is guaranteed dead by launch #2 (or #1, if the icon
+// sits unopened for a day) — confirmed on prod: two mints for user 465,
+// neither token ever redeemed.
+//
+// Two schema changes, both needing the table rebuild (SQLite can't ALTER a
+// CHECK constraint in place — same DROP-new + INSERT + RENAME pattern as
+// V8/V11/V16/V21):
+//   1. Widen `purpose` CHECK to add 'install'.
+//   2. Add `last_used_at` (redeem no longer stamps `used_at` for this purpose
+//      — it stays NULL forever for an install token, so "used" and "redeemed
+//      at least once" are properly distinguishable) and `revoked_at` (the
+//      admin "Odhlasit zariadenia" action + the 5-token-per-user cap's
+//      oldest-eviction both set this instead of deleting the row).
+//
+// No view/trigger references login_tokens (same as V21 — see the
+// db-migrations skill), so this rebuild needs no DROP-VIEW/TRIGGER dance.
+const V22_INSTALL_TOKENS: &str = r#"
+CREATE TABLE login_tokens_new (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id     INTEGER NOT NULL REFERENCES users(id),
+    token_hash  TEXT    NOT NULL UNIQUE,
+    purpose     TEXT    NOT NULL CHECK (purpose IN ('invite','login','code','install')),
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now')),
+    expires_at  TEXT    NOT NULL,
+    used_at     TEXT,
+    attempts    INTEGER NOT NULL DEFAULT 0,
+    last_used_at TEXT,
+    revoked_at  TEXT
+);
+
+INSERT INTO login_tokens_new (id, user_id, token_hash, purpose, created_at, expires_at, used_at, attempts)
+SELECT id, user_id, token_hash, purpose, created_at, expires_at, used_at, attempts
   FROM login_tokens;
 
 DROP TABLE login_tokens;
@@ -3195,5 +3245,157 @@ mod tests {
         .execute(&pool)
         .await
         .expect("purpose='code' must be accepted after the genuine V21 upgrade");
+    }
+
+    // ── V22: install-token columns (#261) ──────────────────────────────────
+
+    #[tokio::test]
+    async fn v22_is_idempotent() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let tbl: Option<(String,)> = sqlx::query_as(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='login_tokens'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(tbl.is_some(), "login_tokens must still exist after re-run");
+        let idx: Vec<(String,)> = sqlx::query_as(
+            "SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='login_tokens'",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert!(
+            idx.iter().any(|(n,)| n == "idx_login_tokens_user"),
+            "idx_login_tokens_user must survive the V22 rebuild; found: {idx:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v22_adds_last_used_at_and_revoked_at_columns() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let cols: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('login_tokens')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        let names: Vec<&str> = cols.iter().map(|(n,)| n.as_str()).collect();
+        assert!(
+            names.contains(&"last_used_at"),
+            "login_tokens.last_used_at column missing after V22; found: {names:?}"
+        );
+        assert!(
+            names.contains(&"revoked_at"),
+            "login_tokens.revoked_at column missing after V22; found: {names:?}"
+        );
+    }
+
+    /// Genuine upgrade from a real pre-V22 database (login_tokens in its V21
+    /// shape, populated with rows across every purpose) — the rebuild must
+    /// PRESERVE every existing row (attempts intact) and backfill
+    /// last_used_at/revoked_at to NULL, rather than truncating anything.
+    /// Mirrors the v21-genuine-upgrade idiom: apply 1..=21 as an older binary
+    /// committed them, seed rows, THEN run_migrations applies only V22.
+    #[tokio::test]
+    async fn v22_preserves_existing_rows_on_genuine_upgrade_from_v21() {
+        use sqlx::sqlite::SqlitePoolOptions;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 21) {
+            let mut conn = pool.acquire().await.unwrap();
+            sqlx::query("PRAGMA foreign_keys = OFF")
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+            let mut tx = conn.begin().await.unwrap();
+            sqlx::raw_sql(sql).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
+                .bind(v)
+                .bind(desc)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            sqlx::query("PRAGMA foreign_keys = ON")
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+        }
+
+        let cols_before: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('login_tokens')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            !cols_before.iter().any(|(n,)| n == "last_used_at"),
+            "test setup: login_tokens must not have last_used_at before V22"
+        );
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v22-upgrade@x', 'U', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO login_tokens (user_id, token_hash, purpose, expires_at, attempts)
+             VALUES (?, 'login-hash', 'login', datetime('now', '+1 day'), 0),
+                    (?, 'code-hash', 'code', datetime('now', '+10 minutes'), 2)",
+        )
+        .bind(uid)
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        run_migrations(&pool).await.unwrap();
+
+        // clippy::type_complexity: name the row shape instead of a bare
+        // 5-element tuple type.
+        type V22Row = (String, String, i64, Option<String>, Option<String>);
+        let rows: Vec<V22Row> = sqlx::query_as(
+            "SELECT token_hash, purpose, attempts, last_used_at, revoked_at
+             FROM login_tokens ORDER BY token_hash",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                ("code-hash".to_string(), "code".to_string(), 2, None, None),
+                ("login-hash".to_string(), "login".to_string(), 0, None, None),
+            ],
+            "V22 must preserve pre-existing rows and backfill last_used_at/revoked_at=NULL"
+        );
+
+        // The widened CHECK now accepts an 'install' row.
+        sqlx::query(
+            "INSERT INTO login_tokens (user_id, token_hash, purpose, expires_at)
+             VALUES (?, 'install-hash', 'install', datetime('now', '+365 days'))",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .expect("purpose='install' must be accepted after the genuine V22 upgrade");
     }
 }

@@ -11,6 +11,7 @@ use super::edit_info_form::EditInfoForm;
 use super::helpers::full_name;
 use super::overview_tab::OverviewTab;
 use super::pass_banner::PassBanner;
+use super::revoke_install_button::RevokeInstallTokensButton;
 use super::sheets::DeleteUserSheet;
 use super::transactions_list::TransactionsList;
 use super::{CardInfo, ServiceInfo};
@@ -201,6 +202,7 @@ pub fn CardActionPanel(
                     {move || i18n::t(lang.get(), "edit_info")}
                 </button>
                 <BlockButton card_id=card_id blocked=is_blocked set_selected=set_selected set_msg=set_msg set_err=set_err />
+                <RevokeInstallTokensButton card_id=card_id set_msg=set_msg set_err=set_err />
                 <button
                     class="btn btn--danger"
                     data-testid="delete-user-button"

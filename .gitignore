@@ -19,6 +19,8 @@ spinbike.db-wal
 .claude/*
 !.claude/skills/
 !.claude/skills/**
+!.claude/rules/
+!.claude/rules/**
 *.png
 !spinbike-ui/static/**/*.png
 .playwright-mcp/

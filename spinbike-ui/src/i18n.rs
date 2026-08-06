@@ -535,6 +535,10 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("topup", ("Dobit", "Top Up"));
     m.insert("block", ("Zablokovat", "Block"));
     m.insert("unblock", ("Odblokovat", "Unblock"));
+    m.insert(
+        "revoke_install_tokens",
+        ("Odhlasit zariadenia", "Log out devices"),
+    );
     m.insert("card_code", ("Kod karty", "Card code"));
     m.insert(
         "new_card_barcode",
@@ -576,6 +580,10 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("visit_confirm_anyway", ("Pridat aj tak", "Add anyway"));
     m.insert("block_ok", ("Karta zablokovana", "Card blocked"));
     m.insert("unblock_ok", ("Karta odblokovana", "Card unblocked"));
+    m.insert(
+        "revoke_install_tokens_ok",
+        ("Odhlasene zariadenia: {}", "Devices logged out: {}"),
+    );
     m.insert("saved", ("Ulozene", "Saved"));
 
     // Staff dashboard

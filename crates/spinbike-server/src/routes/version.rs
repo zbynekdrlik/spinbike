@@ -62,6 +62,9 @@ mod tests {
             launch_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::routes::metrics::LaunchRateLimiter::new(),
             )),
+            install_redeem_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::auth::InstallRedeemRateLimiter::new(),
+            )),
         };
         let app = Router::new().merge(routes()).with_state(state);
 

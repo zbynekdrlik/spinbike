@@ -107,12 +107,19 @@ async fn hashed_asset_still_gets_long_cache_immutable_header() {
     assert_eq!(cache_control, Some("public, max-age=31536000, immutable"));
 }
 
-/// Characterizes existing behavior that MUST survive the #212 fix:
-/// `manifest.json` keeps NO explicit `Cache-Control` header (it is
-/// already `cf-cache-status: DYNAMIC` on prod — not edge-cached — so it
-/// is intentionally untouched by this fix; only `sw.js` needed one).
+/// At the time of #212 (the `sw.js` edge-caching fix), `manifest.json` had
+/// NO explicit `Cache-Control` — it was already `cf-cache-status: DYNAMIC`
+/// on prod (not edge-cached), so #212 intentionally left it untouched.
+/// #261 (round-5 belt-and-braces) DELIBERATELY changes this: the manifest
+/// now optionally carries an install token (`?it=<raw>`), and a cached
+/// stale/tokenless response was explicitly called out in that design as a
+/// silent failure mode — so every `/manifest.json` response (token-bearing
+/// or not) now sets `Cache-Control: no-store`. See
+/// `routes/manifest.rs::manifest_response` and
+/// `manifest_route.rs`'s `manifest_response_always_sets_cache_control_no_store`
+/// unit test for the authoritative coverage of this header.
 #[tokio::test]
-async fn manifest_json_gets_no_explicit_cache_control() {
+async fn manifest_json_sets_cache_control_no_store() {
     let app = TestApp::new().await;
     let resp = app
         .router
@@ -121,10 +128,11 @@ async fn manifest_json_gets_no_explicit_cache_control() {
         .await
         .unwrap();
     assert_eq!(resp.status(), axum::http::StatusCode::OK);
-    assert!(
+    assert_eq!(
         resp.headers()
             .get(axum::http::header::CACHE_CONTROL)
-            .is_none(),
-        "manifest.json must stay untouched by the #212 fix"
+            .and_then(|v| v.to_str().ok()),
+        Some("no-store"),
+        "manifest.json must set Cache-Control: no-store (#261)"
     );
 }

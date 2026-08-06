@@ -84,7 +84,10 @@ Requires `mdbtools` installed on the system.
 
 ## Playbook router
 
-Load the skill for the area you're working in — each contains the full HOW-TO:
+Load the skill for the area you're working in — each contains the full HOW-TO.
+Path-scoped rules under `.claude/rules/` load themselves when you touch a matching file:
+
+- version label / `.app-version` styling → `.claude/rules/ui-version-label.md` (auto-loads on `spinbike-ui/style.css`, `e2e/tests/version-display.spec.ts`)
 
 | Area | Skill | When to load |
 |---|---|---|
