@@ -187,6 +187,25 @@ claim, no DB lookup on the CALLER. So verifying an admin-only UI change
   pattern as the customer recipe above, just `role='staff'`), mint the JWT's
   `sub` against ITS real id, THEN drive the write endpoints. Clean up both
   rows (and anything they created) after.
+- **Verifying a PASSWORD-gated behavior (`POST /api/auth/login`) needs a real
+  argon2id hash — mint it with the `argon2` CLI, not PyJWT.** The JWT recipe
+  above bypasses `login()` entirely, so it cannot prove anything about the
+  login endpoint's own gates (blocked / soft-deleted / wrong-password — #276).
+  `hash_password` uses `Argon2::default()` (argon2id, v19) and
+  `verify_password` parses the cost parameters back OUT of the stored PHC
+  string, so ANY valid argon2id PHC hash verifies — the CLI's parameters do
+  not have to match the server's:
+  ```bash
+  H=$(printf '%s' 'Vrf276Test' | argon2 "$(head -c16 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c16)" -id -e -t 2 -m 15 -p 1)
+  sqlite3 /opt/spinbike/prod/spinbike.db "UPDATE users SET password_hash='$H' WHERE email LIKE 'vrf276-%';"
+  ```
+  `/usr/bin/argon2` is installed on dev1; python `argon2-cffi` is NOT. Use a
+  DISPOSABLE, non-secret literal password on the synthetic rows so the browser
+  half can drive the REAL login form (typing it into Playwright puts it in the
+  transcript — fine for a row you delete minutes later, never for a real one).
+  Create three rows in one insert (active / `blocked=1` / `deleted_at` set) so
+  one run yields the whole matrix, and always include the POSITIVE control (a
+  live account still returns 200) — a 401 alone proves nothing.
 - **Booking a real class occurrence via raw SQL** needs a valid `template_id`
   (from `class_templates`) + a future `date` matching a real occurrence — get
   the id from `GET /api/classes?from=&to=` (public), e.g. template 1 recurs
