@@ -37,6 +37,16 @@ pub enum ErrorCode {
     /// Mirrors the `deleted_at.is_some() || blocked` gate `token_login`
     /// already applies before issuing a session.
     SessionInvalid,
+    /// The password-login call (`POST /api/auth/login`) itself, for a
+    /// blocked OR soft-deleted account submitting the CORRECT password
+    /// (#276). Distinct from `InvalidCredentials` on purpose — this endpoint
+    /// already leaks account existence via `OauthAccount` before password
+    /// verification, so a dedicated code here adds no NEW enumeration
+    /// surface, and it is only returned AFTER a correct password proves the
+    /// caller genuinely holds the account. No token is minted. Fixes the
+    /// bounce loop `SessionInvalid` (above) would otherwise cause one HTTP
+    /// round-trip later: 200 + token -> `/my/balance` 401 -> wipe -> repeat.
+    AccountBlocked,
     // --- 403 Forbidden ---
     StaffRequired,
     AdminRequired,
@@ -102,6 +112,7 @@ impl ErrorCode {
             ErrorCode::InvalidOrExpiredLink => "Invalid or expired link",
             ErrorCode::InvalidOrExpiredCode => "Invalid or expired code",
             ErrorCode::SessionInvalid => "Session no longer valid, please log in again",
+            ErrorCode::AccountBlocked => "Account is blocked",
             ErrorCode::StaffRequired => "Staff access required",
             ErrorCode::AdminRequired => "Admin access required",
             ErrorCode::CardCodeStaffOnly => "Only staff can modify card_code",
@@ -172,6 +183,11 @@ mod tests {
             ErrorCode::SessionInvalid,
             "session_invalid",
             "Session no longer valid, please log in again",
+        ),
+        (
+            ErrorCode::AccountBlocked,
+            "account_blocked",
+            "Account is blocked",
         ),
         (
             ErrorCode::StaffRequired,

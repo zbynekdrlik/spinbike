@@ -258,11 +258,29 @@ pub fn routes() -> Router<AppState> {
         )
 }
 
+/// Whether `user` is allowed to complete a fresh login (#276). Blocked or
+/// soft-deleted accounts are always rejected — a pure check shared by every
+/// login path so the eligibility RULE can't drift between them; each caller
+/// still decides its OWN error code / leakage posture on top (`login` uses a
+/// distinct customer-facing `AccountBlocked`; `token_login`/`code_login` fold
+/// it into their existing generic "invalid" rejection — see their own gates).
+fn account_is_active(user: &users::UserRow) -> bool {
+    !user.blocked && user.deleted_at.is_none()
+}
+
 async fn login(
     State(state): State<AppState>,
     Json(body): Json<LoginRequest>,
 ) -> Result<Json<AuthResponse>, ApiError> {
-    let user = users::get_user_by_email(&state.pool, &body.email)
+    // `..._including_deleted` (not the deleted_at-filtered `get_user_by_email`)
+    // so a soft-deleted account's password still verifies below and the
+    // `account_is_active` check gets to reject it explicitly, at the login
+    // call itself, with the distinct `AccountBlocked` code — rather than
+    // silently relying on the filtered query to make it fall into a plain
+    // "user not found" -> `InvalidCredentials` (#276). The `email` UNIQUE
+    // constraint (held even by a soft-deleted row) guarantees at most one row
+    // ever matches, so this can't pick up a wrong/ambiguous account.
+    let user = users::get_user_by_email_including_deleted(&state.pool, &body.email)
         .await
         .map_err(internal_error)?
         .ok_or(ApiError::Unauthorized(ErrorCode::InvalidCredentials))?;
@@ -274,6 +292,21 @@ async fn login(
 
     if !auth::verify_password(&body.password, password_hash) {
         return Err(ApiError::Unauthorized(ErrorCode::InvalidCredentials));
+    }
+
+    // Only AFTER the password is proven correct (#276): a wrong-password
+    // guess against a blocked/deleted account still gets the generic
+    // `InvalidCredentials` above, so this adds no enumeration surface beyond
+    // what `login()` already has via the `OauthAccount` branch. No token is
+    // minted for a blocked/soft-deleted account.
+    if !account_is_active(&user) {
+        tracing::warn!(
+            user_id = user.id,
+            blocked = user.blocked,
+            deleted = user.deleted_at.is_some(),
+            "login: rejected — blocked or soft-deleted account"
+        );
+        return Err(ApiError::Unauthorized(ErrorCode::AccountBlocked));
     }
 
     let role = parse_role(&user.role);
