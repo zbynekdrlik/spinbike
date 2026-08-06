@@ -140,6 +140,36 @@ await page.evaluate(() => {
 The ticket author's "existing specs start clean" assumption is FALSE for any
 spec that used `loginViaAPI` for setup.
 
+## A test's FIRST page action touching `localStorage` MUST navigate first — `about:blank` throws a SecurityError (#263)
+
+A new spec whose FIRST action is a customer-session switch (no prior admin
+`loginViaAPI` call to establish a real origin) and calls
+`page.evaluate(() => localStorage.clear())` before any `page.goto()` fails
+immediately on a fresh Playwright context: `SecurityError: Failed to read
+the 'localStorage' property from 'Window': Access is denied for this
+document.` — `about:blank` has an opaque origin, and `localStorage` access
+there throws. Every OTHER spec in this suite is silently protected from this
+because their first action is always an admin `loginViaAPI` call, which
+internally does `page.goto('/')` before touching storage — so the trap only
+bites a NEW test whose scenario genuinely doesn't need an admin step first
+(e.g. #263's "customer with no seeded state" case).
+
+**Fix: `page.goto('/')` before the FIRST `localStorage` touch in any new
+per-test helper**, even if `loginViaAPI` (called right after) will navigate
+again — the second navigation is a harmless no-op re-navigation, not a
+double cost worth avoiding:
+
+```ts
+async function loginAsCustomerSk(page: Page, baseURL: string, email: string, password: string): Promise<void> {
+    await page.goto('/');                          // <-- establish a real origin FIRST
+    await page.evaluate(() => { localStorage.clear(); });
+    await loginViaAPI(page, baseURL, email, password);
+    // ... addInitScript for lang override, etc.
+}
+```
+
+Whenever a new spec's test body does NOT start with `loginViaAPI(page, ..., 'admin@test.com', ...)`, check whether its own custom helper touches `localStorage` before any navigation — this is invisible until CI actually runs it (local `npx tsc --noEmit` type-checks fine; the failure is a runtime browser security error, not a type error).
+
 ## Router
 Add a line to the project `CLAUDE.md` `## Playbook router` pointing here so a
 future guard-adding ticket loads this BEFORE pushing, not after CI turns red.
