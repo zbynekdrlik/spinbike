@@ -51,6 +51,25 @@ pub const PURPOSE_LOGIN: &str = "login";
 /// Third purpose (#227): a short 6-digit numeric code the user types inside the
 /// installed PWA. Added to the CHECK by migration V21.
 pub const PURPOSE_CODE: &str = "code";
+/// Fourth purpose (#261, round-5 belt-and-braces): the credential baked into
+/// the dynamic manifest's `start_url` / carried in the address bar via
+/// `history.replaceState`. Unlike every other purpose, this one is
+/// MULTI-USE — the installed home-screen icon opens its `start_url` on
+/// EVERY launch, forever, not just the first, so a single-use token is
+/// guaranteed dead by launch #2. Added to the CHECK by migration V22.
+pub const PURPOSE_INSTALL: &str = "install";
+
+/// Install-token lifetime: 365 days (#261) — the launch URL is permanent, so
+/// the credential must outlive any realistic gap between installs and opens.
+pub const INSTALL_TTL_SECS: i64 = 365 * 24 * 60 * 60;
+
+/// Max simultaneous LIVE (non-revoked) install tokens per user (#261). Prod
+/// evidence showed 2 mints in one install session (no re-entrancy guard, now
+/// fixed client-side too) — this cap is a belt-and-braces backstop, not the
+/// primary defense. On the cap+1-th mint the OLDEST live token is revoked,
+/// never the newest (a fresh mint must never kill the token that might
+/// already be baked into an icon elsewhere).
+pub const INSTALL_TOKEN_CAP: i64 = 5;
 
 /// A 6-digit code is invalidated after this many failed verify attempts — the
 /// mandatory low-entropy brute-force guard (6 digits is guessable) (#227).
@@ -177,6 +196,48 @@ pub async fn is_already_used(pool: &SqlitePool, raw: &str) -> Result<bool> {
     .fetch_optional(pool)
     .await?;
     Ok(used.is_some())
+}
+
+/// Mint a new `purpose='install'` token for `user_id` (#261). 365-day TTL,
+/// multi-use at redemption (see `redeem_install`). Enforces
+/// `INSTALL_TOKEN_CAP`: if the user already has that many LIVE
+/// (`revoked_at IS NULL`) install tokens, the OLDEST one is revoked first —
+/// never the newest, since a fresh mint must not invalidate a token that may
+/// already be baked into an icon on another device/session.
+// TODO(#261 round-5, interim): still delegates to the OLD 24h create_token
+// TTL — this is the RED half of the regression test; the GREEN commit
+// replaces the body with the real 365-day + cap-eviction logic.
+pub async fn create_install_token(pool: &SqlitePool, user_id: i64) -> Result<String> {
+    create_token(pool, user_id, PURPOSE_INSTALL, LOGIN_TTL_SECS).await
+}
+
+/// Redeem a `purpose='install'` token (#261). MULTI-USE: unlike `redeem()`,
+/// this never stamps `used_at` — it updates `last_used_at` on every
+/// successful redeem and returns the same `user_id` every time, for as long
+/// as the token is neither expired nor revoked. Returns `None` for any
+/// invalid/expired/revoked/unknown token (uniform rejection, same as every
+/// other redeem path — no enumeration).
+// TODO(#261 round-5, interim): still delegates to the OLD single-use
+// `redeem()` (used_at + #246 grace semantics) — the RED half of the
+// regression test; the GREEN commit replaces this with the real
+// revoked_at/expires_at-based multi-use redeem.
+pub async fn redeem_install(pool: &SqlitePool, raw: &str) -> Result<Option<i64>> {
+    redeem(pool, raw, &[PURPOSE_INSTALL]).await
+}
+
+/// Revoke every LIVE install token for `user_id` (#261) — the "Odhlasit
+/// zariadenia" admin action. Idempotent (a second call revokes nothing
+/// further). Returns the number of rows actually revoked.
+pub async fn revoke_user_install_tokens(pool: &SqlitePool, user_id: i64) -> Result<u64> {
+    let result = sqlx::query(
+        "UPDATE login_tokens SET revoked_at = datetime('now') \
+         WHERE user_id = ? AND purpose = ? AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .bind(PURPOSE_INSTALL)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected())
 }
 
 /// Create a fresh 6-digit login code for `user_id`, store its per-user hash with
@@ -691,6 +752,163 @@ mod tests {
 
         let removed = purge_expired_and_used(&pool).await.unwrap();
         assert_eq!(removed, 0, "a live-only table must purge nothing");
+    }
+
+    // ── install tokens (#261 round-5) ───────────────────────────────────────
+
+    /// THE core regression this round fixes: round 4's install credential was
+    /// a plain 24h single-use `login` token, guaranteed dead by the time (or
+    /// before) the installed icon's PERMANENT start_url is ever opened again.
+    /// Proves the NEW `purpose='install'` credential is (a) long-lived
+    /// (~365 days, not ~24h) and (b) genuinely multi-use PAST the old #246
+    /// 10-minute grace window (not just "reusable within 10 minutes", which
+    /// the old single-use token already allowed and would NOT have saved
+    /// round 4 — prod evidence showed >10 minutes elapsed with zero redeems).
+    #[tokio::test]
+    async fn install_token_is_long_lived_and_multi_use_past_the_old_grace_window() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "install-multiuse@x").await;
+
+        let raw = create_install_token(&pool, uid).await.unwrap();
+
+        // TTL must be ~365 days, not the old 24h — read expires_at back and
+        // confirm it is far beyond what a 24h token could ever produce.
+        let expires_at: String =
+            sqlx::query_scalar("SELECT expires_at FROM login_tokens WHERE token_hash = ?")
+                .bind(hash_token(&raw))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let far_future_check: Option<i64> = sqlx::query_scalar(
+            "SELECT 1 WHERE ? > datetime('now', '+300 days')",
+        )
+        .bind(&expires_at)
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(
+            far_future_check.is_some(),
+            "install token must expire >300 days out (365-day TTL), got expires_at={expires_at}"
+        );
+
+        // First redeem succeeds.
+        let first = redeem_install(&pool, &raw).await.unwrap();
+        assert_eq!(first, Some(uid), "first install redeem must succeed");
+
+        // Simulate a launch well PAST the old 10-minute single-use grace
+        // window (#246) — a round-4 token would already be dead here.
+        sqlx::query(
+            "UPDATE login_tokens SET used_at = datetime('now', '-601 seconds') \
+             WHERE token_hash = ?",
+        )
+        .bind(hash_token(&raw))
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let second = redeem_install(&pool, &raw).await.unwrap();
+        assert_eq!(
+            second,
+            Some(uid),
+            "install token must still redeem well past the old 10-minute grace window (genuinely multi-use)"
+        );
+
+        // used_at must stay untouched by this purpose (it's not the used_at
+        // mechanism at all) — last_used_at is what advances instead.
+        let last_used_at: Option<String> =
+            sqlx::query_scalar("SELECT last_used_at FROM login_tokens WHERE token_hash = ?")
+                .bind(hash_token(&raw))
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(
+            last_used_at.is_some(),
+            "last_used_at must advance on a successful install redeem"
+        );
+    }
+
+    #[tokio::test]
+    async fn install_token_past_cap_revokes_the_oldest_not_the_newest() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "install-cap@x").await;
+
+        let mut tokens = Vec::new();
+        for _ in 0..INSTALL_TOKEN_CAP {
+            tokens.push(create_install_token(&pool, uid).await.unwrap());
+        }
+        // 6th mint: cap already reached, must revoke the OLDEST (tokens[0]).
+        let sixth = create_install_token(&pool, uid).await.unwrap();
+
+        assert_eq!(
+            redeem_install(&pool, &tokens[0]).await.unwrap(),
+            None,
+            "the oldest token must be revoked (no longer redeems) once the cap is exceeded"
+        );
+        for (i, t) in tokens.iter().enumerate().skip(1) {
+            assert_eq!(
+                redeem_install(&pool, t).await.unwrap(),
+                Some(uid),
+                "token #{i} (not the oldest) must still redeem after cap eviction"
+            );
+        }
+        assert_eq!(
+            redeem_install(&pool, &sixth).await.unwrap(),
+            Some(uid),
+            "the newly minted 6th token must redeem"
+        );
+    }
+
+    #[tokio::test]
+    async fn install_token_expired_is_rejected() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "install-expired@x").await;
+
+        let raw = create_token(&pool, uid, PURPOSE_INSTALL, -10).await.unwrap();
+        assert_eq!(
+            redeem_install(&pool, &raw).await.unwrap(),
+            None,
+            "an expired install token must be rejected"
+        );
+    }
+
+    #[tokio::test]
+    async fn revoke_user_install_tokens_revokes_all_and_only_install_purpose() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "install-revoke@x").await;
+
+        let a = create_install_token(&pool, uid).await.unwrap();
+        let b = create_install_token(&pool, uid).await.unwrap();
+        // A different purpose for the same user must be untouched.
+        let login_tok = create_token(&pool, uid, PURPOSE_LOGIN, LOGIN_TTL_SECS)
+            .await
+            .unwrap();
+
+        let revoked = revoke_user_install_tokens(&pool, uid).await.unwrap();
+        assert_eq!(revoked, 2, "both live install tokens must be revoked");
+
+        assert_eq!(redeem_install(&pool, &a).await.unwrap(), None);
+        assert_eq!(redeem_install(&pool, &b).await.unwrap(), None);
+        assert_eq!(
+            redeem(&pool, &login_tok, &[PURPOSE_LOGIN]).await.unwrap(),
+            Some(uid),
+            "revoking install tokens must not touch a login-purpose token"
+        );
+
+        // Idempotent — a second call revokes nothing further.
+        let revoked_again = revoke_user_install_tokens(&pool, uid).await.unwrap();
+        assert_eq!(revoked_again, 0, "a second revoke call must be a no-op");
+    }
+
+    #[test]
+    fn install_ttl_is_exactly_365_days() {
+        assert_eq!(
+            INSTALL_TTL_SECS, 31_536_000,
+            "install TTL must be exactly 365 days"
+        );
     }
 
     // ── login codes (#227) ────────────────────────────────────────────────
