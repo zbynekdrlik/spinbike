@@ -59,8 +59,16 @@ async function seedActiveMonthlyPass(adminToken: string, cardCode: string): Prom
 }
 
 /** Switch the current session to `email`/`password` with the SK locale
- * (loginViaAPI defaults to EN — see the e2e-testing skill's gotcha). */
+ * (loginViaAPI defaults to EN — see the e2e-testing skill's gotcha).
+ *
+ * `page.goto('/')` runs FIRST — on a fresh context (no prior navigation,
+ * e.g. no earlier admin loginViaAPI call in this test) the page is still
+ * `about:blank`, and `localStorage` access there throws a SecurityError
+ * (opaque origin). Navigating establishes a real origin before we touch
+ * storage; loginViaAPI's own internal `goto('/')` afterward is a harmless
+ * no-op re-navigation. */
 async function loginAsCustomerSk(page: Page, baseURL: string, email: string, password: string): Promise<void> {
+    await page.goto('/');
     await page.evaluate(() => {
         localStorage.clear();
     });
