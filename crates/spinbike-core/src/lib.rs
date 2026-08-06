@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod errors;
 pub mod models;
+pub mod redact;
 pub mod reports;
 pub mod services;
 pub mod stats;

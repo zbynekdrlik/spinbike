@@ -3,6 +3,7 @@ pub mod auth;
 pub mod classes;
 pub mod door;
 pub mod manifest;
+pub mod metrics;
 pub mod my_balance;
 pub mod payments;
 pub mod persistent_bookings;
@@ -45,6 +46,7 @@ pub fn api_routes() -> Router<AppState> {
         .merge(door::routes())
         .merge(users::routes())
         .merge(my_balance::routes())
+        .merge(metrics::routes())
         .merge(payments::routes())
         .merge(admin::routes())
         .merge(persistent_bookings::routes())

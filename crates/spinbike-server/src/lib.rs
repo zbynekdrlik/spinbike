@@ -5,6 +5,7 @@ pub mod ewelink;
 pub mod jobs;
 pub mod mail;
 pub mod rate_limit;
+pub mod request_log;
 pub mod routes;
 pub mod util;
 pub mod ws;
@@ -42,6 +43,11 @@ pub struct AppState {
     /// (which throttles the code/link SEND path).
     pub code_login_rate_limit:
         std::sync::Arc<std::sync::Mutex<crate::routes::auth::CodeLoginRateLimiter>>,
+    /// In-memory rate-limit for the public, unauthenticated `POST
+    /// /api/metrics/launch` beacon (#260), keyed by best-effort client IP.
+    /// Separate from the others — no user/email key exists for this route.
+    pub launch_rate_limit:
+        std::sync::Arc<std::sync::Mutex<crate::routes::metrics::LaunchRateLimiter>>,
 }
 
 /// Build the CORS layer by reading the CORS_ORIGIN environment variable.
@@ -159,6 +165,12 @@ fn handle_panic(err: Box<dyn std::any::Any + Send + 'static>) -> axum::response:
 /// `start_server`) so the SAME guarantee covers every test that builds its
 /// router through this function, e.g.
 /// `panicking_handler_returns_500_and_server_survives` below.
+///
+/// And wires `request_log::middleware` (#260) so every request logs
+/// method/path/redacted-query/status/User-Agent — applied UNDER
+/// `CatchPanicLayer` (added last, so it stays the outermost layer) so a
+/// panic anywhere inside, including in the logging middleware itself, is
+/// still caught.
 pub fn build_router(test_mode: bool) -> axum::Router<AppState> {
     let mut router = routes::all_routes();
     if test_mode {
@@ -167,7 +179,9 @@ pub fn build_router(test_mode: bool) -> axum::Router<AppState> {
         );
         router = router.merge(routes::test_fixtures::routes());
     }
-    router.layer(CatchPanicLayer::custom(handle_panic))
+    router
+        .layer(axum::middleware::from_fn(request_log::middleware))
+        .layer(CatchPanicLayer::custom(handle_panic))
 }
 
 /// Build and start the Axum server.
@@ -199,6 +213,9 @@ pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Re
         )),
         code_login_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
             crate::routes::auth::CodeLoginRateLimiter::new(),
+        )),
+        launch_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+            crate::routes::metrics::LaunchRateLimiter::new(),
         )),
     };
 
@@ -422,6 +439,9 @@ mod tests {
             code_login_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::routes::auth::CodeLoginRateLimiter::new(),
             )),
+            launch_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::metrics::LaunchRateLimiter::new(),
+            )),
         };
 
         // The SAME function start_server() calls, with the SAME test_mode
@@ -544,6 +564,9 @@ mod tests {
             )),
             code_login_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::routes::auth::CodeLoginRateLimiter::new(),
+            )),
+            launch_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
+                crate::routes::metrics::LaunchRateLimiter::new(),
             )),
         };
 
