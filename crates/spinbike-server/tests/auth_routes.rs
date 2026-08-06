@@ -46,6 +46,79 @@ async fn login_unknown_email_unauthorized() {
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
 
+// ── #276: password login must not mint a token for a blocked/deleted user ──
+
+/// A BLOCKED customer entering the CORRECT password must be rejected with the
+/// distinct `account_blocked` code (not 200 — the pre-fix bug: `login()` had
+/// no `blocked` gate at all, unlike `token_login`/`code_login`) and no token
+/// must be minted.
+#[tokio::test]
+async fn login_blocked_user_rejected_no_token_minted() {
+    let app = TestApp::new().await;
+    sqlx::query("UPDATE users SET blocked = 1 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let body = serde_json::json!({
+        "email": "user@test.com",
+        "password": "password",
+    });
+    let (status, resp) = app.request(post_json("/api/auth/login", "", &body)).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "blocked user must be rejected even with the correct password"
+    );
+    assert_eq!(resp["error_code"].as_str().unwrap(), "account_blocked");
+    assert!(
+        resp.get("token").is_none(),
+        "no token may be minted for a blocked account"
+    );
+}
+
+/// A SOFT-DELETED customer entering the CORRECT password must ALSO be
+/// rejected with `account_blocked`, not 200 and not the generic
+/// `invalid_credentials` a plain "user not found" lookup would give.
+#[tokio::test]
+async fn login_deleted_user_rejected_no_token_minted() {
+    let app = TestApp::new().await;
+    sqlx::query("UPDATE users SET deleted_at = datetime('now') WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let body = serde_json::json!({
+        "email": "user@test.com",
+        "password": "password",
+    });
+    let (status, resp) = app.request(post_json("/api/auth/login", "", &body)).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "soft-deleted user must be rejected even with the correct password"
+    );
+    assert_eq!(resp["error_code"].as_str().unwrap(), "account_blocked");
+    assert!(
+        resp.get("token").is_none(),
+        "no token may be minted for a soft-deleted account"
+    );
+}
+
+/// A normal, active customer must be completely unaffected by the new gate.
+#[tokio::test]
+async fn login_active_customer_still_succeeds() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({
+        "email": "user@test.com",
+        "password": "password",
+    });
+    let (status, resp) = app.request(post_json("/api/auth/login", "", &body)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(resp["token"].as_str().unwrap().len() > 10);
+    assert_eq!(resp["user"]["role"].as_str().unwrap(), "customer");
+}
+
 // ── register removed (#108) ──────────────────────────────────────────────
 
 /// Public self-registration is gone: the register handler no longer exists, so
