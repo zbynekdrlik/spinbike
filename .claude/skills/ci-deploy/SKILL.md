@@ -972,3 +972,38 @@ gh api repos/OWNER/REPO/pulls/NUMBER -X PATCH --input payload.json -q '.number'
 (`gh api .../pulls/NUMBER -q '.body'`) confirms it landed. Reach for this
 whenever `gh pr edit`/`gh pr view` throws a "Projects (classic)" error —
 don't retry the same `gh pr` command, it will fail identically every time.
+
+## Before pushing a large diff: run clippy on BOTH workspaces, not just the one you touched most (#261, cost 2 CI cycles)
+
+`spinbike-ui` is a SEPARATE cargo workspace (see the fmt entry above) — and
+so is clippy. Running `cargo clippy --manifest-path spinbike-ui/Cargo.toml
+--target wasm32-unknown-unknown -- -D warnings` locally (Tier-0 `build-ok`
+bypass) does **NOT** cover the root `spinbike-server`/`spinbike-core`
+workspace, and vice versa. #261 touched mostly server-side Rust (a new
+migration, new `db`/`routes` code, new integration tests) plus one UI
+component — checked UI clippy before the first push, skipped server clippy,
+and paid for it: CI's `Lint` job failed on `clippy::type_complexity` (a bare
+5-element tuple type in a new test) that a 1-minute local
+`cargo clippy --all-targets -- -D warnings` at the repo root would have
+caught instantly. **Whenever a diff touches `crates/spinbike-server/` or
+`crates/spinbike-core/` in any non-trivial way, run root-workspace clippy
+locally BEFORE the first push — not just UI clippy because the diff also
+happens to touch a `.rs` file under `spinbike-ui/`.**
+
+## Deliberately changing existing behavior? Grep for tests that CHARACTERIZE the OLD behavior, not just add tests for the new one (#261)
+
+#212 added a test (`static_files.rs::manifest_json_gets_no_explicit_cache_control`)
+asserting `manifest.json` had **no** `Cache-Control` header — accurate at the
+time, and the test even says so in its own doc comment ("characterizes
+existing behavior that MUST survive"). #261 *deliberately* changed that same
+response to always set `Cache-Control: no-store` (the design explicitly
+calls out a cached manifest as a failure mode) — and the old characterization
+test failed CI on the very next push, because nothing in the new work
+touched or even searched for it; the new manifest-header assertions were all
+NEW tests, none of them replaced the stale one. **Before deliberately
+changing an existing response/behavior, grep for existing tests whose NAME
+or doc comment characterizes the OLD state** (`grep -rn
+'no_explicit\|_gets_no_\|_stays_\|_is_unchanged\|characterizes' tests/
+src/`) — a new test proving the NEW behavior does not make an old test
+asserting the opposite go away; it just makes CI catch the contradiction one
+push later than it should have.

@@ -144,3 +144,55 @@ the home-screen app). `db/login_tokens.rs` + `routes/auth.rs`.
   real UI then enter a known-valid value (the public request endpoint never echoes
   it — no enumeration). UI: `CodeLoginForm` + `CustomerLoginMethods` toggle
   (default = email-link, so existing login-link/welcome selectors stay green).
+
+## Round-5 install credential (#261) — multi-use, capped, long-lived (`purpose='install'`, migration V22)
+
+Fourth `login_tokens` purpose, added on top of the #227 pattern above. Key
+differences from every prior purpose — read these before touching
+`create_install_token`/`redeem_install`/`revoke_user_install_tokens`:
+
+- **Genuinely MULTI-USE, not "reusable within a grace window" like #246's
+  invite/login.** `redeem_install` never touches `used_at` at all — it's a
+  single atomic `UPDATE ... SET last_used_at = datetime('now') WHERE
+  revoked_at IS NULL AND expires_at > datetime('now') ... RETURNING
+  user_id`. There is no grace window to reason about because there is no
+  consumption step to grace past.
+- **A read-then-conditional-evict-then-insert mint sequence needs a real
+  transaction, not three independent statements.** `create_install_token`'s
+  cap-eviction (COUNT live tokens → revoke oldest if `>= INSTALL_TOKEN_CAP`
+  → INSERT the new one) was originally three separate `pool`-level calls —
+  an independent code-review pass (dispatched before merge, per
+  `requesting-code-review`) flagged that a genuinely concurrent second mint
+  for the same user could race past the cap. Fixed by wrapping the whole
+  sequence in one `pool.begin()`/`tx.commit()` — SQLite serialises writers,
+  so one transaction is enough to make the sequence atomic. **Any future
+  count→conditional-write→insert mint/cap pattern in this file should start
+  inside a transaction from the first commit, not need a review round to add
+  one.**
+- **A per-token-only rate limiter is trivially evaded by varying the
+  token.** `token_login`'s install-redeem path is rate-limited, but keying
+  the limiter ONLY by the submitted token's hash means an attacker just
+  submits many DISTINCT garbage tokens instead of reusing one — each gets
+  its own fresh 10/min budget, and the only backstop left is the shared
+  GLOBAL cap, which then also throttles unrelated legitimate customers.
+  Fix: check the SAME limiter on TWO keys before touching the DB — the
+  token hash AND a `format!("ip:{}", client_ip_key(&headers))` prefix (using
+  the best-effort client-IP helper already promoted to `pub(crate)` in
+  `routes/metrics.rs`). Distinct string prefixes can't collide with a real
+  64-hex token hash, so one `SlidingWindowLimiter<String>` instance safely
+  serves both dimensions. **Any new per-token (or per-any-attacker-supplied-value)
+  rate limit on a public endpoint should ask "can the caller just vary this
+  value to reset their own budget?" — if yes, pair it with a source-keyed
+  check on the same limiter from the start.**
+- **Verifying a MULTI-USE credential live on prod: use `browser.newContext()`
+  per simulated "launch", not just clearing localStorage in one page.** To
+  prove `#261`'s core fix (the same install token must sign the app in on a
+  SECOND, independent launch — not just a same-tab reload), open the baked
+  `/welcome?t=...&src=install` URL from TWO SEPARATE fresh Playwright
+  contexts (via `page.context().browser().newContext({...})` inside
+  `browser_run_code_unsafe`, each with its own empty storage), not one
+  context with `localStorage.clear()` in between. Separate contexts are
+  closer to "a different device/session opening the same icon" and rule out
+  any same-origin state (cookies, IndexedDB, a lingering SW registration)
+  accidentally carrying the session across what's supposed to be two
+  independent launches.
