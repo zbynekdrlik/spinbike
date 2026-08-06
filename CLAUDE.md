@@ -88,6 +88,7 @@ Load the skill for the area you're working in — each contains the full HOW-TO.
 Path-scoped rules under `.claude/rules/` load themselves when you touch a matching file:
 
 - version label / `.app-version` styling → `.claude/rules/ui-version-label.md` (auto-loads on `spinbike-ui/style.css`, `e2e/tests/version-display.spec.ts`)
+- adding a new `ErrorCode` variant → `.claude/rules/error-codes.md` (auto-loads on `crates/spinbike-core/src/errors.rs`, `crates/spinbike-server/src/routes/**`, `spinbike-ui/src/i18n.rs`)
 
 | Area | Skill | When to load |
 |---|---|---|
