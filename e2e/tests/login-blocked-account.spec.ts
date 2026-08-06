@@ -43,13 +43,15 @@ test.describe('Login page — blocked account (#276)', () => {
             throw new Error(`block failed: ${blockResp.status} ${await blockResp.text()}`);
         }
 
-        // loginViaAPI stored the ADMIN session in localStorage — clear it so
-        // the login attempt below runs as an anonymous browser (the real
-        // scenario), and DON'T force English: this asserts the default
-        // Slovak locale a first-time visitor sees (no spinbike_lang saved).
+        // loginViaAPI stored the ADMIN session AND forced English
+        // (setEnglishLanguage internally, for its own callers' convenience)
+        // — clear all three so the login attempt below runs as a genuinely
+        // fresh anonymous browser (the real scenario) in the DEFAULT Slovak
+        // locale a first-time visitor sees (no spinbike_lang saved).
         await page.evaluate(() => {
             localStorage.removeItem('spinbike_token');
             localStorage.removeItem('spinbike_user');
+            localStorage.removeItem('spinbike_lang');
         });
 
         await page.goto('/login');
