@@ -213,6 +213,11 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
     match code {
         ErrorCode::InvalidCredentials => Some("err_invalid_credentials"),
         ErrorCode::OauthAccount => Some("err_oauth_account"),
+        // #276 — password login of a blocked/soft-deleted account, only
+        // returned AFTER the correct password is verified. Customer-facing:
+        // the whole point of the fix is telling them clearly, instead of the
+        // false "session expired" bounce loop the generic codes caused.
+        ErrorCode::AccountBlocked => Some("err_account_blocked"),
         // #227 login-code flow — both are customer-facing on the code form.
         ErrorCode::InvalidOrExpiredCode => Some("err_invalid_or_expired_code"),
         ErrorCode::TooManyRequests => Some("err_too_many_requests"),
@@ -1153,6 +1158,15 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         (
             "Tento ucet pouziva ine prihlasenie",
             "This account uses a different sign-in method",
+        ),
+    );
+    // #276 — password login of a blocked/soft-deleted account. Unaccented
+    // Slovak per the ticket's exact wording.
+    m.insert(
+        "err_account_blocked",
+        (
+            "Tvoj ucet je zablokovany, ozvi sa nam.",
+            "Your account is blocked, please contact us.",
         ),
     );
     m.insert(
