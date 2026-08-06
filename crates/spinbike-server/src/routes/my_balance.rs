@@ -57,15 +57,16 @@ async fn my_balance(
     // here and map to bool below — sqlx tuple destructuring is stricter
     // about types than `#[derive(FromRow)]`, so we avoid the bool type
     // entirely at the query boundary.
-    let user_row: Option<(i64, String, f64, Option<String>, i64, i64, Option<String>)> =
-        sqlx::query_as(
-            "SELECT id, name, credit, card_code, allow_self_entry, blocked, deleted_at \
-             FROM users WHERE id = ?",
-        )
-        .bind(user_id)
-        .fetch_optional(&state.pool)
-        .await
-        .map_err(internal_error)?;
+    // (id, name, credit, card_code, allow_self_entry, blocked, deleted_at)
+    type UserBalanceRow = (i64, String, f64, Option<String>, i64, i64, Option<String>);
+    let user_row: Option<UserBalanceRow> = sqlx::query_as(
+        "SELECT id, name, credit, card_code, allow_self_entry, blocked, deleted_at \
+         FROM users WHERE id = ?",
+    )
+    .bind(user_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(internal_error)?;
 
     // #268: a syntactically-valid, unexpired JWT for a user that is missing
     // (hard-deleted / never existed), soft-deleted, or blocked no longer
