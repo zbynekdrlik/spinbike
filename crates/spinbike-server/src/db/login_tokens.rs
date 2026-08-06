@@ -203,12 +203,36 @@ pub async fn is_already_used(pool: &SqlitePool, raw: &str) -> Result<bool> {
 /// `INSTALL_TOKEN_CAP`: if the user already has that many LIVE
 /// (`revoked_at IS NULL`) install tokens, the OLDEST one is revoked first —
 /// never the newest, since a fresh mint must not invalidate a token that may
-/// already be baked into an icon on another device/session.
-// TODO(#261 round-5, interim): still delegates to the OLD 24h create_token
-// TTL — this is the RED half of the regression test; the GREEN commit
-// replaces the body with the real 365-day + cap-eviction logic.
+/// already be baked into an icon on another device/session. Ordered by
+/// `created_at ASC, id ASC` so ties within the same second's timestamp
+/// resolution still break correctly on insertion order (`id` is
+/// monotonically increasing regardless of clock granularity).
 pub async fn create_install_token(pool: &SqlitePool, user_id: i64) -> Result<String> {
-    create_token(pool, user_id, PURPOSE_INSTALL, LOGIN_TTL_SECS).await
+    let live_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM login_tokens WHERE user_id = ? AND purpose = ? AND revoked_at IS NULL",
+    )
+    .bind(user_id)
+    .bind(PURPOSE_INSTALL)
+    .fetch_one(pool)
+    .await?;
+
+    if live_count >= INSTALL_TOKEN_CAP {
+        sqlx::query(
+            "UPDATE login_tokens SET revoked_at = datetime('now') \
+             WHERE id = ( \
+                SELECT id FROM login_tokens \
+                WHERE user_id = ? AND purpose = ? AND revoked_at IS NULL \
+                ORDER BY created_at ASC, id ASC \
+                LIMIT 1 \
+             )",
+        )
+        .bind(user_id)
+        .bind(PURPOSE_INSTALL)
+        .execute(pool)
+        .await?;
+    }
+
+    create_token(pool, user_id, PURPOSE_INSTALL, INSTALL_TTL_SECS).await
 }
 
 /// Redeem a `purpose='install'` token (#261). MULTI-USE: unlike `redeem()`,
@@ -216,13 +240,25 @@ pub async fn create_install_token(pool: &SqlitePool, user_id: i64) -> Result<Str
 /// successful redeem and returns the same `user_id` every time, for as long
 /// as the token is neither expired nor revoked. Returns `None` for any
 /// invalid/expired/revoked/unknown token (uniform rejection, same as every
-/// other redeem path — no enumeration).
-// TODO(#261 round-5, interim): still delegates to the OLD single-use
-// `redeem()` (used_at + #246 grace semantics) — the RED half of the
-// regression test; the GREEN commit replaces this with the real
-// revoked_at/expires_at-based multi-use redeem.
+/// other redeem path — no enumeration). Single `UPDATE ... RETURNING` keeps
+/// the check-and-touch atomic against concurrent redemption, same shape as
+/// `redeem()` — but with NO used_at/grace logic, since every successful
+/// install redeem is intentionally a repeatable no-op on token state.
 pub async fn redeem_install(pool: &SqlitePool, raw: &str) -> Result<Option<i64>> {
-    redeem(pool, raw, &[PURPOSE_INSTALL]).await
+    let hash = hash_token(raw);
+    let user_id = sqlx::query_scalar::<_, i64>(
+        "UPDATE login_tokens SET last_used_at = datetime('now') \
+         WHERE token_hash = ? \
+           AND purpose = ? \
+           AND revoked_at IS NULL \
+           AND expires_at > datetime('now') \
+         RETURNING user_id",
+    )
+    .bind(hash)
+    .bind(PURPOSE_INSTALL)
+    .fetch_optional(pool)
+    .await?;
+    Ok(user_id)
 }
 
 /// Revoke every LIVE install token for `user_id` (#261) — the "Odhlasit
