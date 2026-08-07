@@ -3,6 +3,100 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-08-07 — #286 + #287 + #289: had_token race fix + shared sessionStorage helper + backfilled log entry (dev.127)
+
+- **Why:** all three surfaced during `/code-review` of PR #285 (the #284 +
+  #275 batch): #286 and #287 as review findings on `api.rs`/`auth.rs`/
+  `install_prompt.rs`, #289 because that same batch's autopilot worker died
+  mid-run right after the merge and never wrote its own log entry (see the
+  entry directly below this one, backfilled by this batch).
+- **#286 root cause:** `api.rs`'s `handle_unauthorized(status, had_token)`
+  was called at all 9 `api::` call sites with
+  `had_token = get_token().is_some()` re-evaluated AFTER the response had
+  already resolved (`.await`'d), not the token that was actually attached
+  to THAT specific request. A concurrent `clear_auth()` (Logout click, a
+  second tab) landing between send and 401-resolve made the re-read return
+  `false`, silently skipping `mark_session_expired()`/`clear_auth()`/the
+  `/login` redirect — the customer was left on the page with a generic
+  inline error instead of the #275 notice.
+- **#286 fix:** `add_auth()` now returns `(RequestBuilder, bool)`, the bool
+  captured AT BUILD TIME from the same `get_token()` call that decides
+  whether to attach the header. Every call site destructures
+  `let (req, had_token) = add_auth(...)` and passes THAT into
+  `handle_unauthorized`. `post_public`/`post_public_coded` untouched (never
+  call `add_auth`).
+- **#286 RED→GREEN:** `c9b52ef` [red] — new Playwright E2E in
+  `session-invalidation.spec.ts` (`Concurrent logout during an in-flight
+  request still shows the notice`): `page.route` intercepts
+  `**/api/my/balance`, clears `localStorage` INSIDE the interception (before
+  fulfilling 401) — deterministic, not timing-dependent — reproduces the
+  exact ordering the bug depends on → `71ebe19` [green] — the `api.rs` fix,
+  makes it pass.
+- **#287:** pure DRY refactor riding on top of #286's now-race-free code —
+  extracted the sessionStorage get/set JS interop `auth.rs`'s one-shot
+  `mark_session_expired`/`take_session_expired_flag` (#275) and
+  `install_prompt.rs`'s get/set-only `stored_install_token`/
+  `store_install_token` mint guard (#261) each hand-rolled independently
+  into a new `spinbike-ui/src/storage.rs` (`flag_set`/`flag_take` one-shot,
+  `cache_get`/`cache_set` cache — mirrors the existing `platform.rs`
+  precedent). Both call sites became thin wrappers; no behavior change,
+  existing #275/#261 test suites cover it unchanged. `467bbad`.
+- **#289:** the entry directly below this one — the #284 + #275 batch's
+  worker died after its merge (stream watchdog "no progress for 600s")
+  before writing its own log entry; backfilled here from the facts already
+  verified and posted on #289's issue body.
+- **PR [#290](https://github.com/zbynekdrlik/spinbike/pull/290)** (Closes
+  #286, Closes #287, Closes #289).
+
+## 2026-08-07 — #284 + #275: last two dead-session gaps + session-expired notice (dev.126)
+
+- **Why:** `#284` — two independent reviews found `users::user_transactions`
+  (self-view branch) and `auth::install_token` still accepted a dead caller
+  session (missing/soft-deleted/blocked `sub` with a still-valid JWT) — the
+  same gap class as #268/#274/#277, two more `AuthUser` call sites beyond the
+  four #277 already fixed. `#275` — `handle_unauthorized`'s hard
+  `set_href("/login")` destroyed the session-expired message before it could
+  render, so a stale-session redirect landed on a bare login form with no
+  explanation.
+- **#284 fix:** both handlers now call the shared `require_live_session`
+  helper (`auth/mod.rs`), same `if is_self { ... }` shape as `update_user`'s
+  existing self-edit branch — 401 `session_invalid` instead of a silent
+  success (`user_transactions`) or a 500 FK-constraint crash
+  (`install_token`, missing-caller case). Consolidating `door.rs`/
+  `my_balance.rs`'s pre-existing hand-rolled checks onto the shared helper,
+  and moving the check into the `AuthUser` extractor itself, were both
+  evaluated and rejected with measured (not estimated) call-site counts —
+  written up in `.claude/rules/session-invalidation.md` and the issue's own
+  design comments.
+- **#275 fix:** a one-shot `sessionStorage` flag (`spinbike_session_expired`,
+  same pattern as the existing `sb_install_token` install-prompt guard)
+  carries the reason across the hard navigation; `LoginPage` reads + clears
+  it on mount. Never fires on an ordinary wrong-password login (that path
+  never had a token to begin with).
+- **RED→GREEN:** server integration tests (per invalid state + a live-
+  customer positive control per endpoint) for #284, Playwright E2E
+  (`session-invalidation.spec.ts`, the #275 describe block) for #275 — both
+  test-first, same PR.
+- **Verified LIVE on prod BEFORE any code** (STEP 0, both issues) and again
+  post-merge: `GET /api/users/{self}/transactions` and
+  `POST /api/auth/install-token` both 401 `session_invalid` for blocked/
+  soft-deleted/ghost-sub tokens, 200 for a live customer
+  (`http://127.0.0.1:8080`). Browser flow confirmed the notice
+  ("Tvoje prihlasenie uz nie je platne, prihlas sa znova.") renders once on
+  the `/login` redirect, storage is cleared, it is NOT re-shown on reload,
+  and a wrong-password login shows only the unrelated "Tento ucet pouziva
+  ine prihlasenie".
+- **Frontend storage keys** (worth writing down): `spinbike_token`,
+  `spinbike_user`, `spinbike_session_expired` in `spinbike-ui/src/auth.rs`.
+  Customer routes are `/my/balance` + `/my/bookings` — there is no bare
+  `/my`.
+- **PR [#285](https://github.com/zbynekdrlik/spinbike/pull/285)** (Closes
+  #284, Closes #275), merged `dde3ad2`. Main run 31171571417 went green
+  after ONE rerun of a flaky `users-by-movement.spec.ts` (filed as #288).
+- **Note:** this entry was backfilled by the #286+#287+#289 batch above —
+  the original worker for this batch died mid-run right after the merge
+  (stream watchdog: "no progress for 600s") and never reached this step.
+
 ## 2026-08-07 — #274: door/open 401 session_invalid for missing/deleted/blocked user (dev.123)
 
 - **Why:** filed as a review finding on #268/#273 — `/api/door/open` has its

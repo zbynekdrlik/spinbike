@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
+import { setupConsoleCheck, assertCleanConsole, loginViaAPI, uniqueLetterSuffix } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -7,7 +7,10 @@ async function createUniqueUser(
     token: string,
     initialCredit: number,
 ): Promise<{ card_code: string; lastName: string }> {
-    const suffix = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
+    // Letters-only suffix (#39 collision class — see helpers.ts) so this
+    // card_code can never substring-collide with another spec's short
+    // digit search in the shared, single-server E2E DB.
+    const suffix = uniqueLetterSuffix();
     const cardCode = `NOTE-${suffix}`;
     const lastName = `Note${suffix}`;
     const resp = await fetch(`${BASE_URL}/api/users`, {

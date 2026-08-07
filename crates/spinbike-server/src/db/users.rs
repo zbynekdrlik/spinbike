@@ -315,7 +315,17 @@ pub async fn search_users_with_pass(
     }
     let normalized = normalize_search(q);
     let like = format!("%{normalized}%");
+    // #290: card-code match strength, most specific first. A card_code that
+    // genuinely STARTS or ENDS WITH the typed digits ("type the last digits
+    // off a card, get that card") must outrank a row that merely CONTAINS
+    // those digits somewhere in name/company/card_code — previously only
+    // the prefix case was special-cased, so a barcode's TAIL (the common
+    // case) fell into the same catch-all bucket as an unrelated card whose
+    // id happened to contain the same digits, and ordering fell through to
+    // alphabetical name, letting the wrong card win.
+    let exact = q.to_string();
     let prefix = format!("{q}%");
+    let suffix = format!("%{q}");
     let rows: Vec<UserRowWithPass> = sqlx::query_as::<_, UserRowWithPass>(
         "SELECT u.id, u.email, u.name, u.password_hash, u.phone, u.company,
                 u.role, u.oauth_provider, u.oauth_id, u.credit, u.card_code,
@@ -332,7 +342,11 @@ pub async fn search_users_with_pass(
          WHERE u.search_text LIKE ?
            AND u.deleted_at IS NULL
          ORDER BY
-           CASE WHEN u.card_code LIKE ? THEN 0 ELSE 1 END,
+           CASE
+             WHEN u.card_code = ? THEN 0
+             WHEN u.card_code LIKE ? OR u.card_code LIKE ? THEN 1
+             ELSE 2
+           END,
            last_visit_at IS NULL,
            last_visit_at DESC,
            u.name IS NULL, u.name ASC,
@@ -342,7 +356,9 @@ pub async fn search_users_with_pass(
     .bind(CLASS_VISIT_NAMES_EN[0])
     .bind(CLASS_VISIT_NAMES_EN[1])
     .bind(&like)
+    .bind(&exact)
     .bind(&prefix)
+    .bind(&suffix)
     .bind(limit)
     .fetch_all(pool)
     .await
@@ -353,8 +369,10 @@ pub async fn search_users_with_pass(
 /// Search users by partial match. Diacritic- and case-insensitive: the query
 /// is folded via `normalize_search` and compared against the pre-computed
 /// `search_text` column, so "zbyne" finds "Zbyněk" and "drlik" finds "Drlík".
-/// Card-code prefix matches sort first. Empty/whitespace query → empty Vec.
-/// Includes blocked users so staff can find them to unblock.
+/// Card-code exact/prefix/suffix matches sort first (#290 — a barcode TAIL
+/// match must outrank a row that merely contains the digits elsewhere, the
+/// same fix as `search_users_with_pass`). Empty/whitespace query → empty
+/// Vec. Includes blocked users so staff can find them to unblock.
 pub async fn search_users(pool: &SqlitePool, query: &str, limit: i64) -> Result<Vec<UserRow>> {
     let q = query.trim();
     if q.is_empty() {
@@ -362,7 +380,9 @@ pub async fn search_users(pool: &SqlitePool, query: &str, limit: i64) -> Result<
     }
     let needle = normalize_search(q);
     let like = format!("%{needle}%");
+    let exact = q.to_string();
     let prefix = format!("{q}%");
+    let suffix = format!("%{q}");
     let users = sqlx::query_as::<_, UserRow>(
         "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
                 oauth_id, credit, card_code, blocked, allow_debit, search_text,
@@ -370,13 +390,19 @@ pub async fn search_users(pool: &SqlitePool, query: &str, limit: i64) -> Result<
          FROM users
          WHERE deleted_at IS NULL AND search_text LIKE ?
          ORDER BY
-           CASE WHEN card_code LIKE ? THEN 0 ELSE 1 END,
+           CASE
+             WHEN card_code = ? THEN 0
+             WHEN card_code LIKE ? OR card_code LIKE ? THEN 1
+             ELSE 2
+           END,
            name IS NULL, name ASC,
            card_code ASC
          LIMIT ?",
     )
     .bind(&like)
+    .bind(&exact)
     .bind(&prefix)
+    .bind(&suffix)
     .bind(limit)
     .fetch_all(pool)
     .await?;
@@ -1050,6 +1076,113 @@ mod tests {
         let results = search_users(&pool, "Bad Actor", 10).await.unwrap();
         assert_eq!(results.len(), 1);
         assert!(results[0].blocked);
+    }
+
+    /// #39 recurrence (PR #290, CI run 31189869886): a card whose
+    /// card_code genuinely ENDS WITH the searched digits must outrank an
+    /// unrelated card whose id merely CONTAINS those digits somewhere.
+    /// Reproduces the exact CI collision — "Jana Testova" (card
+    /// `70701001`, a true TAIL match on `1001`) vs "AAA Polluter" (card
+    /// `ZZ-99991001999`, contains `1001` in the middle but neither starts
+    /// nor ends with it). Before the fix, only PREFIX matches (`1001%`)
+    /// were special-cased, so neither card_code qualified and ordering
+    /// fell through to plain `name ASC` — "AAA Polluter" sorts before
+    /// "Jana Testova" alphabetically and wrongly won.
+    #[tokio::test]
+    async fn search_users_ranks_barcode_tail_match_above_mere_substring_match() {
+        let pool = setup().await;
+        create_user(
+            &pool,
+            None,
+            None,
+            "AAA Polluter",
+            None,
+            None,
+            Some("ZZ-99991001999"),
+            "customer",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        create_user(
+            &pool,
+            None,
+            None,
+            "Jana Testova",
+            None,
+            None,
+            Some("70701001"),
+            "customer",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let results = search_users(&pool, "1001", 10).await.unwrap();
+        assert_eq!(
+            results.len(),
+            2,
+            "both rows must match the unanchored search"
+        );
+        assert_eq!(
+            results[0].card_code.as_deref(),
+            Some("70701001"),
+            "the card whose barcode ENDS WITH the query must rank first, not the one that merely contains it"
+        );
+    }
+
+    /// Same defect, on the function the live `/api/users/search` ROUTE
+    /// actually calls (`search_users_with_pass`) — the two db-layer search
+    /// functions share the ranking SQL shape, so both need the fix.
+    #[tokio::test]
+    async fn search_users_with_pass_ranks_barcode_tail_match_above_mere_substring_match() {
+        let pool = setup().await;
+        create_user(
+            &pool,
+            None,
+            None,
+            "AAA Polluter",
+            None,
+            None,
+            Some("ZZ-99991001999"),
+            "customer",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        create_user(
+            &pool,
+            None,
+            None,
+            "Jana Testova",
+            None,
+            None,
+            Some("70701001"),
+            "customer",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let results = search_users_with_pass(&pool, "1001", 10).await.unwrap();
+        assert_eq!(
+            results.len(),
+            2,
+            "both rows must match the unanchored search"
+        );
+        assert_eq!(
+            results[0].0.card_code.as_deref(),
+            Some("70701001"),
+            "the card whose barcode ENDS WITH the query must rank first, not the one that merely contains it"
+        );
     }
 
     #[tokio::test]

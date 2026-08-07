@@ -72,33 +72,24 @@ pub fn is_admin() -> bool {
 /// of `/login` never re-shows the notice.
 const SESSION_EXPIRED_KEY: &str = "spinbike_session_expired";
 
-fn session_storage() -> Option<web_sys::Storage> {
-    web_sys::window()?.session_storage().ok()?
-}
-
 /// Mark that the session about to be cleared was invalidated by the server
 /// (a 401 on a previously-valid stored token), not an ordinary user-
 /// initiated logout. Call BEFORE the hard navigation to `/login` — silent
 /// no-op on any storage failure (private browsing, a security exception),
 /// same discipline as every other storage call in this module.
+///
+/// #287: thin wrapper over the shared `storage::flag_set`/`flag_take`
+/// one-shot primitive — see `storage.rs` for why it's shared with
+/// `install_prompt.rs`'s (different-shaped) mint guard.
 pub fn mark_session_expired() {
-    if let Some(s) = session_storage() {
-        let _ = s.set_item(SESSION_EXPIRED_KEY, "1");
-    }
+    crate::storage::flag_set(SESSION_EXPIRED_KEY);
 }
 
 /// Read the one-shot session-expired flag AND clear it in the same call, so
 /// a manual reload of `/login` never re-shows the notice. Call this once,
 /// at `LoginPage` setup.
 pub fn take_session_expired_flag() -> bool {
-    let Some(s) = session_storage() else {
-        return false;
-    };
-    let present = matches!(s.get_item(SESSION_EXPIRED_KEY), Ok(Some(_)));
-    if present {
-        let _ = s.remove_item(SESSION_EXPIRED_KEY);
-    }
-    present
+    crate::storage::flag_take(SESSION_EXPIRED_KEY)
 }
 
 #[cfg(test)]

@@ -195,6 +195,34 @@ export async function loginViaAPI(page: Page, baseURL: string, email: string, pa
 }
 
 /**
+ * Random letters-only (a-z) suffix for any E2E fixture identifier
+ * (card_code, barcode, name) that must never collide with a numeric
+ * substring search.
+ *
+ * `dashboard.spec.ts`'s staff search box (and any future short-substring
+ * search) does an UNANCHORED `search_text LIKE '%query%'` against every
+ * user's name+company+card_code in the shared CI E2E database — all ~80
+ * spec files run serially (workers: 1) against ONE server + ONE SQLite DB
+ * for the whole run, so records accumulate WITHIN a run. A suffix built
+ * from `Date.now()` is PURE DIGITS and can substring-collide with a short
+ * digit query typed by a completely unrelated spec (#39, closed 2026-05-01
+ * via commit f289ac7 — then recurred through `category-revenue.spec.ts`'s
+ * own `Date.now()`-based card_code, confirmed live on CI run 31178634087:
+ * "CR Reports1786106601001s4hn" outranked "Jana Testova" in a '1001'
+ * search). Letters-only makes that collision impossible BY CONSTRUCTION —
+ * no digit substring can ever appear in an a-z-only string.
+ *
+ * 26^len distinct values (len=8 -> ≈2×10^11) also makes a same-run
+ * collision between two GENERATED suffixes themselves statistically
+ * impossible.
+ */
+export function uniqueLetterSuffix(len = 8): string {
+    return Array.from({ length: len }, () =>
+        String.fromCharCode(97 + Math.floor(Math.random() * 26)),
+    ).join('');
+}
+
+/**
  * Create a user with a unique name/card_code so it cannot
  * substring-collide with seeded numeric card codes (#39).
  *
@@ -209,9 +237,7 @@ export async function createUniqueUser(
     email?: string,
 ): Promise<{ user_id: number; name: string; card_code: string; email?: string }> {
     const BASE_URL = 'http://localhost:8099';
-    const suffix = Array.from({ length: 8 }, () =>
-        String.fromCharCode(97 + Math.floor(Math.random() * 26)),
-    ).join('');
+    const suffix = uniqueLetterSuffix();
     const cardCode = `${prefix}-${suffix}`;
     const name = `${prefix} ${prefix}${suffix}`;
     const body: Record<string, unknown> = {

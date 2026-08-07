@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { loginViaAPI, setupConsoleCheck, assertCleanConsole, bratislavaToday } from './helpers';
+import { loginViaAPI, setupConsoleCheck, assertCleanConsole, bratislavaToday, uniqueLetterSuffix } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -71,7 +71,12 @@ test.describe('Reports — category revenue breakdown (#255)', () => {
         const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
 
         const services = await fetchServiceIds(token);
-        const suffix = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
+        // Letters-only suffix (#39 collision class — see helpers.ts) so this
+        // card_code can never substring-collide with another spec's short
+        // digit search in the shared, single-server E2E DB. This exact
+        // suffix (Date.now()-based) is the confirmed root cause of #290's
+        // dashboard.spec.ts flake (CI run 31178634087, "CR Reports...").
+        const suffix = uniqueLetterSuffix();
         const userId = await createUser(token, suffix, 50.0);
 
         const today = bratislavaToday();

@@ -8,6 +8,7 @@ pub mod pages;
 pub mod platform;
 pub mod relative_date;
 pub mod router;
+pub mod storage;
 pub mod util;
 pub mod ws;
 

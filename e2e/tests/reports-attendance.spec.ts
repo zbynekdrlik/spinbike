@@ -1,5 +1,12 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole, loginViaAPI, bratislavaToday, bratislavaDateOffset } from './helpers';
+import {
+    setupConsoleCheck,
+    assertCleanConsole,
+    loginViaAPI,
+    bratislavaToday,
+    bratislavaDateOffset,
+    uniqueLetterSuffix,
+} from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -93,7 +100,10 @@ test.describe('Reports — NAVSTEVY/ATTENDANCE KPI counts class visits only (#23
         const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
 
         const services = await fetchServiceIds(token);
-        const suffix = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
+        // Letters-only suffix (#39 collision class — see helpers.ts) so this
+        // card_code can never substring-collide with another spec's short
+        // digit search in the shared, single-server E2E DB.
+        const suffix = uniqueLetterSuffix();
 
         // Card with enough credit to cover all the charges below (5+5+2.50+2.50+3+35 = 53)
         // plus a 35 € pass sale; 100 keeps the math comfortably positive.

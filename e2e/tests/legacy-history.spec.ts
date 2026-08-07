@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
+import { setupConsoleCheck, assertCleanConsole, loginViaAPI, uniqueLetterSuffix } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -31,7 +31,10 @@ async function openCardByBarcode(page: Page, barcode: string) {
 test('card history shows backfilled service categories (English)', async ({ page }) => {
     const msgs = setupConsoleCheck(page);
     const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-    const barcode = `LH-${Date.now()}`;
+    // Letters-only suffix (#39 collision class — see helpers.ts) so this
+    // barcode can never substring-collide with another spec's short digit
+    // search in the shared, single-server E2E DB.
+    const barcode = `LH-${uniqueLetterSuffix()}`;
     await seedCardWithBackfilledHistory(token, barcode);
 
     await page.goto('/staff');
@@ -51,7 +54,8 @@ test('card history shows backfilled service categories (English)', async ({ page
 test('card history shows backfilled service categories in Slovak', async ({ page }) => {
     const msgs = setupConsoleCheck(page);
     const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-    const barcode = `LH-SK-${Date.now()}`;
+    // Letters-only suffix (#39 collision class — see helpers.ts).
+    const barcode = `LH-SK-${uniqueLetterSuffix()}`;
     await seedCardWithBackfilledHistory(token, barcode);
 
     // Switch to Slovak. loginViaAPI added an init script forcing 'en' on
