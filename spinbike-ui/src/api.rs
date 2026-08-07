@@ -38,7 +38,10 @@ fn base_url() -> String {
 /// doc comment for the race that re-reading fixes.
 fn add_auth(req: RequestBuilder) -> (RequestBuilder, bool) {
     match get_token() {
-        Some(token) => (req.header("Authorization", &format!("Bearer {token}")), true),
+        Some(token) => (
+            req.header("Authorization", &format!("Bearer {token}")),
+            true,
+        ),
         None => (req, false),
     }
 }
@@ -169,7 +172,8 @@ pub async fn put<B: Serialize>(path: &str, body: &B) -> Result<(), String> {
 
 pub async fn patch<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Result<T, String> {
     let url = format!("{}{}", base_url(), path);
-    let (req, had_token) = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::PATCH));
+    let (req, had_token) =
+        add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::PATCH));
     let req = req.json(body).map_err(|e| e.to_string())?;
 
     let resp = req.send().await.map_err(|e| e.to_string())?;
@@ -305,7 +309,8 @@ pub async fn post_json<B: Serialize, T: DeserializeOwned>(
 
 pub async fn delete(path: &str) -> Result<(), String> {
     let url = format!("{}{}", base_url(), path);
-    let (req, had_token) = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::DELETE));
+    let (req, had_token) =
+        add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::DELETE));
     let resp = req.send().await.map_err(|e| e.to_string())?;
 
     if !resp.ok() {
@@ -330,7 +335,8 @@ pub async fn delete_empty(path: &str) -> Result<(), String> {
 /// `error_code` (#158) alongside the raw message — see [`get_coded`].
 pub async fn delete_coded(path: &str) -> Result<(), CodedError> {
     let url = format!("{}{}", base_url(), path);
-    let (req, had_token) = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::DELETE));
+    let (req, had_token) =
+        add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::DELETE));
     let resp = req.send().await.map_err(CodedError::from_transport)?;
 
     if !resp.ok() {
