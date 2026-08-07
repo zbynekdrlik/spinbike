@@ -1,8 +1,10 @@
 //! Door self-entry routes.
 //!
 //! `POST /api/door/open` — authenticated customer opens the studio door:
-//!   * Pre-flight: `blocked` (every role, no bypass) + role + `allow_self_entry`
-//!     + per-user / global rate limits.
+//!   * Pre-flight: missing/soft-deleted/`blocked` user → 401 session_invalid
+//!     (every role, no bypass, #274); then role + `allow_self_entry` (a live,
+//!     non-blocked customer with the flag off stays 403) + per-user / global
+//!     rate limits.
 //!   * BEGIN tx → count today's `door:` rows → decide visit-or-charge for the
 //!     first press, or zero-amount label for the Nth.
 //!   * Call `state.ewelink.press()` (real cloud or test stub).
@@ -32,6 +34,7 @@ use crate::ewelink::EwelinkState;
 use crate::rate_limit::{RateLimitConfig, SlidingWindowLimiter};
 use crate::routes::internal_error;
 use spinbike_core::auth::Role;
+use spinbike_core::errors::ErrorCode;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -92,43 +95,54 @@ async fn open(
 ) -> Result<(StatusCode, Json<serde_json::Value>), ApiError> {
     let user_id = claims.sub;
 
-    // 1. Load user + role + allow_self_entry + credit + blocked.
-    let row: Option<(String, i64, f64, bool)> = sqlx::query_as(
-        "SELECT role, allow_self_entry, credit, blocked FROM users \
-         WHERE id = ? AND deleted_at IS NULL",
+    // 1. Load user + role + allow_self_entry + credit + blocked + deleted_at.
+    //
+    // #274: a syntactically-valid, unexpired JWT for a user that is missing
+    // (hard-deleted / never existed), soft-deleted, or blocked no longer
+    // represents a live session — 401 (session invalid), NOT 403
+    // ("not_allowed"/"blocked" are reserved for a LIVE, non-blocked customer
+    // who simply has allow_self_entry=false or is blocked-while-still-a-real-
+    // account). Mirrors the exact pattern #268 established for
+    // /api/my/balance (routes/my_balance.rs) and the eligibility gate
+    // `token_login` already applies (`user.deleted_at.is_some() ||
+    // user.blocked`, routes/auth.rs). Deliberately NOT filtered by
+    // `deleted_at IS NULL` in the query (unlike before #274) — a
+    // soft-deleted row must still be FETCHED so it is rejected with the
+    // same 401 as every other session-invalid case below, instead of
+    // silently falling into the missing-row branch.
+    type DoorUserRow = (String, i64, f64, bool, Option<String>);
+    let row: Option<DoorUserRow> = sqlx::query_as(
+        "SELECT role, allow_self_entry, credit, blocked, deleted_at FROM users \
+         WHERE id = ?",
     )
     .bind(user_id)
     .fetch_optional(&state.pool)
     .await
     .map_err(internal_error)?;
 
-    let (role, allow_self_entry, mut credit, blocked) = match row {
+    let (role, allow_self_entry, mut credit, blocked, deleted_at) = match row {
         Some(r) => r,
         None => {
-            tracing::warn!(user_id, "door: rejected — user not found or deleted");
-            return Ok((
-                StatusCode::FORBIDDEN,
-                Json(serde_json::json!({"status": "rejected", "reason": "not_allowed"})),
-            ));
+            tracing::warn!(user_id, "door: session invalid — user no longer exists");
+            return Err(ApiError::Unauthorized(ErrorCode::SessionInvalid));
         }
     };
 
-    // Blocked-means-blocked for every role, including admin/staff — a
-    // blocked staff account must not be able to actuate hardware. Checked
-    // BEFORE the allow_self_entry role bypass below so it can never be
-    // skipped by that bypass (#106).
-    //
-    // Reason tag is "blocked" (not the `{"error": "User is blocked"}` shape
-    // used by payments.rs/users.rs) — intentional: this route's own envelope
-    // is already `{"status":"rejected","reason":"<tag>"}` (see "not_allowed"
-    // and "rate_limited" below), so this stays consistent with the OTHER
-    // rejections in this same file rather than mixing two response shapes.
-    if blocked {
-        tracing::warn!(user_id, %role, "door: rejected — user is blocked");
-        return Ok((
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({"status": "rejected", "reason": "blocked"})),
-        ));
+    // Blocked-or-deleted-means-session-invalid for every role, including
+    // admin/staff — a blocked/deleted staff account must not be able to
+    // actuate hardware. Checked BEFORE the allow_self_entry role bypass
+    // below so it can never be skipped by that bypass (#106), and before
+    // any role-specific logic since a dead session has no role to bypass
+    // with.
+    if blocked || deleted_at.is_some() {
+        tracing::warn!(
+            user_id,
+            %role,
+            blocked,
+            deleted = deleted_at.is_some(),
+            "door: session invalid — blocked or deleted user"
+        );
+        return Err(ApiError::Unauthorized(ErrorCode::SessionInvalid));
     }
 
     // Admin/staff bypass the allow_self_entry gate — they run the place,
