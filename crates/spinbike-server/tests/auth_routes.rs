@@ -1022,6 +1022,85 @@ async fn install_token_customer_mints_own_redeemable_login_token() {
     assert_eq!(redeemed["user"]["role"].as_str().unwrap(), "customer");
 }
 
+// ── #284 — install_token must reject a dead caller session
+// (missing/soft-deleted/blocked) with 401 session_invalid, same contract
+// #268/#274/#277/#284's own user_transactions fix established. Before this
+// fix: a blocked or soft-deleted caller could still mint a live,
+// long-lived, multi-use credential for themselves — and a missing (ghost)
+// caller crashed with a 500 (login_tokens.user_id has a real FK to users,
+// which trips on a non-existent sub) instead of a clean 401. ─────────────
+
+#[tokio::test]
+async fn install_token_mint_blocked_caller_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    spinbike_server::db::users::set_blocked(&app.pool, app.customer_id, true)
+        .await
+        .unwrap();
+
+    let (status, resp) = app
+        .request(post_json(
+            "/api/auth/install-token",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "blocked caller's install-token mint must be 401, not 200 — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
+#[tokio::test]
+async fn install_token_mint_soft_deleted_caller_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    spinbike_server::db::users::delete_user(&app.pool, app.customer_id)
+        .await
+        .unwrap();
+
+    let (status, resp) = app
+        .request(post_json(
+            "/api/auth/install-token",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "soft-deleted caller's install-token mint must be 401 — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
+#[tokio::test]
+async fn install_token_mint_missing_caller_returns_401_not_500() {
+    let app = TestApp::new().await;
+    let ghost_id = 999_999_997;
+    let ghost_token = spinbike_server::auth::create_token(
+        helpers::JWT_SECRET,
+        ghost_id,
+        "ghost284b@test.com",
+        &spinbike_core::auth::Role::Customer,
+    )
+    .unwrap();
+
+    let (status, resp) = app
+        .request(post_json(
+            "/api/auth/install-token",
+            &ghost_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "missing caller's install-token mint must be 401, not a 500 FK crash — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
 /// The endpoint is open to any authenticated role — an admin can mint one for
 /// their own session too (mint is always for `claims.sub`, never a
 /// caller-supplied id).

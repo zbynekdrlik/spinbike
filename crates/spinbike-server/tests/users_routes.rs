@@ -449,6 +449,97 @@ async fn user_transactions_forbidden_for_customer() {
     assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
 }
 
+/// Positive control (#284): a LIVE, non-blocked customer viewing their OWN
+/// transactions (`claims.sub == id`) must still get 200 — a 401-everywhere
+/// change would not be a fix, it would be a different bug.
+#[tokio::test]
+async fn user_transactions_self_view_live_customer_succeeds() {
+    let app = TestApp::new().await;
+    let (status, resp) = app
+        .request(get(
+            &format!("/api/users/{}/transactions", app.customer_id),
+            &app.customer_token,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "got {resp}");
+}
+
+// ─── #284 — user_transactions self-view must reject a dead caller session
+// (missing/soft-deleted/blocked) with 401 session_invalid, same contract
+// #268/#274/#277 established. Before this fix: a blocked or soft-deleted
+// caller could still read their OWN transaction history with 200. A STAFF
+// caller viewing ANOTHER (non-self) user's transactions is untouched by
+// this check — session-invalidation is about the CALLER's own session.
+// ────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn user_transactions_self_view_blocked_caller_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    spinbike_server::db::users::set_blocked(&app.pool, app.customer_id, true)
+        .await
+        .unwrap();
+
+    let (status, resp) = app
+        .request(get(
+            &format!("/api/users/{}/transactions", app.customer_id),
+            &app.customer_token,
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "blocked caller's self-view must be 401, not 200 — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
+#[tokio::test]
+async fn user_transactions_self_view_soft_deleted_caller_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    spinbike_server::db::users::delete_user(&app.pool, app.customer_id)
+        .await
+        .unwrap();
+
+    let (status, resp) = app
+        .request(get(
+            &format!("/api/users/{}/transactions", app.customer_id),
+            &app.customer_token,
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "soft-deleted caller's self-view must be 401 — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
+#[tokio::test]
+async fn user_transactions_self_view_missing_caller_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    let ghost_id = 999_999_998;
+    let ghost_token = spinbike_server::auth::create_token(
+        helpers::JWT_SECRET,
+        ghost_id,
+        "ghost284@test.com",
+        &spinbike_core::auth::Role::Customer,
+    )
+    .unwrap();
+
+    let (status, resp) = app
+        .request(get(
+            &format!("/api/users/{ghost_id}/transactions"),
+            &ghost_token,
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "missing caller's self-view must be 401 — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
 // ─── block / unblock ──────────────────────────────────────────────────────────
 
 #[tokio::test]
