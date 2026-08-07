@@ -166,20 +166,30 @@ fn release_mint_slot() {
     MINT_IN_FLIGHT.store(false, Ordering::SeqCst);
 }
 
-/// Persist + arm the credential for a freshly, successfully minted token.
+/// Persist + arm the credential for a freshly, successfully minted token,
+/// then verify the persist actually landed — releasing the slot if it
+/// didn't (code-review finding on #282, [green]).
 ///
-/// #282 [red]: a mint that succeeds at the HTTP layer can still fail to
-/// PERSIST client-side — `store_install_token()` (`storage::cache_set`)
-/// silently no-ops on ANY sessionStorage failure (private browsing, quota,
-/// a security exception — same degrade-gracefully discipline as every
-/// other storage call in this crate, see `storage.rs`). This extraction
-/// does not YET verify the persist landed, so `MINT_IN_FLIGHT` stays
-/// permanently claimed even when it silently failed to write — see the
-/// `a_successful_mint_that_fails_to_persist_releases_the_slot_for_a_later_retry`
-/// test below, which fails on this commit.
+/// A mint that succeeds at the HTTP layer can still fail to PERSIST
+/// client-side — `store_install_token()` (`storage::cache_set`) silently
+/// no-ops on ANY sessionStorage failure (private browsing, quota, a
+/// security exception — same degrade-gracefully discipline as every other
+/// storage call in this crate, see `storage.rs`). Without this check,
+/// `MINT_IN_FLIGHT` would stay permanently claimed even though
+/// `stored_install_token()` keeps returning `None` on every later mount in
+/// this WASM session — `try_claim_mint_slot()` would then refuse forever,
+/// silently disabling the belt-and-braces auto-login credential for the
+/// rest of the session with no way to recover short of a full page reload.
+/// This mount's OWN credential is still armed regardless (the token is
+/// already in hand, storage is only a cache for LATER mounts) — only the
+/// slot's retry-eligibility depends on the persist having actually landed.
+/// See `a_successful_mint_that_fails_to_persist_releases_the_slot_for_a_later_retry`.
 fn confirm_mint_or_release(token: &str) {
     store_install_token(token);
     arm_install_credential(token);
+    if stored_install_token().is_none() {
+        release_mint_slot();
+    }
 }
 
 /// Arm BOTH remaining legs of the round-5 (#261) ladder for an install
@@ -580,9 +590,11 @@ mod tests {
     /// simulating a persist failure even though this test's fake token
     /// stands in for a real, successful 200 response.
     ///
-    /// [red]: fails on the commit that only extracts `confirm_mint_or_release`
-    /// without yet verifying the persist landed — `try_claim_mint_slot()`
-    /// stays `false` after a "successful" mint that never actually persisted.
+    /// [red -> green]: failed on the commit that only extracted
+    /// `confirm_mint_or_release` without yet verifying the persist landed
+    /// (`try_claim_mint_slot()` stayed `false` after a "successful" mint
+    /// that never actually persisted); passes now that it releases the
+    /// slot when the persist didn't land.
     #[wasm_bindgen_test]
     fn a_successful_mint_that_fails_to_persist_releases_the_slot_for_a_later_retry() {
         release_mint_slot();
