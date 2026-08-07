@@ -170,6 +170,43 @@ async function loginAsCustomerSk(page: Page, baseURL: string, email: string, pas
 
 Whenever a new spec's test body does NOT start with `loginViaAPI(page, ..., 'admin@test.com', ...)`, check whether its own custom helper touches `localStorage` before any navigation — this is invisible until CI actually runs it (local `npx tsc --noEmit` type-checks fine; the failure is a runtime browser security error, not a type error).
 
+## `loginViaAPI`'s `setEnglishLanguage` persists for the WHOLE page — clearing `spinbike_lang` afterward does NOT undo it (#276)
+
+`loginViaAPI` calls `setEnglishLanguage(page)` internally, which does
+`page.addInitScript(() => localStorage.setItem('spinbike_lang', 'en'))`. An
+init script registered via `page.addInitScript` re-fires on **every later
+navigation for the lifetime of that page** — not just the one navigation
+`loginViaAPI` itself performs. So a spec that calls `loginViaAPI(page, ...,
+'admin@test.com', ...)` purely to get an admin token for setup API calls,
+then does `page.evaluate(() => localStorage.removeItem('spinbike_lang'))`
+and `page.goto('/login')` expecting the DEFAULT Slovak locale, will still
+see ENGLISH — the init script re-sets `spinbike_lang` to `'en'` before the
+SPA even boots on that next `goto`, silently undoing the manual removal.
+Caught only by CI (#276: an E2E spec asserting the Slovak
+`err_account_blocked` banner text got the English fallback instead) — a
+locale mismatch renders a real page with real text, so there is no runtime
+error to catch it locally, only a wrong-string assertion failure.
+
+**Fix: if a spec only needs an admin/staff TOKEN for setup API calls (never
+needs the browser to actually carry that session), use a raw `fetch()` for
+that login instead of `loginViaAPI(page, ...)`** — same pattern as
+`session-invalidation.spec.ts`'s admin-login step:
+
+```ts
+const adminLoginResp = await fetch(`${BASE_URL}/api/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'admin@test.com', password: 'admin123' }),
+});
+const { token: adminToken } = await adminLoginResp.json();
+```
+
+This never touches `page` at all, so no `addInitScript` is ever registered
+and the page's FIRST real navigation (`page.goto('/login')` etc.) starts
+from a genuinely fresh browser — no session, no forced language. Reach for
+this whenever a spec's `loginViaAPI` call is purely a token-minting
+convenience, not an intentional "browser carries this session" step.
+
 ## Router
 Add a line to the project `CLAUDE.md` `## Playbook router` pointing here so a
 future guard-adding ticket loads this BEFORE pushing, not after CI turns red.

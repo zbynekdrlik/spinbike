@@ -39,6 +39,19 @@ Design spec: `docs/superpowers/specs/2026-07-04-client-onboarding-design.md`. On
 
 Role-based expiry: `Role::Customer` → ~100 years (`CUSTOMER_SESSION_SECS`), admin/staff → 90 days. `parse_role` maps any non-`admin`/`staff` DB role string to `Role::Customer`, so in practice only admin/staff get the 90-day tier. A permanent JWT is NOT revoked on block/delete — that's bounded because the security-critical routes (door, payments) re-check `blocked` from the DB at action time, and `token-login` re-checks blocked/deleted before issuing a session.
 
+## The three LOGIN paths each gate blocked/deleted differently ON PURPOSE (#276) — don't unify their error codes
+
+`login()` (password, admin/staff + legacy customer passwords), `token_login()` (magic link), and `code_login()` (6-digit code) each reject a blocked/soft-deleted account, but with DELIBERATELY different error codes/timing — this is not an inconsistency to "clean up":
+
+- **`login()`** returns a DISTINCT `ErrorCode::AccountBlocked`, and ONLY after `verify_password` succeeds. This endpoint already leaks account existence pre-password via `OauthAccount` (no password_hash = oauth-only account), so a dedicated post-password code adds no NEW enumeration surface, and it's the right UX — the customer typed their correct password and deserves to be told WHY they're stuck, not a generic "session expired" bounce.
+- **`token_login()`/`code_login()`** fold blocked/deleted into their existing generic "invalid" rejection (`InvalidOrExpiredLink`/`InvalidOrExpiredCode`) — a token/code holder proved possession of something ephemeral, not knowledge of a durable secret, so telling them "blocked" specifically would be a stronger signal than the uniform-rejection design these two paths otherwise maintain.
+
+When adding a NEW blocked/deleted check to any auth path, decide the error code by this same reasoning (what does the caller already prove, what does this endpoint already leak) — don't reflexively reuse `SessionInvalid`/`AccountBlocked` from a different path just because it's the closest existing name.
+
+**A shared eligibility CHECK (a pure `fn account_is_active(&UserRow) -> bool` helper) is fine and encouraged — a shared ERROR MAPPING across paths with different leakage postures is not.** Factor the boolean logic once, let each caller keep its own `Err(...)` construction.
+
+**Mutation-testing trap: an eligibility check is only as good as what actually REACHES it.** `login()` originally used `get_user_by_email`, whose SQL filters `WHERE ... AND deleted_at IS NULL` — so a `deleted_at.is_none()` branch added to an eligibility check called from THAT lookup would be genuinely UNREACHABLE (a soft-deleted row can never arrive there to trigger it), and a diff-scoped mutation-testing gate would likely flag it as a surviving/unkillable mutant. Fixed by switching to `get_user_by_email_including_deleted` (already existed for #143's email-collision flow) so the soft-deleted branch is actually live. **Before adding a `deleted_at`/`blocked` check on top of a `get_user_by_*` lookup, check whether that lookup's own SQL already filters the condition you're about to test** — if so, either switch to the `_including_deleted` variant (when you want an explicit, testable rejection) or drop the redundant check (when the filter is deliberate and sufficient), never leave a check that can't be exercised by any real request.
+
 ## Route authorization — use the role extractors, not inline guards (#160)
 
 Authorization is enforced at the **extraction boundary**, not re-authored in each handler body. Three extractors live in `auth/mod.rs`:
