@@ -383,12 +383,13 @@ test.describe('Session-invalidation redirect shows an explanation (#275)', () =>
         });
         expect(blockResp.ok).toBeTruthy();
 
-        // Hold 1s+ so the press actually fires (the hold-guard, #266) —
-        // the in-flight POST /api/door/open gets 401 for the now-blocked
-        // caller, hit via door_button.rs's OWN inline handler.
+        // Hold — the press fires on its OWN internal 1s timer
+        // (HOLD_DURATION_MS, door_button.rs), NOT on pointerup, so no
+        // pointerup dispatch here: by the time a 1200ms wait would let us
+        // send one, the 401 has already redirected this page to /login and
+        // the button element is gone — dispatching to a vanished locator is
+        // exactly what timed out CI on the first attempt at this test.
         await btn.dispatchEvent('pointerdown');
-        await page.waitForTimeout(1200);
-        await btn.dispatchEvent('pointerup');
 
         await page.waitForURL('**/login', { timeout: 10000 });
         const notice = page.locator('[data-testid="session-expired-notice"]');
