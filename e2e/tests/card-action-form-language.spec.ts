@@ -1,5 +1,5 @@
 import { test, expect, Page } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
+import { setupConsoleCheck, assertCleanConsole, loginViaAPI, uniqueLetterSuffix } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -32,7 +32,14 @@ test.describe('Card action form — service dropdown is language-aware', () => {
     test('Refreshments shows in EN and Občerstvenie shows in SK', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const suffix = `${Date.now()}`;
+        // Letters-only suffix (#39 collision class — see helpers.ts) so this
+        // card_code (`LNG-${suffix}`) can never substring-collide with
+        // another spec's short digit search in the shared, single-server
+        // E2E DB. This file's PREVIOUS Date.now()-based suffix was the
+        // original confirmed cause of #290's dashboard.spec.ts flake
+        // (issue #39's exact mechanism: expect(...).toContainText('Jana
+        // Testova') failed against dashboard.spec.ts:18).
+        const suffix = uniqueLetterSuffix();
         const lastName = await createUniqueUserLocal(token, suffix);
 
         // Default in tests is English (loginViaAPI -> setEnglishLanguage).

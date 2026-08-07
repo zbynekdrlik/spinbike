@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { loginViaAPI, setupConsoleCheck, assertCleanConsole } from './helpers';
+import { loginViaAPI, setupConsoleCheck, assertCleanConsole, uniqueLetterSuffix } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -12,7 +12,10 @@ test('day report KPI cards reflect seeded transactions', async ({ page }) => {
     // Create a fresh user with €50 starting credit (one top-up event implicit
     // in creation flow may add to cash_in — we don't assert exact amounts,
     // only "non-zero and rendered").
-    const suffix = `${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
+    // Letters-only suffix (#39 collision class — see helpers.ts) so this
+    // card_code can never substring-collide with another spec's short
+    // digit search in the shared, single-server E2E DB.
+    const suffix = uniqueLetterSuffix();
     const user = await fetch(`${BASE_URL}/api/users`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },

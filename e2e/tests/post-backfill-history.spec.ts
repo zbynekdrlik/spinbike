@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole, loginViaAPI } from './helpers';
+import { setupConsoleCheck, assertCleanConsole, loginViaAPI, uniqueLetterSuffix } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -10,7 +10,10 @@ const BASE_URL = 'http://localhost:8099';
 test('per-card history renders charge / topup / visit / pass-sale labels', async ({ page }) => {
     const msgs = setupConsoleCheck(page);
     const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
-    const barcode = `PBH-${Date.now()}`;
+    // Letters-only suffix (#39 collision class — see helpers.ts) so this
+    // barcode can never substring-collide with another spec's short digit
+    // search in the shared, single-server E2E DB.
+    const barcode = `PBH-${uniqueLetterSuffix()}`;
 
     const seed = await fetch(`${BASE_URL}/api/test/seed-transactions`, {
         method: 'POST',

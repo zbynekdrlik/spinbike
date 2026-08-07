@@ -13,9 +13,16 @@ test.describe('Card dashboard (staff /staff)', () => {
 
         await page.fill('input[type="search"]', '1001');
         // The debounced search fires at ~250ms — wait for a result row.
-        const result = page.locator('[data-testid="search-result"]').first();
+        // Scoped by name, not `.first()`: the shared E2E DB accumulates
+        // fixtures from every spec in the run, and this unanchored
+        // '%1001%' search can also match an unrelated user whose
+        // card_code/name happens to contain the same digits (#39, recurred
+        // via CI run 31178634087 — see the PR #290 root-cause comment and
+        // the regression test below). Scoping by the expected name keeps
+        // this test about "does tail search find MY card", not "does it
+        // happen to sort first".
+        const result = page.locator('[data-testid="search-result"]', { hasText: 'Jana Testova' }).first();
         await expect(result).toBeVisible({ timeout: 3000 });
-        await expect(result).toContainText('Jana Testova');
         await expect(result).toContainText('1001');
 
         await result.click();
@@ -63,10 +70,9 @@ test.describe('Card dashboard (staff /staff)', () => {
         // 70701001) match the unanchored '%1001%' search. Neither card_code
         // is a PREFIX match for '1001', so the query's ORDER BY falls
         // through to plain name ASC — 'AAA' sorts before 'Jana', so a blind
-        // `.first()` picks the WRONG card.
-        const result = page.locator('[data-testid="search-result"]').first();
+        // `.first()` would pick the WRONG card. Scoping by name is the fix.
+        const result = page.locator('[data-testid="search-result"]', { hasText: 'Jana Testova' }).first();
         await expect(result).toBeVisible({ timeout: 3000 });
-        await expect(result).toContainText('Jana Testova');
         await expect(result).toContainText('70701001');
 
         await result.click();
@@ -137,7 +143,10 @@ test.describe('Card dashboard (staff /staff)', () => {
         });
 
         await page.fill('input[type="search"]', '2002');
-        const result = page.locator('[data-testid="search-result"]').first();
+        // Scoped by name, not `.first()` — see the '1001' test above (#39
+        // collision class): the shared E2E DB can contain another card
+        // whose id also matches this unanchored substring search.
+        const result = page.locator('[data-testid="search-result"]', { hasText: 'Petr Vzorny' }).first();
         await expect(result).toBeVisible({ timeout: 3000 });
         await result.click();
 
