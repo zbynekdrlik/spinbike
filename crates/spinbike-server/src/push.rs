@@ -120,7 +120,6 @@ impl PushHandle {
             return Self { inner: None };
         }
 
-        use base64::Engine as _;
         let decoded = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(key_b64) {
             Ok(d) => d,
             Err(e) => {
