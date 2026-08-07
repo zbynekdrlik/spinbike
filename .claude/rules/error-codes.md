@@ -2,7 +2,7 @@
 paths:
   - "crates/spinbike-core/src/errors.rs"
   - "crates/spinbike-server/src/routes/**"
-  - "spinbike-ui/src/i18n.rs"
+  - "spinbike-ui/src/**"
 ---
 
 # Adding a new `ErrorCode` variant
@@ -40,12 +40,24 @@ ONE of them is covered by the workspace's local pre-push gate (#268).
    upstream before it ever reaches this lookup)? Either way it needs an
    explicit arm; there is no default case.
 
-3. `cargo fmt --all --check` run from EITHER the repo root OR
-   `spinbike-ui/` checks the SAME combined tree (both crates) — running it
-   twice per the CLAUDE.md instruction is about covering `spinbike-ui`'s
-   OWN `[workspace]` boundary for fmt, not two disjoint file sets; a
-   formatting issue anywhere in `crates/` will show up from either
-   directory.
+3. **CORRECTED (#293 — the claim below was WRONG, confirmed live):**
+   `cargo fmt --all --check` run from the repo root does **NOT** always
+   catch the same formatting issues as running it from `spinbike-ui/`.
+   `spinbike-ui` has its own top-level `[workspace]` and is excluded from
+   the root workspace, so its `cargo fmt` invocation resolves its OWN
+   `rustfmt.toml`/defaults independently of the root's. Observed directly:
+   a `use super::{a, b, c, d};` import line in
+   `spinbike-ui/src/components/install_prompt.rs` passed a root-level
+   `cargo fmt --all --check` clean, then FAILED CI's `Build WASM (UI)`
+   job (`cargo fmt --manifest-path spinbike-ui/Cargo.toml --all -- --check`)
+   with a line-wrap diff — reproduced locally by running `cargo fmt --all
+   --check` from INSIDE `spinbike-ui/` instead of the repo root, which
+   caught it immediately. **Always run `cargo fmt --all --check` from
+   BOTH the repo root AND from inside `spinbike-ui/` before pushing any
+   change that touches a file under `spinbike-ui/`** (CLAUDE.md's
+   "Pre-Push Checks" already says to run it in both places — that
+   instruction was right; this file's old explanation of WHY was wrong,
+   and downplayed it as redundant). One root-only check is not enough.
 
 ## `sqlx::query_as` tuple size — clippy `type_complexity`
 
