@@ -17,6 +17,7 @@ use spinbike_server::AppState;
 use spinbike_server::auth::{create_token, hash_password};
 use spinbike_server::db::{self, users};
 use spinbike_server::mail::MailHandle;
+use spinbike_server::push::{PushHandle, TEST_VAPID_PRIVATE_KEY_B64};
 use spinbike_server::routes;
 use sqlx::SqlitePool;
 use tokio::sync::broadcast;
@@ -204,6 +205,9 @@ impl TestApp {
             jwt_secret: JWT_SECRET.to_string(),
             ewelink,
             mail: mail.clone(),
+            // Always-enabled, deterministic test VAPID key — no env var to
+            // race on (unlike ewelink/mail's *_TEST_MODE), so no lock needed.
+            push: PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64),
             public_base_url: TEST_BASE_URL.to_string(),
             door_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 spinbike_server::routes::door::RateLimiter::new(),

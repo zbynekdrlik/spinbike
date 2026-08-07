@@ -1040,6 +1040,28 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         ("Posledne pohyby", "Recent activity"),
     );
     m.insert(
+        "push_enable_button",
+        ("Zapnut upozornenia", "Enable notifications"),
+    );
+    m.insert(
+        "push_on",
+        ("Upozornenia su zapnute", "Notifications are on"),
+    );
+    m.insert(
+        "push_blocked",
+        (
+            "Upozornenia su zablokovane v nastaveniach prehliadaca",
+            "Notifications are blocked in your browser settings",
+        ),
+    );
+    m.insert(
+        "push_error_generic",
+        (
+            "Nepodarilo sa zapnut upozornenia. Skus to znova.",
+            "Couldn't enable notifications. Try again.",
+        ),
+    );
+    m.insert(
         "admin_allow_self_entry",
         ("Povolit samoobsluzny vstup", "Allow self-entry"),
     );

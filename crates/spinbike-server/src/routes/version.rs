@@ -49,6 +49,7 @@ mod tests {
             jwt_secret: "test-jwt".to_string(),
             ewelink: crate::ewelink::EwelinkHandle::spawn(),
             mail: crate::mail::MailHandle::spawn(),
+            push: crate::push::PushHandle::spawn(),
             public_base_url: String::new(),
             door_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::routes::door::RateLimiter::new(),

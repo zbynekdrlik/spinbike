@@ -94,3 +94,45 @@ self.addEventListener('fetch', (event) => {
 
     event.respondWith(cacheFirst(event.request));
 });
+
+// PWA push notifications (#264) — low-credit / pass-expiring reminders sent
+// by the server's daily `jobs::notifications` tick. The payload is a small
+// JSON object `{ title, body }` (see `push.rs`'s `send()`); anything else
+// (missing data, malformed JSON) falls back to a generic title/body rather
+// than throwing — a malformed push must never leave the user with NO
+// notification and no clue why.
+self.addEventListener('push', (event) => {
+    let data = {};
+    try {
+        data = event.data ? event.data.json() : {};
+    } catch (e) {
+        data = {};
+    }
+    const title = data.title || 'SpinBike';
+    const options = {
+        body: data.body || '',
+        icon: '/icon-192.png',
+        badge: '/icon-192.png',
+    };
+    event.waitUntil(self.registration.showNotification(title, options));
+});
+
+// Clicking the notification focuses an already-open /my/balance tab if one
+// exists, otherwise opens a new one — never leaves a stray blank tab when
+// the app is already open.
+self.addEventListener('notificationclick', (event) => {
+    event.notification.close();
+    event.waitUntil(
+        clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+            for (const client of windowClients) {
+                if (client.url.includes('/my/balance') && 'focus' in client) {
+                    return client.focus();
+                }
+            }
+            if (clients.openWindow) {
+                return clients.openWindow('/my/balance');
+            }
+            return undefined;
+        })
+    );
+});

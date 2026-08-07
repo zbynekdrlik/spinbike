@@ -265,9 +265,15 @@ jobs:
           # (only invite echoes it; request-login-link never does, by
           # design — it always returns a uniform 200 to avoid leaking
           # whether an email exists) to drive the /welcome flow (#109).
+          # VAPID_PRIVATE_KEY: a well-known PUBLIC test fixture from the
+          # `web-push` crate's own test suite (not a secret — see
+          # crates/spinbike-server/src/push.rs's TEST_VAPID_PRIVATE_KEY_B64)
+          # — makes push.rs's PushHandle Active in CI so #264's
+          # push-notifications.spec.ts sees `/api/push/config` enabled.
           RUST_LOG=spinbike_server=info,spinbike=info \
             PORT=8099 DATABASE_PATH=/tmp/spinbike-e2e.db JWT_SECRET=ci-test \
             SPINBIKE_TEST_MODE=1 EWELINK_TEST_MODE=success SMTP_TEST_MODE=capture \
+            VAPID_PRIVATE_KEY=IQ9Ur0ykXoHS9gzfYX0aBjy9lvdrjx_PFUXmie9YRcY \
             ./target/release/spinbike-server > /tmp/spinbike-server.log 2>&1 &
 
       - name: Wait for server

@@ -94,6 +94,21 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "login_tokens: widen purpose CHECK to include 'install' + last_used_at/revoked_at columns",
         V22_INSTALL_TOKENS,
     ),
+    (
+        23,
+        "push notifications: subscriptions table + anti-spam notify log",
+        V23_PUSH_NOTIFICATIONS,
+    ),
+    (
+        24,
+        "push_notify_log: sent_count column (max-2-per-episode anti-spam)",
+        V24_PUSH_NOTIFY_LOG_SENT_COUNT,
+    ),
+    (
+        25,
+        "transactions: index on user_id (last_topup_amount + other existing per-user queries)",
+        V25_TRANSACTIONS_USER_ID_INDEX,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -934,6 +949,77 @@ DROP TABLE login_tokens;
 ALTER TABLE login_tokens_new RENAME TO login_tokens;
 
 CREATE INDEX IF NOT EXISTS idx_login_tokens_user ON login_tokens(user_id);
+"#;
+
+// V23: PWA push notifications (#264) — low-credit / pass-expiring reminders.
+//
+// Two brand-new tables, both plain `CREATE TABLE IF NOT EXISTS` — no rebuild
+// dance needed (that pattern is only for ALTERing an EXISTING table's CHECK
+// constraint; see the V8/V11/V16/V21/V22 rebuilds above).
+//
+//   - `push_subscriptions`: one row per browser subscription (a user may
+//     have several — multiple devices). `endpoint` is UNIQUE: a browser's
+//     PushManager endpoint identifies the subscription itself, so
+//     re-subscribing the SAME endpoint (e.g. re-clicking the button) is an
+//     upsert, not a duplicate row. `failure_count`/`last_error_at`/
+//     `last_success_at` are maintained by the daily send job — a 404/410
+//     from the push service means the subscription is gone and the row is
+//     DELETED outright (not just flagged), per the issue's own instruction
+//     ("otherwise dead endpoints accumulate forever").
+//   - `push_notify_log`: the anti-spam ledger, ONE row per (user, reason).
+//     `reason` is a fixed vocabulary (CHECK), not a free string, so a typo
+//     in job code can never silently create an untracked reason. The job
+//     DELETES a row the moment its condition clears (re-arm) and only
+//     INSERTs/UPDATEs `last_notified_at` after an actual successful send —
+//     see `jobs::notifications`.
+const V23_PUSH_NOTIFICATIONS: &str = r#"
+CREATE TABLE IF NOT EXISTS push_subscriptions (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id         INTEGER NOT NULL REFERENCES users(id),
+    endpoint        TEXT    NOT NULL UNIQUE,
+    p256dh          TEXT    NOT NULL,
+    auth            TEXT    NOT NULL,
+    created_at      TEXT    NOT NULL DEFAULT (datetime('now')),
+    last_success_at TEXT,
+    last_error_at   TEXT,
+    failure_count   INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_push_subscriptions_user ON push_subscriptions(user_id);
+
+CREATE TABLE IF NOT EXISTS push_notify_log (
+    user_id          INTEGER NOT NULL REFERENCES users(id),
+    reason           TEXT    NOT NULL CHECK (reason IN ('low_credit', 'pass_expiring')),
+    last_notified_at TEXT    NOT NULL,
+    PRIMARY KEY (user_id, reason)
+);
+"#;
+
+// V24 (#264 follow-up, owner decision 2026-08-08): the "max 2 notifications
+// per episode, then silence until the condition clears" anti-spam rule
+// needs a per-(user, reason) counter alongside `last_notified_at` — a
+// plain additive `ALTER TABLE ADD COLUMN` with a constant DEFAULT, which
+// SQLite supports natively (no rebuild dance — that pattern is only for
+// adding/widening a CHECK constraint, not a new column). `push_notify_log`
+// has no dependent view/trigger either way. Incremental rather than
+// editing V23 directly: V23 already shipped on `dev` (`db-migrations.md` /
+// `.claude/rules` convention treats a pushed migration as immutable, this
+// being a production project).
+const V24_PUSH_NOTIFY_LOG_SENT_COUNT: &str = r#"
+ALTER TABLE push_notify_log ADD COLUMN sent_count INTEGER NOT NULL DEFAULT 0;
+"#;
+
+// V25 (#264 review finding): `db::push::last_topup_amount` runs a
+// `WHERE user_id = ?` scan against `transactions` once per customer, every
+// day (the daily notifications job) — with no index, that's a full-table
+// scan per customer per day. `transactions` had NO index on `user_id` at
+// all before this (a pre-existing gap the review surfaced while looking at
+// this new query — several OTHER existing queries, e.g. `my_balance.rs`'s
+// recent-transactions list and `routes/users.rs`'s `topped_up` aggregate,
+// filter the same column and benefit equally). Plain additive index, no
+// rebuild dance needed.
+const V25_TRANSACTIONS_USER_ID_INDEX: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
 "#;
 
 #[cfg(test)]
@@ -3397,5 +3483,161 @@ mod tests {
         .execute(&pool)
         .await
         .expect("purpose='install' must be accepted after the genuine V22 upgrade");
+    }
+
+    // ── V23: push_subscriptions + push_notify_log (#264) ───────────────────
+
+    #[tokio::test]
+    async fn v23_creates_push_subscriptions_and_notify_log_tables() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v23@x', 'V23', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
+             VALUES (?, 'https://push.example/abc', 'p256dh-key', 'auth-secret')",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .expect("push_subscriptions insert must succeed after V23");
+
+        sqlx::query(
+            "INSERT INTO push_notify_log (user_id, reason, last_notified_at)
+             VALUES (?, 'low_credit', datetime('now'))",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .expect("push_notify_log insert must succeed after V23");
+    }
+
+    #[tokio::test]
+    async fn v23_push_notify_log_rejects_unknown_reason() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v23-reason@x', 'V23', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let result = sqlx::query(
+            "INSERT INTO push_notify_log (user_id, reason, last_notified_at)
+             VALUES (?, 'bogus_reason', datetime('now'))",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await;
+
+        assert!(
+            result.is_err(),
+            "the CHECK constraint must reject a reason outside ('low_credit', 'pass_expiring')"
+        );
+    }
+
+    #[tokio::test]
+    async fn v23_push_subscriptions_endpoint_is_unique() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v23-uniq@x', 'V23', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
+             VALUES (?, 'https://push.example/dup', 'k1', 'a1')",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = sqlx::query(
+            "INSERT INTO push_subscriptions (user_id, endpoint, p256dh, auth)
+             VALUES (?, 'https://push.example/dup', 'k2', 'a2')",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await;
+
+        assert!(
+            result.is_err(),
+            "endpoint must be UNIQUE across push_subscriptions"
+        );
+    }
+
+    #[tokio::test]
+    async fn v23_is_idempotent() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        run_migrations(&pool)
+            .await
+            .expect("re-running migrations must be a no-op, not an error");
+    }
+
+    // ── V24: push_notify_log.sent_count (#264 follow-up) ────────────────────
+
+    #[tokio::test]
+    async fn v24_adds_sent_count_column_defaulting_to_zero() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v24@x', 'V24', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO push_notify_log (user_id, reason, last_notified_at)
+             VALUES (?, 'low_credit', datetime('now'))",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .expect("insert must succeed without specifying sent_count (DEFAULT 0)");
+
+        let sent_count: i64 = sqlx::query_scalar(
+            "SELECT sent_count FROM push_notify_log WHERE user_id = ? AND reason = 'low_credit'",
+        )
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(sent_count, 0, "sent_count must default to 0");
+    }
+
+    // ── V25: transactions(user_id) index (#264 review finding) ─────────────
+
+    #[tokio::test]
+    async fn v25_creates_the_transactions_user_id_index() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let name: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_transactions_user_id'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            name.as_deref(),
+            Some("idx_transactions_user_id"),
+            "V25 must create the index"
+        );
     }
 }
