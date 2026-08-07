@@ -13,6 +13,7 @@ use axum::{
 use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation};
 use spinbike_core::auth::{Claims, Role};
 use spinbike_core::errors::ErrorCode;
+use sqlx::SqlitePool;
 
 use crate::AppState;
 use crate::error::ApiError;
@@ -89,6 +90,58 @@ pub fn validate_token(secret: &str, token: &str) -> Result<Claims> {
     )
     .context("Invalid token")?;
     Ok(data.claims)
+}
+
+/// Reject a stale session: missing (hard-deleted/bogus `sub`), soft-deleted
+/// (`deleted_at` set), or `blocked` → `401 SessionInvalid`. A live,
+/// non-blocked row is `Ok(())`.
+///
+/// Call this immediately after extracting `AuthUser` in any handler that
+/// acts on the CALLER's own account (booking/cancelling/listing their own
+/// bookings, self-editing their own profile, etc.) — the same contract
+/// `/api/my/balance` (#268) and `/api/door/open` (#274) already hand-roll
+/// inline. #277 factors it out here instead of a fourth/fifth hand-rolled
+/// copy in `classes.rs`/`users.rs`; see
+/// `.claude/rules/session-invalidation.md` for the full contract and why
+/// this stays a per-handler call rather than moving into the `AuthUser`
+/// extractor itself (deliberately NOT applied to every authenticated
+/// endpoint here — see the #277 design comment on the issue for the
+/// blast-radius reasoning).
+///
+/// Deliberately NOT filtered by `deleted_at IS NULL` in the query — a
+/// soft-deleted row must still be FETCHED so it is rejected with the same
+/// 401 as a missing row, instead of silently falling into the "no row"
+/// branch with no way to tell the two apart (the exact #268 trap).
+pub async fn require_live_session(pool: &SqlitePool, user_id: i64) -> Result<(), ApiError> {
+    let row: Option<(i64, Option<String>)> =
+        sqlx::query_as("SELECT blocked, deleted_at FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await
+            .map_err(|e| {
+                tracing::error!("require_live_session: db error: {e}");
+                ApiError::Internal
+            })?;
+
+    match row {
+        Some((blocked, deleted_at)) if blocked == 0 && deleted_at.is_none() => Ok(()),
+        Some((blocked, deleted_at)) => {
+            tracing::warn!(
+                user_id,
+                blocked = blocked != 0,
+                deleted = deleted_at.is_some(),
+                "require_live_session: session invalid — blocked or deleted user"
+            );
+            Err(ApiError::Unauthorized(ErrorCode::SessionInvalid))
+        }
+        None => {
+            tracing::warn!(
+                user_id,
+                "require_live_session: session invalid — user no longer exists"
+            );
+            Err(ApiError::Unauthorized(ErrorCode::SessionInvalid))
+        }
+    }
 }
 
 /// Parse a DB role string into a `Role` for the AUTH/session-TTL path.

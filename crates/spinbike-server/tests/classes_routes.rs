@@ -210,6 +210,226 @@ async fn cancel_missing_booking_is_404() {
     assert_eq!(status, axum::http::StatusCode::NOT_FOUND);
 }
 
+// ─── #277 — create_booking/cancel_booking/my_bookings must reject a dead
+// caller session (missing/soft-deleted/blocked) with 401 session_invalid,
+// same contract #268 established for /api/my/balance and #274 for
+// /api/door/open. Before this fix: blocked/soft-deleted got 201/204/200
+// (booked/cancelled/listed as normal), and a missing user hit a bare
+// FK-violation 500 on create_booking instead of any typed error.
+// ────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn create_booking_blocked_user_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    let (tid, date) = seed_monday_template(&app).await;
+    spinbike_server::db::users::set_blocked(&app.pool, app.customer_id, true)
+        .await
+        .unwrap();
+
+    let body = serde_json::json!({ "template_id": tid, "date": date });
+    let (status, resp) = app
+        .request(post_json("/api/bookings", &app.customer_token, &body))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "blocked customer's session must be invalidated (401), not allowed to book — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+
+    let n: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM bookings WHERE template_id = ? AND date = ? AND user_id = ?",
+    )
+    .bind(tid)
+    .bind(&date)
+    .bind(app.customer_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(n, 0, "blocked user must not get a booking row");
+}
+
+#[tokio::test]
+async fn create_booking_soft_deleted_user_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    let (tid, date) = seed_monday_template(&app).await;
+    spinbike_server::db::users::delete_user(&app.pool, app.customer_id)
+        .await
+        .unwrap();
+
+    let body = serde_json::json!({ "template_id": tid, "date": date });
+    let (status, resp) = app
+        .request(post_json("/api/bookings", &app.customer_token, &body))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "soft-deleted customer's session must be invalidated (401) — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
+#[tokio::test]
+async fn create_booking_missing_user_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    let (tid, date) = seed_monday_template(&app).await;
+    let ghost_token = spinbike_server::auth::create_token(
+        helpers::JWT_SECRET,
+        999_999_999,
+        "ghost@test.com",
+        &spinbike_core::auth::Role::Customer,
+    )
+    .unwrap();
+
+    let body = serde_json::json!({ "template_id": tid, "date": date });
+    let (status, resp) = app
+        .request(post_json("/api/bookings", &ghost_token, &body))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "missing user must be 401, not a bare FK-violation 500 — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
+#[tokio::test]
+async fn cancel_booking_blocked_user_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    let (tid, date) = seed_monday_template(&app).await;
+    let body = serde_json::json!({ "template_id": tid, "date": date });
+    let (_, resp) = app
+        .request(post_json("/api/bookings", &app.customer_token, &body))
+        .await;
+    let booking_id = resp["id"].as_i64().unwrap();
+
+    spinbike_server::db::users::set_blocked(&app.pool, app.customer_id, true)
+        .await
+        .unwrap();
+
+    let uri = format!("/api/bookings/{booking_id}");
+    let (status, resp) = app.request(delete(&uri, &app.customer_token)).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "blocked customer's session must be invalidated (401), not merely \
+         allowed to cancel — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+
+    let n: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM bookings WHERE id = ? AND cancelled_at IS NULL")
+            .bind(booking_id)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(n, 1, "the booking must remain uncancelled");
+}
+
+#[tokio::test]
+async fn cancel_booking_soft_deleted_user_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    let (tid, date) = seed_monday_template(&app).await;
+    let body = serde_json::json!({ "template_id": tid, "date": date });
+    let (_, resp) = app
+        .request(post_json("/api/bookings", &app.customer_token, &body))
+        .await;
+    let booking_id = resp["id"].as_i64().unwrap();
+
+    spinbike_server::db::users::delete_user(&app.pool, app.customer_id)
+        .await
+        .unwrap();
+
+    let uri = format!("/api/bookings/{booking_id}");
+    let (status, resp) = app.request(delete(&uri, &app.customer_token)).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "soft-deleted customer's session must be invalidated (401) — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
+#[tokio::test]
+async fn cancel_booking_missing_user_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    let ghost_token = spinbike_server::auth::create_token(
+        helpers::JWT_SECRET,
+        999_999_999,
+        "ghost@test.com",
+        &spinbike_core::auth::Role::Customer,
+    )
+    .unwrap();
+
+    // The session check must reject BEFORE the booking lookup even runs —
+    // the booking id below doesn't need to exist.
+    let (status, resp) = app
+        .request(delete("/api/bookings/999999", &ghost_token))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "missing user must be 401, not 404 — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
+#[tokio::test]
+async fn my_bookings_blocked_user_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    spinbike_server::db::users::set_blocked(&app.pool, app.customer_id, true)
+        .await
+        .unwrap();
+
+    let (status, resp) = app
+        .request(get("/api/my/bookings", &app.customer_token))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "blocked user must be 401 — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
+#[tokio::test]
+async fn my_bookings_soft_deleted_user_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    spinbike_server::db::users::delete_user(&app.pool, app.customer_id)
+        .await
+        .unwrap();
+
+    let (status, resp) = app
+        .request(get("/api/my/bookings", &app.customer_token))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "soft-deleted user must be 401 — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
+#[tokio::test]
+async fn my_bookings_missing_user_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    let ghost_token = spinbike_server::auth::create_token(
+        helpers::JWT_SECRET,
+        999_999_999,
+        "ghost@test.com",
+        &spinbike_core::auth::Role::Customer,
+    )
+    .unwrap();
+
+    let (status, resp) = app.request(get("/api/my/bookings", &ghost_token)).await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "missing user must be 401 — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
 #[tokio::test]
 async fn list_classes_returns_persistent_source_for_customer_auto_booking() {
     let app = TestApp::new().await;

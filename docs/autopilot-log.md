@@ -3,6 +3,49 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-08-07 — #274: door/open 401 session_invalid for missing/deleted/blocked user (dev.123)
+
+- **Why:** filed as a review finding on #268/#273 — `/api/door/open` has its
+  own user-lookup precondition, separate from `/api/my/balance`, and #268
+  scoped itself to `my_balance.rs` only. STEP 0 re-confirmed live against
+  prod BEFORE implementing (synthetic rows 616-619 + self-minted JWTs,
+  `http://127.0.0.1:8080`, all cleaned up after): soft-deleted, blocked, and
+  a bogus `sub` all returned 403 (`not_allowed`/`blocked`); the live
+  `allow_self_entry=0` case correctly returned 403 and had to stay that way.
+- **Root cause:** the precondition SELECT filtered `deleted_at IS NULL` (a
+  soft-deleted row silently fell into the "missing row" branch) and both the
+  missing-row and blocked branches hand-built a `403
+  {"status":"rejected","reason":...}` tuple instead of going through the
+  shared `ApiError` type — so a dead JWT never triggered the client's
+  existing 401-clears-session handling (`door_button.rs`'s `post_door_open`
+  already special-cased 401, it was just unreachable).
+- **Fix:** dropped the `deleted_at IS NULL` filter, fetched `deleted_at`
+  alongside `blocked`, folded missing-row + `blocked || deleted_at.is_some()`
+  into one `Err(ApiError::Unauthorized(ErrorCode::SessionInvalid))` — checked
+  in the same place (before the `allow_self_entry` role-bypass logic) the old
+  standalone blocked check sat, preserving the `#106` invariant. Reused the
+  existing `ErrorCode::SessionInvalid` — no new `ErrorCode` variant needed.
+- **RED→GREEN:** `2370251` [red] — 2 new tests (missing user, soft-deleted
+  user) + updated the 3 existing `#106` blocked-user tests to the new 401
+  contract (justified in that same commit — the old 403 assertions tested
+  the exact status code this fix intentionally changes) → `b850a54` [green]
+  — the `door.rs` fix, makes all 5 pass.
+- **Review follow-up (`96f9bd4`):** the deep `requesting-code-review` pass
+  (0 Critical, 0 Important) flagged two logically-redundant-but-untested
+  branch combinations — blocked customer with `allow_self_entry` at its
+  default 0, and a customer both blocked AND soft-deleted at once. Added
+  both as pure coverage (not a RED/GREEN pair — the code already passed).
+- **PR [#280](https://github.com/zbynekdrlik/spinbike/pull/280)** (Closes
+  #274), merged `dfba2fc`. Main CI green incl. Deploy (prod) + Smoke (prod).
+- **Verified LIVE on `https://spinbike.sk` (v0.15.0-dev.123 — DOM matches,
+  SW unregistered + `spinbike-v3` cache cleared first, 0 console errors):**
+  re-ran the full STEP-0 matrix against the deployed build with a fresh set
+  of synthetic rows (620-623) — missing/soft-deleted/blocked all now return
+  `401 {"error_code":"session_invalid"}`; the live `allow_self_entry=0` case
+  is unchanged at `403 not_allowed`; the live `allow_self_entry=1` happy path
+  is unchanged at `200 opened`. All synthetic `users`/`transactions` rows and
+  JWT-secret scratch files deleted after (verified 0 remaining both runs).
+
 ## 2026-08-06 — #261: round-5 belt-and-braces iOS install auto-login (dev.118)
 
 - **Why:** round 4 (#258, dev.113) shipped the whole feature on ONE undocumented iOS behavior (re-reading a runtime-swapped `<link rel="manifest">` at "Add to Home Screen" time) plus a 24h single-use credential — and it never worked. Prod evidence re-confirmed at STEP 0 of this ticket: `install-token: minted user_id=465` logged TWICE (no re-entrancy guard), both `login_tokens` rows `purpose='login'`, `expires_at` 24h out, `used_at` still NULL, no `token-login` line ever followed — the launch URL was never opened.

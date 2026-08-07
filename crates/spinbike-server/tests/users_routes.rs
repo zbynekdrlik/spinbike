@@ -1441,3 +1441,115 @@ async fn staff_can_set_own_password() {
         .await;
     assert_eq!(login_status, axum::http::StatusCode::OK);
 }
+
+// ─── #277 — update_user self-edit must reject a dead caller session
+// (missing/soft-deleted/blocked) with 401 session_invalid, same contract
+// #268 established for /api/my/balance. Before this fix: a blocked caller's
+// self-edit succeeded (200), and a soft-deleted caller got 404
+// user_not_found (the exact wrong shape #268 already ruled out). A STAFF
+// caller editing ANOTHER (non-self) user's row is untouched by this check —
+// session-invalidation is about the CALLER's own session, orthogonal to the
+// existing "soft-deleted target rows are invariant-frozen" 404 below.
+// ────────────────────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn update_user_self_edit_blocked_caller_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    spinbike_server::db::users::set_blocked(&app.pool, app.customer_id, true)
+        .await
+        .unwrap();
+
+    let body = serde_json::json!({"name": "Should Not Apply"});
+    let (status, resp) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.customer_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "blocked caller's self-edit must be invalidated (401), not applied — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+
+    let stored_name: String = sqlx::query_scalar("SELECT name FROM users WHERE id = ?")
+        .bind(app.customer_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_ne!(
+        stored_name, "Should Not Apply",
+        "the edit must not have been applied"
+    );
+}
+
+#[tokio::test]
+async fn update_user_self_edit_soft_deleted_caller_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    spinbike_server::db::users::delete_user(&app.pool, app.customer_id)
+        .await
+        .unwrap();
+
+    let body = serde_json::json!({"name": "Should Not Apply"});
+    let (status, resp) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.customer_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "soft-deleted caller's self-edit must be 401, not 404 — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
+#[tokio::test]
+async fn update_user_self_edit_missing_caller_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    let ghost_id = 999_999_999;
+    let ghost_token = spinbike_server::auth::create_token(
+        helpers::JWT_SECRET,
+        ghost_id,
+        "ghost@test.com",
+        &spinbike_core::auth::Role::Customer,
+    )
+    .unwrap();
+
+    let body = serde_json::json!({"name": "Should Not Apply"});
+    let (status, resp) = app
+        .request(put_json(
+            &format!("/api/users/{ghost_id}"),
+            &ghost_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "missing caller must be 401, not 404 — got {resp}"
+    );
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
+/// Positive control (#277): a LIVE, non-blocked customer must still be able
+/// to self-edit — a 401 everywhere would not be a fix, it would just be a
+/// different bug.
+#[tokio::test]
+async fn update_user_self_edit_live_customer_still_succeeds() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({"name": "Still Works"});
+    let (status, resp) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.customer_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "got {resp}");
+    assert_eq!(resp["name"].as_str().unwrap(), "Still Works");
+}

@@ -8,7 +8,7 @@ use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 use crate::AppState;
-use crate::auth::{AuthUser, OptionalAuthUser, StaffUser};
+use crate::auth::{AuthUser, OptionalAuthUser, StaffUser, require_live_session};
 use crate::db::classes as db;
 use crate::error::ApiError;
 use crate::routes::internal_error;
@@ -208,6 +208,13 @@ async fn create_booking(
     AuthUser(claims): AuthUser,
     Json(body): Json<BookingRequest>,
 ) -> Result<(StatusCode, Json<BookingResponse>), ApiError> {
+    // #277: a dead caller session (missing/soft-deleted/blocked) must never
+    // be able to book — checked first, before any other logic, same
+    // placement as door.rs's session-invalid gate. This also fixes the
+    // FK-violation 500 a missing `sub` used to hit on the `bookings` INSERT
+    // below (no row → 401 now, never reaches the insert at all).
+    require_live_session(&state.pool, claims.sub).await?;
+
     // Determine who the booking is for. Precedence:
     //   1. explicit body.user_id
     //   2. fall back to the caller (customer self-booking)
@@ -290,6 +297,11 @@ async fn cancel_booking(
     AuthUser(claims): AuthUser,
     Path(booking_id): Path<i64>,
 ) -> Result<StatusCode, ApiError> {
+    // #277: reject a dead caller session before even looking up the
+    // booking — a blocked/deleted/missing session must get 401 regardless
+    // of which booking id it names.
+    require_live_session(&state.pool, claims.sub).await?;
+
     // Get the booking to check ownership.
     let booking = sqlx::query_as::<_, db::BookingRow>(
         "SELECT id, template_id, date, user_id, created_by, source, created_at, cancelled_at
@@ -336,6 +348,10 @@ async fn my_bookings(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<Vec<MyBookingResponse>>, ApiError> {
+    // #277: a dead session must never see its own (still-listed) bookings —
+    // reject before the read.
+    require_live_session(&state.pool, claims.sub).await?;
+
     let bookings = db::list_user_bookings(&state.pool, claims.sub)
         .await
         .map_err(internal_error)?;

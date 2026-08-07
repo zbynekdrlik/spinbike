@@ -12,7 +12,7 @@ use spinbike_core::services::CLASS_VISIT_NAMES_EN;
 use spinbike_core::stats::{MonthlyBucket, PeriodAgg, PeriodTotals, StatsResponse};
 
 use crate::AppState;
-use crate::auth::{AuthUser, StaffUser};
+use crate::auth::{AuthUser, StaffUser, require_live_session};
 use crate::db::transactions::NOTE_MAX_CHARS;
 use crate::db::{transactions, users as db};
 use crate::error::ApiError;
@@ -572,6 +572,13 @@ async fn update_user(
     // permissions for editing OTHER users.
     let is_self = claims.sub == id;
     let is_staff_or_admin = claims.role.can_manage_cards();
+
+    // Audit line FIRST, before any rejection — including the #277 session
+    // check right below. Comprehensive-logging discipline: what a caller
+    // (even one about to be rejected) ATTEMPTED to change is exactly the
+    // security-relevant trace a dead-session self-edit attempt should still
+    // leave; require_live_session's own tracing::warn! below carries the
+    // rejection reason but no field-level detail.
     tracing::info!(
         caller_id = claims.sub,
         caller_role = ?claims.role,
@@ -585,6 +592,19 @@ async fn update_user(
         has_password = body.password.is_some(),
         "PUT /api/users/{id}: update request"
     );
+
+    // #277: a self-edit from a dead CALLER session (missing/soft-deleted/
+    // blocked) must be 401 session_invalid — not fall through to whatever
+    // the mutation logic below would otherwise do (previously 404
+    // user_not_found for a soft-deleted caller, or a silently-applied edit
+    // for a blocked caller). Staff/admin editing ANOTHER user's row is
+    // unaffected: session-invalidation is about the CALLER's own session,
+    // orthogonal to the "soft-deleted TARGET rows are invariant-frozen" 404
+    // below (#56), which stays exactly as-is for that case.
+    if is_self {
+        require_live_session(&state.pool, claims.sub).await?;
+    }
+
     if !is_staff_or_admin && !is_self {
         return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
