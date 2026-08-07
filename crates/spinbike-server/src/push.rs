@@ -16,11 +16,19 @@
 //! automatically by the crate whenever a payload is set — see `send()`)
 //! plus our own `TTL`/`Content-Encoding` headers.
 
+use std::time::Duration;
+
 use base64::Engine as _;
 use web_push::{
     ContentEncoding, PartialVapidSignatureBuilder, SubscriptionInfo, VapidSignatureBuilder,
     WebPushMessageBuilder,
 };
+
+/// Per-send HTTP timeout (#264 review finding) — the daily job sends
+/// sequentially (see `jobs::notifications::evaluate_reason`), so a hung
+/// push-service connection with no timeout would stall every OTHER
+/// customer's notification behind it.
+const SEND_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A well-known, PUBLIC test fixture from the `web-push` crate's own test
 /// suite (`PRIVATE_BASE64` in its `vapid::builder` tests) — NOT a secret,
@@ -92,19 +100,42 @@ impl PushHandle {
     /// construct a handle deterministically without mutating process-wide
     /// env state (see `TEST_VAPID_PRIVATE_KEY_B64`).
     ///
-    /// The empty-string case is checked HERE explicitly (not just left to
-    /// the crate) — an empty key decodes to a zero-length byte slice, and
-    /// `web_push`'s `ES256KeyPair::from_bytes` (via `jwt-simple`) PANICS on
-    /// that specific length rather than returning its usual `Result::Err`
-    /// (confirmed live: CI's `Test` job crashed inside
-    /// `generic-array-0.14.7`'s length assertion, not a graceful
-    /// `WebPushError`). Any OTHER malformed-but-non-empty string (wrong
-    /// length, invalid chars) does return `Err` normally — only the empty
-    /// case needs this guard.
+    /// **The exact-32-byte length is checked HERE, ourselves, before ever
+    /// calling into the crate — this is NOT just the empty-string case.**
+    /// `VapidSignatureBuilder::from_base64_no_sub` decodes the base64 then
+    /// calls `ES256KeyPair::from_bytes`, which (via `jwt-simple` 0.12.17 /
+    /// `generic-array` 0.14.7, the pinned versions) PANICS on ANY
+    /// non-32-byte input via `generic-array`'s internal length assertion —
+    /// it does NOT return `Result::Err` for a wrong-length key the way it
+    /// does for genuinely invalid base64 characters. Left unguarded,
+    /// `spawn()` (which runs unguarded at server startup) would crash the
+    /// WHOLE process the moment an operator pastes a wrong-length
+    /// `VAPID_PRIVATE_KEY`. So: decode the base64 ourselves, verify the
+    /// byte count is exactly 32 (a P-256 private scalar), and only THEN
+    /// hand the same string to the crate — by that point its internal
+    /// re-decode is guaranteed to produce exactly 32 bytes, so its own
+    /// `from_bytes` call can never hit the panicking path.
     pub fn from_base64_private_key(key_b64: &str) -> Self {
         if key_b64.is_empty() {
             return Self { inner: None };
         }
+
+        use base64::Engine as _;
+        let decoded = match base64::engine::general_purpose::URL_SAFE_NO_PAD.decode(key_b64) {
+            Ok(d) => d,
+            Err(e) => {
+                tracing::error!("push: disabled — VAPID_PRIVATE_KEY invalid base64: {e}");
+                return Self { inner: None };
+            }
+        };
+        if decoded.len() != 32 {
+            tracing::error!(
+                len = decoded.len(),
+                "push: disabled — VAPID_PRIVATE_KEY must decode to exactly 32 bytes (a P-256 private scalar)"
+            );
+            return Self { inner: None };
+        }
+
         let vapid = match VapidSignatureBuilder::from_base64_no_sub(key_b64) {
             Ok(b) => b,
             Err(e) => {
@@ -114,11 +145,24 @@ impl PushHandle {
         };
         let public_key_b64 =
             base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(vapid.get_public_key());
+
+        // Explicit timeout (#264 review finding): without one, one stalled
+        // push-service endpoint could hang the whole daily job — every
+        // OTHER customer's notification waits behind it, since the job
+        // sends sequentially (see `jobs::notifications::evaluate_reason`).
+        let http = match reqwest::Client::builder().timeout(SEND_TIMEOUT).build() {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!("push: disabled — could not build HTTP client: {e}");
+                return Self { inner: None };
+            }
+        };
+
         Self {
             inner: Some(std::sync::Arc::new(Inner {
                 vapid,
                 public_key_b64,
-                http: reqwest::Client::new(),
+                http,
             })),
         }
     }
@@ -242,6 +286,19 @@ mod tests {
     #[test]
     fn from_base64_private_key_with_garbage_is_disabled() {
         let handle = PushHandle::from_base64_private_key("not-a-valid-vapid-key");
+        assert!(handle.public_key().is_none());
+    }
+
+    /// A VALID base64url string that decodes to 16 bytes, not 32 — the
+    /// exact shape that used to PANIC inside `generic-array` instead of
+    /// returning Disabled (#264 review finding). Must be rejected
+    /// gracefully, never crash the process.
+    #[test]
+    fn from_base64_private_key_with_valid_base64_but_wrong_length_is_disabled() {
+        // base64url(no padding) of 16 zero bytes — decodes cleanly, just
+        // not to the required 32.
+        let wrong_length_key = "AAAAAAAAAAAAAAAAAAAAAA";
+        let handle = PushHandle::from_base64_private_key(wrong_length_key);
         assert!(handle.public_key().is_none());
     }
 

@@ -69,6 +69,20 @@ pub const NOTIFY_COOLDOWN_DAYS: i64 = 7;
 /// customer who never comes back.
 pub const MAX_NOTIFICATIONS_PER_EPISODE: i64 = 2;
 
+/// After this many CONSECUTIVE send failures (429/5xx/malformed-payload —
+/// any non-Sent, non-Gone outcome), prune the subscription outright rather
+/// than retrying it forever (#264 review finding — only 404/410 pruned
+/// before this). The job runs daily, so 10 is roughly 10 days of grace for
+/// a genuinely transient issue to self-resolve before giving up.
+pub const MAX_CONSECUTIVE_FAILURES: i64 = 10;
+
+/// Wall-clock hour (Europe/Bratislava, 0..=23) the daily job is aligned to
+/// (#264 review finding — see `util::duration_until_next_bratislava_hour`,
+/// which `bin/server.rs` uses to schedule this). Mid-morning: late enough
+/// that a customer is normally awake, early enough to act on it before the
+/// gym's own opening hours.
+pub const DAILY_RUN_HOUR: u32 = 9;
+
 /// Bundles the three things every per-user evaluation needs regardless of
 /// reason — purely to keep `evaluate_reason`'s arg count under clippy's
 /// `too_many_arguments` limit (8 positional args tripped it); no behavior
@@ -108,12 +122,33 @@ pub async fn tick_as_of(pool: &SqlitePool, push: &PushHandle, today: NaiveDate) 
     .await?;
 
     for (user_id, credit) in credit_rows {
-        let last_topup = db::push::last_topup_amount(pool, user_id).await?;
+        // A single row's DB error must NOT abort the whole batch (#264
+        // review finding) — log and move on to the next customer instead
+        // of propagating with `?`, which would silently skip every
+        // REMAINING user for the rest of this tick.
+        let last_topup = match db::push::last_topup_amount(pool, user_id).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(
+                    user_id,
+                    error = %e,
+                    "push: low_credit — failed to read last top-up, skipping this user"
+                );
+                continue;
+            }
+        };
         let condition = credit <= LOW_CREDIT_THRESHOLD_EUR
             && last_topup.is_some_and(|t| t >= MIN_LAST_TOPUP_EUR);
+        tracing::debug!(
+            user_id,
+            credit = %format!("{credit:.2}"),
+            last_topup = %last_topup.map(|t| format!("{t:.2}")).unwrap_or_else(|| "none".to_string()),
+            condition,
+            "push: low_credit evaluation"
+        );
         let title = "Dochadza ti kredit";
         let body = format!("Tvoj zostatok je {credit:.2} EUR. Doplat si kredit na recepcii.");
-        if evaluate_reason(
+        match evaluate_reason(
             &ctx,
             user_id,
             db::push::REASON_LOW_CREDIT,
@@ -121,9 +156,21 @@ pub async fn tick_as_of(pool: &SqlitePool, push: &PushHandle, today: NaiveDate) 
             title,
             &body,
         )
-        .await?
+        .await
         {
-            sent += 1;
+            Ok(true) => {
+                tracing::info!(user_id, reason = "low_credit", "push: notified");
+                sent += 1;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::error!(
+                    user_id,
+                    reason = "low_credit",
+                    error = %e,
+                    "push: evaluation failed, skipping this user"
+                );
+            }
         }
     }
 
@@ -171,7 +218,16 @@ pub async fn tick_as_of(pool: &SqlitePool, push: &PushHandle, today: NaiveDate) 
             None => (String::new(), String::new()),
         };
 
-        if evaluate_reason(
+        tracing::debug!(
+            user_id,
+            valid_until = %valid_until.as_deref().unwrap_or("none"),
+            condition,
+            "push: pass_expiring evaluation"
+        );
+
+        // Same "log and continue, never abort the batch" discipline as the
+        // low_credit loop above (#264 review finding).
+        match evaluate_reason(
             &ctx,
             user_id,
             db::push::REASON_PASS_EXPIRING,
@@ -179,12 +235,25 @@ pub async fn tick_as_of(pool: &SqlitePool, push: &PushHandle, today: NaiveDate) 
             &title,
             &body,
         )
-        .await?
+        .await
         {
-            sent += 1;
+            Ok(true) => {
+                tracing::info!(user_id, reason = "pass_expiring", "push: notified");
+                sent += 1;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                tracing::error!(
+                    user_id,
+                    reason = "pass_expiring",
+                    error = %e,
+                    "push: evaluation failed, skipping this user"
+                );
+            }
         }
     }
 
+    tracing::info!(sent, "push: daily tick complete");
     Ok(sent)
 }
 
@@ -249,7 +318,20 @@ async fn evaluate_reason(
                 db::push::prune_subscription(pool, sub.id).await?;
             }
             SendOutcome::RateLimited | SendOutcome::Retryable | SendOutcome::Failed => {
-                db::push::record_send_failure(pool, sub.id).await?;
+                let failure_count = db::push::record_send_failure(pool, sub.id).await?;
+                if failure_count >= MAX_CONSECUTIVE_FAILURES {
+                    // A malformed p256dh/auth yields SendOutcome::Failed
+                    // forever, but pruning was previously wired only to
+                    // Gone (404/410) — a permanently-broken subscription
+                    // would be retried indefinitely (#264 review finding).
+                    tracing::warn!(
+                        user_id,
+                        subscription_id = sub.id,
+                        failure_count,
+                        "push: pruning subscription after repeated send failures"
+                    );
+                    db::push::prune_subscription(pool, sub.id).await?;
+                }
             }
         }
     }
@@ -775,6 +857,45 @@ mod tests {
                 .unwrap()
                 .is_none(),
             "a pruned/failed send must NOT stamp the ledger — retry tomorrow once resubscribed"
+        );
+    }
+
+    /// A subscription that keeps failing (429/5xx/malformed data — never a
+    /// 404/410 `Gone`) must eventually be pruned too, not retried forever
+    /// (#264 review finding). A failed send never stamps the notify
+    /// ledger, so the SAME (user, reason) is re-evaluated — and the
+    /// subscription re-attempted — on every tick with no cooldown in the
+    /// way, letting repeated `tick_as_of` calls simulate consecutive
+    /// failures directly.
+    #[tokio::test]
+    async fn repeated_failures_eventually_prune_the_subscription() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST);
+                then.status(500);
+            })
+            .await;
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+
+        let uid = seed_customer(&pool, "failing@x", 1.0).await;
+        seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
+        seed_topup(&pool, uid, 20.0).await;
+
+        for _ in 0..(MAX_CONSECUTIVE_FAILURES - 1) {
+            tick_as_of(&pool, &push, test_today()).await.unwrap();
+        }
+        assert!(
+            db::push::has_subscription(&pool, uid).await.unwrap(),
+            "must not prune before reaching the threshold"
+        );
+
+        tick_as_of(&pool, &push, test_today()).await.unwrap();
+        assert!(
+            !db::push::has_subscription(&pool, uid).await.unwrap(),
+            "must prune once failure_count reaches MAX_CONSECUTIVE_FAILURES"
         );
     }
 

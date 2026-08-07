@@ -113,20 +113,24 @@ pub async fn record_send_success(pool: &SqlitePool, id: i64) -> Result<()> {
     Ok(())
 }
 
-/// Non-fatal send failure (429/5xx/transport error) — NOT a prune signal on
-/// its own (only EndpointNotValid/EndpointNotFound is); just recorded for
-/// observability so a subscription that's been failing for a while is
-/// visible without any special handling yet.
-pub async fn record_send_failure(pool: &SqlitePool, id: i64) -> Result<()> {
-    sqlx::query(
+/// Non-fatal send failure (429/5xx/malformed-payload/transport error) —
+/// recorded for observability AND returns the UPDATED `failure_count` so
+/// the caller can decide whether to prune a subscription that's been
+/// failing repeatedly (see `jobs::notifications::MAX_CONSECUTIVE_FAILURES`
+/// — a malformed `p256dh`/`auth` yields `SendOutcome::Failed` forever and
+/// is never a 404/410 `Gone`, so without this the row would be retried
+/// indefinitely).
+pub async fn record_send_failure(pool: &SqlitePool, id: i64) -> Result<i64> {
+    let failure_count: i64 = sqlx::query_scalar(
         "UPDATE push_subscriptions
          SET last_error_at = datetime('now'), failure_count = failure_count + 1
-         WHERE id = ?",
+         WHERE id = ?
+         RETURNING failure_count",
     )
     .bind(id)
-    .execute(pool)
+    .fetch_one(pool)
     .await?;
-    Ok(())
+    Ok(failure_count)
 }
 
 /// One (user, reason) ledger row — the anti-spam episode state (#264
@@ -277,6 +281,60 @@ mod tests {
         assert_eq!(rows[0].auth, "new-auth");
     }
 
+    /// The SAME browser endpoint being re-registered under a DIFFERENT
+    /// user_id reassigns ownership (#264 review finding — confirmed
+    /// intended, not a bug). This is the realistic "shared device" case:
+    /// a browser's PushManager endpoint identifies the SUBSCRIPTION
+    /// (effectively the device+browser-profile), not an account — if a
+    /// second customer logs in on the same device and enables
+    /// notifications, the endpoint they get from the browser is often the
+    /// SAME one, and it should now deliver to the NEW logged-in customer,
+    /// not silently keep notifying whoever subscribed first.
+    #[tokio::test]
+    async fn upsert_same_endpoint_different_user_reassigns_ownership() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid_a = seed_customer(&pool, "shared-a@x").await;
+        let uid_b = seed_customer(&pool, "shared-b@x").await;
+
+        upsert_subscription(&pool, uid_a, "https://push.example/shared", "p-a", "a-a")
+            .await
+            .unwrap();
+        assert_eq!(
+            list_subscriptions_for_user(&pool, uid_a)
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+
+        upsert_subscription(&pool, uid_b, "https://push.example/shared", "p-b", "a-b")
+            .await
+            .unwrap();
+
+        assert!(
+            list_subscriptions_for_user(&pool, uid_a)
+                .await
+                .unwrap()
+                .is_empty(),
+            "the original owner must no longer see this endpoint as theirs"
+        );
+        let rows_b = list_subscriptions_for_user(&pool, uid_b).await.unwrap();
+        assert_eq!(
+            rows_b.len(),
+            1,
+            "the new owner must now have exactly this row"
+        );
+        assert_eq!(rows_b[0].p256dh, "p-b");
+        assert_eq!(rows_b[0].auth, "a-b");
+
+        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM push_subscriptions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(total, 1, "still exactly one row, reassigned not duplicated");
+    }
+
     #[tokio::test]
     async fn delete_subscription_is_scoped_to_the_owning_user() {
         let pool = create_memory_pool().await.unwrap();
@@ -350,7 +408,11 @@ mod tests {
             .unwrap();
         let id = list_subscriptions_for_user(&pool, uid).await.unwrap()[0].id;
 
-        record_send_failure(&pool, id).await.unwrap();
+        let returned_count = record_send_failure(&pool, id).await.unwrap();
+        assert_eq!(
+            returned_count, 1,
+            "record_send_failure must return the new count"
+        );
         let (failure_count, last_error_at): (i64, Option<String>) = sqlx::query_as(
             "SELECT failure_count, last_error_at FROM push_subscriptions WHERE id = ?",
         )
@@ -364,7 +426,8 @@ mod tests {
             "a failure must stamp last_error_at"
         );
 
-        record_send_failure(&pool, id).await.unwrap();
+        let returned_count = record_send_failure(&pool, id).await.unwrap();
+        assert_eq!(returned_count, 2);
         let failure_count: i64 =
             sqlx::query_scalar("SELECT failure_count FROM push_subscriptions WHERE id = ?")
                 .bind(id)

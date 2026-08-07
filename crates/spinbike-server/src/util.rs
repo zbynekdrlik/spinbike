@@ -70,6 +70,39 @@ pub fn bratislava_day_range_utc(day: NaiveDate) -> (NaiveDateTime, NaiveDateTime
     )
 }
 
+/// Duration until the next occurrence of `hour:00:00` in the gym's local
+/// time (Europe/Bratislava), computed from `now` (a Bratislava-local naive
+/// datetime — pass `now_bratislava()` in production). If `now` is already
+/// at or past `hour:00` today, returns the delay until `hour:00`
+/// TOMORROW — never zero/negative, never today's `hour` again.
+///
+/// Used to align a daily background job to a sane customer-visible
+/// wall-clock hour instead of firing at whatever moment the server process
+/// happened to start (#264 review finding — a plain uptime-relative
+/// interval pins a daily notification to the LAST RESTART time forever,
+/// e.g. 03:00 after an overnight deploy). Deliberately recomputed fresh
+/// from real wall-clock time on every cycle by the caller (a sleep-loop,
+/// not a fixed `tokio::time::interval`) rather than assuming a flat
+/// 86400s repeat — Bratislava's two DST transitions a year make a
+/// calendar day either 23h or 25h, so a fixed-interval repeat would slowly
+/// drift off the target hour; recomputing each time self-corrects.
+pub fn duration_until_next_bratislava_hour(now: NaiveDateTime, hour: u32) -> std::time::Duration {
+    let today_at_hour = now
+        .date()
+        .and_hms_opt(hour, 0, 0)
+        .expect("hour must be 0..=23");
+    let target = if today_at_hour > now {
+        today_at_hour
+    } else {
+        (now.date() + Duration::days(1))
+            .and_hms_opt(hour, 0, 0)
+            .expect("hour must be 0..=23")
+    };
+    (target - now)
+        .to_std()
+        .unwrap_or(std::time::Duration::from_secs(0))
+}
+
 /// Format an integer as an English ordinal: 1 → "1st", 2 → "2nd", 3 → "3rd",
 /// 4 → "4th", 11 → "11th", 21 → "21st", 100 → "100th".
 ///
@@ -89,7 +122,7 @@ pub fn ordinal(n: u32) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{now_bratislava, ordinal, today_bratislava};
+    use super::{duration_until_next_bratislava_hour, now_bratislava, ordinal, today_bratislava};
     use chrono::{NaiveDate, TimeZone, Utc};
     use chrono_tz::Europe::Bratislava;
 
@@ -241,5 +274,39 @@ mod tests {
     #[test]
     fn ordinal_zero() {
         assert_eq!(ordinal(0), "0th");
+    }
+
+    #[test]
+    fn duration_until_next_bratislava_hour_before_target_is_later_today() {
+        let now = NaiveDate::from_ymd_opt(2026, 8, 8)
+            .unwrap()
+            .and_hms_opt(6, 30, 0)
+            .unwrap();
+        let delay = duration_until_next_bratislava_hour(now, 9);
+        // 06:30 -> 09:00 same day = 2h30m.
+        assert_eq!(delay.as_secs(), 2 * 3600 + 30 * 60);
+    }
+
+    #[test]
+    fn duration_until_next_bratislava_hour_after_target_rolls_to_tomorrow() {
+        let now = NaiveDate::from_ymd_opt(2026, 8, 8)
+            .unwrap()
+            .and_hms_opt(14, 0, 0)
+            .unwrap();
+        let delay = duration_until_next_bratislava_hour(now, 9);
+        // 14:00 -> tomorrow 09:00 = 19h.
+        assert_eq!(delay.as_secs(), 19 * 3600);
+    }
+
+    #[test]
+    fn duration_until_next_bratislava_hour_at_exactly_the_target_rolls_to_tomorrow() {
+        // "at or past" per the doc comment — exactly on the hour must NOT
+        // return zero (which would busy-loop); it rolls to tomorrow.
+        let now = NaiveDate::from_ymd_opt(2026, 8, 8)
+            .unwrap()
+            .and_hms_opt(9, 0, 0)
+            .unwrap();
+        let delay = duration_until_next_bratislava_hour(now, 9);
+        assert_eq!(delay.as_secs(), 24 * 3600);
     }
 }

@@ -125,17 +125,31 @@ async fn main() -> Result<()> {
         });
     }
 
-    // Push notifications: daily. Reminders, not alerts — no need to run more
-    // often (mirrors token_purge's own 86400s interval above).
+    // Push notifications: daily, aligned to a fixed Bratislava-local
+    // wall-clock hour (#264 review finding) rather than an uptime-relative
+    // interval — the latter would pin customer-visible notifications to
+    // whatever moment the server process last restarted (e.g. 03:00 after
+    // an overnight deploy) forever. The delay is recomputed from real
+    // wall-clock time EVERY cycle (a sleep-loop, not a fixed 86400s
+    // `tokio::time::interval`) so it self-corrects across Bratislava's two
+    // DST transitions a year instead of slowly drifting off the target
+    // hour. Startup already ran the job once above, so this loop's first
+    // sleep waits for the NEXT occurrence of the aligned hour.
     {
         let pool = pool.clone();
         let push = push.clone();
         tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(86400));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-            interval.tick().await; // first tick fires immediately; ignore (startup already ran it above).
             loop {
-                interval.tick().await;
+                let delay = spinbike_server::util::duration_until_next_bratislava_hour(
+                    spinbike_server::util::now_bratislava(),
+                    spinbike_server::jobs::notifications::DAILY_RUN_HOUR,
+                );
+                tracing::debug!(
+                    delay_secs = delay.as_secs(),
+                    hour = spinbike_server::jobs::notifications::DAILY_RUN_HOUR,
+                    "push: sleeping until the next aligned daily run"
+                );
+                tokio::time::sleep(delay).await;
                 match spinbike_server::jobs::notifications::tick(&pool, &push).await {
                     Ok(n) if n > 0 => tracing::info!("push: sent {n} notifications"),
                     Ok(_) => {}

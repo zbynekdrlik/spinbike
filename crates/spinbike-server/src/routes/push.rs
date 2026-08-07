@@ -23,6 +23,44 @@ pub fn routes() -> Router<AppState> {
         .route("/api/push/unsubscribe", post(unsubscribe))
 }
 
+/// Known Web Push service hosts (exact match). The server's own daily
+/// `jobs::notifications` job later POSTs directly to whatever `endpoint` a
+/// customer registers here — an ALLOWLIST, never a denylist, is mandatory:
+/// without one, any authenticated customer could register an
+/// internal/metadata URL (`http://169.254.169.254/...`, an internal admin
+/// endpoint, etc.) and the server's own background job would issue an
+/// outbound POST to it once a day (authenticated SSRF — #264 review
+/// finding). `*.notify.windows.com` (Edge/Windows) is checked separately
+/// as a suffix match below since it's per-device, not one fixed host.
+const ALLOWED_PUSH_HOSTS: &[&str] = &[
+    "fcm.googleapis.com",                // Chrome / Chromium / Edge (Blink)
+    "updates.push.services.mozilla.com", // Firefox
+    "web.push.apple.com",                // Safari
+];
+
+/// True when `endpoint` parses as `https://` with a host on the known
+/// push-service allowlist. Parsed via `reqwest::Url` (immune to
+/// path/query tricks like `https://fcm.googleapis.com.evil.com/...` or
+/// `https://evil.com/fcm.googleapis.com` — those parse to a DIFFERENT
+/// host than the real one, so a substring check on the raw string would be
+/// unsafe here). The `.notify.windows.com` suffix check has a leading
+/// dot, so it can only match a genuine subdomain of Microsoft's own DNS
+/// zone — an attacker cannot register `evilnotify.windows.com` and have
+/// it pass (no dot boundary) or `notify.windows.com.evil.com` (that ENDS
+/// in `.evil.com`, not `.notify.windows.com`).
+fn is_allowed_push_endpoint(endpoint: &str) -> bool {
+    let Ok(url) = reqwest::Url::parse(endpoint) else {
+        return false;
+    };
+    if url.scheme() != "https" {
+        return false;
+    }
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    ALLOWED_PUSH_HOSTS.contains(&host) || host.ends_with(".notify.windows.com")
+}
+
 #[derive(Serialize)]
 struct PushConfigResponse {
     /// False when the server has no `VAPID_PRIVATE_KEY` configured — the
@@ -83,6 +121,15 @@ async fn subscribe(
         return Err(bad_request(
             "endpoint and keys.p256dh/keys.auth are required",
         ));
+    }
+
+    if !is_allowed_push_endpoint(&req.endpoint) {
+        tracing::warn!(
+            user_id = claims.sub,
+            endpoint = %req.endpoint,
+            "push: rejected subscribe — endpoint is not a recognized push service"
+        );
+        return Err(bad_request("endpoint is not a recognized push service"));
     }
 
     crate::db::push::upsert_subscription(

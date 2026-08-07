@@ -104,6 +104,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "push_notify_log: sent_count column (max-2-per-episode anti-spam)",
         V24_PUSH_NOTIFY_LOG_SENT_COUNT,
     ),
+    (
+        25,
+        "transactions: index on user_id (last_topup_amount + other existing per-user queries)",
+        V25_TRANSACTIONS_USER_ID_INDEX,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -1002,6 +1007,19 @@ CREATE TABLE IF NOT EXISTS push_notify_log (
 // being a production project).
 const V24_PUSH_NOTIFY_LOG_SENT_COUNT: &str = r#"
 ALTER TABLE push_notify_log ADD COLUMN sent_count INTEGER NOT NULL DEFAULT 0;
+"#;
+
+// V25 (#264 review finding): `db::push::last_topup_amount` runs a
+// `WHERE user_id = ?` scan against `transactions` once per customer, every
+// day (the daily notifications job) — with no index, that's a full-table
+// scan per customer per day. `transactions` had NO index on `user_id` at
+// all before this (a pre-existing gap the review surfaced while looking at
+// this new query — several OTHER existing queries, e.g. `my_balance.rs`'s
+// recent-transactions list and `routes/users.rs`'s `topped_up` aggregate,
+// filter the same column and benefit equally). Plain additive index, no
+// rebuild dance needed.
+const V25_TRANSACTIONS_USER_ID_INDEX: &str = r#"
+CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
 "#;
 
 #[cfg(test)]
@@ -3601,5 +3619,25 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(sent_count, 0, "sent_count must default to 0");
+    }
+
+    // ── V25: transactions(user_id) index (#264 review finding) ─────────────
+
+    #[tokio::test]
+    async fn v25_creates_the_transactions_user_id_index() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let name: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_transactions_user_id'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            name.as_deref(),
+            Some("idx_transactions_user_id"),
+            "V25 must create the index"
+        );
     }
 }
