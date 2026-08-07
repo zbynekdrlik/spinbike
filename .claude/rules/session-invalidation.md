@@ -80,14 +80,16 @@ both now call `require_live_session`, gated on the self-acting branch only
 
 **Why NOT the `AuthUser` extractor** (weighed seriously in #277's design
 step, re-weighed with MEASURED numbers in #284's — see either issue's
-design comment for the full reasoning): only **8** handlers actually
+design comment for the full reasoning): only **9** handlers actually
 destructure `AuthUser(claims): AuthUser` directly (`door::open`,
 `auth::install_token`, `auth::me`, `classes::create_booking`,
 `classes::cancel_booking`, `classes::my_bookings`, `users::update_user`,
-`users::user_transactions`) — after #284, 7 of the 8 call
-`require_live_session` or its hand-rolled equivalent; only `auth::me`
-doesn't (it never touches the DB, just echoes the JWT's own claims back, so
-there's nothing for the check to protect). But `StaffUser` and `AdminUser`
+`users::user_transactions`, `my_balance::my_balance`) — after #284, 8 of
+the 9 call `require_live_session` or its hand-rolled equivalent (including
+`my_balance`'s own pre-existing hand-rolled check, described above); only
+`auth::me` doesn't (it never touches the DB, just echoes the JWT's own
+claims back, so there's nothing for the check to protect). But `StaffUser`
+and `AdminUser`
 (`auth/mod.rs`) both internally call `AuthUser::from_request_parts` FIRST —
 so moving the check INTO `AuthUser` would silently cascade to every
 `StaffUser`/`AdminUser` handler too: measured **50** `StaffUser` + **15**
