@@ -45,6 +45,8 @@
 //! 365-day, multi-use, and capped at 5 live tokens/user — see
 //! `db/login_tokens.rs`'s `create_install_token`/`redeem_install`.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use js_sys::{Function, Promise, Reflect};
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -125,18 +127,45 @@ fn store_install_token(token: &str) {
     crate::storage::cache_set(INSTALL_TOKEN_STORAGE_KEY, token);
 }
 
-/// Whether THIS `Effect` firing may proceed to mint a fresh install token.
+/// Module-level (NOT component-local) single-flight guard for the install-
+/// token mint (#282 fix). A Leptos signal declared inside `InstallPrompt`'s
+/// component body would be destroyed on unmount and re-created fresh on
+/// the NEXT mount — exactly the same gap `stored_install_token()` already
+/// has (see its doc). This `static` instead survives for the lifetime of
+/// the WASM instance regardless of how many times `InstallPrompt`
+/// mounts/unmounts within one browser session (e.g. `/welcome` -> the CTA
+/// link -> `/my/balance`), so it can actually guard ACROSS mounts.
+static MINT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Whether THIS `Effect` firing may proceed to mint a fresh install token:
+/// `false` when a token is already stored, OR when another firing already
+/// claimed the slot and hasn't finished (or failed) yet.
 ///
-/// #282: a session-storage-only check is a check-then-act race — the mint
-/// POST is async and `store_install_token()` only runs after it resolves,
-/// so a SECOND `Effect` firing (e.g. `InstallPrompt`'s second mount on
-/// `/my/balance` after the `/welcome` CTA link, before the first mint's
-/// response has landed) still observes no stored token and also mints.
-/// See the `mint-guard-race` unit test below, which reproduces exactly
-/// this: two firings racing ahead of any write-back must not both claim
-/// the slot.
+/// #282 fix: a session-storage-only check is a check-then-act race — the
+/// mint POST is async and `store_install_token()` only runs after it
+/// resolves, so a SECOND `Effect` firing (e.g. `InstallPrompt`'s second
+/// mount on `/my/balance` after the `/welcome` CTA link, before the first
+/// mint's response has landed) used to also observe no stored token and
+/// also mint. The fix is `AtomicBool::swap` — a single SYNCHRONOUS
+/// check-and-set with no `.await` in between — so only the first firing in
+/// this WASM instance's lifetime can ever pass both checks. See the
+/// `only_one_effect_firing_may_claim_the_mint_slot_before_a_token_is_stored`
+/// unit test below.
 fn try_claim_mint_slot() -> bool {
-    stored_install_token().is_none()
+    if stored_install_token().is_some() {
+        return false;
+    }
+    !MINT_IN_FLIGHT.swap(true, Ordering::SeqCst)
+}
+
+/// Release a previously-claimed mint slot after a FAILED mint (network
+/// error, non-2xx, etc.) so a later remount in this session can retry —
+/// matching this module's existing "every step degrades to a silent no-op
+/// on failure" discipline. Never called on success: once a token is
+/// stored, `try_claim_mint_slot` short-circuits on the `stored_install_token()`
+/// check before ever consulting the flag again.
+fn release_mint_slot() {
+    MINT_IN_FLIGHT.store(false, Ordering::SeqCst);
 }
 
 /// Arm BOTH remaining legs of the round-5 (#261) ladder for an install
@@ -404,14 +433,17 @@ pub fn InstallPrompt() -> impl IntoView {
                 return;
             }
             spawn_local(async move {
-                if let Ok(resp) = api::post::<InstallTokenReq, InstallTokenResp>(
+                match api::post::<InstallTokenReq, InstallTokenResp>(
                     "/api/auth/install-token",
                     &InstallTokenReq {},
                 )
                 .await
                 {
-                    store_install_token(&resp.token);
-                    arm_install_credential(&resp.token);
+                    Ok(resp) => {
+                        store_install_token(&resp.token);
+                        arm_install_credential(&resp.token);
+                    }
+                    Err(_) => release_mint_slot(),
                 }
             });
         });
