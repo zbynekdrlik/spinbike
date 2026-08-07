@@ -26,6 +26,13 @@ async fn main() -> Result<()> {
     let pool = db::create_pool(&PathBuf::from(&db_path)).await?;
     db::run_migrations(&pool).await?;
 
+    // Independent PushHandle for the background job loop below — mirrors how
+    // `charger`/`materialiser`/`token_purge` operate on their own `pool.clone()`
+    // rather than through `AppState` (built separately, inside `start_server`).
+    // Both instantiations read the same `VAPID_PRIVATE_KEY` env var, so they
+    // agree on Enabled/Disabled deterministically.
+    let push = spinbike_server::push::PushHandle::spawn();
+
     // Populate search_text for any users that pre-date the migration.
     let backfilled = db::users::backfill_search_text(&pool).await?;
     if backfilled > 0 {
@@ -55,6 +62,15 @@ async fn main() -> Result<()> {
         Ok(n) if n > 0 => tracing::info!("login_tokens purge removed {n} rows at startup"),
         Ok(_) => {}
         Err(e) => tracing::error!("startup login_tokens purge failed: {e}"),
+    }
+
+    // Run the push-notification evaluation once at startup too (#264) — same
+    // reasoning as token_purge above: an observable log line right after a
+    // deploy, and covers the window while the server was down.
+    match spinbike_server::jobs::notifications::tick(&pool, &push).await {
+        Ok(n) if n > 0 => tracing::info!("push: sent {n} notifications at startup"),
+        Ok(_) => {}
+        Err(e) => tracing::error!("startup push notifications tick failed: {e}"),
     }
 
     // Charger: every 60s. `Delay` skips back-to-back catch-up ticks if a tick
@@ -104,6 +120,26 @@ async fn main() -> Result<()> {
                     Ok(n) if n > 0 => tracing::info!("login_tokens purge removed {n} rows"),
                     Ok(_) => {}
                     Err(e) => tracing::error!("login_tokens purge failed: {e}"),
+                }
+            }
+        });
+    }
+
+    // Push notifications: daily. Reminders, not alerts — no need to run more
+    // often (mirrors token_purge's own 86400s interval above).
+    {
+        let pool = pool.clone();
+        let push = push.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(86400));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            interval.tick().await; // first tick fires immediately; ignore (startup already ran it above).
+            loop {
+                interval.tick().await;
+                match spinbike_server::jobs::notifications::tick(&pool, &push).await {
+                    Ok(n) if n > 0 => tracing::info!("push: sent {n} notifications"),
+                    Ok(_) => {}
+                    Err(e) => tracing::error!("push notifications tick failed: {e}"),
                 }
             }
         });

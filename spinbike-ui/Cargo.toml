@@ -33,11 +33,22 @@ web-sys = { version = "0.3", features = [
     "KeyboardEvent",
     "MediaQueryList",
     "History",
+    "Navigator",
+    "ServiceWorkerContainer",
+    "ServiceWorkerRegistration",
+    "PushManager",
+    "PushSubscriptionOptionsInit",
+    "Notification",
+    "NotificationPermission",
 ] }
 js-sys = "0.3"
 futures = "0.3"
 chrono = { version = "0.4", features = ["serde"] }
 chrono-tz = { version = "0.10", default-features = false }
+# base64url-decode the server's VAPID public key into raw bytes for
+# `PushSubscriptionOptionsInit::set_application_server_key_opt_u8_array`
+# (#264) — same version pinned server-side (crates/spinbike-server/Cargo.toml).
+base64 = "0.22"
 
 [profile.release]
 opt-level = "z"

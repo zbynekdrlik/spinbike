@@ -4,6 +4,7 @@ pub mod error;
 pub mod ewelink;
 pub mod jobs;
 pub mod mail;
+pub mod push;
 pub mod rate_limit;
 pub mod request_log;
 pub mod routes;
@@ -25,6 +26,9 @@ pub struct AppState {
     pub jwt_secret: String,
     pub ewelink: crate::ewelink::EwelinkHandle,
     pub mail: crate::mail::MailHandle,
+    /// PWA push (#264) — VAPID signing + send. `Disabled` (no configured
+    /// public key) whenever `VAPID_PRIVATE_KEY` is unset; see `push.rs`.
+    pub push: crate::push::PushHandle,
     /// Base URL used to compose magic-link emails, e.g.
     /// `https://spinbike.newlevel.media`. Read from `PUBLIC_BASE_URL` at
     /// startup; empty when unset (invite/login-link then compose a relative
@@ -212,6 +216,7 @@ pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Re
         jwt_secret,
         ewelink: crate::ewelink::EwelinkHandle::spawn(),
         mail: crate::mail::MailHandle::spawn(),
+        push: crate::push::PushHandle::spawn(),
         public_base_url,
         door_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
             crate::routes::door::RateLimiter::new(),
@@ -440,6 +445,7 @@ mod tests {
             jwt_secret: "placeholder".to_string(),
             ewelink: crate::ewelink::EwelinkHandle::spawn(),
             mail: crate::mail::MailHandle::spawn(),
+            push: crate::push::PushHandle::spawn(),
             public_base_url: String::new(),
             door_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::routes::door::RateLimiter::new(),
@@ -569,6 +575,7 @@ mod tests {
             jwt_secret: "placeholder".to_string(),
             ewelink: crate::ewelink::EwelinkHandle::spawn(),
             mail: crate::mail::MailHandle::spawn(),
+            push: crate::push::PushHandle::spawn(),
             public_base_url: String::new(),
             door_rate_limit: std::sync::Arc::new(std::sync::Mutex::new(
                 crate::routes::door::RateLimiter::new(),

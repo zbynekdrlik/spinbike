@@ -10,7 +10,7 @@ use wasm_bindgen_futures::spawn_local;
 use spinbike_core::reports::{EventKind, classify};
 
 use crate::api;
-use crate::components::{DoorButton, InstallPrompt};
+use crate::components::{DoorButton, InstallPrompt, PushToggle};
 use crate::dates;
 use crate::i18n::{self, Lang, fmt_date_short, tf};
 
@@ -128,6 +128,10 @@ pub fn MyBalancePage() -> impl IntoView {
         // Install-to-home-screen nudge (#110) — renders nothing once
         // installed or on a browser offering neither install path.
         <InstallPrompt />
+
+        // "Enable notifications" affordance (#264) — renders nothing while
+        // loading, unsupported, or server-disabled.
+        <PushToggle />
 
         // Loading spinner / error banner / recent visits — these update
         // reactively on data changes.
