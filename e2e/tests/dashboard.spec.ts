@@ -27,6 +27,56 @@ test.describe('Card dashboard (staff /staff)', () => {
         assertCleanConsole(consoleMessages);
     });
 
+    // Regression test for the #39 collision class recurring (CI run
+    // 31178634087 — see the PR #290 root-cause comment for full detail).
+    // dashboard.spec.ts's `search_text LIKE '%1001%'` search is
+    // UNANCHORED: it matches ANY user's name+company+card_code anywhere in
+    // the shared E2E DB, and when neither matching row's card_code
+    // PREFIX-matches the query, ordering falls through to plain
+    // `name ASC`. Manufacture a deterministic stand-in for the class of
+    // polluter that broke this ('AAA Polluter', card containing '1001',
+    // sorts before 'Jana Testova' alphabetically) directly in this test so
+    // its outcome never depends on another spec's random Date.now() value
+    // happening to land inside the search window.
+    test('search by barcode tail is not fooled by an unrelated card whose id happens to contain the same digits', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const seed = await fetch(`${BASE_URL}/api/users`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+            body: JSON.stringify({
+                name: 'AAA Polluter',
+                initial_credit: 1,
+                card_code: 'ZZ-99991001999',
+            }),
+        });
+        if (!seed.ok) throw new Error(`seed polluter failed: ${seed.status} ${await seed.text()}`);
+
+        await page.goto('/staff');
+        await page.waitForSelector('input[type="search"]');
+        await page.fill('input[type="search"]', '1001');
+
+        // Both 'AAA Polluter' (card ZZ-99991001999) and 'Jana Testova' (card
+        // 70701001) match the unanchored '%1001%' search. Neither card_code
+        // is a PREFIX match for '1001', so the query's ORDER BY falls
+        // through to plain name ASC — 'AAA' sorts before 'Jana', so a blind
+        // `.first()` picks the WRONG card.
+        const result = page.locator('[data-testid="search-result"]').first();
+        await expect(result).toBeVisible({ timeout: 3000 });
+        await expect(result).toContainText('Jana Testova');
+        await expect(result).toContainText('70701001');
+
+        await result.click();
+        const panel = page.locator('[data-testid="action-panel"]');
+        await expect(panel).toBeVisible();
+        await expect(panel).toContainText('Jana Testova');
+
+        assertCleanConsole(consoleMessages);
+    });
+
     test('search by surname finds the card', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
 
