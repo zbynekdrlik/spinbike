@@ -98,7 +98,7 @@ pub async fn list_transactions_for_user(
          FROM transactions t
          LEFT JOIN services s ON s.id = t.service_id
          WHERE t.user_id = ?
-         ORDER BY t.created_at DESC",
+         ORDER BY t.created_at DESC, t.id DESC",
     )
     .bind(user_id)
     .fetch_all(pool)
@@ -130,7 +130,7 @@ pub async fn list_transactions_for_user_paginated(
                  FROM transactions t
                  LEFT JOIN services s ON s.id = t.service_id
                  WHERE t.user_id = ? AND t.created_at < ?
-                 ORDER BY t.created_at DESC
+                 ORDER BY t.created_at DESC, t.id DESC
                  LIMIT ?",
         )
         .bind(user_id)
@@ -146,7 +146,7 @@ pub async fn list_transactions_for_user_paginated(
                  FROM transactions t
                  LEFT JOIN services s ON s.id = t.service_id
                  WHERE t.user_id = ?
-                 ORDER BY t.created_at DESC
+                 ORDER BY t.created_at DESC, t.id DESC
                  LIMIT ?",
         )
         .bind(user_id)
@@ -345,10 +345,10 @@ mod tests {
     /// did), silently breaking the transactions list's "first row = most
     /// recent" invariant every UI/E2E assertion relies on.
     ///
-    /// [red]: fails without a secondary `id DESC` tiebreaker -- SQLite is
-    /// free to return the tied rows in EITHER order, so asserting the
-    /// specific newest-id-first order this ticket requires is not
-    /// guaranteed to hold today.
+    /// [red -> green]: failed without a secondary `id DESC` tiebreaker
+    /// (SQLite was free to return the tied rows in either order); passes
+    /// now that `ORDER BY t.created_at DESC, t.id DESC` breaks same-second
+    /// ties deterministically, newest-id-first.
     #[tokio::test]
     async fn same_created_at_transactions_break_ties_by_id_newest_first() {
         let pool = setup().await;
