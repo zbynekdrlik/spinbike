@@ -198,3 +198,110 @@ test.describe('Blocked user booking attempt → clean logout (#277)', () => {
         assertCleanConsole(messages);
     });
 });
+
+// #275 — follow-up to #268: the redirect itself already worked (a stale
+// session correctly bounces to /login and clears storage), but the customer
+// used to land on a BARE login form with no explanation. This carries the
+// reason across the hard `set_href` navigation via a one-shot sessionStorage
+// flag (api.rs's handle_unauthorized -> auth.rs's mark_session_expired) and
+// renders it once on LoginPage (auth.rs's take_session_expired_flag, which
+// clears the flag as it reads it).
+test.describe('Session-invalidation redirect shows an explanation (#275)', () => {
+    test('a stale-session redirect shows the notice once, then clears it (a reload does not re-show it)', async ({
+        page,
+        baseURL,
+    }) => {
+        const messages = setupConsoleCheck(page);
+
+        const suffix = Array.from({ length: 8 }, () =>
+            String.fromCharCode(97 + Math.floor(Math.random() * 26)),
+        ).join('');
+        const email = `expnotice-${suffix}@test.local`;
+        const password = `Pw-${suffix}`;
+        const seedResp = await fetch(`${BASE_URL}/api/test/seed-account`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                email,
+                password,
+                name: `Expnotice ${suffix}`,
+                role: 'customer',
+            }),
+        });
+        if (!seedResp.ok) {
+            throw new Error(`seed-account failed: ${seedResp.status} ${await seedResp.text()}`);
+        }
+        const { user_id } = await seedResp.json();
+
+        await loginViaAPI(page, baseURL!, email, password);
+
+        // Block via a raw admin fetch — NOT loginViaAPI on this page, which
+        // would overwrite the customer session we just stored.
+        const adminLoginResp = await fetch(`${BASE_URL}/api/auth/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email: 'admin@test.com', password: 'admin123' }),
+        });
+        if (!adminLoginResp.ok) {
+            throw new Error(
+                `admin login failed: ${adminLoginResp.status} ${await adminLoginResp.text()}`,
+            );
+        }
+        const { token: adminToken } = await adminLoginResp.json();
+        const blockResp = await fetch(`${BASE_URL}/api/users/block`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
+            body: JSON.stringify({ user_id, blocked: true }),
+        });
+        expect(blockResp.ok).toBeTruthy();
+
+        // The browser still holds the now-blocked customer's session.
+        // Loading /my/balance fires GET /api/my/balance, gets 401, and the
+        // client's handle_unauthorized redirects to /login.
+        await page.goto('/');
+        await page.waitForURL('**/login', { timeout: 10000 });
+
+        const notice = page.locator('[data-testid="session-expired-notice"]');
+        await expect(notice).toBeVisible();
+        await expect(notice).toContainText('Tvoje prihlasenie uz nie je platne');
+
+        const token = await page.evaluate(() => localStorage.getItem('spinbike_token'));
+        const user = await page.evaluate(() => localStorage.getItem('spinbike_user'));
+        expect(token).toBeNull();
+        expect(user).toBeNull();
+
+        // A manual reload must NOT re-show the notice — the flag is
+        // read-once-then-cleared, not tied to the session state.
+        await page.reload();
+        await expect(page.locator('[data-testid="session-expired-notice"]')).not.toBeVisible();
+
+        assertCleanConsole(messages);
+    });
+
+    test('a wrong-password login shows only the credentials error, never the session-expired notice', async ({
+        page,
+    }) => {
+        const messages = setupConsoleCheck(page);
+
+        await page.goto('/login');
+        // Fresh page load, no prior stale-session redirect in this test —
+        // confirms the notice is NOT some default-shown element.
+        await expect(
+            page.locator('[data-testid="session-expired-notice"]'),
+        ).not.toBeVisible();
+
+        await page.fill('input[type="email"]', 'nonexistent-wrongpw@test.local');
+        await page.fill('input[type="password"]', 'definitely-wrong-password');
+        await page.click('button[type="submit"]');
+
+        await page.waitForSelector('.alert.alert-error', { timeout: 5000 });
+        const errorText = await page.textContent('.alert.alert-error');
+        expect(errorText).toContain('Nespravny email alebo heslo');
+
+        await expect(
+            page.locator('[data-testid="session-expired-notice"]'),
+        ).not.toBeVisible();
+
+        assertCleanConsole(messages);
+    });
+});
