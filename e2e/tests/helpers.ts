@@ -63,7 +63,19 @@ export function setupConsoleCheck(page: Page, options: ConsoleCheckOptions = {})
     const is4xxNetworkMessage = (text: string): boolean =>
         /the server responded with a status of 4\d\d/.test(text);
 
-    const isFiltered = (text: string): boolean =>
+    // #278 [green, round 2]: the browser-generated "Failed to load resource:
+    // the server responded with a status of 4xx" console message NEVER
+    // contains the resource URL in its `text` — matching `allow4xxFor`
+    // needles against `text.includes(needle)` (the first #278 fix) can
+    // therefore never match, so every intentional 4xx leaked through as an
+    // "unexpected" console error (CI run 31197701928, 23 specs). Confirmed
+    // empirically (standalone Playwright script against a local HTTP
+    // server): Chromium reports these as `Log.entryAdded` browser-level
+    // messages, and Playwright surfaces their resource URL via
+    // `msg.location().url` — NOT via `msg.text()`. `page.on('pageerror')`
+    // (uncaught JS exceptions) has no such resource location, so only the
+    // console path takes a location.
+    const isFiltered = (text: string, locationUrl?: string): boolean =>
         text.includes('SharedArrayBuffer') ||
         // Trunk bootstrap calls wasm-bindgen init with the legacy
         // positional arg form; wasm-bindgen 0.2.x emits a deprecation
@@ -82,9 +94,12 @@ export function setupConsoleCheck(page: Page, options: ConsoleCheckOptions = {})
         text.includes('negative-balance fetch failed: TypeError: Failed to fetch') ||
         text.includes('negative-balance fetch failed: Missing authorization header') ||
         // #278: a 4xx-derived network message is filtered ONLY when the
-        // caller explicitly named the endpoint as its own deliberate 4xx
+        // FAILED RESOURCE'S URL (never the message text) matches an
+        // endpoint the caller explicitly named as its own deliberate 4xx
         // (see ConsoleCheckOptions.allow4xxFor above) — never blanket.
-        (is4xxNetworkMessage(text) && allow4xxFor.some((needle) => text.includes(needle)));
+        (is4xxNetworkMessage(text) &&
+            locationUrl !== undefined &&
+            allow4xxFor.some((needle) => locationUrl.includes(needle)));
 
     page.on('console', (msg) => {
         if (msg.type() === 'error' || msg.type() === 'warning') {
@@ -94,7 +109,7 @@ export function setupConsoleCheck(page: Page, options: ConsoleCheckOptions = {})
             // triggering 401/403/409 on a NAMED endpoint — see
             // allow4xxFor above). 5xx errors are NEVER filtered — those
             // indicate real server bugs.
-            if (isFiltered(text)) {
+            if (isFiltered(text, msg.location().url)) {
                 return;
             }
             messages.push(`[${msg.type()}] ${text}`);
