@@ -27,6 +27,26 @@ export function bratislavaDateOffset(days: number): string {
     return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10);
 }
 
+export interface ConsoleCheckOptions {
+    /**
+     * URL substrings whose 4xx-derived browser network message
+     * ("Failed to load resource: the server responded with a status of
+     * 4xx") is the DELIBERATE subject of THIS test and should be treated
+     * as benign — e.g. a wrong-password login attempt hitting
+     * `/api/auth/login`. Matched via `text.includes(needle)`.
+     *
+     * Defaults to `[]` — no 4xx message is filtered. Before #278 this
+     * filter was a single BLANKET regex applied to every caller, which
+     * made `assertCleanConsole` vacuous for any spec whose flow legitimately
+     * triggers a 4xx: it silently swallowed 4xx noise from completely
+     * UNRELATED endpoints too, so a real regression logging an unexpected
+     * 4xx-derived console error would still pass green. Opting in per test,
+     * scoped to the exact endpoint(s) that test expects, keeps "clean
+     * console" meaning "nothing unexpected happened".
+     */
+    allow4xxFor?: string[];
+}
+
 /**
  * Set up console error/warning collection on a page.
  * Returns an array that accumulates messages during the test.
@@ -36,8 +56,12 @@ export function bratislavaDateOffset(days: number): string {
  * console events, so listening only to 'console' silently misses every
  * Leptos panic. See #89.)
  */
-export function setupConsoleCheck(page: Page): string[] {
+export function setupConsoleCheck(page: Page, options: ConsoleCheckOptions = {}): string[] {
     const messages: string[] = [];
+    const allow4xxFor = options.allow4xxFor ?? [];
+
+    const is4xxNetworkMessage = (text: string): boolean =>
+        /the server responded with a status of 4\d\d/.test(text);
 
     const isFiltered = (text: string): boolean =>
         text.includes('SharedArrayBuffer') ||
@@ -56,15 +80,23 @@ export function setupConsoleCheck(page: Page): string[] {
         // runner artefacts — a generic prefix match would mask real API
         // regressions (e.g. malformed JSON from a deploy) in CI.
         text.includes('negative-balance fetch failed: TypeError: Failed to fetch') ||
+        // #278 [red]: the `allow4xxFor` option is wired into the signature
+        // but not yet consulted here — the filter is still the OLD blanket
+        // regex, matching regardless of `allow4xxFor`. This deliberately
+        // keeps `console-check-4xx-scoping.spec.ts`'s first test failing
+        // until the next (GREEN) commit narrows this condition.
         text.includes('negative-balance fetch failed: Missing authorization header') ||
-        /the server responded with a status of 4\d\d/.test(text);
+        is4xxNetworkMessage(text);
+    void allow4xxFor;
 
     page.on('console', (msg) => {
         if (msg.type() === 'error' || msg.type() === 'warning') {
             const text = msg.text();
-            // Ignore benign browser-level warnings and expected 4xx responses
-            // (tests intentionally trigger 401/403/409 — those are not bugs)
-            // 5xx errors are NOT filtered — those indicate real server bugs
+            // Ignore benign browser-level warnings and the caller's own
+            // explicitly-allowed 4xx responses (tests intentionally
+            // triggering 401/403/409 on a NAMED endpoint — see
+            // allow4xxFor above). 5xx errors are NEVER filtered — those
+            // indicate real server bugs.
             if (isFiltered(text)) {
                 return;
             }
