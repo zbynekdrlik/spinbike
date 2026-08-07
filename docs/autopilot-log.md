@@ -3,6 +3,45 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-08-07 — #278 4xx console-filter scoping + #282 install-token mint-guard race + #291 transaction ordering tiebreaker (PR #292 + follow-up PR #293, dev.130)
+
+- **#278 (`9ca6d33` [red] → `758ccb2` [green] → `b34f9f2`/`71f48dc` CI fixes):**
+  `setupConsoleCheck`'s blanket 4xx filter made `assertCleanConsole` vacuous
+  for any spec whose flow legitimately triggers a 4xx. Made opt-in per test
+  via `allow4xxFor`. First fix matched `allow4xxFor` against `msg.text()` —
+  broke CI (23/218 tests) because Chromium's "Failed to load resource"
+  message never carries the URL in its text. Root-caused via a standalone
+  Playwright script: the URL lives in `msg.location().url`. Also allow-listed
+  `/api/metrics/launch` (the standalone-launch beacon, rate-limited, fires on
+  every `setIosStandalone()` test) — a second, unrelated 429 leak.
+- **#282 (`963f21f` [red] → `330ba5e` [green] → `8225f32` [red] →
+  `7ee41f9` [green]):** install-token mint guard was a check-then-act race
+  (sessionStorage-only check, async mint POST in between) — fixed with a
+  module-level `AtomicBool` single-flight guard. Code review then found the
+  success path never verified the sessionStorage WRITE actually landed — a
+  silent persist failure (private browsing/quota) left the guard
+  permanently claimed. `confirm_mint_or_release` now re-checks and releases
+  on a failed persist. Verified LIVE on prod (spinbike.sk): exactly 1 POST
+  `/api/auth/install-token` across initial load + same-tab reload, same
+  token both times.
+- **#291 (`cad318d` insufficient fix → `cb5cbd4` [red] → `448b354` [green]
+  → `c7184ac` same-pattern sweep):** `txn-note.spec.ts`'s void test flaked 3x
+  on CI (dev run 31197701928, main run 31203717764, dev run 31204778238).
+  First fix (wait for the DELETE response) was real but insufficient — the
+  actual root cause, found via a failure's DOM-snapshot artifact: SQLite's
+  `datetime('now')` default has only second precision, so a fresh user's
+  initial-credit top-up and its first charge can tie on `created_at`, and
+  `ORDER BY t.created_at DESC` had no tiebreaker — same-second rows sorted
+  in an unspecified order, so the void sometimes landed on the wrong row.
+  Fixed with `, t.id DESC` on all 4 affected queries across
+  `db/transactions.rs`, `routes/my_balance.rs`, and `routes/payments.rs`
+  (same table, same bug class, swept proactively).
+- Both PRs: #292 (the original 2-issue batch + review fixes) and #293 (the
+  post-merge #291 follow-up, since #292 had already merged when #291
+  recurred on main). Deployed + verified: v0.15.0-dev.130 on both dev and
+  prod, main CI green (E2E + all 8 mutation shards), prod Deploy + Smoke
+  green.
+
 ## 2026-08-07 — #288 pagination flake + #39 recurrence: barcode-tail search ranking bug (same PR #290 batch, dev.127)
 
 - **Why:** discovered mid-PR while hardening PR #290 (the #286+#287+#289

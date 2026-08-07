@@ -92,6 +92,8 @@ Path-scoped rules under `.claude/rules/` load themselves when you touch a matchi
 - `AuthUser`-driven route acting on the caller's own account → `.claude/rules/session-invalidation.md` (auto-loads on `crates/spinbike-server/src/routes/**` — the blocked/deleted-user 401 contract, #268/#274/#277)
 - writing/editing an E2E fixture generator or pagination loop → `.claude/rules/e2e-fixtures.md` (auto-loads on `e2e/tests/**` — dataset-growth-safe fixtures + rank-based pagination, #288/#39)
 - card search ranking or the search-result row's digit display → `.claude/rules/search-ranking.md` (auto-loads on `crates/spinbike-server/src/db/users.rs`, `spinbike-ui/src/pages/dashboard/mod.rs`, `e2e/tests/dashboard.spec.ts`, `e2e/tests/negative-balance.spec.ts` — tail-match ranking + row-vs-panel digit display, #290/#39)
+- `setupConsoleCheck`'s `allow4xxFor` opt-in filter → `.claude/rules/e2e-console-check.md` (auto-loads on `e2e/tests/helpers.ts`, `e2e/tests/console-check-4xx-scoping.spec.ts` — match `msg.location().url`, never `msg.text()`, #278)
+- ordering a `transactions` query by `created_at` → `.claude/rules/transaction-ordering.md` (auto-loads on `db/transactions.rs`, `routes/my_balance.rs`, `routes/payments.rs` — same-second ties need an `id DESC` tiebreaker, #291)
 
 | Area | Skill | When to load |
 |---|---|---|

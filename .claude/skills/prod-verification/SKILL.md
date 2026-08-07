@@ -215,3 +215,39 @@ claim, no DB lookup on the CALLER. So verifying an admin-only UI change
   rule, so that field can read `None` even with a valid pass-sale row. To verify
   the pass-EXPIRY date render (`tx_until_short` + `fmt_date_short`), the pass-sale
   MOVEMENT row's `do DD.MM.` suffix is enough — you don't need the pass banner.
+- **Verifying iOS-only UI (the install-prompt / mint-guard flow, #282) on
+  live prod via a long-lived Playwright MCP profile needs MORE than a
+  `navigator.userAgent` override.** A real (non-mobile-emulated) Chromium
+  profile that has visited `spinbike.sk` many times across earlier
+  verification sessions has accumulated enough PWA-engagement signal for
+  Chromium's OWN internal installability heuristics to fire a REAL
+  `beforeinstallprompt` event — completely independent of a spoofed
+  `navigator.userAgent`. `install_prompt.rs`'s `detect_kind()` checks
+  `has_deferred_prompt()` (whether `index.html`'s listener captured that
+  event into `window.__deferredInstallPrompt`) BEFORE it ever checks the
+  UA — so a genuinely-fired event silently routes to the
+  Android/Chromium branch (a plain "Add to home screen" button) instead of
+  the iOS numbered-steps guide, even with an iPhone UA. CI never hits this
+  because each E2E test gets a FRESH, zero-history browser context (no
+  accumulated engagement, so Chromium never fires the real event there),
+  which is why this only surfaces when verifying by hand against a reused
+  MCP profile. Fix: suppress the capture in the SAME `page.addInitScript`
+  that overrides the UA, so the app's own UA-based branch governs
+  regardless of what the underlying engine would have done:
+  ```js
+  await page.addInitScript(() => {
+    Object.defineProperty(window.navigator, 'userAgent', { get: () => '<iPhone UA>' });
+    const origAdd = window.addEventListener.bind(window);
+    window.addEventListener = function (type, listener, options) {
+      if (type === 'beforeinstallprompt') return; // force the UA-based iOS branch
+      return origAdd(type, listener, options);
+    };
+  });
+  ```
+  Confirms via `mcp__playwright__browser_network_requests` (filtered to the
+  endpoint under test) rather than a `page.on('request', ...)` counter
+  declared inside a `browser_run_code_unsafe` closure — a closure-local
+  counter returned from that tool was observed NOT reflecting requests
+  that actually fired (mechanism unclear, possibly a context-isolation
+  quirk of the unsafe-code sandbox); the MCP's own tracked request list
+  for the tab is the reliable source of truth.
