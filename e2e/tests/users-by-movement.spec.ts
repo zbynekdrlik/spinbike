@@ -82,16 +82,28 @@ test.describe('Users by last movement (#56)', () => {
 
         // B has dated activity (2 days ago) so it sits early in the dated
         // section. UMA-A (no movement) is in the NULL-FIRST chunk; UMA-C may
-        // be on a later page. Click "Show more" until B's row appears (max 5
-        // pages = 250 rows). The page-1 cap is 50 rows in the component.
-        const rowB = page.locator(`[data-testid="user-row"]:has-text("${b.name}")`);
-        for (let i = 0; i < 5; i++) {
-            if (await rowB.count()) break;
-            const showMore = page.locator('[data-testid="users-by-movement-show-more"]');
-            if (!(await showMore.count())) break;
+        // be on a later page.
+        //
+        // #288: a FIXED "click Show more up to N times" loop flakes as the
+        // shared single-worker E2E DB accumulates more no-movement users
+        // from every earlier test in the run — B's rank keeps growing and
+        // eventually outruns whatever cap N was. We already know B's EXACT
+        // rank from `idxB` (computed above via the API, against the same
+        // ordering the UI paginates). The component's own page size is 50
+        // (`const PAGE: i64 = 50;` in users_by_movement.rs) — the first
+        // load covers ranks 0..49, and each further "Show more" click adds
+        // another 50. So the number of clicks needed to guarantee B's rank
+        // is on-page is deterministic: `floor(idxB / 50)`, independent of
+        // how large the shared DB grows. This replaces the old fixed-5-tries
+        // loop entirely, closing the flake rather than just raising its cap.
+        const PAGE_SIZE = 50;
+        const clicksNeeded = Math.floor(idxB / PAGE_SIZE);
+        const showMore = page.locator('[data-testid="users-by-movement-show-more"]');
+        for (let i = 0; i < clicksNeeded; i++) {
+            await expect(showMore).toBeEnabled({ timeout: 5000 });
             await showMore.click();
-            await page.waitForTimeout(200);
         }
+        const rowB = page.locator(`[data-testid="user-row"]:has-text("${b.name}")`);
         await expect(rowB).toBeVisible();
 
         // Click row B → navigation lands on /staff with B's panel open.
