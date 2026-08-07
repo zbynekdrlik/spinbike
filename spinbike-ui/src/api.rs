@@ -30,23 +30,26 @@ fn base_url() -> String {
     String::new()
 }
 
-fn add_auth(req: RequestBuilder) -> RequestBuilder {
-    if let Some(token) = get_token() {
-        req.header("Authorization", &format!("Bearer {token}"))
-    } else {
-        req
+/// Attach the `Authorization` header if a token is currently stored, and
+/// return whether one was actually attached — captured HERE, at build time,
+/// alongside the token itself. #286: every caller MUST pass this captured
+/// bool into `handle_unauthorized`, never a fresh `get_token().is_some()`
+/// read after the response has resolved — see `handle_unauthorized`'s own
+/// doc comment for the race that re-reading fixes.
+fn add_auth(req: RequestBuilder) -> (RequestBuilder, bool) {
+    match get_token() {
+        Some(token) => (req.header("Authorization", &format!("Bearer {token}")), true),
+        None => (req, false),
     }
 }
 
 pub async fn get<T: DeserializeOwned>(path: &str) -> Result<T, String> {
     let url = format!("{}{}", base_url(), path);
-    let resp = add_auth(RequestBuilder::new(&url))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let (req, had_token) = add_auth(RequestBuilder::new(&url));
+    let resp = req.send().await.map_err(|e| e.to_string())?;
 
     if !resp.ok() {
-        if handle_unauthorized(resp.status(), get_token().is_some()) {
+        if handle_unauthorized(resp.status(), had_token) {
             return Err(session_expired_message());
         }
         let text = resp.text().await.unwrap_or_default();
@@ -63,13 +66,11 @@ pub async fn get<T: DeserializeOwned>(path: &str) -> Result<T, String> {
 /// by the customer-facing render sites that need to localize their error.
 pub async fn get_coded<T: DeserializeOwned>(path: &str) -> Result<T, CodedError> {
     let url = format!("{}{}", base_url(), path);
-    let resp = add_auth(RequestBuilder::new(&url))
-        .send()
-        .await
-        .map_err(CodedError::from_transport)?;
+    let (req, had_token) = add_auth(RequestBuilder::new(&url));
+    let resp = req.send().await.map_err(CodedError::from_transport)?;
 
     if !resp.ok() {
-        if handle_unauthorized(resp.status(), get_token().is_some()) {
+        if handle_unauthorized(resp.status(), had_token) {
             return Err(CodedError::msg(session_expired_message()));
         }
         let text = resp.text().await.unwrap_or_default();
@@ -81,14 +82,13 @@ pub async fn get_coded<T: DeserializeOwned>(path: &str) -> Result<T, CodedError>
 
 pub async fn post<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Result<T, String> {
     let url = format!("{}{}", base_url(), path);
-    let req = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::POST))
-        .json(body)
-        .map_err(|e| e.to_string())?;
+    let (req, had_token) = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::POST));
+    let req = req.json(body).map_err(|e| e.to_string())?;
 
     let resp = req.send().await.map_err(|e| e.to_string())?;
 
     if !resp.ok() {
-        if handle_unauthorized(resp.status(), get_token().is_some()) {
+        if handle_unauthorized(resp.status(), had_token) {
             return Err(session_expired_message());
         }
         let text = resp.text().await.unwrap_or_default();
@@ -151,14 +151,13 @@ pub async fn post_public_coded<B: Serialize, T: DeserializeOwned>(
 
 pub async fn put<B: Serialize>(path: &str, body: &B) -> Result<(), String> {
     let url = format!("{}{}", base_url(), path);
-    let req = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::PUT))
-        .json(body)
-        .map_err(|e| e.to_string())?;
+    let (req, had_token) = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::PUT));
+    let req = req.json(body).map_err(|e| e.to_string())?;
 
     let resp = req.send().await.map_err(|e| e.to_string())?;
 
     if !resp.ok() {
-        if handle_unauthorized(resp.status(), get_token().is_some()) {
+        if handle_unauthorized(resp.status(), had_token) {
             return Err(session_expired_message());
         }
         let text = resp.text().await.unwrap_or_default();
@@ -170,14 +169,13 @@ pub async fn put<B: Serialize>(path: &str, body: &B) -> Result<(), String> {
 
 pub async fn patch<B: Serialize, T: DeserializeOwned>(path: &str, body: &B) -> Result<T, String> {
     let url = format!("{}{}", base_url(), path);
-    let req = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::PATCH))
-        .json(body)
-        .map_err(|e| e.to_string())?;
+    let (req, had_token) = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::PATCH));
+    let req = req.json(body).map_err(|e| e.to_string())?;
 
     let resp = req.send().await.map_err(|e| e.to_string())?;
 
     if !resp.ok() {
-        if handle_unauthorized(resp.status(), get_token().is_some()) {
+        if handle_unauthorized(resp.status(), had_token) {
             return Err(session_expired_message());
         }
         let text = resp.text().await.unwrap_or_default();
@@ -260,14 +258,13 @@ pub async fn put_json<B: Serialize, T: DeserializeOwned>(
     body: &B,
 ) -> Result<T, ApiError> {
     let url = format!("{}{}", base_url(), path);
-    let req = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::PUT))
-        .json(body)
-        .map_err(|e| ApiError::msg(e.to_string()))?;
+    let (req, had_token) = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::PUT));
+    let req = req.json(body).map_err(|e| ApiError::msg(e.to_string()))?;
 
     let resp = req.send().await.map_err(|e| ApiError::msg(e.to_string()))?;
 
     if !resp.ok() {
-        if handle_unauthorized(resp.status(), get_token().is_some()) {
+        if handle_unauthorized(resp.status(), had_token) {
             return Err(ApiError::msg(session_expired_message()));
         }
         let text = resp.text().await.unwrap_or_default();
@@ -288,14 +285,13 @@ pub async fn post_json<B: Serialize, T: DeserializeOwned>(
     body: &B,
 ) -> Result<T, ApiError> {
     let url = format!("{}{}", base_url(), path);
-    let req = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::POST))
-        .json(body)
-        .map_err(|e| ApiError::msg(e.to_string()))?;
+    let (req, had_token) = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::POST));
+    let req = req.json(body).map_err(|e| ApiError::msg(e.to_string()))?;
 
     let resp = req.send().await.map_err(|e| ApiError::msg(e.to_string()))?;
 
     if !resp.ok() {
-        if handle_unauthorized(resp.status(), get_token().is_some()) {
+        if handle_unauthorized(resp.status(), had_token) {
             return Err(ApiError::msg(session_expired_message()));
         }
         let text = resp.text().await.unwrap_or_default();
@@ -309,13 +305,11 @@ pub async fn post_json<B: Serialize, T: DeserializeOwned>(
 
 pub async fn delete(path: &str) -> Result<(), String> {
     let url = format!("{}{}", base_url(), path);
-    let resp = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::DELETE))
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
+    let (req, had_token) = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::DELETE));
+    let resp = req.send().await.map_err(|e| e.to_string())?;
 
     if !resp.ok() {
-        if handle_unauthorized(resp.status(), get_token().is_some()) {
+        if handle_unauthorized(resp.status(), had_token) {
             return Err(session_expired_message());
         }
         let text = resp.text().await.unwrap_or_default();
@@ -336,13 +330,11 @@ pub async fn delete_empty(path: &str) -> Result<(), String> {
 /// `error_code` (#158) alongside the raw message — see [`get_coded`].
 pub async fn delete_coded(path: &str) -> Result<(), CodedError> {
     let url = format!("{}{}", base_url(), path);
-    let resp = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::DELETE))
-        .send()
-        .await
-        .map_err(CodedError::from_transport)?;
+    let (req, had_token) = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::DELETE));
+    let resp = req.send().await.map_err(CodedError::from_transport)?;
 
     if !resp.ok() {
-        if handle_unauthorized(resp.status(), get_token().is_some()) {
+        if handle_unauthorized(resp.status(), had_token) {
             return Err(CodedError::msg(session_expired_message()));
         }
         let text = resp.text().await.unwrap_or_default();
