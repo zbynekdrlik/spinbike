@@ -672,6 +672,75 @@ async fn blocked_staff_is_rejected_despite_role_bypass() {
     );
 }
 
+/// #274 review follow-up: a blocked customer with `allow_self_entry=0`
+/// (the DEFAULT, unlike the other blocked tests above which explicitly
+/// enable it first) must still get 401 session_invalid, not the 403
+/// not_allowed a non-blocked customer with the flag off would get — proves
+/// the blocked-or-deleted check really does win regardless of what
+/// `allow_self_entry` holds, not just when the flag happens to be on.
+#[tokio::test]
+async fn blocked_customer_without_allow_self_entry_returns_401_not_403() {
+    let app = TestApp::with_door_mode("success").await;
+    // allow_self_entry defaults to 0 — deliberately NOT calling
+    // enable_self_entry() here, unlike the sibling blocked tests.
+    sqlx::query("UPDATE users SET blocked = 1 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    let (status, body) = app
+        .request(post_json(
+            "/api/door/open",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "blocked customer must be session-invalid even with allow_self_entry \
+         at its default 0 — got body {body}"
+    );
+    assert_eq!(body["error_code"], "session_invalid");
+}
+
+/// #274 review follow-up: a customer who is BOTH blocked AND soft-deleted
+/// (the two ORed conditions both true at once) must still get exactly one
+/// clean 401 session_invalid — proves the `blocked || deleted_at.is_some()`
+/// gate doesn't do anything surprising when both sides are true.
+#[tokio::test]
+async fn blocked_and_soft_deleted_customer_returns_401_session_invalid() {
+    let app = TestApp::with_door_mode("success").await;
+    enable_self_entry(&app).await;
+    sqlx::query("UPDATE users SET blocked = 1 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let outcome = spinbike_server::db::users::delete_user(&app.pool, app.customer_id)
+        .await
+        .unwrap();
+    assert!(matches!(
+        outcome,
+        spinbike_server::db::users::DeleteUserOutcome::Deleted { .. }
+    ));
+
+    let (status, body) = app
+        .request(post_json(
+            "/api/door/open",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::UNAUTHORIZED,
+        "blocked-and-soft-deleted customer must get a single clean 401 — got body {body}"
+    );
+    assert_eq!(body["error_code"], "session_invalid");
+}
+
 /// #274: a syntactically-valid, unexpired JWT for a user that never existed
 /// (hard-deleted / bogus `sub`) must get 401 session_invalid, not the
 /// generic 403 `not_allowed` — mirrors `my_balance_missing_user_returns_401_not_404`
