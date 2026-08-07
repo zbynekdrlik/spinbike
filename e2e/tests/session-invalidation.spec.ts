@@ -406,3 +406,75 @@ test.describe('Session-invalidation redirect shows an explanation (#275)', () =>
         assertCleanConsole(messages);
     });
 });
+
+// #286 — `handle_unauthorized`'s `had_token` used to be re-read via
+// `get_token()` AFTER the response resolved, not the token actually
+// attached to THIS specific request. A concurrent `clear_auth()` (a second
+// tab logging out, or the user clicking Logout) landing between the
+// request being SENT and its 401 RESOLVING made `had_token` false at
+// read-time, silently skipping `mark_session_expired()`/`clear_auth()`/the
+// `/login` redirect for that one request — the customer was left on the
+// page with a generic inline error instead of the #275 notice. Fixed by
+// capturing `had_token` at `add_auth()` call time (request-build time,
+// before the await), not by re-reading storage afterward.
+//
+// `page.route` clears localStorage INSIDE the interception, before
+// fulfilling the 401 — deterministic (not a real timing race), but
+// reproduces the exact ordering the bug depended on: token present when
+// the request was built and sent, gone by the time the response resolves.
+test.describe('Concurrent logout during an in-flight request still shows the notice (#286)', () => {
+    test('a session cleared while a request is in flight still redirects with the notice', async ({
+        page,
+        baseURL,
+    }) => {
+        const messages = setupConsoleCheck(page);
+
+        const suffix = Array.from({ length: 8 }, () =>
+            String.fromCharCode(97 + Math.floor(Math.random() * 26)),
+        ).join('');
+        const email = `race-${suffix}@test.local`;
+        const password = `Pw-${suffix}`;
+        const seedResp = await fetch(`${BASE_URL}/api/test/seed-account`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password, name: `Race ${suffix}`, role: 'customer' }),
+        });
+        if (!seedResp.ok) {
+            throw new Error(`seed-account failed: ${seedResp.status} ${await seedResp.text()}`);
+        }
+
+        await loginViaAPI(page, baseURL!, email, password);
+
+        // The token IS present when this request is built and sent (it's a
+        // live, freshly-logged-in session) — the race is about what happens
+        // to it WHILE the request is in flight, not about it being absent
+        // from the start.
+        await page.route('**/api/my/balance', async (route) => {
+            await page.evaluate(() => {
+                localStorage.removeItem('spinbike_token');
+                localStorage.removeItem('spinbike_user');
+            });
+            await route.fulfill({
+                status: 401,
+                contentType: 'application/json',
+                body: JSON.stringify({ error: 'Session invalid', error_code: 'session_invalid' }),
+            });
+        });
+
+        await page.goto('/my/balance');
+
+        await page.waitForURL('**/login', { timeout: 10000 });
+        const notice = page.locator('[data-testid="session-expired-notice"]');
+        await expect(notice).toBeVisible();
+        // English: loginViaAPI's setEnglishLanguage init script re-fires on
+        // every later navigation (#276 gotcha, see the #275 tests above).
+        await expect(notice).toContainText('Your session is no longer valid');
+
+        const token = await page.evaluate(() => localStorage.getItem('spinbike_token'));
+        const user = await page.evaluate(() => localStorage.getItem('spinbike_user'));
+        expect(token).toBeNull();
+        expect(user).toBeNull();
+
+        assertCleanConsole(messages);
+    });
+});
