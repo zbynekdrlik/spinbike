@@ -92,13 +92,16 @@ claims back, so there's nothing for the check to protect). But `StaffUser`
 and `AdminUser`
 (`auth/mod.rs`) both internally call `AuthUser::from_request_parts` FIRST —
 so moving the check INTO `AuthUser` would silently cascade to every
-`StaffUser`/`AdminUser` handler too: measured **50** `StaffUser` + **15**
-`AdminUser` call sites, ~73 handlers total, not the ~17 #277 estimated.
-Most of those act on a TARGET user by path id (staff editing a customer,
-admin managing cards) — gating on the CALLER's own liveness there is a
-materially bigger, separate decision (should a blocked staff account be
-locked out of every admin action mid-shift, not just self-acting ones?)
-needing its own review of all ~73 call sites' tests. Cost of the extra
+`StaffUser`/`AdminUser` handler too: measured **37** `StaffUser` + **12**
+`AdminUser` handler-parameter call sites (grepped for the actual extractor
+PARAMETER, not every mention of the type name — an earlier pass of this
+count, 50/15, double-counted `use` imports and doc-comment mentions;
+`code-review` caught the error), ~58 handlers total, not the ~17 #277
+estimated. Most of those act on a TARGET user by path id (staff editing a
+customer, admin managing cards) — gating on the CALLER's own liveness there
+is a materially bigger, separate decision (should a blocked staff account
+be locked out of every admin action mid-shift, not just self-acting ones?)
+needing its own review of all ~58 call sites' tests. Cost of the extra
 `SELECT` is negligible either way (single SQLite file, sub-millisecond,
 low-traffic single-operator app) — scope discipline, not cost, is still the
 deciding factor. If a future ticket wants the extractor-level guarantee for

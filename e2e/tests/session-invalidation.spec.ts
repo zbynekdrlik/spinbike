@@ -365,18 +365,23 @@ test.describe('Session-invalidation redirect shows an explanation (#275)', () =>
 
         await loginViaAPI(page, baseURL!, email, password);
 
-        // Block AFTER logging in — the browser still holds the now-dead
-        // session, same shape as the other tests in this file.
+        // Load /my/balance WHILE STILL LIVE — GET /api/my/balance (#268)
+        // already 401s+redirects for a dead session, so if we blocked
+        // first, the page would never even mount the door button; this
+        // test is specifically about door_button.rs's OWN inline 401
+        // handler firing on the door PRESS itself, not the page load.
+        await page.goto('/my/balance');
+        const btn = page.locator('[data-testid="door-open-button"]');
+        await expect(btn).toBeVisible();
+
+        // Block only AFTER the page (and the door button) is up — the
+        // browser still holds the now-dead session in memory/localStorage.
         const blockResp = await fetch(`${BASE_URL}/api/users/block`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
             body: JSON.stringify({ user_id, blocked: true }),
         });
         expect(blockResp.ok).toBeTruthy();
-
-        await page.goto('/my/balance');
-        const btn = page.locator('[data-testid="door-open-button"]');
-        await expect(btn).toBeVisible();
 
         // Hold 1s+ so the press actually fires (the hold-guard, #266) —
         // the in-flight POST /api/door/open gets 401 for the now-blocked
