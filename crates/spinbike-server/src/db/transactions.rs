@@ -333,6 +333,66 @@ mod tests {
         timestamps
     }
 
+    /// #291 (found investigating a recurring txn-note.spec.ts E2E flake):
+    /// `created_at`'s column default is `datetime('now')`, which SQLite
+    /// resolves at SECOND precision -- two transactions created within the
+    /// same wall-clock second (e.g. `createUniqueUser`'s initial-credit
+    /// top-up immediately followed by a staff charge, the exact E2E shape)
+    /// get an IDENTICAL `created_at` string. `ORDER BY t.created_at DESC`
+    /// alone gives SQLite no tiebreaker for those rows -- their relative
+    /// order is UNSPECIFIED, and was observed flipping between CI runs
+    /// (sometimes the older top-up sorted first, sometimes the newer charge
+    /// did), silently breaking the transactions list's "first row = most
+    /// recent" invariant every UI/E2E assertion relies on.
+    ///
+    /// [red]: fails without a secondary `id DESC` tiebreaker -- SQLite is
+    /// free to return the tied rows in EITHER order, so asserting the
+    /// specific newest-id-first order this ticket requires is not
+    /// guaranteed to hold today.
+    #[tokio::test]
+    async fn same_created_at_transactions_break_ties_by_id_newest_first() {
+        let pool = setup().await;
+        let user_id = insert_test_user(&pool, "Tie-1 User").await;
+
+        let tied_at = "2026-01-01 12:00:00";
+        let older_id: i64 = sqlx::query_scalar(
+            "INSERT INTO transactions (user_id, amount, action, created_at)
+             VALUES (?, ?, ?, ?) RETURNING id",
+        )
+        .bind(user_id)
+        .bind(50.0_f64)
+        .bind("topup")
+        .bind(tied_at)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let newer_id: i64 = sqlx::query_scalar(
+            "INSERT INTO transactions (user_id, amount, action, created_at)
+             VALUES (?, ?, ?, ?) RETURNING id",
+        )
+        .bind(user_id)
+        .bind(-1.5_f64)
+        .bind("charge")
+        .bind(tied_at)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            newer_id > older_id,
+            "AUTOINCREMENT must have assigned a strictly larger id to the later insert"
+        );
+
+        let rows = list_transactions_for_user_paginated(&pool, user_id, None, None)
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(
+            rows[0].id, newer_id,
+            "same-created_at rows must break ties newest-id-first, not by incidental scan order"
+        );
+        assert_eq!(rows[1].id, older_id);
+    }
+
     #[tokio::test]
     async fn paginated_default_returns_at_most_10_newest_first() {
         let pool = setup().await;
