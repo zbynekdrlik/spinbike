@@ -263,7 +263,11 @@ test.describe('Session-invalidation redirect shows an explanation (#275)', () =>
 
         const notice = page.locator('[data-testid="session-expired-notice"]');
         await expect(notice).toBeVisible();
-        await expect(notice).toContainText('Tvoje prihlasenie uz nie je platne');
+        // English, not Slovak: loginViaAPI's setEnglishLanguage registers a
+        // page.addInitScript that re-fires on EVERY later navigation for the
+        // lifetime of this page (including the /login redirect below) — a
+        // documented e2e-testing skill gotcha (#276), not a locale bug.
+        await expect(notice).toContainText('Your session is no longer valid');
 
         const token = await page.evaluate(() => localStorage.getItem('spinbike_token'));
         const user = await page.evaluate(() => localStorage.getItem('spinbike_user'));
