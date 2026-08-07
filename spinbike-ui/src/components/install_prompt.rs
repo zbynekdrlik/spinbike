@@ -125,6 +125,20 @@ fn store_install_token(token: &str) {
     crate::storage::cache_set(INSTALL_TOKEN_STORAGE_KEY, token);
 }
 
+/// Whether THIS `Effect` firing may proceed to mint a fresh install token.
+///
+/// #282: a session-storage-only check is a check-then-act race — the mint
+/// POST is async and `store_install_token()` only runs after it resolves,
+/// so a SECOND `Effect` firing (e.g. `InstallPrompt`'s second mount on
+/// `/my/balance` after the `/welcome` CTA link, before the first mint's
+/// response has landed) still observes no stored token and also mints.
+/// See the `mint-guard-race` unit test below, which reproduces exactly
+/// this: two firings racing ahead of any write-back must not both claim
+/// the slot.
+fn try_claim_mint_slot() -> bool {
+    stored_install_token().is_none()
+}
+
 /// Arm BOTH remaining legs of the round-5 (#261) ladder for an install
 /// token, given a token already minted (or reused from the sessionStorage
 /// guard):
@@ -375,12 +389,18 @@ pub fn InstallPrompt() -> impl IntoView {
     // is reused and re-armed on every mount (including a same-tab reload);
     // only the FIRST mount in a session actually POSTs.
     //
+    // #282: `try_claim_mint_slot()` additionally guards against a SECOND
+    // mount racing ahead of the FIRST mint's async response — see its doc.
+    //
     // Fires once on mount; the mint is an authenticated call (api::post) and
     // every step degrades to a silent no-op on failure.
     if initial_kind == PromptKind::Ios && auth::get_token().is_some() {
         Effect::new(move |_| {
             if let Some(token) = stored_install_token() {
                 arm_install_credential(&token);
+                return;
+            }
+            if !try_claim_mint_slot() {
                 return;
             }
             spawn_local(async move {
@@ -459,7 +479,7 @@ pub fn InstallPrompt() -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::install_welcome_url;
+    use super::{install_welcome_url, try_claim_mint_slot};
     use wasm_bindgen_test::*;
 
     /// Mirrors the server-side `manifest.rs::install_start_url` formula
@@ -471,6 +491,29 @@ mod tests {
         assert_eq!(
             install_welcome_url("abc-123_XYZ"),
             "/welcome?t=abc-123_XYZ&src=install"
+        );
+    }
+
+    /// #282 regression: two `Effect` firings can both race ahead of the
+    /// first mint POST's response landing — `store_install_token()` never
+    /// runs until then, so a session-storage-only check (`stored_install_token()
+    /// .is_none()`) sees "no token yet" both times and lets BOTH claim a
+    /// mint slot, exactly the CI-observed `mintCount == 2`
+    /// (`install-prompt.spec.ts`'s "sessionStorage guard" test). `wasm-pack
+    /// test --node` has no real `window`/sessionStorage (see `storage.rs`'s
+    /// own tests), so `stored_install_token()` returns `None` on every call
+    /// in this env regardless of what would "really" be stored — which is
+    /// exactly what makes this a clean, deterministic repro of the race:
+    /// the ONLY thing that may distinguish the first call from the second
+    /// is an in-memory single-flight guard, not sessionStorage state.
+    #[wasm_bindgen_test]
+    fn only_one_effect_firing_may_claim_the_mint_slot_before_a_token_is_stored() {
+        let first = try_claim_mint_slot();
+        let second = try_claim_mint_slot();
+        assert!(first, "the first firing must be allowed to mint");
+        assert!(
+            !second,
+            "#282: a second firing before the first's mint response lands must NOT also claim the slot"
         );
     }
 }
