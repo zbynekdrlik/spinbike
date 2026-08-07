@@ -45,6 +45,8 @@
 //! 365-day, multi-use, and capped at 5 live tokens/user — see
 //! `db/login_tokens.rs`'s `create_install_token`/`redeem_install`.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use js_sys::{Function, Promise, Reflect};
 use leptos::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -123,6 +125,71 @@ fn stored_install_token() -> Option<String> {
 /// this tab might mint again, not a correctness break.
 fn store_install_token(token: &str) {
     crate::storage::cache_set(INSTALL_TOKEN_STORAGE_KEY, token);
+}
+
+/// Module-level (NOT component-local) single-flight guard for the install-
+/// token mint (#282 fix). A Leptos signal declared inside `InstallPrompt`'s
+/// component body would be destroyed on unmount and re-created fresh on
+/// the NEXT mount — exactly the same gap `stored_install_token()` already
+/// has (see its doc). This `static` instead survives for the lifetime of
+/// the WASM instance regardless of how many times `InstallPrompt`
+/// mounts/unmounts within one browser session (e.g. `/welcome` -> the CTA
+/// link -> `/my/balance`), so it can actually guard ACROSS mounts.
+static MINT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
+
+/// Whether THIS `Effect` firing may proceed to mint a fresh install token:
+/// `false` when a token is already stored, OR when another firing already
+/// claimed the slot and hasn't finished (or failed) yet.
+///
+/// #282 fix: a session-storage-only check is a check-then-act race — the
+/// mint POST is async and `store_install_token()` only runs after it
+/// resolves, so a SECOND `Effect` firing (e.g. `InstallPrompt`'s second
+/// mount on `/my/balance` after the `/welcome` CTA link, before the first
+/// mint's response has landed) used to also observe no stored token and
+/// also mint. The fix is `AtomicBool::swap` — a single SYNCHRONOUS
+/// check-and-set with no `.await` in between — so only the first firing in
+/// this WASM instance's lifetime can ever pass both checks. See the
+/// `only_one_effect_firing_may_claim_the_mint_slot_before_a_token_is_stored`
+/// unit test below.
+fn try_claim_mint_slot() -> bool {
+    if stored_install_token().is_some() {
+        return false;
+    }
+    !MINT_IN_FLIGHT.swap(true, Ordering::SeqCst)
+}
+
+/// Release a previously-claimed mint slot after a FAILED mint (network
+/// error, non-2xx, etc.) so a later remount in this session can retry —
+/// matching this module's existing "every step degrades to a silent no-op
+/// on failure" discipline.
+fn release_mint_slot() {
+    MINT_IN_FLIGHT.store(false, Ordering::SeqCst);
+}
+
+/// Persist + arm the credential for a freshly, successfully minted token,
+/// then verify the persist actually landed — releasing the slot if it
+/// didn't (code-review finding on #282, [green]).
+///
+/// A mint that succeeds at the HTTP layer can still fail to PERSIST
+/// client-side — `store_install_token()` (`storage::cache_set`) silently
+/// no-ops on ANY sessionStorage failure (private browsing, quota, a
+/// security exception — same degrade-gracefully discipline as every other
+/// storage call in this crate, see `storage.rs`). Without this check,
+/// `MINT_IN_FLIGHT` would stay permanently claimed even though
+/// `stored_install_token()` keeps returning `None` on every later mount in
+/// this WASM session — `try_claim_mint_slot()` would then refuse forever,
+/// silently disabling the belt-and-braces auto-login credential for the
+/// rest of the session with no way to recover short of a full page reload.
+/// This mount's OWN credential is still armed regardless (the token is
+/// already in hand, storage is only a cache for LATER mounts) — only the
+/// slot's retry-eligibility depends on the persist having actually landed.
+/// See `a_successful_mint_that_fails_to_persist_releases_the_slot_for_a_later_retry`.
+fn confirm_mint_or_release(token: &str) {
+    store_install_token(token);
+    arm_install_credential(token);
+    if stored_install_token().is_none() {
+        release_mint_slot();
+    }
 }
 
 /// Arm BOTH remaining legs of the round-5 (#261) ladder for an install
@@ -375,6 +442,9 @@ pub fn InstallPrompt() -> impl IntoView {
     // is reused and re-armed on every mount (including a same-tab reload);
     // only the FIRST mount in a session actually POSTs.
     //
+    // #282: `try_claim_mint_slot()` additionally guards against a SECOND
+    // mount racing ahead of the FIRST mint's async response — see its doc.
+    //
     // Fires once on mount; the mint is an authenticated call (api::post) and
     // every step degrades to a silent no-op on failure.
     if initial_kind == PromptKind::Ios && auth::get_token().is_some() {
@@ -383,15 +453,18 @@ pub fn InstallPrompt() -> impl IntoView {
                 arm_install_credential(&token);
                 return;
             }
+            if !try_claim_mint_slot() {
+                return;
+            }
             spawn_local(async move {
-                if let Ok(resp) = api::post::<InstallTokenReq, InstallTokenResp>(
+                match api::post::<InstallTokenReq, InstallTokenResp>(
                     "/api/auth/install-token",
                     &InstallTokenReq {},
                 )
                 .await
                 {
-                    store_install_token(&resp.token);
-                    arm_install_credential(&resp.token);
+                    Ok(resp) => confirm_mint_or_release(&resp.token),
+                    Err(_) => release_mint_slot(),
                 }
             });
         });
@@ -459,7 +532,9 @@ pub fn InstallPrompt() -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::install_welcome_url;
+    use super::{
+        confirm_mint_or_release, install_welcome_url, release_mint_slot, try_claim_mint_slot,
+    };
     use wasm_bindgen_test::*;
 
     /// Mirrors the server-side `manifest.rs::install_start_url` formula
@@ -471,6 +546,68 @@ mod tests {
         assert_eq!(
             install_welcome_url("abc-123_XYZ"),
             "/welcome?t=abc-123_XYZ&src=install"
+        );
+    }
+
+    /// #282 regression: two `Effect` firings can both race ahead of the
+    /// first mint POST's response landing — `store_install_token()` never
+    /// runs until then, so a session-storage-only check (`stored_install_token()
+    /// .is_none()`) sees "no token yet" both times and lets BOTH claim a
+    /// mint slot, exactly the CI-observed `mintCount == 2`
+    /// (`install-prompt.spec.ts`'s "sessionStorage guard" test). `wasm-pack
+    /// test --node` has no real `window`/sessionStorage (see `storage.rs`'s
+    /// own tests), so `stored_install_token()` returns `None` on every call
+    /// in this env regardless of what would "really" be stored — which is
+    /// exactly what makes this a clean, deterministic repro of the race:
+    /// the ONLY thing that may distinguish the first call from the second
+    /// is an in-memory single-flight guard, not sessionStorage state.
+    #[wasm_bindgen_test]
+    fn only_one_effect_firing_may_claim_the_mint_slot_before_a_token_is_stored() {
+        // Normalize state first: MINT_IN_FLIGHT is a module-level static
+        // shared across every test in this file's wasm-pack test binary
+        // (same wasm instance, no per-test isolation) — without this reset,
+        // a run order where another test claims-and-leaves-claimed first
+        // would make `first` false here, an order-dependent flake.
+        release_mint_slot();
+        let first = try_claim_mint_slot();
+        let second = try_claim_mint_slot();
+        assert!(first, "the first firing must be allowed to mint");
+        assert!(
+            !second,
+            "#282: a second firing before the first's mint response lands must NOT also claim the slot"
+        );
+    }
+
+    /// Code-review finding on #282: a mint that succeeds at the HTTP layer
+    /// can still fail to PERSIST client-side (sessionStorage throwing in
+    /// private browsing, quota, a security exception — `store_install_token`
+    /// silently no-ops on any such failure, see `storage.rs`). If the slot
+    /// stays claimed regardless, `try_claim_mint_slot()` refuses FOREVER on
+    /// every later mount in this WASM session even though
+    /// `stored_install_token()` keeps returning `None` — silently disabling
+    /// the belt-and-braces auto-login credential with no way to recover
+    /// short of a full page reload. `wasm-pack test --node` has no real
+    /// `window`/sessionStorage at all (see `storage.rs`'s own tests), so
+    /// `store_install_token()` always silently no-ops here — exactly
+    /// simulating a persist failure even though this test's fake token
+    /// stands in for a real, successful 200 response.
+    ///
+    /// [red -> green]: failed on the commit that only extracted
+    /// `confirm_mint_or_release` without yet verifying the persist landed
+    /// (`try_claim_mint_slot()` stayed `false` after a "successful" mint
+    /// that never actually persisted); passes now that it releases the
+    /// slot when the persist didn't land.
+    #[wasm_bindgen_test]
+    fn a_successful_mint_that_fails_to_persist_releases_the_slot_for_a_later_retry() {
+        release_mint_slot();
+        assert!(
+            try_claim_mint_slot(),
+            "must be claimable at the start of this test"
+        );
+        confirm_mint_or_release("fake-token-never-persists-in-this-test-env");
+        assert!(
+            try_claim_mint_slot(),
+            "#282: a mint whose persist silently failed must release its slot so a later mount can retry"
         );
     }
 }

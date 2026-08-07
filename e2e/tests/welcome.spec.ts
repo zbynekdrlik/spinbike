@@ -165,7 +165,7 @@ test.describe('Magic-link welcome page (#109)', () => {
     test('a dead token without a session lands on the recovery screen, no raw error (#261)', async ({
         page,
     }) => {
-        const consoleMessages = setupConsoleCheck(page);
+        const consoleMessages = setupConsoleCheck(page, { allow4xxFor: ['/api/auth/token-login'] });
         await setEnglishLanguage(page);
 
         await page.goto('/welcome?t=this-token-was-never-issued&src=install');

@@ -33,7 +33,7 @@ async function seedActivePass(token: string, barcode: string) {
 }
 
 test('duplicate same-day manual visit: warns, Cancel logs nothing, Add anyway logs the second', async ({ page }) => {
-    const msgs = setupConsoleCheck(page);
+    const msgs = setupConsoleCheck(page, { allow4xxFor: ['/api/payments/log-visit'] });
     const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
 
     const RUN_TAG = `DUPV${Math.random().toString(36).slice(2, 12).toUpperCase()}`;
@@ -89,7 +89,7 @@ test('duplicate same-day manual visit: warns, Cancel logs nothing, Add anyway lo
 });
 
 test('duplicate same-day visit sourced from a door entry: warns with "via door"', async ({ page }) => {
-    const msgs = setupConsoleCheck(page);
+    const msgs = setupConsoleCheck(page, { allow4xxFor: ['/api/payments/log-visit'] });
     const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
 
     const RUN_TAG = `DUPVDOOR${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
@@ -151,7 +151,7 @@ test('duplicate same-day visit sourced from a door entry: warns with "via door"'
 // track every POST to log-visit and assert the force-retry click fires
 // exactly one.
 test('force-retry "Add anyway" button re-entry guard: rapid double-click fires only one POST', async ({ page }) => {
-    const msgs = setupConsoleCheck(page);
+    const msgs = setupConsoleCheck(page, { allow4xxFor: ['/api/payments/log-visit'] });
     const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
 
     const RUN_TAG = `DUPVFG${Math.random().toString(36).slice(2, 10).toUpperCase()}`;

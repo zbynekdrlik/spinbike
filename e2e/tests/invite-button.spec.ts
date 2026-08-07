@@ -200,7 +200,7 @@ test.describe('Staff "Send invite" button in edit-info form (#111, #141, #232)',
     test('invite endpoint failure keeps the sheet open with the in-sheet red alert (#232)', async ({
         page,
     }) => {
-        const consoleMessages = setupConsoleCheck(page);
+        const consoleMessages = setupConsoleCheck(page, { allow4xxFor: ['/invite'] });
         const adminToken = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
 
         const email = randomEmail('inviteerr');
@@ -208,9 +208,10 @@ test.describe('Staff "Send invite" button in edit-info form (#111, #141, #232)',
         await openEditInfoSheet(page, user.name);
 
         // The save step (PUT) succeeds normally; only the invite POST fails.
-        // Status kept in the 4xx range so the console-check helper's existing
-        // benign-4xx filter applies (a mocked failure isn't a real bug) —
-        // the client branches on the JSON `error` string, not the status.
+        // Status kept in the 4xx range so the console-check helper's
+        // allow4xxFor-scoped filter applies (a mocked failure isn't a real
+        // bug) — the client branches on the JSON `error` string, not the
+        // status.
         await page.route(`**/api/users/${user.user_id}/invite`, (route) =>
             route.fulfill({
                 status: 400,
@@ -294,7 +295,7 @@ test.describe('Staff "Send invite" button in edit-info form (#111, #141, #232)',
     test('a colliding typed email: one-click invite shows the in-sheet 409 error, stays open, sends nothing', async ({
         page,
     }) => {
-        const consoleMessages = setupConsoleCheck(page);
+        const consoleMessages = setupConsoleCheck(page, { allow4xxFor: ['/api/users'] });
         const adminToken = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
 
         // A holder account that already OWNS an email (and has a card_code, so
@@ -327,7 +328,8 @@ test.describe('Staff "Send invite" button in edit-info form (#111, #141, #232)',
         expect((await lookupCard(adminToken, victim.card_code)).email ?? '').toBe('');
 
         // The 409 logs a browser-level 4xx "Failed to load resource" that the
-        // shared helper already filters — nothing else should appear.
+        // shared helper filters ONLY for /api/users (#278, allow4xxFor above)
+        // — nothing else should appear.
         assertCleanConsole(consoleMessages);
     });
 

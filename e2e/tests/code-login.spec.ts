@@ -87,7 +87,7 @@ test.describe('Login page — customer login-code (#227)', () => {
     });
 
     test('a wrong code shows a localized error and does not log in', async ({ page }) => {
-        const consoleMessages = setupConsoleCheck(page);
+        const consoleMessages = setupConsoleCheck(page, { allow4xxFor: ['/api/auth/code-login'] });
         const email = await seedCustomer(page);
 
         await setEnglishLanguage(page);
@@ -131,7 +131,14 @@ test.describe('Customer login method ordering — installed standalone iOS (#228
     });
 
     test('standalone + iOS leads with the code form on /login', async ({ page }) => {
-        const consoleMessages = setupConsoleCheck(page);
+        // launch_beacon.rs fires POST /api/metrics/launch fire-and-forget on
+        // EVERY navigation once `navigator.standalone` is true (set below) —
+        // an incidental side effect of this test's own setup, not something
+        // it asserts on. Rate-limited per-IP and shared across the whole
+        // serial CI run (all setIosStandalone() tests hit the same limiter),
+        // so it can legitimately 429 depending on run position (observed on
+        // CI run 31199203784: this exact test + the Android one below).
+        const consoleMessages = setupConsoleCheck(page, { allow4xxFor: ['/api/metrics/launch'] });
         await setIosStandalone(page);
         await setEnglishLanguage(page);
         await page.goto('/login');
@@ -154,7 +161,9 @@ test.describe('Customer login method ordering — installed standalone iOS (#228
     test('standalone + iOS leads with the code form on /welcome invalid-token fallback', async ({
         page,
     }) => {
-        const consoleMessages = setupConsoleCheck(page);
+        // See the /login standalone test above — same launch-beacon 429
+        // exposure, same allow-list.
+        const consoleMessages = setupConsoleCheck(page, { allow4xxFor: ['/api/metrics/launch'] });
         await setIosStandalone(page);
         await setEnglishLanguage(page);
         await page.goto('/welcome');
@@ -203,7 +212,10 @@ test.describe('Customer login method ordering — Android standalone unaffected 
     });
 
     test('standalone + Android still leads with the link form', async ({ page }) => {
-        const consoleMessages = setupConsoleCheck(page);
+        // See the iOS standalone tests above — same launch-beacon 429
+        // exposure (setIosStandalone sets navigator.standalone, which is
+        // what launch_beacon.rs's is_standalone() checks, regardless of UA).
+        const consoleMessages = setupConsoleCheck(page, { allow4xxFor: ['/api/metrics/launch'] });
         await setIosStandalone(page);
         await setEnglishLanguage(page);
         await page.goto('/login');

@@ -3,6 +3,78 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-08-07 — #288 pagination flake + #39 recurrence: barcode-tail search ranking bug (same PR #290 batch, dev.127)
+
+- **Why:** discovered mid-PR while hardening PR #290 (the #286+#287+#289
+  batch above) — a shared-DB CI flake (#288) and a real recurrence of #39's
+  collision class, this time surfacing an actual PRODUCT ranking bug, not
+  just test-fixture pollution. All commits ride the same `dev` branch/PR
+  #290 as #286/#287/#289; no separate PR.
+- **#288 fix (`1794e11`):** `users-by-movement.spec.ts`'s "Show more" loop
+  capped at 5 clicks (250 rows) hunting a seeded row by text match. As the
+  shared single-worker CI E2E DB accumulates more no-movement users across
+  the 215-test run, the seeded row's rank drifts deeper and the fixed cap
+  becomes insufficient. The test already computes the row's exact rank via
+  an API call before touching the UI — now it clicks "Show more" exactly
+  `floor(rank / PAGE_SIZE)` times instead of guessing with a fixed bound.
+  Root-cause investigation on PR #290 also REFUTED the had_token/add_auth
+  changes and `action_form.rs` as causes (both unchanged by this diff).
+- **#39 recurrence, E2E side (`c876103` [red] → `a048216` [green]):**
+  `dashboard.spec.ts`'s staff search does an unanchored
+  `search_text LIKE '%1001%'` and several tests trusted `.first()` for a
+  short digit query. `category-revenue.spec.ts`'s own `Date.now()`-based
+  card_code substring-collided with `'1001'` on CI run 31178634087
+  ("CR Reports…" outranked "Jana Testova") — the exact #39 mechanism
+  (closed May via `f289ac7`'s letters-only suffix helper) recurring because
+  the fix never fully propagated. Producer-side (root cause, matches #39's
+  own fix): extracted `uniqueLetterSuffix()` (pure a-z, zero digits — no
+  digit-substring collision possible by construction) into `helpers.ts`,
+  migrated 13 spec files off `Date.now()`-based suffixes onto it. Consumer-
+  side (defense in depth): `dashboard.spec.ts`'s 3 affected tests now scope
+  the result locator by `{ hasText: <expected name> }` instead of raw
+  `.first()` position. Alternative rejected: consumer-side-only hardening
+  (issue #39's own "Option 4") — cheaper but leaves all 13 producers free to
+  manufacture the next collision; doing both retires the class.
+- **#39 recurrence, SERVER side (`5fc07a0` [red] → `22477a7` [green]):**
+  the E2E hardening above only patches test fixtures — investigation found
+  the SAME bug shape live in `search_users`/`search_users_with_pass`
+  (`crates/spinbike-server/src/db/users.rs`): only a card_code PREFIX match
+  was special-cased; a card_code ending with the typed digits (a barcode
+  TAIL — the common real-world case, "type the last digits off a card")
+  fell into the same catch-all bucket as an unrelated card merely
+  CONTAINING those digits, and ordering fell through to plain name ASC.
+  Reproduces CI run 31189869886's "AAA Polluter" outranking "Jana Testova".
+  Fix adds an exact-match bucket (0), then a combined prefix-OR-suffix
+  "boundary match" bucket (1), above the generic contains-elsewhere bucket
+  (2) — applied identically to both db-layer search functions (only
+  `search_users_with_pass` is reachable from a route today; `search_users`
+  shares the identical bug shape in the same file).
+- **Follow-up test-assertion fix (`36eae91`):** the new regression test
+  (`dashboard.spec.ts:48`) initially asserted the full 8-digit card number
+  against the search-RESULT row before any click — that row intentionally
+  renders only the last 4 digits by design (also relied on by
+  `negative-balance.spec.ts`); the full number only appears in the action
+  panel after clicking. Confirmed via the raw CI log that the locator
+  correctly found Jana's row (name-scoped, immune to the ranking bug) — a
+  misplaced assertion, not a second product defect. User decision (PR #290
+  comment thread): fix the assertion, keep the row's tail-only rendering
+  and the ranking fix untouched.
+- **Verified LIVE on `https://spinbike.sk` (v0.15.0-dev.127) post-deploy:**
+  two synthetic customers — card `88012345` (ends with `12345`) vs card
+  `9912345000` (merely contains `12345`) — via both the local-origin API
+  (`/api/users/search?q=12345`) and the real staff dashboard DOM: the
+  tail-matching card ranks first in both, and clicking it opens the correct
+  card's detail panel (full number `88012345`). Both synthetic rows deleted
+  after (0 remaining).
+- **Commits (dev, same PR #290 as the batch above):** `1794e11` → `c876103`
+  [red] → `a048216` [green] → `5fc07a0` [red] → `22477a7` [green] →
+  `36eae91`. PR [#290](https://github.com/zbynekdrlik/spinbike/pull/290)
+  (Closes #286, Closes #287, Closes #289 — #288 and #39 closed separately,
+  no `Closes` keyword since they predate/ride this same PR), merged
+  `9978611`. Main CI run
+  [31193314710](https://github.com/zbynekdrlik/spinbike/actions/runs/31193314710)
+  green incl. E2E, Deploy (prod), Smoke (prod).
+
 ## 2026-08-07 — #286 + #287 + #289: had_token race fix + shared sessionStorage helper + backfilled log entry (dev.127)
 
 - **Why:** all three surfaced during `/code-review` of PR #285 (the #284 +
