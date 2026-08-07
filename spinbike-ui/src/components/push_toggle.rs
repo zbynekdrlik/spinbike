@@ -4,20 +4,21 @@
 //! users reflexively deny (per the issue). One explicit button; permission
 //! is requested only on click.
 //!
-//! **Reading the subscription result uses `js_sys::Reflect` + `toJSON()`,
+//! **Reading the subscription result uses `js_sys::Reflect` and `toJSON()`,
 //! not a typed `web_sys::PushSubscription` binding.** `PushSubscription`
-//! has no live `keys` PROPERTY — only a `toJSON()` METHOD that computes
+//! has no live `keys` PROPERTY, only a `toJSON()` METHOD that computes
 //! `{endpoint, keys: {p256dh, auth}}` from the raw key material. Calling
-//! that method dynamically (rather than `.dyn_into::<PushSubscription>()`
-//! + typed getters) works identically whether the resolved value is a real
-//! browser `PushSubscription` OR a plain object shaped the same way — which
-//! is what makes the E2E test for this button tractable: it stubs
-//! `PushManager.prototype.subscribe` (the ONE hop that would otherwise need
-//! a live round-trip to the browser's real push service) with a plain JS
-//! object exposing `endpoint` + `toJSON()`, and this code neither knows nor
-//! cares that it isn't the native class instance. `ServiceWorkerRegistration`/
-//! `PushManager`/`Notification` stay on typed `web_sys` bindings throughout —
-//! only the final subscription-object READ is untyped.
+//! that method dynamically, rather than `.dyn_into::<PushSubscription>()`
+//! and typed getters, works identically whether the resolved value is a
+//! real browser `PushSubscription` or a plain object shaped the same way.
+//! That is what makes the E2E test for this button tractable: it stubs
+//! `PushManager.prototype.subscribe` (the ONE hop that would otherwise
+//! need a live round-trip to the browser's real push service) with a
+//! plain JS object exposing `endpoint` and `toJSON()`, and this code
+//! neither knows nor cares that it isn't the native class instance.
+//! `ServiceWorkerRegistration`, `PushManager`, and `Notification` stay on
+//! typed `web_sys` bindings throughout; only the final subscription-object
+//! read is untyped.
 
 use js_sys::Function;
 use leptos::prelude::*;

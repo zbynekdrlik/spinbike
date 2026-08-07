@@ -246,7 +246,9 @@ mod tests {
 
         // V13 dropped the `cards` table and promoted its columns into `users`.
         // V17 added `login_tokens` (magic-link tokens) — sorts after
-        // `instructors`, before `persistent_bookings`.
+        // `instructors`, before `persistent_bookings`. V23 (#264) added
+        // `push_notify_log` + `push_subscriptions` — sort after
+        // `persistent_bookings`, before `schema_version`.
         let expected = vec![
             "bookings",
             "class_cancellations",
@@ -254,6 +256,8 @@ mod tests {
             "instructors",
             "login_tokens",
             "persistent_bookings",
+            "push_notify_log",
+            "push_subscriptions",
             "schema_version",
             "services",
             "settings",

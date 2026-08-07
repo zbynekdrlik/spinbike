@@ -91,7 +91,20 @@ impl PushHandle {
     /// the same format `spawn()` reads from env, extracted so tests can
     /// construct a handle deterministically without mutating process-wide
     /// env state (see `TEST_VAPID_PRIVATE_KEY_B64`).
+    ///
+    /// The empty-string case is checked HERE explicitly (not just left to
+    /// the crate) — an empty key decodes to a zero-length byte slice, and
+    /// `web_push`'s `ES256KeyPair::from_bytes` (via `jwt-simple`) PANICS on
+    /// that specific length rather than returning its usual `Result::Err`
+    /// (confirmed live: CI's `Test` job crashed inside
+    /// `generic-array-0.14.7`'s length assertion, not a graceful
+    /// `WebPushError`). Any OTHER malformed-but-non-empty string (wrong
+    /// length, invalid chars) does return `Err` normally — only the empty
+    /// case needs this guard.
     pub fn from_base64_private_key(key_b64: &str) -> Self {
+        if key_b64.is_empty() {
+            return Self { inner: None };
+        }
         let vapid = match VapidSignatureBuilder::from_base64_no_sub(key_b64) {
             Ok(b) => b,
             Err(e) => {
