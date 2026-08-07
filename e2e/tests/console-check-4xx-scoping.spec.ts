@@ -35,8 +35,23 @@ test.describe('setupConsoleCheck 4xx scoping (#278)', () => {
         await page.goto('/login');
         await page.waitForSelector('h1.page-title');
 
+        // This is a NEGATIVE assertion (proving a message never arrives), so
+        // a bare fixed sleep before checking would be a guess at how long
+        // the whole chain takes — exactly the flake risk code review (#278)
+        // flagged: on a slow CI runner the console event could still arrive
+        // AFTER a short guessed timeout, making the assertion pass for the
+        // wrong reason. `waitForResponse` ties the wait to the actual 401
+        // landing (the real signal any console message is derived from,
+        // same network event); the short trailing buffer only covers the
+        // browser's own internal `Log.entryAdded` dispatch, which is not
+        // guaranteed to be strictly ordered before the fetch()/Response
+        // promise this awaits (see helpers.ts's `msg.location().url` note).
+        const responsePromise = page.waitForResponse(
+            (r) => r.url().includes('/api/my/balance') && r.status() === 401,
+        );
         await page.evaluate(() => fetch('/api/my/balance').catch(() => {}));
-        await page.waitForTimeout(500);
+        await responsePromise;
+        await page.waitForTimeout(200);
 
         assertCleanConsole(messages);
     });
