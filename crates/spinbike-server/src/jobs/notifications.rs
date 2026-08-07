@@ -446,6 +446,74 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn credit_exactly_at_the_low_credit_threshold_notifies() {
+        // Boundary is <=, not < — credit exactly AT the threshold must
+        // still notify.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST);
+                then.status(201);
+            })
+            .await;
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+
+        let uid = seed_customer(&pool, "atthreshold@x", LOW_CREDIT_THRESHOLD_EUR).await;
+        seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
+        seed_topup(&pool, uid, MIN_LAST_TOPUP_EUR).await;
+
+        let sent = tick_as_of(&pool, &push, test_today()).await.unwrap();
+        assert_eq!(sent, 1, "credit == threshold (<=) must still notify");
+    }
+
+    #[tokio::test]
+    async fn credit_just_above_the_low_credit_threshold_does_not_notify() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST);
+                then.status(201);
+            })
+            .await;
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+
+        let uid = seed_customer(&pool, "abovethreshold@x", LOW_CREDIT_THRESHOLD_EUR + 0.01).await;
+        seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
+        seed_topup(&pool, uid, MIN_LAST_TOPUP_EUR).await;
+
+        let sent = tick_as_of(&pool, &push, test_today()).await.unwrap();
+        assert_eq!(sent, 0, "credit just above the threshold must not notify");
+    }
+
+    #[tokio::test]
+    async fn tick_delegates_to_tick_as_of_with_real_today() {
+        // `tick` (the public, non-`_as_of` entry point `server.rs` actually
+        // calls) is otherwise never exercised directly by any other test
+        // here — all of them call `tick_as_of` with an injected date.
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST);
+                then.status(201);
+            })
+            .await;
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+
+        let uid = seed_customer(&pool, "realtick@x", 1.0).await;
+        seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
+        seed_topup(&pool, uid, 20.0).await;
+
+        let sent = tick(&pool, &push).await.unwrap();
+        assert_eq!(sent, 1, "tick() must actually evaluate and send");
+    }
+
     // ── anti-spam: cooldown, episode cap, re-arm ────────────────────────────
 
     #[tokio::test]
@@ -480,6 +548,54 @@ mod tests {
         // no second send.
         let sent_again = tick_as_of(&pool, &push, test_today()).await.unwrap();
         assert_eq!(sent_again, 0, "must respect the cooldown");
+        assert_eq!(mock.calls_async().await, 1);
+    }
+
+    /// Exact boundary: the owner's decision says "last_notified_at is
+    /// `>= NOTIFY_COOLDOWN_DAYS` old" — 7 days exactly must resend, 6 days
+    /// must NOT (still inside the cooldown).
+    #[tokio::test]
+    async fn cooldown_boundary_exactly_seven_days_resends_six_days_does_not() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let server = MockServer::start_async().await;
+        let mock = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST);
+                then.status(201);
+            })
+            .await;
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let today = test_today();
+
+        // Six days ago -> still inside the cooldown, no resend.
+        let uid_six = seed_customer(&pool, "sixdays@x", 1.0).await;
+        seed_subscription(&pool, uid_six, &server.url("/wpush/six")).await;
+        seed_topup(&pool, uid_six, 20.0).await;
+        sqlx::query(
+            "INSERT INTO push_notify_log (user_id, reason, last_notified_at, sent_count)
+             VALUES (?, 'low_credit', datetime('now', '-6 days'), 1)",
+        )
+        .bind(uid_six)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Seven days ago exactly -> cooldown satisfied, must resend.
+        let uid_seven = seed_customer(&pool, "sevendays@x", 1.0).await;
+        seed_subscription(&pool, uid_seven, &server.url("/wpush/seven")).await;
+        seed_topup(&pool, uid_seven, 20.0).await;
+        sqlx::query(
+            "INSERT INTO push_notify_log (user_id, reason, last_notified_at, sent_count)
+             VALUES (?, 'low_credit', datetime('now', '-7 days'), 1)",
+        )
+        .bind(uid_seven)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let sent = tick_as_of(&pool, &push, today).await.unwrap();
+        assert_eq!(sent, 1, "only the 7-day-old row must resend");
         assert_eq!(mock.calls_async().await, 1);
     }
 

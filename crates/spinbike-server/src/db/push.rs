@@ -304,6 +304,77 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn record_send_success_stamps_last_success_at_and_resets_failure_count() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "success@x").await;
+        upsert_subscription(&pool, uid, "https://push.example/succ", "p", "a")
+            .await
+            .unwrap();
+        let id = list_subscriptions_for_user(&pool, uid).await.unwrap()[0].id;
+
+        // Seed a prior failure so we can prove success actually resets it.
+        record_send_failure(&pool, id).await.unwrap();
+        let (failure_count, last_success_at): (i64, Option<String>) = sqlx::query_as(
+            "SELECT failure_count, last_success_at FROM push_subscriptions WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(failure_count, 1);
+        assert!(last_success_at.is_none());
+
+        record_send_success(&pool, id).await.unwrap();
+        let (failure_count, last_success_at): (i64, Option<String>) = sqlx::query_as(
+            "SELECT failure_count, last_success_at FROM push_subscriptions WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(failure_count, 0, "a success must reset failure_count");
+        assert!(
+            last_success_at.is_some(),
+            "a success must stamp last_success_at"
+        );
+    }
+
+    #[tokio::test]
+    async fn record_send_failure_stamps_last_error_at_and_increments_failure_count() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "failure@x").await;
+        upsert_subscription(&pool, uid, "https://push.example/fail", "p", "a")
+            .await
+            .unwrap();
+        let id = list_subscriptions_for_user(&pool, uid).await.unwrap()[0].id;
+
+        record_send_failure(&pool, id).await.unwrap();
+        let (failure_count, last_error_at): (i64, Option<String>) = sqlx::query_as(
+            "SELECT failure_count, last_error_at FROM push_subscriptions WHERE id = ?",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(failure_count, 1);
+        assert!(
+            last_error_at.is_some(),
+            "a failure must stamp last_error_at"
+        );
+
+        record_send_failure(&pool, id).await.unwrap();
+        let failure_count: i64 =
+            sqlx::query_scalar("SELECT failure_count FROM push_subscriptions WHERE id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(failure_count, 2, "failure_count must increment, not reset");
+    }
+
+    #[tokio::test]
     async fn prune_removes_the_row_outright() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
@@ -442,6 +513,13 @@ mod tests {
         .unwrap();
         // A visit (amount 0) — not a top-up.
         sqlx::query("INSERT INTO transactions (user_id, amount, action) VALUES (?, 0.0, 'visit')")
+            .bind(uid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        // A zero-amount row with action='topup' — the `amount > 0` boundary
+        // (not `>= 0`): a €0 "top-up" is meaningless and must not count.
+        sqlx::query("INSERT INTO transactions (user_id, amount, action) VALUES (?, 0.0, 'topup')")
             .bind(uid)
             .execute(&pool)
             .await

@@ -91,6 +91,43 @@ async fn subscribe_rejects_missing_endpoint() {
     assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
 }
 
+/// Endpoint present but `keys.p256dh` empty — each of the three validated
+/// fields must independently reject (kills a `||` -> `&&` mutant on the
+/// combined emptiness check that a single all-fields-fine-except-endpoint
+/// test alone wouldn't catch).
+#[tokio::test]
+async fn subscribe_rejects_missing_p256dh() {
+    let app = TestApp::new().await;
+    let (status, _) = app
+        .request(post_json(
+            "/api/push/subscribe",
+            &app.customer_token,
+            &serde_json::json!({
+                "endpoint": "https://push.example/missing-p256dh",
+                "keys": { "p256dh": "", "auth": TEST_AUTH }
+            }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
+/// Same as above for `keys.auth`.
+#[tokio::test]
+async fn subscribe_rejects_missing_auth() {
+    let app = TestApp::new().await;
+    let (status, _) = app
+        .request(post_json(
+            "/api/push/subscribe",
+            &app.customer_token,
+            &serde_json::json!({
+                "endpoint": "https://push.example/missing-auth",
+                "keys": { "p256dh": TEST_P256DH, "auth": "" }
+            }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test]
 async fn resubscribe_same_endpoint_upserts_not_duplicates() {
     let app = TestApp::new().await;
