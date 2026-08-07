@@ -1,10 +1,11 @@
-//! Push-subscription storage and the anti-spam notify ledger (#264, migration
-//! V23 — see `db::migrations`). Two independent tables:
+//! Push-subscription storage and the anti-spam notify ledger (#264,
+//! migrations V23/V24 — see `db::migrations`). Two independent tables:
 //!
 //! - `push_subscriptions`: one row per browser subscription for a user.
 //! - `push_notify_log`: one row per (user, reason) — the daily notification
-//!   job's cooldown/re-arm state. `jobs::notifications` is the only writer
-//!   of `record_notified`/`clear_notified`.
+//!   job's cooldown/episode-cap/re-arm state (`last_notified_at` +
+//!   `sent_count`). `jobs::notifications` is the only writer of
+//!   `record_notified`/`clear_notified`.
 
 use anyhow::Result;
 use sqlx::SqlitePool;
@@ -128,31 +129,45 @@ pub async fn record_send_failure(pool: &SqlitePool, id: i64) -> Result<()> {
     Ok(())
 }
 
-/// Raw `last_notified_at` (SQLite `datetime('now')` format,
-/// `YYYY-MM-DD HH:MM:SS`) for (user, reason), or `None` if never notified /
-/// already re-armed.
-pub async fn last_notified_at(
+/// One (user, reason) ledger row — the anti-spam episode state (#264
+/// follow-up, owner decision 2026-08-08: max `MAX_NOTIFICATIONS_PER_EPISODE`
+/// notifications per episode, then silence until re-arm).
+#[derive(Debug, Clone, PartialEq, sqlx::FromRow)]
+pub struct NotifyLogRow {
+    /// SQLite `datetime('now')` format, `YYYY-MM-DD HH:MM:SS`.
+    pub last_notified_at: String,
+    /// How many notifications have been sent THIS episode (since the last
+    /// re-arm). Compared against `jobs::notifications::MAX_NOTIFICATIONS_PER_EPISODE`.
+    pub sent_count: i64,
+}
+
+/// The ledger row for (user, reason), or `None` if never notified this
+/// episode / already re-armed.
+pub async fn notify_log(
     pool: &SqlitePool,
     user_id: i64,
     reason: &str,
-) -> Result<Option<String>> {
-    let v: Option<String> = sqlx::query_scalar(
-        "SELECT last_notified_at FROM push_notify_log WHERE user_id = ? AND reason = ?",
+) -> Result<Option<NotifyLogRow>> {
+    let row = sqlx::query_as::<_, NotifyLogRow>(
+        "SELECT last_notified_at, sent_count FROM push_notify_log WHERE user_id = ? AND reason = ?",
     )
     .bind(user_id)
     .bind(reason)
     .fetch_optional(pool)
     .await?;
-    Ok(v)
+    Ok(row)
 }
 
-/// Stamp (user, reason) as notified NOW. Only called after an actual
-/// successful send (see `jobs::notifications`) — never speculatively.
+/// Stamp (user, reason) as notified NOW and increment `sent_count`. Only
+/// called after an actual successful send (see `jobs::notifications`) —
+/// never speculatively.
 pub async fn record_notified(pool: &SqlitePool, user_id: i64, reason: &str) -> Result<()> {
     sqlx::query(
-        "INSERT INTO push_notify_log (user_id, reason, last_notified_at)
-         VALUES (?, ?, datetime('now'))
-         ON CONFLICT(user_id, reason) DO UPDATE SET last_notified_at = excluded.last_notified_at",
+        "INSERT INTO push_notify_log (user_id, reason, last_notified_at, sent_count)
+         VALUES (?, ?, datetime('now'), 1)
+         ON CONFLICT(user_id, reason) DO UPDATE SET
+             last_notified_at = excluded.last_notified_at,
+             sent_count = push_notify_log.sent_count + 1",
     )
     .bind(user_id)
     .bind(reason)
@@ -163,8 +178,8 @@ pub async fn record_notified(pool: &SqlitePool, user_id: i64, reason: &str) -> R
 
 /// Re-arm: drop the ledger row for (user, reason) — the condition is no
 /// longer true (credit topped up / pass renewed), so the NEXT time it
-/// becomes true the cooldown starts fresh instead of inheriting a stale
-/// timestamp from a previous episode.
+/// becomes true both the cooldown clock AND the per-episode `sent_count`
+/// start fresh instead of inheriting state from a previous episode.
 pub async fn clear_notified(pool: &SqlitePool, user_id: i64, reason: &str) -> Result<()> {
     sqlx::query("DELETE FROM push_notify_log WHERE user_id = ? AND reason = ?")
         .bind(user_id)
@@ -172,6 +187,32 @@ pub async fn clear_notified(pool: &SqlitePool, user_id: i64, reason: &str) -> Re
         .execute(pool)
         .await?;
     Ok(())
+}
+
+/// The user's most recent CREDIT-INCREASING transaction amount (a
+/// "top-up"), or `None` if they have never topped up. `action = 'topup' AND
+/// amount > 0 AND deleted_at IS NULL` is the SAME filter
+/// `routes/users.rs`'s `topped_up` aggregate already uses to identify a
+/// real top-up (never a monthly-pass sale — those are `action='charge'`
+/// with a NEGATIVE amount; never a charge/visit; never a voided row).
+///
+/// Ordered `created_at DESC, id DESC` per `.claude/rules/transaction-ordering.md`
+/// (#291) — `created_at` has only SECOND precision, so same-second ties
+/// need the `id` tiebreaker to deterministically pick the newest row.
+pub async fn last_topup_amount(pool: &SqlitePool, user_id: i64) -> Result<Option<f64>> {
+    let amount: Option<f64> = sqlx::query_scalar(
+        "SELECT amount FROM transactions
+         WHERE user_id = ?
+           AND action = 'topup'
+           AND amount > 0
+           AND deleted_at IS NULL
+         ORDER BY created_at DESC, id DESC
+         LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(amount)
 }
 
 #[cfg(test)]
@@ -284,25 +325,22 @@ mod tests {
         let uid = seed_customer(&pool, "ledger@x").await;
 
         assert_eq!(
-            last_notified_at(&pool, uid, REASON_LOW_CREDIT)
-                .await
-                .unwrap(),
+            notify_log(&pool, uid, REASON_LOW_CREDIT).await.unwrap(),
             None
         );
 
         record_notified(&pool, uid, REASON_LOW_CREDIT)
             .await
             .unwrap();
-        assert!(
-            last_notified_at(&pool, uid, REASON_LOW_CREDIT)
-                .await
-                .unwrap()
-                .is_some()
-        );
+        let log = notify_log(&pool, uid, REASON_LOW_CREDIT)
+            .await
+            .unwrap()
+            .expect("row must exist after record_notified");
+        assert_eq!(log.sent_count, 1);
 
         // Re-notifying (upsert) must not create a second row for the same
-        // (user, reason) — the PRIMARY KEY(user_id, reason) enforces this,
-        // but confirm at the query-layer too.
+        // (user, reason) — the PRIMARY KEY(user_id, reason) enforces this —
+        // and must INCREMENT sent_count, not reset it.
         record_notified(&pool, uid, REASON_LOW_CREDIT)
             .await
             .unwrap();
@@ -314,13 +352,16 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        assert_eq!(n, 1);
+        assert_eq!(n, 1, "still one row, not a duplicate");
+        let log = notify_log(&pool, uid, REASON_LOW_CREDIT)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(log.sent_count, 2, "second record_notified must increment");
 
         clear_notified(&pool, uid, REASON_LOW_CREDIT).await.unwrap();
         assert_eq!(
-            last_notified_at(&pool, uid, REASON_LOW_CREDIT)
-                .await
-                .unwrap(),
+            notify_log(&pool, uid, REASON_LOW_CREDIT).await.unwrap(),
             None
         );
     }
@@ -335,11 +376,109 @@ mod tests {
             .await
             .unwrap();
         assert!(
-            last_notified_at(&pool, uid, REASON_PASS_EXPIRING)
+            notify_log(&pool, uid, REASON_PASS_EXPIRING)
                 .await
                 .unwrap()
                 .is_none(),
             "notifying one reason must not affect the other"
         );
+    }
+
+    // ── last_topup_amount (#264 follow-up, owner decision 2026-08-08) ──────
+
+    async fn seed_service_id(pool: &SqlitePool, kind: &str) -> i64 {
+        sqlx::query_scalar("SELECT id FROM services WHERE kind = ?")
+            .bind(kind)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn last_topup_amount_is_none_with_no_history() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "notopup@x").await;
+
+        assert_eq!(last_topup_amount(&pool, uid).await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn last_topup_amount_picks_the_newest_by_created_at_then_id() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "topups@x").await;
+
+        // Two top-ups in the SAME second (same created_at) — the tiebreaker
+        // (id DESC) must decide, per transaction-ordering.md (#291).
+        sqlx::query(
+            "INSERT INTO transactions (user_id, amount, action, created_at)
+             VALUES (?, 10.0, 'topup', '2026-08-08 10:00:00'),
+                    (?, 25.0, 'topup', '2026-08-08 10:00:00')",
+        )
+        .bind(uid)
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(last_topup_amount(&pool, uid).await.unwrap(), Some(25.0));
+    }
+
+    #[tokio::test]
+    async fn last_topup_amount_excludes_charges_visits_passes_and_voided_rows() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_customer(&pool, "excl@x").await;
+        let pass_svc = seed_service_id(&pool, "monthly_pass").await;
+
+        // A charge (negative amount) — not a top-up.
+        sqlx::query(
+            "INSERT INTO transactions (user_id, amount, action) VALUES (?, -5.0, 'charge')",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // A visit (amount 0) — not a top-up.
+        sqlx::query("INSERT INTO transactions (user_id, amount, action) VALUES (?, 0.0, 'visit')")
+            .bind(uid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        // A monthly-pass sale (action='charge', negative amount, valid_until
+        // set) — the gate must not confuse a pass purchase with a top-up.
+        sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until)
+             VALUES (?, ?, -35.0, 'charge', date('now', '+30 days'))",
+        )
+        .bind(uid)
+        .bind(pass_svc)
+        .execute(&pool)
+        .await
+        .unwrap();
+        // A voided top-up — must not count as a real top-up.
+        sqlx::query(
+            "INSERT INTO transactions (user_id, amount, action, deleted_at)
+             VALUES (?, 50.0, 'topup', datetime('now'))",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        assert_eq!(
+            last_topup_amount(&pool, uid).await.unwrap(),
+            None,
+            "none of charge/visit/pass-sale/voided rows count as a top-up"
+        );
+
+        // Now a genuine, non-voided top-up.
+        sqlx::query("INSERT INTO transactions (user_id, amount, action) VALUES (?, 20.0, 'topup')")
+            .bind(uid)
+            .execute(&pool)
+            .await
+            .unwrap();
+        assert_eq!(last_topup_amount(&pool, uid).await.unwrap(), Some(20.0));
     }
 }

@@ -99,6 +99,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "push notifications: subscriptions table + anti-spam notify log",
         V23_PUSH_NOTIFICATIONS,
     ),
+    (
+        24,
+        "push_notify_log: sent_count column (max-2-per-episode anti-spam)",
+        V24_PUSH_NOTIFY_LOG_SENT_COUNT,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -983,6 +988,20 @@ CREATE TABLE IF NOT EXISTS push_notify_log (
     last_notified_at TEXT    NOT NULL,
     PRIMARY KEY (user_id, reason)
 );
+"#;
+
+// V24 (#264 follow-up, owner decision 2026-08-08): the "max 2 notifications
+// per episode, then silence until the condition clears" anti-spam rule
+// needs a per-(user, reason) counter alongside `last_notified_at` — a
+// plain additive `ALTER TABLE ADD COLUMN` with a constant DEFAULT, which
+// SQLite supports natively (no rebuild dance — that pattern is only for
+// adding/widening a CHECK constraint, not a new column). `push_notify_log`
+// has no dependent view/trigger either way. Incremental rather than
+// editing V23 directly: V23 already shipped on `dev` (`db-migrations.md` /
+// `.claude/rules` convention treats a pushed migration as immutable, this
+// being a production project).
+const V24_PUSH_NOTIFY_LOG_SENT_COUNT: &str = r#"
+ALTER TABLE push_notify_log ADD COLUMN sent_count INTEGER NOT NULL DEFAULT 0;
 "#;
 
 #[cfg(test)]
@@ -3549,5 +3568,38 @@ mod tests {
         run_migrations(&pool)
             .await
             .expect("re-running migrations must be a no-op, not an error");
+    }
+
+    // ── V24: push_notify_log.sent_count (#264 follow-up) ────────────────────
+
+    #[tokio::test]
+    async fn v24_adds_sent_count_column_defaulting_to_zero() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v24@x', 'V24', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO push_notify_log (user_id, reason, last_notified_at)
+             VALUES (?, 'low_credit', datetime('now'))",
+        )
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .expect("insert must succeed without specifying sent_count (DEFAULT 0)");
+
+        let sent_count: i64 = sqlx::query_scalar(
+            "SELECT sent_count FROM push_notify_log WHERE user_id = ? AND reason = 'low_credit'",
+        )
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(sent_count, 0, "sent_count must default to 0");
     }
 }
