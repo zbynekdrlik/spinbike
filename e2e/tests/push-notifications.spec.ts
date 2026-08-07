@@ -99,7 +99,10 @@ test('the enable-notifications button appears, never auto-prompts, and its subsc
     const messages = setupConsoleCheck(page);
     const customer = await seedCustomer('push');
 
-    const subscriptionEndpoint = `https://push.example.test/e2e-${uniqueLetterSuffix()}`;
+    // Must be on the server's push-endpoint allowlist (routes/push.rs's
+    // ALLOWED_PUSH_HOSTS, #264 SSRF-hardening review finding) — the
+    // subscribe POST below goes through the REAL validation, not a stub.
+    const subscriptionEndpoint = `https://fcm.googleapis.com/fcm/send/e2e-${uniqueLetterSuffix()}`;
     await context.grantPermissions(['notifications'], { origin: BASE_URL });
     await stubPushEnvironment(page, subscriptionEndpoint);
 

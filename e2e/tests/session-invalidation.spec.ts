@@ -19,9 +19,13 @@ test.describe('Stale session (deleted user) → clean logout (#268)', () => {
         baseURL,
     }) => {
         // #278: the 401 this test's own repro intentionally produces (GET
-        // /api/my/balance for the now-deleted user) is the ONLY 4xx allowed
-        // through — a 4xx from anywhere else would still fail this assertion.
-        const messages = setupConsoleCheck(page, { allow4xxFor: ['/api/my/balance'] });
+        // /api/my/balance for the now-deleted user) is expected — a 4xx
+        // from anywhere else would still fail this assertion. #264 added
+        // PushToggle to /my/balance, which ALSO fires GET /api/push/config
+        // on mount and gets the SAME 401 for the same stale session.
+        const messages = setupConsoleCheck(page, {
+            allow4xxFor: ['/api/my/balance', '/api/push/config'],
+        });
 
         // Seed a fresh throwaway customer and log them in via the real API —
         // loginViaAPI navigates to '/' and stores spinbike_token/spinbike_user
@@ -217,8 +221,12 @@ test.describe('Session-invalidation redirect shows an explanation (#275)', () =>
         baseURL,
     }) => {
         // #278: this repro's own deliberate 401 comes from /api/my/balance
-        // for the now-blocked user.
-        const messages = setupConsoleCheck(page, { allow4xxFor: ['/api/my/balance'] });
+        // for the now-blocked user. #264 added PushToggle to /my/balance,
+        // which ALSO fires GET /api/push/config on mount and gets the SAME
+        // 401 for the same stale session.
+        const messages = setupConsoleCheck(page, {
+            allow4xxFor: ['/api/my/balance', '/api/push/config'],
+        });
 
         const suffix = Array.from({ length: 8 }, () =>
             String.fromCharCode(97 + Math.floor(Math.random() * 26)),
