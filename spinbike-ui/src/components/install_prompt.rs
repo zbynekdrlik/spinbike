@@ -532,7 +532,9 @@ pub fn InstallPrompt() -> impl IntoView {
 
 #[cfg(test)]
 mod tests {
-    use super::{confirm_mint_or_release, install_welcome_url, release_mint_slot, try_claim_mint_slot};
+    use super::{
+        confirm_mint_or_release, install_welcome_url, release_mint_slot, try_claim_mint_slot,
+    };
     use wasm_bindgen_test::*;
 
     /// Mirrors the server-side `manifest.rs::install_start_url` formula
