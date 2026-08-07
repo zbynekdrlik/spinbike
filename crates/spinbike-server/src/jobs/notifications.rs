@@ -506,6 +506,14 @@ mod tests {
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
 
+        // A user with no qualifying condition at all: tick() must return
+        // 0 — proves it isn't hardcoded to always report a send.
+        seed_customer(&pool, "realtick-clean@x", 100.0).await;
+        let sent = tick(&pool, &push).await.unwrap();
+        assert_eq!(sent, 0, "tick() must report 0 when nothing qualifies");
+
+        // Now a genuinely qualifying user: tick() must return 1 — proves
+        // it isn't hardcoded to always report nothing either.
         let uid = seed_customer(&pool, "realtick@x", 1.0).await;
         seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
         seed_topup(&pool, uid, 20.0).await;
