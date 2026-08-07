@@ -32,6 +32,25 @@ async fn config_reports_enabled_and_the_public_key() {
     assert_eq!(body["subscribed"], false);
 }
 
+/// A blocked customer's session is invalid, not just merely-unauthorized —
+/// same contract #268/#274/#277 established for `/api/my/balance`,
+/// `/api/door/open`, and the booking routes. `/api/push/config` reads
+/// account-specific data (`subscribed`) via `AuthUser`, so it must apply
+/// the same session-invalidation check even though it's a GET.
+#[tokio::test]
+async fn config_blocked_user_returns_401_session_invalid() {
+    let app = TestApp::new().await;
+    spinbike_server::db::users::set_blocked(&app.pool, app.customer_id, true)
+        .await
+        .unwrap();
+
+    let (status, resp) = app
+        .request(get("/api/push/config", &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::UNAUTHORIZED);
+    assert_eq!(resp["error_code"], "session_invalid");
+}
+
 #[tokio::test]
 async fn config_requires_authentication() {
     let app = TestApp::new().await;

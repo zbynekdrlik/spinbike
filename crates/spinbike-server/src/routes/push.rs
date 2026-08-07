@@ -42,6 +42,8 @@ async fn config(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<PushConfigResponse>, ApiError> {
+    crate::auth::require_live_session(&state.pool, claims.sub).await?;
+
     let subscribed = crate::db::push::has_subscription(&state.pool, claims.sub)
         .await
         .map_err(internal_error)?;
