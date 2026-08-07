@@ -107,7 +107,13 @@ test.describe('Blocked user booking attempt → clean logout (#277)', () => {
 
         // Find a real, currently-bookable occurrence in THIS week — the
         // SchedulePage's day-picker only shows the current Mon-Sun week
-        // (mirrors schedule.rs's own current_week_dates()).
+        // (mirrors schedule.rs's own current_week_dates(), which computes
+        // from the BROWSER's local time via js_sys::Date). Format from the
+        // same LOCAL date components throughout — never round-trip through
+        // toISOString() (UTC), which disagrees with local time overnight
+        // (see helpers.ts's own #251 warning against exactly this).
+        const fmt = (d: Date) =>
+            `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         const now = new Date();
         const dow = now.getDay(); // 0=Sun..6=Sat
         const daysSinceMonday = dow === 0 ? 6 : dow - 1;
@@ -117,7 +123,7 @@ test.describe('Blocked user booking attempt → clean logout (#277)', () => {
         for (let i = 0; i < 7; i++) {
             const d = new Date(monday);
             d.setDate(monday.getDate() + i);
-            weekDates.push(d.toISOString().split('T')[0]);
+            weekDates.push(fmt(d));
         }
         const occResp = await fetch(
             `${BASE_URL}/api/classes?from=${weekDates[0]}&to=${weekDates[6]}`,
@@ -186,7 +192,8 @@ test.describe('Blocked user booking attempt → clean logout (#277)', () => {
         const occAfter: Array<{ template_id: number; booked: number }> =
             await occAfterResp.json();
         const slotAfter = occAfter.find((o) => o.template_id === slot.template_id);
-        expect(slotAfter?.booked ?? 0).toBe(slot.booked);
+        expect(slotAfter).toBeDefined();
+        expect(slotAfter?.booked).toBe(slot.booked);
 
         assertCleanConsole(messages);
     });

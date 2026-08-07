@@ -63,8 +63,11 @@ CALLER's own account. `classes.rs`'s `create_booking`/`cancel_booking`/
 own pre-existing hand-rolled inline checks rather than migrated to the new
 helper — both are correct and already tested; migrating them would only add
 diff/re-test risk for zero behavior change. Write NEW session-invalidation
-checks against the helper; a future cleanup pass MAY consolidate the two old
-sites onto it too, but that is not required.
+checks against the helper; `#284` tracks a future cleanup pass that MAY
+consolidate the two old sites onto it, and also covers two more gaps two
+independent reviews found right after #277 shipped: `user_transactions`'s
+self-view branch (`users.rs`) and `install_token` (`auth.rs`) both still
+accept a dead caller session.
 
 **Why NOT the `AuthUser` extractor** (weighed seriously in #277's design
 step — see the issue's design comment for the full reasoning): `AuthUser`/

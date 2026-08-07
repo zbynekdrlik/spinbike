@@ -89,7 +89,7 @@ Path-scoped rules under `.claude/rules/` load themselves when you touch a matchi
 
 - version label / `.app-version` styling → `.claude/rules/ui-version-label.md` (auto-loads on `spinbike-ui/style.css`, `e2e/tests/version-display.spec.ts`)
 - adding a new `ErrorCode` variant → `.claude/rules/error-codes.md` (auto-loads on `crates/spinbike-core/src/errors.rs`, `crates/spinbike-server/src/routes/**`, `spinbike-ui/src/i18n.rs`)
-- `AuthUser`-driven route acting on the caller's own account → `.claude/rules/session-invalidation.md` (auto-loads on `crates/spinbike-server/src/routes/**` — the blocked/deleted-user 401 contract, #268/#274/#281)
+- `AuthUser`-driven route acting on the caller's own account → `.claude/rules/session-invalidation.md` (auto-loads on `crates/spinbike-server/src/routes/**` — the blocked/deleted-user 401 contract, #268/#274/#277)
 
 | Area | Skill | When to load |
 |---|---|---|
