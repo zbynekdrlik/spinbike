@@ -1222,6 +1222,20 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         "err_request_failed_format",
         ("Poziadavka zlyhala (HTTP {})", "Request failed (HTTP {})"),
     );
+    // #275 — rendered ONCE on /login after the redirect from
+    // handle_unauthorized's hard navigation (a sessionStorage one-shot flag
+    // carries the reason across it — see auth.rs's
+    // mark_session_expired/take_session_expired_flag). Deliberately a
+    // DIFFERENT key from err_session_expired above: that one is the
+    // ephemeral pre-redirect string (destroyed by the hard nav before a
+    // human can read it), this is the notice a customer actually sees.
+    m.insert(
+        "login_session_expired_notice",
+        (
+            "Tvoje prihlasenie uz nie je platne, prihlas sa znova.",
+            "Your session is no longer valid, please log in again.",
+        ),
+    );
 
     m
 });

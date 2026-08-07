@@ -207,6 +207,44 @@ from a genuinely fresh browser — no session, no forced language. Reach for
 this whenever a spec's `loginViaAPI` call is purely a token-minting
 convenience, not an intentional "browser carries this session" step.
 
+## Driving a real Book click on the customer `/schedule` page (#277) — the day-picker only shows THIS week, and date math MUST stay in local time
+
+`/schedule` (`spinbike-ui/src/pages/schedule.rs`) is NOT like the staff
+`/staff` upcoming-classes view (`spin-booking.spec.ts`'s `openJanaCard`,
+which shows a rolling near-future window) — its `DayPicker` only ever
+renders the CURRENT Mon-Sun week, computed from the BROWSER's LOCAL time
+(`current_week_dates()`, via `js_sys::Date::get_day()`/`get_date()`, not a
+Bratislava-anchored or UTC calculation). A spec that needs to click a real
+`[data-testid="book-{tid}-{date}"]` button (rather than booking via a raw
+`fetch`) must:
+
+1. Compute the SAME current-week date range the page will show, and query
+   `GET /api/classes?from=<monday>&to=<sunday>` (public, unauthenticated)
+   to find a real bookable occurrence (`!cancelled && booked < capacity`).
+2. There are NO `data-testid`s on the day-picker's own buttons
+   (`day_picker.rs`) — select by DOM order: `.day-btn` is rendered
+   Monday-first, so `page.locator('.day-btn').nth(dayIdx)` where `dayIdx`
+   is the 0=Monday..6=Sunday offset of the found slot's date within the
+   computed week.
+3. **Format every date from LOCAL `Date` components — never round-trip
+   through `toISOString()`.** `toISOString()` is UTC; mixing it with
+   `getDay()`/`getDate()` (both local) silently shifts every date back one
+   day whenever local time has rolled past midnight but UTC hasn't (or vice
+   versa) — the exact anti-pattern this skill already warns about above
+   (#251), but it bit again on #277's own new spec because the week/day
+   INDEX math (needed for `dayIdx`) is a different code path from a
+   Bratislava-day report assertion and doesn't visually look like the same
+   pattern:
+   ```ts
+   const fmt = (d: Date) =>
+       `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+   ```
+   CI runs UTC (`ubuntu-latest`), so this is invisible there — it only
+   bites a LOCAL run on a non-UTC machine (e.g. this project's own dev
+   boxes) between roughly 00:00-02:00 Europe/Bratislava, and it fails
+   confusingly: the book button never appears (5s timeout on
+   `expect(bookBtn).toBeVisible()`), not an obviously date-related error.
+
 ## Router
 Add a line to the project `CLAUDE.md` `## Playbook router` pointing here so a
 future guard-adding ticket loads this BEFORE pushing, not after CI turns red.

@@ -20,7 +20,7 @@
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
-use crate::auth::{clear_auth, get_token};
+use crate::auth::{clear_auth, get_token, mark_session_expired};
 use crate::i18n::{self, Lang};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -234,6 +234,14 @@ async fn post_door_open() -> Result<(), u16> {
     };
     let status = resp.status();
     if status == 401 && get_token().is_some() {
+        // #275 review follow-up: this is a SECOND inline 401 handler,
+        // independent of api.rs's `handle_unauthorized` (the one #275
+        // itself modified) — door_button.rs sends its own raw
+        // gloo_net request rather than going through api.rs. Without this
+        // call, a customer whose session dies mid-press (blocked/soft-
+        // deleted while holding the door button) would hit the exact bare-
+        // login-form bug #275 fixed, just via this second code path.
+        mark_session_expired();
         clear_auth();
         if let Some(win) = web_sys::window() {
             let _ = win.location().set_href("/login");

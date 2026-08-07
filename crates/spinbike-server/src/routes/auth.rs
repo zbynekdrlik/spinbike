@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
 use crate::AppState;
-use crate::auth::{self, AuthUser, StaffUser, parse_role};
+use crate::auth::{self, AuthUser, StaffUser, parse_role, require_live_session};
 use crate::db::{login_tokens, users};
 use crate::error::ApiError;
 use crate::mail::MailError;
@@ -619,6 +619,38 @@ async fn install_token(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<InstallTokenResponse>, ApiError> {
+    // #284: a dead CALLER session (missing/soft-deleted/blocked) must not be
+    // able to mint a fresh, long-lived, multi-use install credential for
+    // itself — same #268/#274/#277/users::user_transactions contract. Also
+    // closes a worse pre-existing shape for the missing-caller case:
+    // `create_install_token` writes a `login_tokens` row with a real FK to
+    // `users(id)`, so a non-existent `claims.sub` used to crash with a 500
+    // FK-constraint error instead of a clean 401 — this check runs BEFORE
+    // that write is ever attempted.
+    //
+    // Reviewed (code-review, #284): this IS a separate query on its own
+    // pool checkout before `create_install_token` opens its OWN transaction
+    // below — a narrow TOCTOU window between the two, the exact shape this
+    // file's rule doc argues AGAINST introducing into door.rs/my_balance.rs.
+    // Deliberately accepted here, and it is NOT the same tradeoff: door.rs/
+    // my_balance.rs currently have ZERO TOCTOU (one query does the whole
+    // check+read atomically) — adding this pattern there would make
+    // already-correct code strictly WORSE for zero gain. `install_token` had
+    // NO CHECK AT ALL before this fix (a strictly bigger hole: any dead
+    // session could mint, no race required) — this closes that unconditionally
+    // and leaves only a race requiring a staff block/delete action to land in
+    // the sub-millisecond gap between two awaited SELECTs on ONE HTTP request,
+    // on a single-operator, low-traffic app. Folding the check into
+    // `create_install_token`'s own transaction (closing even that gap) would
+    // need `create_install_token` to return `Option<String>` instead of
+    // `String` — touching its 5 existing unit-test call sites in
+    // `db/login_tokens.rs`, or crossing the `db` layer's clean boundary with
+    // `auth`'s `ApiError` type (this module never imports it elsewhere) —
+    // for a race that is not exploitable without already being staff/admin
+    // with impeccable timing. Not worth either cost; documented rather than
+    // silently left unaddressed.
+    require_live_session(&state.pool, claims.sub).await?;
+
     let raw = login_tokens::create_install_token(&state.pool, claims.sub)
         .await
         .map_err(internal_error)?;

@@ -2,7 +2,7 @@ use gloo_net::http::RequestBuilder;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::auth::{clear_auth, get_token};
+use crate::auth::{clear_auth, get_token, mark_session_expired};
 
 /// If the response is 401 AND we had a token stored (i.e., a previously-valid
 /// session expired), clear stored auth and redirect to /login.
@@ -12,6 +12,11 @@ use crate::auth::{clear_auth, get_token};
 /// (e.g., wrong password on login) — those show an inline error instead.
 fn handle_unauthorized(status: u16, had_token: bool) -> bool {
     if status == 401 && had_token {
+        // #275: stash the one-shot reason BEFORE the hard navigation below
+        // destroys this whole page/JS context — LoginPage reads + clears it
+        // on mount so the customer sees WHY they landed on a bare login
+        // form instead of silently getting bounced.
+        mark_session_expired();
         clear_auth();
         if let Some(win) = web_sys::window() {
             let _ = win.location().set_href("/login");

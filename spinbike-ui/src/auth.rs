@@ -63,6 +63,44 @@ pub fn is_admin() -> bool {
     get_user().map(|u| u.role.is_admin()).unwrap_or(false)
 }
 
+/// `sessionStorage` key for the #275 one-shot "session was invalidated"
+/// flag — carries the reason across `handle_unauthorized`'s hard
+/// `set_href("/login")` navigation, which destroys any in-memory value.
+/// `sessionStorage` (not `localStorage`), same reasoning as
+/// `install_prompt.rs`'s `sb_install_token` guard (#261): scoped to this
+/// tab's session only, and read-once-then-cleared so a later manual reload
+/// of `/login` never re-shows the notice.
+const SESSION_EXPIRED_KEY: &str = "spinbike_session_expired";
+
+fn session_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.session_storage().ok()?
+}
+
+/// Mark that the session about to be cleared was invalidated by the server
+/// (a 401 on a previously-valid stored token), not an ordinary user-
+/// initiated logout. Call BEFORE the hard navigation to `/login` — silent
+/// no-op on any storage failure (private browsing, a security exception),
+/// same discipline as every other storage call in this module.
+pub fn mark_session_expired() {
+    if let Some(s) = session_storage() {
+        let _ = s.set_item(SESSION_EXPIRED_KEY, "1");
+    }
+}
+
+/// Read the one-shot session-expired flag AND clear it in the same call, so
+/// a manual reload of `/login` never re-shows the notice. Call this once,
+/// at `LoginPage` setup.
+pub fn take_session_expired_flag() -> bool {
+    let Some(s) = session_storage() else {
+        return false;
+    };
+    let present = matches!(s.get_item(SESSION_EXPIRED_KEY), Ok(Some(_)));
+    if present {
+        let _ = s.remove_item(SESSION_EXPIRED_KEY);
+    }
+    present
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +149,26 @@ mod tests {
         };
         let json = serde_json::to_string(&ui).unwrap();
         assert!(json.contains(r#""role":"admin""#), "got {json}");
+    }
+
+    /// #275: this crate's unit tests run via `wasm-pack test --node`, which
+    /// has NO `window`/`sessionStorage` at all (a real Node.js runtime, not
+    /// a browser) — confirmed live in CI (this test originally asserted the
+    /// full set-then-read round trip and failed there: `session_storage()`
+    /// is `None` in that environment, so both functions are no-ops). Both
+    /// MUST gracefully no-op rather than panic when storage is unavailable
+    /// (the same tolerance they're documented to have for private
+    /// browsing / a security exception) — this is exactly that case,
+    /// reproducibly, in every CI run. The actual set-then-read-then-cleared
+    /// round trip in a REAL browser is verified by the Playwright E2E spec
+    /// (`e2e/tests/session-invalidation.spec.ts`, `#275`), which `--node`
+    /// unit tests structurally cannot cover.
+    #[wasm_bindgen_test]
+    fn session_expired_flag_helpers_degrade_gracefully_without_a_window() {
+        mark_session_expired();
+        assert!(
+            !take_session_expired_flag(),
+            "no window/sessionStorage in this test runtime — must no-op, not panic"
+        );
     }
 }
