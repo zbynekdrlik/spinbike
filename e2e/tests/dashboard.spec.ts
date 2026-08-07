@@ -73,12 +73,12 @@ test.describe('Card dashboard (staff /staff)', () => {
         // `.first()` would pick the WRONG card. Scoping by name is the fix.
         const result = page.locator('[data-testid="search-result"]', { hasText: 'Jana Testova' }).first();
         await expect(result).toBeVisible({ timeout: 3000 });
-        await expect(result).toContainText('70701001');
 
         await result.click();
         const panel = page.locator('[data-testid="action-panel"]');
         await expect(panel).toBeVisible();
         await expect(panel).toContainText('Jana Testova');
+        await expect(panel).toContainText('70701001');
 
         assertCleanConsole(consoleMessages);
     });
