@@ -67,6 +67,14 @@ pub fn LoginPage() -> impl IntoView {
     let pass_ref = NodeRef::<leptos::html::Input>::new();
     let (error, set_error) = signal(None::<api::CodedError>);
     let (loading, set_loading) = signal(false);
+    // #275: read + clear the one-shot "your session was invalidated" flag
+    // ONCE at mount — `take_session_expired_flag` clears it as it reads, so
+    // a later manual reload of /login never re-shows the notice. This is
+    // completely independent of `error`/`set_error` above (a WRONG-PASSWORD
+    // submit on THIS page must never trigger it) — it can only ever have
+    // been set by api.rs's `handle_unauthorized` before the redirect that
+    // landed us here.
+    let show_expired_notice = auth::take_session_expired_flag();
 
     let on_submit = move |ev: web_sys::SubmitEvent| {
         ev.prevent_default();
@@ -117,6 +125,18 @@ pub fn LoginPage() -> impl IntoView {
             // `InstallPrompt` (no A2HS install button/guide belongs here).
             <InAppBrowserBanner />
             <h1 class="page-title">{move || i18n::t(lang.get(), "login")}</h1>
+            {move || {
+                if show_expired_notice {
+                    view! {
+                        <div class="alert alert-info" data-testid="session-expired-notice">
+                            {move || i18n::t(lang.get(), "login_session_expired_notice")}
+                        </div>
+                    }
+                        .into_any()
+                } else {
+                    ().into_any()
+                }
+            }}
             {move || {
                 match error.get() {
                     None => ().into_any(),

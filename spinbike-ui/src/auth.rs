@@ -63,6 +63,44 @@ pub fn is_admin() -> bool {
     get_user().map(|u| u.role.is_admin()).unwrap_or(false)
 }
 
+/// `sessionStorage` key for the #275 one-shot "session was invalidated"
+/// flag — carries the reason across `handle_unauthorized`'s hard
+/// `set_href("/login")` navigation, which destroys any in-memory value.
+/// `sessionStorage` (not `localStorage`), same reasoning as
+/// `install_prompt.rs`'s `sb_install_token` guard (#261): scoped to this
+/// tab's session only, and read-once-then-cleared so a later manual reload
+/// of `/login` never re-shows the notice.
+const SESSION_EXPIRED_KEY: &str = "spinbike_session_expired";
+
+fn session_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.session_storage().ok()?
+}
+
+/// Mark that the session about to be cleared was invalidated by the server
+/// (a 401 on a previously-valid stored token), not an ordinary user-
+/// initiated logout. Call BEFORE the hard navigation to `/login` — silent
+/// no-op on any storage failure (private browsing, a security exception),
+/// same discipline as every other storage call in this module.
+pub fn mark_session_expired() {
+    if let Some(s) = session_storage() {
+        let _ = s.set_item(SESSION_EXPIRED_KEY, "1");
+    }
+}
+
+/// Read the one-shot session-expired flag AND clear it in the same call, so
+/// a manual reload of `/login` never re-shows the notice. Call this once,
+/// at `LoginPage` setup.
+pub fn take_session_expired_flag() -> bool {
+    let Some(s) = session_storage() else {
+        return false;
+    };
+    let present = matches!(s.get_item(SESSION_EXPIRED_KEY), Ok(Some(_)));
+    if present {
+        let _ = s.remove_item(SESSION_EXPIRED_KEY);
+    }
+    present
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,5 +149,24 @@ mod tests {
         };
         let json = serde_json::to_string(&ui).unwrap();
         assert!(json.contains(r#""role":"admin""#), "got {json}");
+    }
+
+    /// #275: the flag is unset by default, set by `mark_session_expired`,
+    /// and reading it via `take_session_expired_flag` both returns true AND
+    /// clears it — a second read must come back false (the "never re-show
+    /// on a manual reload" requirement).
+    #[wasm_bindgen_test]
+    fn session_expired_flag_is_one_shot() {
+        // Clean slate: a previous test in this same browser session may
+        // have left the flag set.
+        let _ = take_session_expired_flag();
+        assert!(!take_session_expired_flag(), "must start clear");
+
+        mark_session_expired();
+        assert!(take_session_expired_flag(), "flag must be set after mark");
+        assert!(
+            !take_session_expired_flag(),
+            "flag must be cleared after being read once"
+        );
     }
 }
