@@ -1052,6 +1052,105 @@ mod tests {
         assert!(results[0].blocked);
     }
 
+    /// #39 recurrence (PR #290, CI run 31189869886): a card whose
+    /// card_code genuinely ENDS WITH the searched digits must outrank an
+    /// unrelated card whose id merely CONTAINS those digits somewhere.
+    /// Reproduces the exact CI collision — "Jana Testova" (card
+    /// `70701001`, a true TAIL match on `1001`) vs "AAA Polluter" (card
+    /// `ZZ-99991001999`, contains `1001` in the middle but neither starts
+    /// nor ends with it). Before the fix, only PREFIX matches (`1001%`)
+    /// were special-cased, so neither card_code qualified and ordering
+    /// fell through to plain `name ASC` — "AAA Polluter" sorts before
+    /// "Jana Testova" alphabetically and wrongly won.
+    #[tokio::test]
+    async fn search_users_ranks_barcode_tail_match_above_mere_substring_match() {
+        let pool = setup().await;
+        create_user(
+            &pool,
+            None,
+            None,
+            "AAA Polluter",
+            None,
+            None,
+            Some("ZZ-99991001999"),
+            "customer",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        create_user(
+            &pool,
+            None,
+            None,
+            "Jana Testova",
+            None,
+            None,
+            Some("70701001"),
+            "customer",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let results = search_users(&pool, "1001", 10).await.unwrap();
+        assert_eq!(results.len(), 2, "both rows must match the unanchored search");
+        assert_eq!(
+            results[0].card_code.as_deref(),
+            Some("70701001"),
+            "the card whose barcode ENDS WITH the query must rank first, not the one that merely contains it"
+        );
+    }
+
+    /// Same defect, on the function the live `/api/users/search` ROUTE
+    /// actually calls (`search_users_with_pass`) — the two db-layer search
+    /// functions share the ranking SQL shape, so both need the fix.
+    #[tokio::test]
+    async fn search_users_with_pass_ranks_barcode_tail_match_above_mere_substring_match() {
+        let pool = setup().await;
+        create_user(
+            &pool,
+            None,
+            None,
+            "AAA Polluter",
+            None,
+            None,
+            Some("ZZ-99991001999"),
+            "customer",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        create_user(
+            &pool,
+            None,
+            None,
+            "Jana Testova",
+            None,
+            None,
+            Some("70701001"),
+            "customer",
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let results = search_users_with_pass(&pool, "1001", 10).await.unwrap();
+        assert_eq!(results.len(), 2, "both rows must match the unanchored search");
+        assert_eq!(
+            results[0].0.card_code.as_deref(),
+            Some("70701001"),
+            "the card whose barcode ENDS WITH the query must rank first, not the one that merely contains it"
+        );
+    }
+
     #[tokio::test]
     async fn update_credit_add_and_subtract() {
         let pool = setup().await;
