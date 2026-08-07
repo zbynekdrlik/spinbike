@@ -80,14 +80,11 @@ export function setupConsoleCheck(page: Page, options: ConsoleCheckOptions = {})
         // runner artefacts — a generic prefix match would mask real API
         // regressions (e.g. malformed JSON from a deploy) in CI.
         text.includes('negative-balance fetch failed: TypeError: Failed to fetch') ||
-        // #278 [red]: the `allow4xxFor` option is wired into the signature
-        // but not yet consulted here — the filter is still the OLD blanket
-        // regex, matching regardless of `allow4xxFor`. This deliberately
-        // keeps `console-check-4xx-scoping.spec.ts`'s first test failing
-        // until the next (GREEN) commit narrows this condition.
         text.includes('negative-balance fetch failed: Missing authorization header') ||
-        is4xxNetworkMessage(text);
-    void allow4xxFor;
+        // #278: a 4xx-derived network message is filtered ONLY when the
+        // caller explicitly named the endpoint as its own deliberate 4xx
+        // (see ConsoleCheckOptions.allow4xxFor above) — never blanket.
+        (is4xxNetworkMessage(text) && allow4xxFor.some((needle) => text.includes(needle)));
 
     page.on('console', (msg) => {
         if (msg.type() === 'error' || msg.type() === 'warning') {

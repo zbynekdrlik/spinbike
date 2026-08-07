@@ -18,7 +18,10 @@ test.describe('Stale session (deleted user) → clean logout (#268)', () => {
         page,
         baseURL,
     }) => {
-        const messages = setupConsoleCheck(page);
+        // #278: the 401 this test's own repro intentionally produces (GET
+        // /api/my/balance for the now-deleted user) is the ONLY 4xx allowed
+        // through — a 4xx from anywhere else would still fail this assertion.
+        const messages = setupConsoleCheck(page, { allow4xxFor: ['/api/my/balance'] });
 
         // Seed a fresh throwaway customer and log them in via the real API —
         // loginViaAPI navigates to '/' and stores spinbike_token/spinbike_user
@@ -88,7 +91,9 @@ test.describe('Blocked user booking attempt → clean logout (#277)', () => {
         page,
         baseURL,
     }) => {
-        const messages = setupConsoleCheck(page);
+        // #278: this repro's own deliberate 401 is the booking POST — allow
+        // only that, nothing else.
+        const messages = setupConsoleCheck(page, { allow4xxFor: ['/api/bookings'] });
 
         const suffix = Array.from({ length: 8 }, () =>
             String.fromCharCode(97 + Math.floor(Math.random() * 26)),
@@ -211,7 +216,9 @@ test.describe('Session-invalidation redirect shows an explanation (#275)', () =>
         page,
         baseURL,
     }) => {
-        const messages = setupConsoleCheck(page);
+        // #278: this repro's own deliberate 401 comes from /api/my/balance
+        // for the now-blocked user.
+        const messages = setupConsoleCheck(page, { allow4xxFor: ['/api/my/balance'] });
 
         const suffix = Array.from({ length: 8 }, () =>
             String.fromCharCode(97 + Math.floor(Math.random() * 26)),
@@ -285,7 +292,7 @@ test.describe('Session-invalidation redirect shows an explanation (#275)', () =>
     test('a wrong-password login shows only the credentials error, never the session-expired notice', async ({
         page,
     }) => {
-        const messages = setupConsoleCheck(page);
+        const messages = setupConsoleCheck(page, { allow4xxFor: ['/api/auth/login'] });
 
         await page.goto('/login');
         // Fresh page load, no prior stale-session redirect in this test —
@@ -318,7 +325,9 @@ test.describe('Session-invalidation redirect shows an explanation (#275)', () =>
         page,
         baseURL,
     }) => {
-        const messages = setupConsoleCheck(page);
+        // #278: this repro's own deliberate 401 comes from the door-press's
+        // own inline handler (POST /api/door/open on the now-blocked user).
+        const messages = setupConsoleCheck(page, { allow4xxFor: ['/api/door/open'] });
 
         const adminLoginResp = await fetch(`${BASE_URL}/api/auth/login`, {
             method: 'POST',
@@ -427,7 +436,9 @@ test.describe('Concurrent logout during an in-flight request still shows the not
         page,
         baseURL,
     }) => {
-        const messages = setupConsoleCheck(page);
+        // #278: this repro's own deliberate 401 is the mocked GET
+        // /api/my/balance response below.
+        const messages = setupConsoleCheck(page, { allow4xxFor: ['/api/my/balance'] });
 
         const suffix = Array.from({ length: 8 }, () =>
             String.fromCharCode(97 + Math.floor(Math.random() * 26)),

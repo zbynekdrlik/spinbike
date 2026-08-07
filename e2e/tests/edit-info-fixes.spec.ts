@@ -23,7 +23,7 @@ test.describe('Edit-info form field fixes', () => {
     test('a rejected save shows the error INSIDE the still-open sheet, not hidden behind the backdrop', async ({
         page,
     }) => {
-        const consoleMessages = setupConsoleCheck(page);
+        const consoleMessages = setupConsoleCheck(page, { allow4xxFor: ['/api/users'] });
 
         const staffToken = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
         const user = await createUniqueUser(staffToken, 0, 'EI');
@@ -78,7 +78,8 @@ test.describe('Edit-info form field fixes', () => {
         await expect(sheet).toBeVisible();
 
         // The 409 logs a browser-level "Failed to load resource" that the
-        // shared helper already filters (4xx). Nothing else should appear.
+        // shared helper filters ONLY for /api/users (#278, allow4xxFor above
+        // — this test's own deliberate subject). Nothing else should appear.
         expect(consoleMessages).toEqual([]);
     });
 
@@ -115,7 +116,7 @@ test.describe('Edit-info form field fixes', () => {
     test('the edit sheet cannot be dismissed by Escape while a save is in flight', async ({
         page,
     }) => {
-        const consoleMessages = setupConsoleCheck(page);
+        const consoleMessages = setupConsoleCheck(page, { allow4xxFor: ['/api/users'] });
 
         const staffToken = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
         const user = await createUniqueUser(staffToken, 0, 'MS');

@@ -87,7 +87,7 @@ test.describe('Authentication flows', () => {
     });
 
     test('login with wrong password shows error', async ({ page }) => {
-        const consoleMessages = setupConsoleCheck(page);
+        const consoleMessages = setupConsoleCheck(page, { allow4xxFor: ['/api/auth/login'] });
 
         await page.goto('/login');
         await page.waitForSelector('h1.page-title');
@@ -134,7 +134,7 @@ test.describe('Authentication flows', () => {
 // back to Lang::Sk in that case (the real default a first-time visitor sees).
 test.describe('Authentication flows — default Slovak locale (#145)', () => {
     test('login with wrong password shows the Slovak error message, not English', async ({ page }) => {
-        const consoleMessages = setupConsoleCheck(page);
+        const consoleMessages = setupConsoleCheck(page, { allow4xxFor: ['/api/auth/login'] });
 
         await page.goto('/login');
         await page.waitForSelector('h1.page-title');

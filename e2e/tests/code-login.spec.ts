@@ -87,7 +87,7 @@ test.describe('Login page — customer login-code (#227)', () => {
     });
 
     test('a wrong code shows a localized error and does not log in', async ({ page }) => {
-        const consoleMessages = setupConsoleCheck(page);
+        const consoleMessages = setupConsoleCheck(page, { allow4xxFor: ['/api/auth/code-login'] });
         const email = await seedCustomer(page);
 
         await setEnglishLanguage(page);

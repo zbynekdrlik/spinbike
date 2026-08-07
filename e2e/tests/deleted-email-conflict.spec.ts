@@ -18,7 +18,7 @@ test.describe('Soft-deleted email conflict resolution (#143)', () => {
         page,
         baseURL,
     }) => {
-        const messages = setupConsoleCheck(page);
+        const messages = setupConsoleCheck(page, { allow4xxFor: ['/api/users'] });
         const token = await loginViaAPI(page, baseURL!, 'staff@test.com', 'staff123');
         await setEnglishLanguage(page);
 

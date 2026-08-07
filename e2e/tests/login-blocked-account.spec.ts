@@ -13,7 +13,7 @@ test.describe('Login page — blocked account (#276)', () => {
     test('a blocked customer entering the correct password stays on /login with the account-blocked message, not a bounce loop', async ({
         page,
     }) => {
-        const consoleMessages = setupConsoleCheck(page);
+        const consoleMessages = setupConsoleCheck(page, { allow4xxFor: ['/api/auth/login'] });
 
         // Seed a throwaway customer with a known password, then block it —
         // admin/staff-only APIs. A RAW fetch for the admin login (NOT
