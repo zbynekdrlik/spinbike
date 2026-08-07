@@ -109,12 +109,12 @@ fn swap_manifest_link(token: &str) {
 /// unconditional mint. Degrades to `None` (treated exactly like "not minted
 /// yet") on any unavailable step — sessionStorage can legitimately be absent
 /// (private browsing, a security exception) and must never panic.
+///
+/// #287: thin wrapper over the shared `storage::cache_get`/`cache_set`
+/// primitive — see `storage.rs` for why it's shared with `auth.rs`'s
+/// (different-shaped) one-shot session-expired flag.
 fn stored_install_token() -> Option<String> {
-    web_sys::window()?
-        .session_storage()
-        .ok()??
-        .get_item(INSTALL_TOKEN_STORAGE_KEY)
-        .ok()?
+    crate::storage::cache_get(INSTALL_TOKEN_STORAGE_KEY)
 }
 
 /// Persist a freshly-minted install token into the sessionStorage guard.
@@ -122,13 +122,7 @@ fn stored_install_token() -> Option<String> {
 /// call in this module) — losing the guard only means a future mount in
 /// this tab might mint again, not a correctness break.
 fn store_install_token(token: &str) {
-    let Some(window) = web_sys::window() else {
-        return;
-    };
-    let Ok(Some(storage)) = window.session_storage() else {
-        return;
-    };
-    let _ = storage.set_item(INSTALL_TOKEN_STORAGE_KEY, token);
+    crate::storage::cache_set(INSTALL_TOKEN_STORAGE_KEY, token);
 }
 
 /// Arm BOTH remaining legs of the round-5 (#261) ladder for an install
