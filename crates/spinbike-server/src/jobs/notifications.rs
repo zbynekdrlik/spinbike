@@ -15,6 +15,7 @@
 //! - condition TRUE now -> send only if no ledger row exists yet, or the
 //!   existing row's `last_notified_at` is >= `COOLDOWN_DAYS` old; otherwise
 //!   skip silently (still condition-true, just inside the cooldown).
+//!
 //! The ledger is stamped ONLY after an actual successful send — a customer
 //! with the condition true but no stored subscription is re-evaluated
 //! (cheaply) every day until they subscribe, never falsely marked notified.
@@ -40,6 +41,16 @@ pub const PASS_EXPIRING_DAYS: i64 = 3;
 /// the issue's own suggested floor.
 pub const COOLDOWN_DAYS: i64 = 7;
 
+/// Bundles the three things every per-user evaluation needs regardless of
+/// reason — purely to keep `evaluate_reason`'s arg count under clippy's
+/// `too_many_arguments` limit (8 positional args tripped it); no behavior
+/// implication, just fewer parameters to pass around.
+struct Ctx<'a> {
+    pool: &'a SqlitePool,
+    push: &'a PushHandle,
+    today: NaiveDate,
+}
+
 /// Run one evaluation pass. Returns the number of notifications actually
 /// sent (summed across both reasons).
 pub async fn tick(pool: &SqlitePool, push: &PushHandle) -> Result<usize> {
@@ -50,6 +61,7 @@ pub async fn tick(pool: &SqlitePool, push: &PushHandle) -> Result<usize> {
 /// `today` is injected so tests are deterministic — mirrors
 /// `charger::tick`/`tick_as_of`.
 pub async fn tick_as_of(pool: &SqlitePool, push: &PushHandle, today: NaiveDate) -> Result<usize> {
+    let ctx = Ctx { pool, push, today };
     let mut sent = 0usize;
 
     // ---- low_credit ----
@@ -66,12 +78,10 @@ pub async fn tick_as_of(pool: &SqlitePool, push: &PushHandle, today: NaiveDate) 
         let title = "Dochadza ti kredit";
         let body = format!("Tvoj zostatok je {credit:.2} EUR. Doplat si kredit na recepcii.");
         if evaluate_reason(
-            pool,
-            push,
+            &ctx,
             user_id,
             db::push::REASON_LOW_CREDIT,
             condition,
-            today,
             title,
             &body,
         )
@@ -125,12 +135,10 @@ pub async fn tick_as_of(pool: &SqlitePool, push: &PushHandle, today: NaiveDate) 
         };
 
         if evaluate_reason(
-            pool,
-            push,
+            &ctx,
             user_id,
             db::push::REASON_PASS_EXPIRING,
             condition,
-            today,
             &title,
             &body,
         )
@@ -148,15 +156,17 @@ pub async fn tick_as_of(pool: &SqlitePool, push: &PushHandle, today: NaiveDate) 
 /// ledger only after an ACTUAL successful send. Returns `true` iff at
 /// least one subscription was successfully notified.
 async fn evaluate_reason(
-    pool: &SqlitePool,
-    push: &PushHandle,
+    ctx: &Ctx<'_>,
     user_id: i64,
     reason: &str,
     condition: bool,
-    today: NaiveDate,
     title: &str,
     body: &str,
 ) -> Result<bool> {
+    let pool = ctx.pool;
+    let push = ctx.push;
+    let today = ctx.today;
+
     if !condition {
         db::push::clear_notified(pool, user_id, reason).await?;
         return Ok(false);
@@ -296,7 +306,7 @@ mod tests {
         // no second send.
         let sent_again = tick_as_of(&pool, &push, test_today()).await.unwrap();
         assert_eq!(sent_again, 0, "must respect the cooldown");
-        assert_eq!(mock.hits_async().await, 1);
+        assert_eq!(mock.calls_async().await, 1);
     }
 
     #[tokio::test]
@@ -327,7 +337,7 @@ mod tests {
 
         let sent = tick_as_of(&pool, &push, test_today()).await.unwrap();
         assert_eq!(sent, 1, "cooldown expired -> must resend");
-        assert_eq!(mock.hits_async().await, 1);
+        assert_eq!(mock.calls_async().await, 1);
     }
 
     #[tokio::test]

@@ -261,7 +261,7 @@ mod tests {
             )
             .await;
         assert_eq!(outcome, SendOutcome::Sent);
-        assert_eq!(mock.hits_async().await, 1);
+        assert_eq!(mock.calls_async().await, 1);
     }
 
     #[tokio::test]
@@ -374,6 +374,6 @@ mod tests {
             )
             .await;
         assert_eq!(outcome, SendOutcome::Sent);
-        assert_eq!(mock.hits_async().await, 1);
+        assert_eq!(mock.calls_async().await, 1);
     }
 }
