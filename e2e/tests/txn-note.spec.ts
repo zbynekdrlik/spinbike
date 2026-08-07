@@ -167,8 +167,25 @@ test.describe('Transaction notes — issue #26', () => {
         await chargeWithNote(page, '1.50', 'doomed');
 
         const firstRow = page.locator('[data-testid="transactions-list"] .list-row').first();
+        // #291: unlike every sibling test in this file (which waits for its
+        // OWN mutation's response before asserting on the DOM), this test
+        // used to click void and assert immediately with no synchronization
+        // at all -- racing Playwright's own expect() auto-retry against the
+        // full DELETE -> txn_refresh bump -> GET refetch -> re-render chain,
+        // observed flaking on CI (element(s) not found on the note-text
+        // locator, CI runs 31197701928 and 31203717764). Waiting for the
+        // DELETE response explicitly (matching the PATCH-response pattern
+        // the 'inline pencil edits'/'clearing a note' tests above already
+        // use successfully) proves the void itself landed before the
+        // remaining refetch+render latency is left to expect()'s own retry
+        // loop, same as those already-reliable tests.
+        const voidResp = page.waitForResponse(
+            (r) => /\/api\/transactions\/\d+$/.test(r.url()) && r.request().method() === 'DELETE',
+        );
         page.once('dialog', (d) => d.accept());
         await firstRow.locator('[data-testid="txn-void"]').click();
+        const resp = await voidResp;
+        expect(resp.ok()).toBe(true);
 
         // After void: note text remains, pencil and X disappear.
         await expect(firstRow.locator('[data-testid="txn-note-text"]')).toContainText('doomed');

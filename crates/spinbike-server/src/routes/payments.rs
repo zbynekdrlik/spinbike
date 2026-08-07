@@ -380,7 +380,7 @@ async fn log_visit(
                AND service_id IN (SELECT id FROM services WHERE name_en IN ({placeholders})) \
                AND ( action = 'visit' \
                      OR (action = 'charge' AND amount < 0 AND valid_until IS NULL) ) \
-             ORDER BY created_at DESC LIMIT 1"
+             ORDER BY created_at DESC, id DESC LIMIT 1"
         );
         let mut q = sqlx::query_as::<_, (String, Option<String>)>(&sql)
             .bind(body.user_id)

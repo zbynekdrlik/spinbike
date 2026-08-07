@@ -145,7 +145,7 @@ async fn my_balance(
            LEFT JOIN services s ON s.id = t.service_id \
           WHERE t.user_id = ? \
             AND t.deleted_at IS NULL \
-          ORDER BY t.created_at DESC \
+          ORDER BY t.created_at DESC, t.id DESC \
           LIMIT 20",
     )
     .bind(user_id)
