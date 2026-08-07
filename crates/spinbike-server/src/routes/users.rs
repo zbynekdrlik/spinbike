@@ -764,6 +764,17 @@ async fn user_transactions(
         return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
+    // #284: a dead CALLER session (missing/soft-deleted/blocked) must not be
+    // able to read even their OWN transaction history — same
+    // #268/#274/#277 contract, gated on the SELF-view branch only (mirrors
+    // update_user's `if is_self { require_live_session(...).await?; }`
+    // pattern). A staff/admin caller viewing ANOTHER user's transactions is
+    // untouched: session-invalidation is about the CALLER's own session,
+    // orthogonal to whose data is being read.
+    if claims.sub == id {
+        require_live_session(&state.pool, claims.sub).await?;
+    }
+
     let txns = transactions::list_transactions_for_user_paginated(
         &state.pool,
         id,

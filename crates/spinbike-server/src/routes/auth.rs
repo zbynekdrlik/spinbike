@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use std::time::{Duration, Instant};
 
 use crate::AppState;
-use crate::auth::{self, AuthUser, StaffUser, parse_role};
+use crate::auth::{self, AuthUser, StaffUser, parse_role, require_live_session};
 use crate::db::{login_tokens, users};
 use crate::error::ApiError;
 use crate::mail::MailError;
@@ -619,6 +619,16 @@ async fn install_token(
     State(state): State<AppState>,
     AuthUser(claims): AuthUser,
 ) -> Result<Json<InstallTokenResponse>, ApiError> {
+    // #284: a dead CALLER session (missing/soft-deleted/blocked) must not be
+    // able to mint a fresh, long-lived, multi-use install credential for
+    // itself — same #268/#274/#277/users::user_transactions contract. Also
+    // closes a worse pre-existing shape for the missing-caller case:
+    // `create_install_token` writes a `login_tokens` row with a real FK to
+    // `users(id)`, so a non-existent `claims.sub` used to crash with a 500
+    // FK-constraint error instead of a clean 401 — this check runs BEFORE
+    // that write is ever attempted.
+    require_live_session(&state.pool, claims.sub).await?;
+
     let raw = login_tokens::create_install_token(&state.pool, claims.sub)
         .await
         .map_err(internal_error)?;

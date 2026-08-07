@@ -59,27 +59,46 @@ it immediately after extracting `AuthUser` in any handler that acts on the
 CALLER's own account. `classes.rs`'s `create_booking`/`cancel_booking`/
 `my_bookings` and `users.rs`'s `update_user` self-edit branch all call it.
 
-`door.rs` (#274) and `my_balance.rs` (#268) were deliberately left on their
-own pre-existing hand-rolled inline checks rather than migrated to the new
-helper — both are correct and already tested; migrating them would only add
-diff/re-test risk for zero behavior change. Write NEW session-invalidation
-checks against the helper; `#284` tracks a future cleanup pass that MAY
-consolidate the two old sites onto it, and also covers two more gaps two
-independent reviews found right after #277 shipped: `user_transactions`'s
-self-view branch (`users.rs`) and `install_token` (`auth.rs`) both still
-accept a dead caller session.
+`door.rs` (#274) and `my_balance.rs` (#268) are DELIBERATELY left on their
+own pre-existing hand-rolled inline checks, permanently — not "for now".
+`#284` (which fixed the two NEW gaps below) considered consolidating them
+onto the shared helper and decided against it: both sites already fetch
+`blocked`/`deleted_at` in the SAME query as the other columns they need and
+already carry the identical 401 `session_invalid` contract, tested. Moving
+them onto `require_live_session` has only two honest shapes — an extra
+query before the existing one (opens a narrow TOCTOU window between the two
+reads that doesn't exist today) or a genuinely redundant second check next
+to the first (pure diff/re-test risk for zero behavior change) — and
+neither is worth it for already-correct, already-tested code. Write NEW
+session-invalidation checks against the helper; do not migrate these two.
+
+`#284` also covers the two gaps two independent reviews found right after
+#277 shipped: `user_transactions`'s self-view branch (`users.rs`) and
+`install_token` (`auth.rs`) both used to accept a dead caller session —
+both now call `require_live_session`, gated on the self-acting branch only
+(same `if is_self { ... }` shape as `update_user`).
 
 **Why NOT the `AuthUser` extractor** (weighed seriously in #277's design
-step — see the issue's design comment for the full reasoning): `AuthUser`/
-`StaffUser`/`AdminUser` back ~17 handler call sites across `auth.rs`,
-`payments.rs`, `admin.rs`, `users.rs`, `door.rs`, `my_balance.rs`,
-`classes.rs`. Moving the check into the extractor would apply it to all of
-them at once (correctly closing the class of bug for every future endpoint
-with zero chance of a missed call site) but is a much bigger blast radius
-than any one ticket's named scope, and needs re-verifying every affected
-call site's existing tests. Cost of the extra `SELECT` is negligible either
-way (single SQLite file, sub-millisecond, low-traffic single-operator app) —
-scope discipline, not cost, was the deciding factor. If a future ticket
-wants the extractor-level guarantee for the other ~13 sites (payments,
-admin, user management), that is a deliberate follow-up, not something to
-fold silently into an unrelated fix.
+step, re-weighed with MEASURED numbers in #284's — see either issue's
+design comment for the full reasoning): only **8** handlers actually
+destructure `AuthUser(claims): AuthUser` directly (`door::open`,
+`auth::install_token`, `auth::me`, `classes::create_booking`,
+`classes::cancel_booking`, `classes::my_bookings`, `users::update_user`,
+`users::user_transactions`) — after #284, 7 of the 8 call
+`require_live_session` or its hand-rolled equivalent; only `auth::me`
+doesn't (it never touches the DB, just echoes the JWT's own claims back, so
+there's nothing for the check to protect). But `StaffUser` and `AdminUser`
+(`auth/mod.rs`) both internally call `AuthUser::from_request_parts` FIRST —
+so moving the check INTO `AuthUser` would silently cascade to every
+`StaffUser`/`AdminUser` handler too: measured **50** `StaffUser` + **15**
+`AdminUser` call sites, ~73 handlers total, not the ~17 #277 estimated.
+Most of those act on a TARGET user by path id (staff editing a customer,
+admin managing cards) — gating on the CALLER's own liveness there is a
+materially bigger, separate decision (should a blocked staff account be
+locked out of every admin action mid-shift, not just self-acting ones?)
+needing its own review of all ~73 call sites' tests. Cost of the extra
+`SELECT` is negligible either way (single SQLite file, sub-millisecond,
+low-traffic single-operator app) — scope discipline, not cost, is still the
+deciding factor. If a future ticket wants the extractor-level guarantee for
+the `StaffUser`/`AdminUser` cascade, that is a deliberate, much larger
+follow-up, not something to fold silently into an unrelated fix.
