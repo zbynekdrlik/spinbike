@@ -180,6 +180,14 @@ mod tests {
             }
         });
 
+        // `tokio::time::advance` only wakes timers that are ALREADY
+        // registered — a freshly `tokio::spawn`ed task hasn't been polled
+        // yet, so its `sleep(delay)` future doesn't exist as a registered
+        // timer until the task runs at least once. Yield first so the
+        // executor polls it up to that first `.await` (registering the
+        // timer) BEFORE we jump the clock past it.
+        tokio::task::yield_now().await;
+
         // A couple of seconds' buffer: the spawned task computes its own
         // "now" a hair after this test did, so its real delay is very
         // slightly shorter — advancing by strictly more than our own
