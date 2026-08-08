@@ -1612,7 +1612,7 @@ checksum = "67b1b7a3b5fe4f1376887184045fcf45c69e92af734b7aaddc05fb777b6fbd03"
 
 [[package]]
 name = "spinbike-core"
-version = "0.15.0-dev.118"
+version = "0.15.0-dev.140"
 dependencies = [
  "chrono",
  "serde",
@@ -1622,8 +1622,9 @@ dependencies = [
 
 [[package]]
 name = "spinbike-ui"
-version = "0.15.0-dev.118"
+version = "0.15.0-dev.140"
 dependencies = [
+ "base64",
  "chrono",
  "chrono-tz",
  "console_error_panic_hook",

@@ -47,8 +47,10 @@
 //! second, independent `localStorage` flag, set only on a manual `On -> Off`
 //! click and cleared on a manual `Off -> On` click or a successful
 //! auto-subscribe) is the fix: the mount effect only auto-subscribes when
-//! `permission == granted && !subscribed && !push_user_disabled()`. This is
-//! a purely client-side UI memory, not a new server-side preference (the
+//! `permission == granted && no local subscription found (see the #305
+//! paragraph above — never the server's account-wide flag) &&
+//! !push_user_disabled()`. This is a purely client-side UI memory, not a
+//! new server-side preference (the
 //! owner's comment only forbids introducing a NEW server preference when
 //! none exists — none does, and none is added here).
 //!
@@ -528,16 +530,30 @@ pub fn PushToggle() -> impl IntoView {
                             // (plain idempotent upsert) in case an earlier
                             // subscribe POST failed silently while the
                             // browser-side subscribe succeeded, then show
-                            // On — errors aren't surfaced, the device
-                            // demonstrably has a live subscription
-                            // regardless of server-sync state.
+                            // On regardless of this POST's own outcome —
+                            // the device demonstrably has a live
+                            // subscription either way (review finding: a
+                            // FAILING reconcile must not go completely
+                            // unlogged just because it isn't shown in the
+                            // UI, so it still gets a console warning here,
+                            // same pattern as unsubscribe_flow's own
+                            // best-effort warnings below).
                             clear_push_user_disabled();
                             let body = SubscribeReq {
                                 endpoint,
                                 keys: SubscribeKeysReq { p256dh, auth },
                             };
-                            let _ = api::post::<_, serde_json::Value>("/api/push/subscribe", &body)
-                                .await;
+                            if let Err(e) =
+                                api::post::<_, serde_json::Value>("/api/push/subscribe", &body)
+                                    .await
+                            {
+                                web_sys::console::warn_1(
+                                    &format!(
+                                        "push: #305 reconcile of an existing local subscription failed: {e}"
+                                    )
+                                    .into(),
+                                );
+                            }
                             set_state.set(PushState::On);
                             return;
                         }
