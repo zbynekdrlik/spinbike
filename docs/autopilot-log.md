@@ -3,6 +3,44 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-08-08 — #264 PWA push notifications: low credit + expiring pass (PR #296, dev.133)
+
+- **Feature:** daily job `jobs::notifications::tick`, two reasons
+  (`low_credit`, `pass_expiring`), migrations V23–V25 (`push_subscriptions`,
+  `push_notify_log` + `sent_count`), `sw.js` gained `push` +
+  `notificationclick` listeners.
+- **Owner decisions** recorded on the issue before implementation: low-credit
+  push requires `credit <= 3.30` **AND** last top-up `>= 20.00 EUR` (excludes
+  one-off single-entry customers; boundary is `>=`, "last top-up" = the single
+  most recent credit-increasing transaction, not a sum); cadence = one tick
+  per day, `NOTIFY_COOLDOWN_DAYS = 7`, `MAX_NOTIFICATIONS_PER_EPISODE = 2`,
+  re-armed when the condition clears.
+- **Adversarial review** produced 10 findings; fixed in-PR: SSRF hardening of
+  `/api/push/subscribe` (require `https://` + host allowlist), VAPID key
+  length validation (a wrong-length key panicked inside `generic-array`), send
+  timeout + pruning of `Failed` subscriptions, per-user loop changed from
+  `?`-abort to log-and-continue, `tracing` instrumentation, session-
+  invalidation regression tests for subscribe/unsubscribe.
+- **Fallout fix `8e51039`:** the SSRF guard made `PushToggle` legitimately 401
+  in two `session-invalidation.spec.ts` repros — fixed by adding
+  `/api/push/config` to their `allow4xxFor` list (per
+  `.claude/rules/e2e-console-check.md`, match `msg.location().url`, never
+  `msg.text()`).
+- **Spun off as #297** (`chore(server): token_purge's daily interval is
+  uptime-relative, not wall-clock-aligned`) — the same pattern #264 fixed for
+  the push job.
+- **Prod verification** (0.15.0-dev.133, live prod DB + journal): synthetic
+  customer with a 25 EUR last top-up and 1.00 EUR credit was selected and a
+  real VAPID-signed POST was emitted (`push: notified user_id=… reason=
+  "low_credit"`, `sent=1`); a second same-day tick sent nothing (ledger
+  untouched, no second network attempt); lowering the last top-up to 5.00 EUR
+  and clearing the ledger made the job skip the user entirely. All synthetic
+  rows deleted afterwards.
+- Testing gotcha now in `.claude/rules/push-notifications.md`: `push::send()`
+  does no host validation (the allowlist is only in the subscribe route) and
+  the anti-spam ledger is stamped only on a real 2xx — so proving the cooldown
+  needs a local mock endpoint returning 201, not a failed send.
+
 ## 2026-08-07 — #278 4xx console-filter scoping + #282 install-token mint-guard race + #291 transaction ordering tiebreaker (PR #292 + follow-up PR #293, dev.130)
 
 - **#278 (`9ca6d33` [red] → `758ccb2` [green] → `b34f9f2`/`71f48dc` CI fixes):**
