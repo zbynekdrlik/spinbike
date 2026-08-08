@@ -132,12 +132,178 @@ mod tests {
         );
     }
 
+    /// Captures `tracing` output emitted while `f` runs, via an in-memory
+    /// `MakeWriter` — `tracing-subscriber`'s `fmt` layer is already a
+    /// runtime dependency (`bin/server.rs` uses it to configure the real
+    /// process subscriber), so this needs no new dev-dependency.
+    /// `tracing::subscriber::set_default` scopes the subscriber to the
+    /// current OS thread; `#[tokio::test]`'s default runtime is
+    /// single-threaded, so a `tokio::spawn`ed task polled from inside `f`
+    /// still runs on the same thread and is captured too.
+    async fn capture_tracing_output<F, Fut>(f: F) -> String
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = ()>,
+    {
+        use std::sync::{Arc, Mutex};
+
+        #[derive(Clone, Default)]
+        struct BufWriter(Arc<Mutex<Vec<u8>>>);
+
+        impl std::io::Write for BufWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for BufWriter {
+            type Writer = Self;
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
+        }
+
+        let buf = BufWriter::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(buf.clone())
+            .with_max_level(tracing::Level::INFO)
+            .with_ansi(false)
+            .finish();
+
+        let _guard = tracing::subscriber::set_default(subscriber);
+        f().await;
+
+        String::from_utf8(buf.0.lock().unwrap().clone()).expect("log output must be valid utf8")
+    }
+
+    /// Regression coverage for #299: cargo-mutants surfaced 5 surviving
+    /// mutants, all on the same line — `Ok(n) if n > 0 => tracing::info!`
+    /// mutated to `true`, `false`, `n < 0`, `n == 0`, `n >= 0` were all
+    /// MISSED, because `spawn_daily_job_runs_tick_after_the_computed_delay`
+    /// below always returns `Ok(0)` from `tick`, so the guard's outcome was
+    /// never actually distinguished by any assertion.
+    ///
+    /// This test (positive count, expect the info log) and the next one
+    /// (zero count, expect NO info log) together kill all 5: for `n=5`,
+    /// `n>0`/`n>=0` agree with the original (log fires) while
+    /// `false`/`n<0`/`n==0` disagree (no log); for `n=0`, `n>0`/`n<0` agree
+    /// with the original (no log) while `true`/`n==0`/`n>=0` disagree (log
+    /// fires) — so between the two cases every mutant produces at least one
+    /// observably different log outcome. Each test also asserts `tick`
+    /// itself ran exactly once, so a broken spawn/sleep/call path can't
+    /// hide behind a vacuously-true "log absent" assertion.
+    #[tokio::test]
+    async fn spawn_daily_job_logs_info_when_tick_returns_a_positive_count() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Two extra clones of the SAME underlying atomic, one per closure
+        // that needs its own `move`d-in handle — `calls` itself is never
+        // referenced inside `capture_tracing_output`'s closure, so it is
+        // never captured/moved and stays usable for the assert below.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_in_job = calls.clone();
+        let calls_in_loop = calls.clone();
+
+        let output = capture_tracing_output(move || async move {
+            let pool = crate::db::create_memory_pool().await.unwrap();
+            crate::db::run_migrations(&pool).await.unwrap();
+            tokio::time::pause();
+
+            let hour = 17;
+            let approx_delay = crate::util::duration_until_next_bratislava_hour(
+                crate::util::now_bratislava(),
+                hour,
+            );
+
+            super::spawn_daily_job(pool, hour, "capture job pos", move |_pool| {
+                let calls = calls_in_job.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(5)
+                }
+            });
+
+            tokio::task::yield_now().await;
+            tokio::time::advance(approx_delay + std::time::Duration::from_secs(2)).await;
+            for _ in 0..50 {
+                tokio::task::yield_now().await;
+                if calls_in_loop.load(Ordering::SeqCst) >= 1 {
+                    break;
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "tick must have run once");
+        assert!(
+            output.contains("capture job pos: 5"),
+            "expected the positive-count info log, got: {output:?}"
+        );
+    }
+
+    /// See `spawn_daily_job_logs_info_when_tick_returns_a_positive_count`
+    /// above — the zero-count half of the same mutation-gap coverage.
+    #[tokio::test]
+    async fn spawn_daily_job_does_not_log_info_when_tick_returns_zero() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // See the sibling positive-count test above for why this needs
+        // separate `calls_in_job`/`calls_in_loop` clones instead of moving
+        // `calls` itself into the closure.
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_in_job = calls.clone();
+        let calls_in_loop = calls.clone();
+
+        let output = capture_tracing_output(move || async move {
+            let pool = crate::db::create_memory_pool().await.unwrap();
+            crate::db::run_migrations(&pool).await.unwrap();
+            tokio::time::pause();
+
+            let hour = 18;
+            let approx_delay = crate::util::duration_until_next_bratislava_hour(
+                crate::util::now_bratislava(),
+                hour,
+            );
+
+            super::spawn_daily_job(pool, hour, "capture job zero", move |_pool| {
+                let calls = calls_in_job.clone();
+                async move {
+                    calls.fetch_add(1, Ordering::SeqCst);
+                    Ok(0)
+                }
+            });
+
+            tokio::task::yield_now().await;
+            tokio::time::advance(approx_delay + std::time::Duration::from_secs(2)).await;
+            for _ in 0..50 {
+                tokio::task::yield_now().await;
+                if calls_in_loop.load(Ordering::SeqCst) >= 1 {
+                    break;
+                }
+            }
+        })
+        .await;
+
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "tick must have run once");
+        assert!(
+            !output.contains("capture job zero:"),
+            "did not expect an info log for a zero count, got: {output:?}"
+        );
+    }
+
     /// Regression coverage for #299: proves `spawn_daily_job` actually
-    /// RUNS its `tick` closure after sleeping — the two tests above only
-    /// pin the delay arithmetic, which leaves the function's own body
-    /// (spawn the loop, sleep, call `tick`) unexercised. A mutation run
-    /// caught exactly this gap: replacing the whole function body with
-    /// `()` was MISSED (no test failed) until this test was added.
+    /// RUNS its `tick` closure after sleeping — the two
+    /// `daily_run_hour_*` tests near the top of this module only pin the
+    /// delay arithmetic, which leaves the function's own body (spawn the
+    /// loop, sleep, call `tick`) unexercised. A mutation run caught
+    /// exactly this gap: replacing the whole function body with `()` was
+    /// MISSED (no test failed) until this test was added.
     ///
     /// `#[tokio::test(start_paused = true)]` gives the task a virtual
     /// clock; `tokio::time::advance` fast-forwards it instead of a real
