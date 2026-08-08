@@ -224,7 +224,7 @@ mod tests {
         unit: &'static str,
         tick: F,
     ) where
-        F: Fn(SqlitePool) -> Fut + Send + 'static,
+        F: Fn(sqlx::SqlitePool) -> Fut + Send + 'static,
         Fut: Future<Output = anyhow::Result<usize>> + Send + 'static,
     {
         let pool = crate::db::create_memory_pool().await.unwrap();
