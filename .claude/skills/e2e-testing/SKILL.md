@@ -245,6 +245,41 @@ Bratislava-anchored or UTC calculation). A spec that needs to click a real
    confusingly: the book button never appears (5s timeout on
    `expect(bookBtn).toBeVisible()`), not an obviously date-related error.
 
+## Never assume `Notification.permission` starts `"default"` in CI's headless Chromium — force it explicitly (#303)
+
+`push-notifications.spec.ts` needed a genuinely UNDECIDED permission state
+(to test a one-time proactive prompt) and assumed the real, unstubbed
+`Notification.permission` getter would read `"default"` on a fresh
+Playwright context with NO `context.grantPermissions` call. It does NOT —
+confirmed live on CI (run 31243551938): two specs relying on that
+assumption both failed because the prompt they expected never rendered.
+The existing module doc already documents a DIFFERENT, adjacent Chromium
+quirk (calling `context.grantPermissions(['notifications'])` leaves the
+static getter stuck reporting `"denied"` regardless) — this is a THIRD,
+separate gotcha: even with NO `grantPermissions` call at all, headless
+Chromium's own default read isn't `"default"` either.
+
+**Fix: never trust the real getter for ANY of the three permission states —
+force it explicitly via the same `Object.defineProperty` override this
+suite already uses for `"granted"`/`"denied"`:**
+
+```ts
+async function stubUndecided(page: Page): Promise<void> {
+    await page.addInitScript(() => {
+        Object.defineProperty(Notification, 'permission', {
+            configurable: true,
+            get: () => 'default',
+        });
+    });
+}
+```
+
+Apply this rule to any FUTURE spec that needs a genuinely undecided
+`Notification.permission` (or, by extension, any other browser permission
+API with a getter/state you have not explicitly overridden) — assuming a
+"fresh context" default without forcing it is not safe in this CI
+environment.
+
 ## Router
 Add a line to the project `CLAUDE.md` `## Playbook router` pointing here so a
 future guard-adding ticket loads this BEFORE pushing, not after CI turns red.
