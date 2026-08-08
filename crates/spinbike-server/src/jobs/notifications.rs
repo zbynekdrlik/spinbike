@@ -9,12 +9,31 @@
 //!
 //! **Low-credit gate (owner decision, 2026-08-07 — see #264's own
 //! comments): the low-credit reminder is customer-tier-scoped.** A
-//! one-off single-entry customer must NOT get it. It fires ONLY when BOTH
-//! hold: `credit <= LOW_CREDIT_THRESHOLD_EUR` AND the user's most recent
-//! top-up was `>= MIN_LAST_TOPUP_EUR`. A user with no top-up history at
-//! all never gets this reminder. The expiring-pass reminder is UNAFFECTED
-//! by this gate — it fires for any user with a pass ending within the
-//! window, regardless of top-up size.
+//! one-off single-entry customer must NOT get it. It fires ONLY when ALL
+//! THREE hold: `credit <= LOW_CREDIT_THRESHOLD_EUR` AND the user's most
+//! recent top-up was `>= MIN_LAST_TOPUP_EUR` AND the user does NOT hold an
+//! active monthly pass as of `today` (see #306 below). A user with no
+//! top-up history at all never gets this reminder. The expiring-pass
+//! reminder is UNAFFECTED by this gate — it fires for any user with a pass
+//! ending within the window, regardless of top-up size.
+//!
+//! **Active-pass suppression (#306, owner-confirmed root cause, 2026-08-08):
+//! while a customer holds an active monthly pass, their `credit` is 0 BY
+//! DESIGN** (every visit during the pass period is booked as
+//! `action='visit'`, amount 0 — nothing is ever deducted from credit while
+//! the pass covers it). `low_credit`'s original condition looked only at
+//! `credit`/`last_topup` and never checked pass status, so a pass holder
+//! whose most recent top-up happened to clear the 20 EUR gate got a
+//! nonsensical "Dochadza ti kredit" push while their pass was still fully
+//! valid. The fix reads the SAME canonical `user_active_pass` view (V18)
+//! the `pass_expiring` loop below already reads, via
+//! `db::users::get_user_pass_valid_until`, and suppresses `low_credit`
+//! whenever `pass_valid_until >= today` (inclusive — a pass expiring
+//! TODAY still covers the whole of today, so the customer must not be
+//! nagged about credit until tomorrow). This makes the sequence coherent:
+//! `pass_expiring` fires 3 days before the pass ends; the moment it
+//! actually expires, `low_credit` naturally unlocks (its own condition
+//! was true all along, just gated) and can remind the customer to top up.
 //!
 //! **Anti-spam (owner decision, 2026-08-08 — mandatory per the issue,
 //! refined with an episode cap):** per (user, reason), tracked in
@@ -137,12 +156,32 @@ pub async fn tick_as_of(pool: &SqlitePool, push: &PushHandle, today: NaiveDate) 
                 continue;
             }
         };
+        // #306: an active monthly pass suppresses low_credit — while it
+        // covers the customer, credit is 0 by design (see module doc) and
+        // "Dochadza ti kredit" is nonsensical. Same canonical
+        // `user_active_pass` view (V18) `pass_expiring` reads below.
+        // `>=` today (inclusive) — a pass expiring TODAY still covers the
+        // whole of today.
+        let pass_valid_until = match db::users::get_user_pass_valid_until(pool, user_id).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(
+                    user_id,
+                    error = %e,
+                    "push: low_credit — failed to read pass status, skipping this user"
+                );
+                continue;
+            }
+        };
+        let has_active_pass = pass_valid_until.is_some_and(|vu| vu >= today);
         let condition = credit <= LOW_CREDIT_THRESHOLD_EUR
-            && last_topup.is_some_and(|t| t >= MIN_LAST_TOPUP_EUR);
+            && last_topup.is_some_and(|t| t >= MIN_LAST_TOPUP_EUR)
+            && !has_active_pass;
         tracing::debug!(
             user_id,
             credit = %format!("{credit:.2}"),
             last_topup = %last_topup.map(|t| format!("{t:.2}")).unwrap_or_else(|| "none".to_string()),
+            has_active_pass,
             condition,
             "push: low_credit evaluation"
         );
