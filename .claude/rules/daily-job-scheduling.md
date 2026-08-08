@@ -79,3 +79,24 @@ notifications::tick(&pool, &push).await } }`).
   plain `tokio::time::interval`, NOT `spawn_daily_job` — this rule (and the helper)
   is specifically about DAILY-or-longer cadences where restart-pinning + DST drift
   actually matters.
+- **A generic function's `where` clause defined INSIDE `mod tests` needs its OWN
+  `use`/fully-qualified path — it does NOT inherit the outer module's `use`.** A
+  private `use sqlx::SqlitePool;` at the top of `jobs/mod.rs` is visible to
+  `mod tests` via `super::SqlitePool`, but the BARE identifier `SqlitePool` in a
+  test helper's own `where F: Fn(SqlitePool) -> Fut` does NOT resolve without an
+  explicit import in `tests`'s own scope — this is an `E0425` compile error the
+  `Lint` CI job catches (NOT `cargo fmt`, so it survives the Tier-0 local
+  fmt-only check and costs a full CI cycle). Fully-qualify (`sqlx::SqlitePool`)
+  instead of adding a redundant `use` when it's the only reference in scope.
+- **A log-gating branch (`Ok(n) if n > 0 => tracing::info!(...)`) has NO
+  observable side effect other than the log line itself** — a test that only
+  proves `tick` ran (via a call counter) leaves the GUARD itself unmutated, since
+  every mutant of `n > 0` (`true`/`false`/`n < 0`/`n == 0`/`n >= 0`) produces the
+  identical "tick ran once" result. To kill those mutants, capture the actual
+  `tracing` output (`capture_tracing_output` in `jobs/mod.rs`'s test module — an
+  in-memory `MakeWriter` over `Arc<Mutex<Vec<u8>>>`, scoped via
+  `tracing::subscriber::set_default`, no new dependency since `tracing-subscriber`
+  is already a runtime dep) and assert the log line's PRESENCE/ABSENCE for at
+  least two different counts (one that should log, one that shouldn't). Any
+  future `Ok(n) if n > <threshold>`-shaped log-gating branch in this codebase
+  needs the same treatment, not just a "did the function run" test.
