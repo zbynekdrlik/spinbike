@@ -42,14 +42,20 @@ notifications::tick(&pool, &push).await } }`).
   `token_purge` = 4 (pure housekeeping, off-peak).
 - `duration_until_next_bratislava_hour` (in `util.rs`) is the shared, already-tested
   helper `spawn_daily_job` itself calls — don't reinvent DST-safe scheduling per job.
-- `spawn_daily_job`'s own sleep loop is NOT unit-testable (it's an infinite
-  `tokio::spawn` future). Regression coverage instead pins the production
-  `duration_until_next_bratislava_hour(now, DAILY_RUN_HOUR)` call at each job's own
-  hour — see `token_purge.rs`'s `daily_run_hour_*` tests (single-job) and
-  `jobs/mod.rs`'s own tests (parameterized over both current job hours) — before-target-
-  hour and at/after-target-hour cases. A new job doesn't strictly need its own copy of
-  these tests (the arithmetic is already covered generically), but adding one at your
-  job's specific hour is cheap insurance if that hour is adjacent to another job's.
+- The DELAY arithmetic is pinned per-hour in `token_purge.rs`'s `daily_run_hour_*`
+  tests (single-job) and `jobs/mod.rs`'s own tests (parameterized over both current
+  job hours) — before-target-hour and at/after-target-hour cases. A new job doesn't
+  strictly need its own copy (the arithmetic is already covered generically), but
+  adding one at your job's specific hour is cheap insurance if that hour is adjacent
+  to another job's.
+- `spawn_daily_job`'s own execution (sleep, then actually call `tick`) is separately
+  covered by `jobs/mod.rs`'s `spawn_daily_job_runs_tick_after_the_computed_delay`
+  test, via `#[tokio::test(start_paused = true)]` + `tokio::time::advance` to
+  fast-forward the wait instead of a real wall-clock sleep (tokio's `test-util`
+  feature, dev-dependency only — see `Cargo.toml`). This exists because a mutation
+  run caught it directly: the two arithmetic-only tests above left the function's
+  own body (spawn the loop, sleep, actually invoke `tick`) unexercised, so
+  cargo-mutants MISSED replacing the whole `spawn_daily_job` body with `()`.
 - Still run your job's `tick` once at startup, directly in `main()`, BEFORE the
   `spawn_daily_job` call — the helper only owns the recurring loop, not the startup
   tick, so the first observable log line appears right after boot instead of waiting

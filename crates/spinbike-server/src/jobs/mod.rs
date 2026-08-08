@@ -131,4 +131,66 @@ mod tests {
             "notifications' hour (9) hasn't passed yet — later today"
         );
     }
+
+    /// Regression coverage for #299: proves `spawn_daily_job` actually
+    /// RUNS its `tick` closure after sleeping — the two tests above only
+    /// pin the delay arithmetic, which leaves the function's own body
+    /// (spawn the loop, sleep, call `tick`) unexercised. A mutation run
+    /// caught exactly this gap: replacing the whole function body with
+    /// `()` was MISSED (no test failed) until this test was added.
+    ///
+    /// `#[tokio::test(start_paused = true)]` gives the task a virtual
+    /// clock; `tokio::time::advance` fast-forwards it instead of a real
+    /// wall-clock wait (the real delay can be up to 24h). The delay itself
+    /// is still computed from the REAL wall clock (`duration_until_next_
+    /// bratislava_hour` calls `chrono::Utc::now()`, not tokio's clock) —
+    /// pin it here immediately before spawning so the advance covers
+    /// whatever the spawned loop computes for the same instant.
+    #[tokio::test(start_paused = true)]
+    async fn spawn_daily_job_runs_tick_after_the_computed_delay() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let pool = crate::db::create_memory_pool().await.unwrap();
+        crate::db::run_migrations(&pool).await.unwrap();
+
+        // Arbitrary hour, unrelated to either real job's DAILY_RUN_HOUR —
+        // this test only cares that `spawn_daily_job` eventually calls
+        // `tick`, not which hour.
+        let hour = 17;
+        let approx_delay =
+            crate::util::duration_until_next_bratislava_hour(crate::util::now_bratislava(), hour);
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let calls_in_job = calls.clone();
+        super::spawn_daily_job(pool, hour, "test job", move |_pool| {
+            let calls = calls_in_job.clone();
+            async move {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(0)
+            }
+        });
+
+        // A couple of seconds' buffer: the spawned task computes its own
+        // "now" a hair after this test did, so its real delay is very
+        // slightly shorter — advancing by strictly more than our own
+        // reading guarantees its sleep has already elapsed.
+        tokio::time::advance(approx_delay + std::time::Duration::from_secs(2)).await;
+
+        // `advance` drives due timers, but the woken task still needs to
+        // be polled to actually run its (non-timer) body — yield a few
+        // times to give the executor that chance without a real wait.
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+            if calls.load(Ordering::SeqCst) >= 1 {
+                break;
+            }
+        }
+
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "spawn_daily_job must call tick once after its sleep elapses"
+        );
+    }
 }
