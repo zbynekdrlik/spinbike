@@ -58,3 +58,8 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 tempfile = "3"
 httpmock = "0.8"
+# test-util (#299): `#[tokio::test(start_paused = true)]` + `tokio::time::advance`
+# for `jobs::spawn_daily_job`'s test — fast-forwards its internal `sleep()`
+# instead of a real wall-clock wait. Dev-dependency only: the release binary
+# (which doesn't pull dev-dependencies) never gets this feature.
+tokio = { workspace = true, features = ["test-util"] }

@@ -1,6 +1,6 @@
 [package]
 name = "spinbike-ui"
-version = "0.15.0-dev.134"
+version = "0.15.0-dev.135"
 edition = "2024"
 
 [workspace]

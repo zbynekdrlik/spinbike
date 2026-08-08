@@ -112,67 +112,40 @@ async fn main() -> Result<()> {
     // `tokio::time::interval`, which pins the purge to whatever moment the
     // server process last restarted (e.g. 03:00 after an overnight deploy)
     // forever. Pure housekeeping (#119) with no customer-visible effect, but
-    // the pattern should stay consistent with the other daily job. The
-    // delay is recomputed from real wall-clock time EVERY cycle (a
-    // sleep-loop, not a fixed 86400s interval) so it self-corrects across
-    // Bratislava's two DST transitions a year. Startup already ran the job
-    // once above, so this loop's first sleep waits for the NEXT occurrence
-    // of the aligned hour.
-    {
-        let pool = pool.clone();
-        tokio::spawn(async move {
-            loop {
-                let delay = spinbike_server::util::duration_until_next_bratislava_hour(
-                    spinbike_server::util::now_bratislava(),
-                    spinbike_server::jobs::token_purge::DAILY_RUN_HOUR,
-                );
-                tracing::debug!(
-                    delay_secs = delay.as_secs(),
-                    hour = spinbike_server::jobs::token_purge::DAILY_RUN_HOUR,
-                    "login_tokens purge: sleeping until the next aligned daily run"
-                );
-                tokio::time::sleep(delay).await;
-                match spinbike_server::jobs::token_purge::tick(&pool).await {
-                    Ok(n) if n > 0 => tracing::info!("login_tokens purge removed {n} rows"),
-                    Ok(_) => {}
-                    Err(e) => tracing::error!("login_tokens purge failed: {e}"),
-                }
-            }
-        });
-    }
+    // the pattern should stay consistent with the other daily job. Startup
+    // already ran the job once above, so this loop's first sleep waits for
+    // the NEXT occurrence of the aligned hour. `spawn_daily_job` (#299) owns
+    // the sleep-loop mechanics — see its doc comment / `.claude/rules/
+    // daily-job-scheduling.md` for the DST-safety rationale.
+    spinbike_server::jobs::spawn_daily_job(
+        pool.clone(),
+        spinbike_server::jobs::token_purge::DAILY_RUN_HOUR,
+        "login_tokens purge",
+        "rows removed",
+        |pool| async move { spinbike_server::jobs::token_purge::tick(&pool).await },
+    );
 
     // Push notifications: daily, aligned to a fixed Bratislava-local
     // wall-clock hour (#264 review finding) rather than an uptime-relative
     // interval — the latter would pin customer-visible notifications to
     // whatever moment the server process last restarted (e.g. 03:00 after
-    // an overnight deploy) forever. The delay is recomputed from real
-    // wall-clock time EVERY cycle (a sleep-loop, not a fixed 86400s
-    // `tokio::time::interval`) so it self-corrects across Bratislava's two
-    // DST transitions a year instead of slowly drifting off the target
-    // hour. Startup already ran the job once above, so this loop's first
-    // sleep waits for the NEXT occurrence of the aligned hour.
+    // an overnight deploy) forever. Startup already ran the job once above,
+    // so this loop's first sleep waits for the NEXT occurrence of the
+    // aligned hour. `notifications::tick` takes an extra `&PushHandle` that
+    // `spawn_daily_job`'s signature doesn't carry, so it's captured by the
+    // closure instead of widening the helper for one caller (#299).
     {
-        let pool = pool.clone();
         let push = push.clone();
-        tokio::spawn(async move {
-            loop {
-                let delay = spinbike_server::util::duration_until_next_bratislava_hour(
-                    spinbike_server::util::now_bratislava(),
-                    spinbike_server::jobs::notifications::DAILY_RUN_HOUR,
-                );
-                tracing::debug!(
-                    delay_secs = delay.as_secs(),
-                    hour = spinbike_server::jobs::notifications::DAILY_RUN_HOUR,
-                    "push: sleeping until the next aligned daily run"
-                );
-                tokio::time::sleep(delay).await;
-                match spinbike_server::jobs::notifications::tick(&pool, &push).await {
-                    Ok(n) if n > 0 => tracing::info!("push: sent {n} notifications"),
-                    Ok(_) => {}
-                    Err(e) => tracing::error!("push notifications tick failed: {e}"),
-                }
-            }
-        });
+        spinbike_server::jobs::spawn_daily_job(
+            pool.clone(),
+            spinbike_server::jobs::notifications::DAILY_RUN_HOUR,
+            "push notifications",
+            "sent",
+            move |pool| {
+                let push = push.clone();
+                async move { spinbike_server::jobs::notifications::tick(&pool, &push).await }
+            },
+        );
     }
 
     spinbike_server::start_server(pool, port, jwt_secret).await?;
