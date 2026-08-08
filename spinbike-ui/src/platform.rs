@@ -17,6 +17,14 @@ pub(crate) fn window_value() -> Option<JsValue> {
     web_sys::window().map(JsValue::from)
 }
 
+/// Shared `localStorage` accessor (#303 review finding — was independently
+/// duplicated a third time in `push_toggle.rs`; consolidated here so at
+/// least new call sites share one copy. `auth.rs`/`i18n.rs` keep their own
+/// pre-existing private copies — out of scope to touch for #303).
+pub(crate) fn local_storage() -> Option<web_sys::Storage> {
+    web_sys::window()?.local_storage().ok()?
+}
+
 /// `Reflect::get` with a string key, defaulting to `undefined` on any error
 /// (missing property, non-object target) rather than propagating — every
 /// caller here treats "absent" and "errored" the same way.

@@ -62,8 +62,9 @@ use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 
 use crate::api;
+use crate::auth;
 use crate::i18n::{self, Lang};
-use crate::platform::{get_prop, window_value};
+use crate::platform::{get_prop, local_storage, window_value};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PushState {
@@ -103,50 +104,66 @@ struct UnsubscribeReq {
     endpoint: String,
 }
 
-/// `localStorage` key for the one-time proactive-prompt dismissal (#303
-/// point 2). Set on EITHER prompt choice ("Zapnut" or "Teraz nie") so the
-/// prompt never reappears once the user has made any decision.
+/// `localStorage` key BASE for the one-time proactive-prompt dismissal
+/// (#303 point 2) — see [`storage_key`] for the per-account suffix. Set on
+/// EITHER prompt choice ("Zapnut" or "Teraz nie") so the prompt never
+/// reappears once the user has made any decision.
 const PUSH_PROMPT_DISMISSED_KEY: &str = "sb_push_prompt_dismissed";
 
-/// `localStorage` key marking "the user explicitly turned notifications off
-/// via the switch" (#303 point 1 vs. the switch's `On -> Off` direction —
-/// see module doc). Cleared on a manual re-enable or a successful
+/// `localStorage` key BASE marking "the user explicitly turned
+/// notifications off via the switch" (#303 point 1 vs. the switch's
+/// `On -> Off` direction — see module doc) — see [`storage_key`] for the
+/// per-account suffix. Cleared on a manual re-enable or a successful
 /// auto-subscribe.
 const PUSH_USER_DISABLED_KEY: &str = "sb_push_user_disabled";
 
-fn local_storage() -> Option<web_sys::Storage> {
-    web_sys::window()?.local_storage().ok()?
+/// Suffix a `localStorage` key BASE with the CURRENTLY LOGGED-IN user's own
+/// id (#303 review finding). Both flags above are otherwise plain
+/// origin-scoped keys with no account identity — on a device shared by
+/// multiple customers (front-desk kiosk, a shared family device, two
+/// accounts in the same browser), an unscoped flag written by one customer
+/// would silently apply to the next customer who logs in on the same
+/// browser: a dismissed prompt they never saw, or an auto-subscribe that
+/// never fires because a PREVIOUS customer once turned it off. Falls back
+/// to the bare base (old, unscoped behavior) only when no user is known —
+/// this component never renders anything before the caller is
+/// authenticated, so that fallback is defensive, not a real code path.
+fn storage_key(base: &str) -> String {
+    match auth::get_user() {
+        Some(u) => format!("{base}_{}", u.id),
+        None => base.to_string(),
+    }
 }
 
 fn push_prompt_dismissed() -> bool {
     local_storage()
-        .and_then(|s| s.get_item(PUSH_PROMPT_DISMISSED_KEY).ok())
+        .and_then(|s| s.get_item(&storage_key(PUSH_PROMPT_DISMISSED_KEY)).ok())
         .flatten()
         .is_some()
 }
 
 fn mark_push_prompt_dismissed() {
     if let Some(s) = local_storage() {
-        let _ = s.set_item(PUSH_PROMPT_DISMISSED_KEY, "1");
+        let _ = s.set_item(&storage_key(PUSH_PROMPT_DISMISSED_KEY), "1");
     }
 }
 
 fn push_user_disabled() -> bool {
     local_storage()
-        .and_then(|s| s.get_item(PUSH_USER_DISABLED_KEY).ok())
+        .and_then(|s| s.get_item(&storage_key(PUSH_USER_DISABLED_KEY)).ok())
         .flatten()
         .is_some()
 }
 
 fn mark_push_user_disabled() {
     if let Some(s) = local_storage() {
-        let _ = s.set_item(PUSH_USER_DISABLED_KEY, "1");
+        let _ = s.set_item(&storage_key(PUSH_USER_DISABLED_KEY), "1");
     }
 }
 
 fn clear_push_user_disabled() {
     if let Some(s) = local_storage() {
-        let _ = s.remove_item(PUSH_USER_DISABLED_KEY);
+        let _ = s.remove_item(&storage_key(PUSH_USER_DISABLED_KEY));
     }
 }
 
@@ -259,10 +276,15 @@ async fn subscribe_flow(
 /// (`PushManager.getSubscription()` — the only place the endpoint is known;
 /// the server never sends key material back to the client), call
 /// `subscription.unsubscribe()`, and return the endpoint so the caller can
-/// tell the server to drop its matching row. `Ok(None)` means the browser
-/// already had no subscription (nothing to unsubscribe from, nothing to
-/// tell the server) — treated as a benign no-op by the caller, not an
-/// error.
+/// tell the server to drop its matching row.
+///
+/// `Ok(None)` means the browser already had no subscription (nothing to
+/// unsubscribe from, nothing to tell the server) — a benign no-op, not an
+/// error. `Err(())` means a subscription EXISTED but the browser's own
+/// `.unsubscribe()` call genuinely rejected — the subscription is still
+/// live, so the caller must NOT treat the device as off (#303 review
+/// finding: silently swallowing this and still returning `Ok` would let
+/// the UI claim "off" for a device that can still receive pushes).
 async fn unsubscribe_flow() -> Result<Option<String>, ()> {
     let window = web_sys::window().ok_or(())?;
     let sw_container = window.navigator().service_worker();
@@ -281,17 +303,34 @@ async fn unsubscribe_flow() -> Result<Option<String>, ()> {
     let endpoint = get_prop(&sub_val, "endpoint").as_string();
 
     let unsubscribe_fn = get_prop(&sub_val, "unsubscribe");
-    if let Some(f) = unsubscribe_fn.dyn_ref::<Function>()
-        && let Ok(result) = f.call0(&sub_val)
-        && let Ok(promise) = result.dyn_into::<js_sys::Promise>()
-        && let Err(e) = JsFuture::from(promise).await
-    {
-        // Non-fatal: the server-side row is still dropped below (the push
-        // service will just have no subscription to deliver to). Logged so
-        // a real browser-side unsubscribe failure isn't silently invisible.
-        web_sys::console::warn_1(
-            &format!("push: browser-side unsubscribe() rejected: {e:?}").into(),
-        );
+    match unsubscribe_fn.dyn_ref::<Function>() {
+        Some(f) => {
+            let promise = f
+                .call0(&sub_val)
+                .ok()
+                .and_then(|r| r.dyn_into::<js_sys::Promise>().ok());
+            match promise {
+                Some(p) => {
+                    if let Err(e) = JsFuture::from(p).await {
+                        web_sys::console::warn_1(
+                            &format!("push: browser-side unsubscribe() rejected: {e:?}").into(),
+                        );
+                        return Err(());
+                    }
+                }
+                None => {
+                    // unsubscribe() didn't return a promise at all (a
+                    // malformed subscription object) — can't confirm
+                    // success either way; best-effort proceed, logged.
+                    web_sys::console::warn_1(
+                        &"push: unsubscribe() did not return a promise".into(),
+                    );
+                }
+            }
+        }
+        None => {
+            web_sys::console::warn_1(&"push: subscription has no unsubscribe() method".into());
+        }
     }
 
     Ok(endpoint)
@@ -316,7 +355,6 @@ pub fn PushToggle() -> impl IntoView {
         set_error.set(false);
         set_state.set(PushState::Busy);
         set_show_prompt.set(false);
-        mark_push_prompt_dismissed();
         spawn_local(async move {
             match subscribe_flow(&key).await {
                 Ok((endpoint, p256dh, auth)) => {
@@ -326,19 +364,75 @@ pub fn PushToggle() -> impl IntoView {
                     };
                     match api::post::<_, serde_json::Value>("/api/push/subscribe", &body).await {
                         Ok(_) => {
+                            mark_push_prompt_dismissed();
                             clear_push_user_disabled();
                             set_state.set(PushState::On);
                         }
                         Err(_) => {
+                            // Transient failure (network/session hiccup) —
+                            // do NOT mark the prompt dismissed: no real
+                            // decision was reached, so it must still be
+                            // available to retry on the next visit (#303
+                            // review finding).
                             set_error.set(true);
                             set_state.set(PushState::Off);
                         }
                     }
                 }
-                Err(SubscribeError::PermissionDenied) => set_state.set(PushState::Blocked),
+                Err(SubscribeError::PermissionDenied) => {
+                    // A genuine decision WAS reached (the user just denied
+                    // it) — the prompt must never come back for this.
+                    mark_push_prompt_dismissed();
+                    set_state.set(PushState::Blocked);
+                }
                 Err(SubscribeError::Other) => {
                     set_error.set(true);
                     set_state.set(PushState::Off);
+                }
+            }
+        });
+    };
+
+    // Shared "unsubscribe now" logic — used by the settings switch's
+    // On->Off click AND the mount-effect self-heal below (#303 review
+    // finding: a device the user already marked off locally must reconcile
+    // itself with the server, never silently flip back to a lying "on").
+    // `report_errors` suppresses the error banner during the silent
+    // self-heal path — a background reconciliation the user never
+    // triggered shouldn't surface an alert on page load.
+    let do_unsubscribe = move |report_errors: bool| {
+        set_error.set(false);
+        set_state.set(PushState::Busy);
+        spawn_local(async move {
+            match unsubscribe_flow().await {
+                Ok(endpoint_opt) => {
+                    // The browser side is now confirmed off (or already
+                    // was) — reflect that immediately regardless of the
+                    // server POST outcome below. A failed POST just means
+                    // the NEXT load's self-heal retries the delete;
+                    // reverting to "On" here would show a lying "on" for a
+                    // device that can no longer receive anything (#303
+                    // review finding).
+                    mark_push_user_disabled();
+                    set_state.set(PushState::Off);
+                    if let Some(endpoint) = endpoint_opt {
+                        let body = UnsubscribeReq { endpoint };
+                        if api::post::<_, serde_json::Value>("/api/push/unsubscribe", &body)
+                            .await
+                            .is_err()
+                            && report_errors
+                        {
+                            set_error.set(true);
+                        }
+                    }
+                }
+                Err(()) => {
+                    // The browser subscription genuinely still exists (its
+                    // own unsubscribe() call rejected) — must NOT claim off.
+                    if report_errors {
+                        set_error.set(true);
+                    }
+                    set_state.set(PushState::On);
                 }
             }
         });
@@ -359,7 +453,18 @@ pub fn PushToggle() -> impl IntoView {
                         return;
                     }
                     if cfg.subscribed {
-                        set_state.set(PushState::On);
+                        if push_user_disabled() {
+                            // Self-heal (#303 review finding): the LOCAL
+                            // device already decided "off", but the server
+                            // still has (or had) a row for this account —
+                            // e.g. a prior unsubscribe POST failed, or a
+                            // different device's subscription. Reconcile
+                            // silently rather than showing a lying "on" for
+                            // a device the customer explicitly turned off.
+                            do_unsubscribe(false);
+                        } else {
+                            set_state.set(PushState::On);
+                        }
                         return;
                     }
                     let permission = web_sys::Notification::permission();
@@ -396,39 +501,7 @@ pub fn PushToggle() -> impl IntoView {
 
     let on_toggle_click = move |_| match state.get_untracked() {
         PushState::Off => do_subscribe(),
-        PushState::On => {
-            set_error.set(false);
-            set_state.set(PushState::Busy);
-            spawn_local(async move {
-                match unsubscribe_flow().await {
-                    Ok(Some(endpoint)) => {
-                        let body = UnsubscribeReq { endpoint };
-                        match api::post::<_, serde_json::Value>("/api/push/unsubscribe", &body)
-                            .await
-                        {
-                            Ok(_) => {
-                                mark_push_user_disabled();
-                                set_state.set(PushState::Off);
-                            }
-                            Err(_) => {
-                                set_error.set(true);
-                                set_state.set(PushState::On);
-                            }
-                        }
-                    }
-                    Ok(None) => {
-                        // Browser already had no subscription — nothing to
-                        // tell the server; reflect the honest (off) state.
-                        mark_push_user_disabled();
-                        set_state.set(PushState::Off);
-                    }
-                    Err(_) => {
-                        set_error.set(true);
-                        set_state.set(PushState::On);
-                    }
-                }
-            });
-        }
+        PushState::On => do_unsubscribe(true),
         PushState::Loading
         | PushState::Unsupported
         | PushState::Disabled
@@ -496,6 +569,7 @@ pub fn PushToggle() -> impl IntoView {
                                     class=switch_class
                                     role="switch"
                                     aria-checked=checked.to_string()
+                                    aria-label=move || i18n::t(lang.get(), "push_settings_label")
                                     data-testid="push-toggle-switch"
                                     disabled=disabled
                                     on:click=on_toggle_click

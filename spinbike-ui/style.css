@@ -1614,15 +1614,9 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
 }
 
 /* Notification settings row (#303) — same shadowed-card idiom as
-   .card-credit/.card-pass, with a real role="switch" toggle instead of a
-   permanent CTA button. */
-.card-push {
-    background: var(--surface, #fff);
-    border-radius: 10px;
-    padding: 1rem;
-    margin-bottom: 0.75rem;
-    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
-}
+   .card-credit/.card-pass (shared rule below, joined into that selector
+   list rather than duplicated — #303 review finding), with a real
+   role="switch" toggle instead of a permanent CTA button. */
 .card-push__row {
     display: flex;
     align-items: center;
@@ -1724,7 +1718,7 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
     flex: 1;
 }
 
-.card-credit, .card-pass {
+.card-credit, .card-pass, .card-push {
     background: var(--surface, #fff);
     border-radius: 10px;
     padding: 1rem;
