@@ -3,6 +3,24 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-08-08 — #297 token_purge daily interval: wall-clock-aligned, not uptime-relative (PR #298, dev.134)
+
+- **Root cause:** `bin/server.rs`'s `login_tokens purge: daily` spawn block used
+  `tokio::time::interval(Duration::from_secs(86400))`, which measures its first
+  real tick from task-spawn (= server-restart) time — same defect class #264
+  fixed for `jobs::notifications`.
+- **Fix (`bd36400`):** copied #264's sleep-loop pattern —
+  `util::duration_until_next_bratislava_hour(now_bratislava(), DAILY_RUN_HOUR)`
+  recomputed every cycle. New `jobs::token_purge::DAILY_RUN_HOUR = 4`
+  (off-peak, offset from notifications' 09:00 so the two daily jobs never
+  contend for the DB pool at once) — a technical placement decision, no owner
+  input needed.
+- **Tests:** `token_purge.rs::daily_run_hour_before_target_is_later_today` /
+  `daily_run_hour_at_or_after_target_rolls_to_tomorrow` — the spawn loop itself
+  isn't unit-testable, so these pin the production scheduling call
+  (`duration_until_next_bratislava_hour` + the real `DAILY_RUN_HOUR` constant)
+  as regression coverage, mirroring `util.rs`'s existing generic-helper tests.
+
 ## 2026-08-08 — #264 PWA push notifications: low credit + expiring pass (PR #296, dev.133)
 
 - **Feature:** daily job `jobs::notifications::tick`, two reasons
