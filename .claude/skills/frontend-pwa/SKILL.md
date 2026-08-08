@@ -14,6 +14,10 @@ triggers:
   - error_code
   - api.rs
   - localize error
+  - PushManager
+  - getSubscription
+  - per-device state
+  - futures::future::select
 ---
 
 # SpinBike Frontend / PWA gotchas
@@ -821,3 +825,60 @@ non-component module with its own pure unit tests, boot-fired from `lib.rs`
   `router::App` (also called only from that one `main()` line) is `pub fn
   App`. Mirror that: make the boot-only function `pub`, not `pub(crate)`,
   and add its module as `pub mod` in `lib.rs`'s module list.
+
+## A per-account server flag can NEVER answer a per-device question — trust the browser's own local state instead (#305)
+
+`GET /api/push/config`'s `subscribed: bool` was a per-ACCOUNT aggregate
+(`db::push::has_subscription` = `COUNT(*) FROM push_subscriptions WHERE
+user_id = ?` > 0 — true if ANY device the customer ever used subscribed).
+`push_toggle.rs`'s mount effect trusted that flag directly for on/off UI
+state, so a second device that never itself subscribed inherited "On" from
+a different device's row and silently received nothing. **The general
+principle, for any FUTURE per-device feature in this PWA** (a device-scoped
+setting, a "trust this device" flag, anything keyed conceptually per-browser
+rather than per-customer): a server API that only knows the ACCOUNT can
+never truthfully answer "is THIS device X" — ask the browser directly
+(`PushManager.getSubscription()`, a `localStorage`/`IndexedDB` marker,
+`navigator.credentials`, whatever the feature's real local signal is) and
+treat the server's account-wide view as, at most, something to reconcile
+TOWARD, never something to trust FOR STATE. Fix in `push_toggle.rs`:
+`local_subscription_fields()` asks `PushManager.getSubscription()` for the
+genuine per-device truth; a live local subscription is reconciled to the
+server with an idempotent upsert POST, never the other way around.
+
+## Bounding a possibly-hanging browser Promise with a timeout: `futures::future::select` + the existing `gloo_timers::future::TimeoutFuture` pattern (#305)
+
+`navigator.serviceWorker.ready` (and other browser Promises gated on a
+one-time async setup, like SW registration) never resolves AT ALL per spec
+if that setup never completes (a private-browsing storage restriction, a
+failed `register()` call silently swallowed elsewhere). Awaiting it
+UNCONDITIONALLY on every page mount (rather than only on an explicit user
+click) turns a rare per-click risk into a permanent per-visit one — a
+device that never gets a working SW gets stuck at a loading state forever,
+on every future visit, with no way to recover short of the state clearing
+itself (it won't).
+
+**Fix pattern — race the real work against a timeout using crates already
+in `spinbike-ui/Cargo.toml`** (`futures = "0.3"`, `gloo-timers = { version =
+"0.3", features = ["futures"] }` — the latter is ALREADY the project's
+established timer primitive, used throughout for deferred/delayed UI
+updates via `gloo_timers::future::TimeoutFuture::new(ms).await`, see
+`ws.rs`/`action_form.rs`/`sheet.rs`/`door_button.rs` etc.):
+
+```rust
+async fn bounded_call() -> Result<T, ()> {
+    let work = Box::pin(the_real_async_call());
+    let timeout = Box::pin(gloo_timers::future::TimeoutFuture::new(TIMEOUT_MS));
+    match futures::future::select(work, timeout).await {
+        futures::future::Either::Left((result, _)) => result,
+        futures::future::Either::Right(_) => Err(()), // timed out
+    }
+}
+```
+
+`Box::pin` is required — `select` needs both futures `Unpin`, and an
+anonymous `async fn`/`async {}` future is not `Unpin` on its own;
+`Pin<Box<F>>` always is. No new dependency needed — both crates were
+already direct deps before this fix, just never combined into a race
+before. Pick a generous timeout (this is a background local-truth check,
+not a user-blocking action) but always finite.
