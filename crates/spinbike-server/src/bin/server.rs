@@ -121,6 +121,7 @@ async fn main() -> Result<()> {
         pool.clone(),
         spinbike_server::jobs::token_purge::DAILY_RUN_HOUR,
         "login_tokens purge",
+        "rows removed",
         |pool| async move { spinbike_server::jobs::token_purge::tick(&pool).await },
     );
 
@@ -139,6 +140,7 @@ async fn main() -> Result<()> {
             pool.clone(),
             spinbike_server::jobs::notifications::DAILY_RUN_HOUR,
             "push notifications",
+            "sent",
             move |pool| {
                 let push = push.clone();
                 async move { spinbike_server::jobs::notifications::tick(&pool, &push).await }

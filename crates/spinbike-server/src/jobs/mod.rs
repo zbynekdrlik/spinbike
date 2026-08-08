@@ -24,10 +24,20 @@ use std::future::Future;
 /// `daily-job-scheduling.md` for why: picking a non-colliding hour per job
 /// is a per-job decision, not a scheduling-mechanism one).
 ///
-/// `job_name` is used only for log lines — the debug line on sleep and the
-/// info/error line after `tick()` — as `"{job_name}: sleeping until the
-/// next aligned daily run"` / `"{job_name}: {n}"` / `"{job_name} failed:
-/// {e}"`. Pick a name that reads naturally in that shape.
+/// `job_name` is used for ALL log lines — the debug line on sleep and the
+/// error line after `tick()` — as `"{job_name}: sleeping until the next
+/// aligned daily run"` / `"{job_name} failed: {e}"`. Pick a name that reads
+/// naturally in that shape.
+///
+/// `unit` is used ONLY in the success line, as `"{job_name}: {n} {unit}"`
+/// (e.g. `job_name = "login_tokens purge"`, `unit = "rows removed"` →
+/// `"login_tokens purge: 5 rows removed"`) — a separate parameter rather
+/// than folding a noun into `job_name` itself, because `job_name` is reused
+/// verbatim in the sleep/error lines where a success-only phrase like
+/// "rows removed" would read as broken grammar (a review on #299 caught
+/// this: collapsing both jobs' bespoke `"{n} rows removed"` / `"sent {n}
+/// notifications"` wording into a single job-identity string lost what `n`
+/// actually counts).
 ///
 /// Does NOT run the job's startup tick — callers still call `<job>::tick`
 /// once directly in `main()` BEFORE calling this, so the first observable
@@ -42,9 +52,16 @@ use std::future::Future;
 /// with an extra dependency (`notifications::tick`'s `&PushHandle`),
 /// `move |pool| { let push = push.clone(); async move {
 /// notifications::tick(&pool, &push).await } }` — the helper's own
-/// signature never widens for one caller's extra argument.
-pub fn spawn_daily_job<F, Fut>(pool: SqlitePool, hour: u32, job_name: &'static str, tick: F)
-where
+/// signature never widens for one caller's extra argument (this is what
+/// `unit` is NOT — it is a plain `&'static str`, not a dependency, so it
+/// stays a direct parameter).
+pub fn spawn_daily_job<F, Fut>(
+    pool: SqlitePool,
+    hour: u32,
+    job_name: &'static str,
+    unit: &'static str,
+    tick: F,
+) where
     F: Fn(SqlitePool) -> Fut + Send + 'static,
     Fut: Future<Output = anyhow::Result<usize>> + Send + 'static,
 {
@@ -61,7 +78,7 @@ where
             );
             tokio::time::sleep(delay).await;
             match tick(pool.clone()).await {
-                Ok(n) if n > 0 => tracing::info!("{job_name}: {n}"),
+                Ok(n) if n > 0 => tracing::info!("{job_name}: {n} {unit}"),
                 Ok(_) => {}
                 Err(e) => tracing::error!("{job_name} failed: {e}"),
             }
@@ -180,6 +197,52 @@ mod tests {
         String::from_utf8(buf.0.lock().unwrap().clone()).expect("log output must be valid utf8")
     }
 
+    /// Spawns `spawn_daily_job(pool, hour, job_name, unit, tick)` against a
+    /// fresh in-memory pool with a paused virtual clock, then drives the
+    /// clock past the computed delay and yields enough times for the woken
+    /// task to actually run `tick` once. Shared by all three
+    /// `spawn_daily_job_*` tests below — each independently reimplemented
+    /// this exact pool/pause/spawn/yield/advance/yield dance in an earlier
+    /// draft of this PR, and each independently had to work around the SAME
+    /// two timing gotchas before landing on the sequence below (a review on
+    /// #299 flagged the duplication and both gotchas are cheap insurance
+    /// against silently reintroducing either):
+    ///
+    /// - `tokio::time::pause()` must run AFTER `create_memory_pool()`, not
+    ///   before / not via `#[tokio::test(start_paused = true)]` — pausing
+    ///   first let tokio's auto-advance-when-idle race ahead of the pool's
+    ///   own connect-acquire deadline and fail with "pool timed out while
+    ///   waiting for an open connection" (fixed in `7e5719f`).
+    /// - a bare `tokio::time::advance` before ANY yield never wakes the
+    ///   spawned task's `sleep`, because a freshly `tokio::spawn`ed task
+    ///   hasn't been polled yet and so hasn't registered that timer —
+    ///   `yield_now()` first lets the executor poll it up to its first
+    ///   `.await` (fixed in `8865732`).
+    async fn spawn_and_drive_one_tick<F, Fut>(
+        hour: u32,
+        job_name: &'static str,
+        unit: &'static str,
+        tick: F,
+    ) where
+        F: Fn(SqlitePool) -> Fut + Send + 'static,
+        Fut: Future<Output = anyhow::Result<usize>> + Send + 'static,
+    {
+        let pool = crate::db::create_memory_pool().await.unwrap();
+        crate::db::run_migrations(&pool).await.unwrap();
+        tokio::time::pause();
+
+        let approx_delay =
+            crate::util::duration_until_next_bratislava_hour(crate::util::now_bratislava(), hour);
+
+        super::spawn_daily_job(pool, hour, job_name, unit, tick);
+
+        tokio::task::yield_now().await;
+        tokio::time::advance(approx_delay + std::time::Duration::from_secs(2)).await;
+        for _ in 0..50 {
+            tokio::task::yield_now().await;
+        }
+    }
+
     /// Regression coverage for #299: cargo-mutants surfaced 5 surviving
     /// mutants, all on the same line — `Ok(n) if n > 0 => tracing::info!`
     /// mutated to `true`, `false`, `n < 0`, `n == 0`, `n >= 0` were all
@@ -201,47 +264,23 @@ mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        // Two extra clones of the SAME underlying atomic, one per closure
-        // that needs its own `move`d-in handle — `calls` itself is never
-        // referenced inside `capture_tracing_output`'s closure, so it is
-        // never captured/moved and stays usable for the assert below.
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_in_job = calls.clone();
-        let calls_in_loop = calls.clone();
 
-        let output = capture_tracing_output(move || async move {
-            let pool = crate::db::create_memory_pool().await.unwrap();
-            crate::db::run_migrations(&pool).await.unwrap();
-            tokio::time::pause();
-
-            let hour = 17;
-            let approx_delay = crate::util::duration_until_next_bratislava_hour(
-                crate::util::now_bratislava(),
-                hour,
-            );
-
-            super::spawn_daily_job(pool, hour, "capture job pos", move |_pool| {
+        let output = capture_tracing_output(move || {
+            spawn_and_drive_one_tick(17, "capture job pos", "widgets", move |_pool| {
                 let calls = calls_in_job.clone();
                 async move {
                     calls.fetch_add(1, Ordering::SeqCst);
                     Ok(5)
                 }
-            });
-
-            tokio::task::yield_now().await;
-            tokio::time::advance(approx_delay + std::time::Duration::from_secs(2)).await;
-            for _ in 0..50 {
-                tokio::task::yield_now().await;
-                if calls_in_loop.load(Ordering::SeqCst) >= 1 {
-                    break;
-                }
-            }
+            })
         })
         .await;
 
         assert_eq!(calls.load(Ordering::SeqCst), 1, "tick must have run once");
         assert!(
-            output.contains("capture job pos: 5"),
+            output.contains("capture job pos: 5 widgets"),
             "expected the positive-count info log, got: {output:?}"
         );
     }
@@ -253,40 +292,17 @@ mod tests {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        // See the sibling positive-count test above for why this needs
-        // separate `calls_in_job`/`calls_in_loop` clones instead of moving
-        // `calls` itself into the closure.
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_in_job = calls.clone();
-        let calls_in_loop = calls.clone();
 
-        let output = capture_tracing_output(move || async move {
-            let pool = crate::db::create_memory_pool().await.unwrap();
-            crate::db::run_migrations(&pool).await.unwrap();
-            tokio::time::pause();
-
-            let hour = 18;
-            let approx_delay = crate::util::duration_until_next_bratislava_hour(
-                crate::util::now_bratislava(),
-                hour,
-            );
-
-            super::spawn_daily_job(pool, hour, "capture job zero", move |_pool| {
+        let output = capture_tracing_output(move || {
+            spawn_and_drive_one_tick(18, "capture job zero", "widgets", move |_pool| {
                 let calls = calls_in_job.clone();
                 async move {
                     calls.fetch_add(1, Ordering::SeqCst);
                     Ok(0)
                 }
-            });
-
-            tokio::task::yield_now().await;
-            tokio::time::advance(approx_delay + std::time::Duration::from_secs(2)).await;
-            for _ in 0..50 {
-                tokio::task::yield_now().await;
-                if calls_in_loop.load(Ordering::SeqCst) >= 1 {
-                    break;
-                }
-            }
+            })
         })
         .await;
 
@@ -305,70 +321,28 @@ mod tests {
     /// exactly this gap: replacing the whole function body with `()` was
     /// MISSED (no test failed) until this test was added.
     ///
-    /// `#[tokio::test(start_paused = true)]` gives the task a virtual
-    /// clock; `tokio::time::advance` fast-forwards it instead of a real
-    /// wall-clock wait (the real delay can be up to 24h). The delay itself
-    /// is still computed from the REAL wall clock (`duration_until_next_
-    /// bratislava_hour` calls `chrono::Utc::now()`, not tokio's clock) —
-    /// pin it here immediately before spawning so the advance covers
-    /// whatever the spawned loop computes for the same instant.
+    /// Uses `spawn_and_drive_one_tick`'s paused virtual clock — see its own
+    /// doc comment for why plain `#[tokio::test(start_paused = true)]`
+    /// does NOT work here (it was tried and reverted in `7e5719f`).
     #[tokio::test]
     async fn spawn_daily_job_runs_tick_after_the_computed_delay() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
-        // Real (unpaused) time for pool creation: `create_memory_pool` does
-        // genuine async I/O via a `spawn_blocking` worker thread, which the
-        // single-threaded test executor can't see as "busy" — pausing time
-        // FIRST made tokio's auto-advance-when-idle behavior race ahead to
-        // the pool's own internal acquire-timeout deadline and fail the
-        // connect with "pool timed out while waiting for an open
-        // connection" before the blocking thread ever finished (caught by
-        // CI, not locally). Pause only AFTER the pool is ready.
-        let pool = crate::db::create_memory_pool().await.unwrap();
-        crate::db::run_migrations(&pool).await.unwrap();
-        tokio::time::pause();
-
-        // Arbitrary hour, unrelated to either real job's DAILY_RUN_HOUR —
-        // this test only cares that `spawn_daily_job` eventually calls
-        // `tick`, not which hour.
-        let hour = 17;
-        let approx_delay =
-            crate::util::duration_until_next_bratislava_hour(crate::util::now_bratislava(), hour);
-
         let calls = Arc::new(AtomicUsize::new(0));
         let calls_in_job = calls.clone();
-        super::spawn_daily_job(pool, hour, "test job", move |_pool| {
+
+        // Arbitrary hour/unit, unrelated to either real job's
+        // DAILY_RUN_HOUR — this test only cares that `spawn_daily_job`
+        // eventually calls `tick`, not which hour or unit.
+        spawn_and_drive_one_tick(17, "test job", "widgets", move |_pool| {
             let calls = calls_in_job.clone();
             async move {
                 calls.fetch_add(1, Ordering::SeqCst);
                 Ok(0)
             }
-        });
-
-        // `tokio::time::advance` only wakes timers that are ALREADY
-        // registered — a freshly `tokio::spawn`ed task hasn't been polled
-        // yet, so its `sleep(delay)` future doesn't exist as a registered
-        // timer until the task runs at least once. Yield first so the
-        // executor polls it up to that first `.await` (registering the
-        // timer) BEFORE we jump the clock past it.
-        tokio::task::yield_now().await;
-
-        // A couple of seconds' buffer: the spawned task computes its own
-        // "now" a hair after this test did, so its real delay is very
-        // slightly shorter — advancing by strictly more than our own
-        // reading guarantees its sleep has already elapsed.
-        tokio::time::advance(approx_delay + std::time::Duration::from_secs(2)).await;
-
-        // `advance` drives due timers, but the woken task still needs to
-        // be polled to actually run its (non-timer) body — yield a few
-        // times to give the executor that chance without a real wait.
-        for _ in 0..50 {
-            tokio::task::yield_now().await;
-            if calls.load(Ordering::SeqCst) >= 1 {
-                break;
-            }
-        }
+        })
+        .await;
 
         assert_eq!(
             calls.load(Ordering::SeqCst),

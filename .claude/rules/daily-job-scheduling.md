@@ -16,7 +16,7 @@ until the next restart re-pins it. It also drifts across Bratislava's two DST
 transitions a year (23h/25h calendar days).
 
 **#299 extracted the sleep-loop those two blocks duplicated into
-`jobs::spawn_daily_job(pool, hour, job_name, tick)` — any new daily (or otherwise
+`jobs::spawn_daily_job(pool, hour, job_name, unit, tick)` — any new daily (or otherwise
 wall-clock-scheduled) job calls that helper from `bin/server.rs` instead of copying a
 spawn block:**
 
@@ -25,9 +25,17 @@ spinbike_server::jobs::spawn_daily_job(
     pool.clone(),
     spinbike_server::jobs::<your_job>::DAILY_RUN_HOUR,
     "<your job's log name>",
+    "<noun for what tick's Ok(n) counts, e.g. \"rows removed\" / \"sent\">",
     |pool| async move { spinbike_server::jobs::<your_job>::tick(&pool).await },
 );
 ```
+
+`job_name` is reused in EVERY log line (sleep/error), so keep it a plain identity
+phrase; `unit` is used ONLY in the success line (`"{job_name}: {n} {unit}"`) — a
+separate parameter exists specifically so the count-carrying line still says what `n`
+counts (a review on #299 caught the first draft collapsing both jobs' bespoke
+`"{n} rows removed"` / `"sent {n} notifications"` wording into a job-identity-only
+string, silently losing that information).
 
 If your job's `tick` needs an extra dependency beyond `&SqlitePool` (like
 `notifications::tick`'s `&PushHandle`), capture it in the closure instead of widening
@@ -48,14 +56,21 @@ notifications::tick(&pool, &push).await } }`).
   strictly need its own copy (the arithmetic is already covered generically), but
   adding one at your job's specific hour is cheap insurance if that hour is adjacent
   to another job's.
-- `spawn_daily_job`'s own execution (sleep, then actually call `tick`) is separately
-  covered by `jobs/mod.rs`'s `spawn_daily_job_runs_tick_after_the_computed_delay`
-  test, via `#[tokio::test(start_paused = true)]` + `tokio::time::advance` to
-  fast-forward the wait instead of a real wall-clock sleep (tokio's `test-util`
-  feature, dev-dependency only — see `Cargo.toml`). This exists because a mutation
-  run caught it directly: the two arithmetic-only tests above left the function's
-  own body (spawn the loop, sleep, actually invoke `tick`) unexercised, so
-  cargo-mutants MISSED replacing the whole `spawn_daily_job` body with `()`.
+- `spawn_daily_job`'s own execution (sleep, then actually call `tick`, then log
+  correctly) is covered by three tests in `jobs/mod.rs`, all built on a shared
+  `spawn_and_drive_one_tick` helper: `spawn_daily_job_runs_tick_after_the_computed_delay`
+  (proves the loop calls `tick` at all — a mutation run MISSED the whole function body
+  replaced with `()` until this existed), and
+  `spawn_daily_job_logs_info_when_tick_returns_a_positive_count` /
+  `_does_not_log_info_when_tick_returns_zero` (prove the `Ok(n) if n > 0` log-gating
+  guard is actually exercised both ways — 5 more mutants on that one guard were MISSED
+  until these existed, since the first test always returns `Ok(0)`). All three use a
+  paused virtual clock via **manual `tokio::time::pause()` called AFTER pool
+  creation** — NOT `#[tokio::test(start_paused = true)]`, which was tried first and
+  reverted: pausing before the pool exists lets tokio's auto-advance-when-idle race
+  ahead of the pool's own connect-acquire deadline and fail with "pool timed out while
+  waiting for an open connection" (tokio's `test-util` feature is still the
+  dev-dependency enabling `time::pause`/`advance` — see `Cargo.toml`).
 - Still run your job's `tick` once at startup, directly in `main()`, BEFORE the
   `spawn_daily_job` call — the helper only owns the recurring loop, not the startup
   tick, so the first observable log line appears right after boot instead of waiting
