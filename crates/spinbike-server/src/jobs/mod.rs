@@ -146,13 +146,22 @@ mod tests {
     /// bratislava_hour` calls `chrono::Utc::now()`, not tokio's clock) —
     /// pin it here immediately before spawning so the advance covers
     /// whatever the spawned loop computes for the same instant.
-    #[tokio::test(start_paused = true)]
+    #[tokio::test]
     async fn spawn_daily_job_runs_tick_after_the_computed_delay() {
         use std::sync::Arc;
         use std::sync::atomic::{AtomicUsize, Ordering};
 
+        // Real (unpaused) time for pool creation: `create_memory_pool` does
+        // genuine async I/O via a `spawn_blocking` worker thread, which the
+        // single-threaded test executor can't see as "busy" — pausing time
+        // FIRST made tokio's auto-advance-when-idle behavior race ahead to
+        // the pool's own internal acquire-timeout deadline and fail the
+        // connect with "pool timed out while waiting for an open
+        // connection" before the blocking thread ever finished (caught by
+        // CI, not locally). Pause only AFTER the pool is ready.
         let pool = crate::db::create_memory_pool().await.unwrap();
         crate::db::run_migrations(&pool).await.unwrap();
+        tokio::time::pause();
 
         // Arbitrary hour, unrelated to either real job's DAILY_RUN_HOUR —
         // this test only cares that `spawn_daily_job` eventually calls
