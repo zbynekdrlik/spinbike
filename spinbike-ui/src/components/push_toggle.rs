@@ -318,6 +318,39 @@ async fn get_local_subscription() -> Result<Option<JsValue>, ()> {
     }
 }
 
+/// Per spec, `navigator.serviceWorker.ready` never resolves at all if no
+/// service worker ever successfully registers/activates for this origin
+/// (a private-browsing storage restriction, or a failed `register()` call
+/// that `index.html`'s own bootstrap silently swallows). Deep-review
+/// finding (this PR): [`local_subscription_fields`] now runs
+/// UNCONDITIONALLY on every `/my/balance` mount (#305) — before, this
+/// exact await only ever ran on an explicit subscribe/unsubscribe click.
+/// Without a bound, a device that never gets a working SW would hang
+/// [`get_local_subscription`] forever on EVERY future visit, permanently
+/// stranding the mount effect at `PushState::Loading` (the push card
+/// silently renders nothing, forever, for that device). `LOCAL_SUBSCRIPTION_TIMEOUT_MS`
+/// is generous (this is a background local-truth check, not a
+/// user-blocking action) but finite — both callers below use this bounded
+/// wrapper, never the raw unbounded fn directly.
+const LOCAL_SUBSCRIPTION_TIMEOUT_MS: u32 = 5000;
+
+async fn get_local_subscription_bounded() -> Result<Option<JsValue>, ()> {
+    let work = Box::pin(get_local_subscription());
+    let timeout = Box::pin(gloo_timers::future::TimeoutFuture::new(
+        LOCAL_SUBSCRIPTION_TIMEOUT_MS,
+    ));
+    match futures::future::select(work, timeout).await {
+        futures::future::Either::Left((result, _)) => result,
+        futures::future::Either::Right(_) => {
+            web_sys::console::warn_1(
+                &"push: get_local_subscription timed out — service worker never became ready"
+                    .into(),
+            );
+            Err(())
+        }
+    }
+}
+
 /// #305: read THIS device's own live push subscription directly from the
 /// browser and extract its endpoint/keys — the only reliable per-DEVICE
 /// truth. `GET /api/push/config`'s `subscribed` flag is a per-ACCOUNT
@@ -329,7 +362,7 @@ async fn get_local_subscription() -> Result<Option<JsValue>, ()> {
 /// actually subscribed and silently receives nothing. The mount effect
 /// calls this INSTEAD of trusting `cfg.subscribed` for on/off state.
 async fn local_subscription_fields() -> Result<Option<(String, String, String)>, ()> {
-    match get_local_subscription().await? {
+    match get_local_subscription_bounded().await? {
         Some(sub_val) => Ok(extract_subscription_fields(&sub_val)),
         None => Ok(None),
     }
@@ -343,19 +376,31 @@ async fn local_subscription_fields() -> Result<Option<(String, String, String)>,
 ///
 /// `Ok(None)` means the browser already had no subscription (nothing to
 /// unsubscribe from, nothing to tell the server) — a benign no-op, not an
-/// error. `Err(())` means a subscription EXISTED but the browser's own
-/// `.unsubscribe()` call genuinely rejected — the subscription is still
-/// live, so the caller must NOT treat the device as off (#303 review
-/// finding: silently swallowing this and still returning `Ok` would let
-/// the UI claim "off" for a device that can still receive pushes).
+/// error. `Err(())` means a subscription EXISTED but its unsubscribe
+/// could NOT be confirmed — the browser's own `.unsubscribe()` call
+/// genuinely rejected, OR `unsubscribe` was missing/malformed (no
+/// function, or didn't return a Promise) — in every such case the
+/// subscription may still be live, so the caller must NOT treat the
+/// device as off (#303 review finding, and this PR's own deep-review
+/// finding for the two malformed-object cases: silently swallowing any
+/// of these and still returning `Ok` would let the UI claim "off" for a
+/// device that can still receive pushes).
 async fn unsubscribe_flow() -> Result<Option<String>, ()> {
-    let sub_val = match get_local_subscription().await? {
+    let sub_val = match get_local_subscription_bounded().await? {
         Some(v) => v,
         None => return Ok(None),
     };
 
     let endpoint = get_prop(&sub_val, "endpoint").as_string();
 
+    // Deep-review finding (this PR): both fallback branches below used to
+    // just warn and FALL THROUGH to the `Ok(endpoint)` at the end — which
+    // directly contradicts this function's own doc comment above ("must
+    // NOT treat the device as off" when we can't confirm the browser
+    // genuinely unsubscribed). A malformed `unsubscribe` (missing, or not
+    // returning a Promise) means we truly cannot confirm success, so both
+    // now return `Err(())` — same as the confirmed-rejected case above —
+    // instead of silently claiming the device is off.
     let unsubscribe_fn = get_prop(&sub_val, "unsubscribe");
     match unsubscribe_fn.dyn_ref::<Function>() {
         Some(f) => {
@@ -375,15 +420,20 @@ async fn unsubscribe_flow() -> Result<Option<String>, ()> {
                 None => {
                     // unsubscribe() didn't return a promise at all (a
                     // malformed subscription object) — can't confirm
-                    // success either way; best-effort proceed, logged.
+                    // success either way, so this is NOT a confirmed
+                    // unsubscribe: fail closed rather than claim "off".
                     web_sys::console::warn_1(
                         &"push: unsubscribe() did not return a promise".into(),
                     );
+                    return Err(());
                 }
             }
         }
         None => {
+            // Subscription object has no unsubscribe() method at all — a
+            // malformed object; same "can't confirm, fail closed" logic.
             web_sys::console::warn_1(&"push: subscription has no unsubscribe() method".into());
+            return Err(());
         }
     }
 
