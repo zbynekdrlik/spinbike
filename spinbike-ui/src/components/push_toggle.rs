@@ -1,5 +1,18 @@
 //! Web-Push notification settings row for `/my/balance` (#264, redesigned
-//! #303).
+//! #303, per-device state fixed #305).
+//!
+//! **#305 — the mount effect never trusts `GET /api/push/config`'s
+//! `subscribed` flag for on/off state.** That flag is a per-ACCOUNT
+//! aggregate (true the moment ANY device the customer ever used
+//! subscribed), so a customer who subscribed on their desktop and then
+//! opens `/my/balance` on a phone that never subscribed would see the
+//! switch lie "On" while the phone silently receives nothing. The mount
+//! effect instead calls `local_subscription_fields()`, which asks the
+//! browser's OWN `PushManager.getSubscription()` — the only genuine
+//! per-device truth — and drives state from that. When the browser reports
+//! a live local subscription, the server row is reconciled with a plain
+//! idempotent upsert POST (covers a prior subscribe POST that failed
+//! silently) before showing On.
 //!
 //! **#303 replaced the original permanent `.btn.btn--primary` CTA with a
 //! settings-row toggle switch (`.card-push` idiom, matching `.card-credit`/
@@ -34,8 +47,10 @@
 //! second, independent `localStorage` flag, set only on a manual `On -> Off`
 //! click and cleared on a manual `Off -> On` click or a successful
 //! auto-subscribe) is the fix: the mount effect only auto-subscribes when
-//! `permission == granted && !subscribed && !push_user_disabled()`. This is
-//! a purely client-side UI memory, not a new server-side preference (the
+//! `permission == granted && no local subscription found (see the #305
+//! paragraph above — never the server's account-wide flag) &&
+//! !push_user_disabled()`. This is a purely client-side UI memory, not a
+//! new server-side preference (the
 //! owner's comment only forbids introducing a NEW server preference when
 //! none exists — none does, and none is added here).
 //!
@@ -84,7 +99,13 @@ enum PushState {
 struct PushConfigResp {
     enabled: bool,
     public_key: Option<String>,
-    subscribed: bool,
+    // NOTE (#305): the server's `subscribed` field is deliberately NOT
+    // deserialized here — it's a per-ACCOUNT aggregate (true if ANY device
+    // the customer ever used subscribed), so it can never answer "is THIS
+    // device subscribed" and must never drive on/off state. See
+    // `local_subscription_fields` — the mount effect asks the browser's
+    // own `PushManager.getSubscription()` instead. `serde` silently
+    // ignores the extra JSON field (no `deny_unknown_fields`).
 }
 
 #[derive(Serialize)]
@@ -190,6 +211,23 @@ enum SubscribeError {
     Other,
 }
 
+/// Await the SW registration and return its `PushManager` — the exact
+/// acquisition sequence `subscribe_flow` and [`get_local_subscription`]
+/// both need. Deep-review finding (this PR): the two used to duplicate
+/// this verbatim; extracted here so a future fix to the sequence (e.g.
+/// handling a rejected `ready()` promise differently) can't silently
+/// drift between the two call sites. `Err(())` on any browser-API
+/// failure — callers map to their own error type as needed.
+async fn ready_push_manager() -> Result<web_sys::PushManager, ()> {
+    let window = web_sys::window().ok_or(())?;
+    let sw_container = window.navigator().service_worker();
+    let ready_promise = sw_container.ready().map_err(|_| ())?;
+    let registration_val = JsFuture::from(ready_promise).await.map_err(|_| ())?;
+    let registration: web_sys::ServiceWorkerRegistration =
+        registration_val.dyn_into().map_err(|_| ())?;
+    registration.push_manager().map_err(|_| ())
+}
+
 /// Request permission (if not already decided), await the SW registration,
 /// call `PushManager.subscribe`, and read back `{endpoint, p256dh, auth}`.
 /// Every JS boundary degrades to `Err(SubscribeError::Other)` rather than
@@ -220,17 +258,8 @@ async fn subscribe_flow(
         return Err(SubscribeError::Other);
     }
 
-    let window = web_sys::window().ok_or(SubscribeError::Other)?;
-    let sw_container = window.navigator().service_worker();
-    let ready_promise = sw_container.ready().map_err(|_| SubscribeError::Other)?;
-    let registration_val = JsFuture::from(ready_promise)
+    let push_manager = ready_push_manager()
         .await
-        .map_err(|_| SubscribeError::Other)?;
-    let registration: web_sys::ServiceWorkerRegistration = registration_val
-        .dyn_into()
-        .map_err(|_| SubscribeError::Other)?;
-    let push_manager = registration
-        .push_manager()
         .map_err(|_| SubscribeError::Other)?;
 
     let key_bytes = {
@@ -251,25 +280,93 @@ async fn subscribe_flow(
         .await
         .map_err(|_| SubscribeError::Other)?;
 
-    // toJSON() (Reflect-called, see module doc) rather than a typed
-    // PushSubscription binding.
-    let to_json = get_prop(&sub_val, "toJSON");
+    extract_subscription_fields(&sub_val).ok_or(SubscribeError::Other)
+}
+
+/// Read `{endpoint, keys: {p256dh, auth}}` off a raw `PushSubscription`-like
+/// `JsValue` via its `toJSON()` method (Reflect-called, see module doc)
+/// rather than a typed `web_sys::PushSubscription` binding — shared by
+/// `subscribe_flow`'s own freshly-created subscription and
+/// [`local_subscription_fields`]'s read of an EXISTING one.
+fn extract_subscription_fields(sub_val: &JsValue) -> Option<(String, String, String)> {
+    let to_json = get_prop(sub_val, "toJSON");
     let json_val: JsValue = match to_json.dyn_ref::<Function>() {
-        Some(f) => f.call0(&sub_val).unwrap_or_else(|_| sub_val.clone()),
+        Some(f) => f.call0(sub_val).unwrap_or_else(|_| sub_val.clone()),
         None => sub_val.clone(),
     };
-    let endpoint = get_prop(&json_val, "endpoint")
-        .as_string()
-        .ok_or(SubscribeError::Other)?;
+    let endpoint = get_prop(&json_val, "endpoint").as_string()?;
     let keys = get_prop(&json_val, "keys");
-    let p256dh = get_prop(&keys, "p256dh")
-        .as_string()
-        .ok_or(SubscribeError::Other)?;
-    let auth = get_prop(&keys, "auth")
-        .as_string()
-        .ok_or(SubscribeError::Other)?;
+    let p256dh = get_prop(&keys, "p256dh").as_string()?;
+    let auth = get_prop(&keys, "auth").as_string()?;
+    Some((endpoint, p256dh, auth))
+}
 
-    Ok((endpoint, p256dh, auth))
+/// Await the SW registration and read the browser's OWN existing
+/// subscription via `PushManager.getSubscription()` — returns `Ok(None)`
+/// when this device genuinely has none (not an error, the common case),
+/// `Err(())` on a genuine browser-API failure. Shared by
+/// [`unsubscribe_flow`] and [`local_subscription_fields`] (#305) — both
+/// need the browser's own local truth, never the server's per-account
+/// aggregate flag.
+async fn get_local_subscription() -> Result<Option<JsValue>, ()> {
+    let push_manager = ready_push_manager().await?;
+    let get_sub_promise = push_manager.get_subscription().map_err(|_| ())?;
+    let sub_val = JsFuture::from(get_sub_promise).await.map_err(|_| ())?;
+    if sub_val.is_null() || sub_val.is_undefined() {
+        Ok(None)
+    } else {
+        Ok(Some(sub_val))
+    }
+}
+
+/// Per spec, `navigator.serviceWorker.ready` never resolves at all if no
+/// service worker ever successfully registers/activates for this origin
+/// (a private-browsing storage restriction, or a failed `register()` call
+/// that `index.html`'s own bootstrap silently swallows). Deep-review
+/// finding (this PR): [`local_subscription_fields`] now runs
+/// UNCONDITIONALLY on every `/my/balance` mount (#305) — before, this
+/// exact await only ever ran on an explicit subscribe/unsubscribe click.
+/// Without a bound, a device that never gets a working SW would hang
+/// [`get_local_subscription`] forever on EVERY future visit, permanently
+/// stranding the mount effect at `PushState::Loading` (the push card
+/// silently renders nothing, forever, for that device). `LOCAL_SUBSCRIPTION_TIMEOUT_MS`
+/// is generous (this is a background local-truth check, not a
+/// user-blocking action) but finite — both callers below use this bounded
+/// wrapper, never the raw unbounded fn directly.
+const LOCAL_SUBSCRIPTION_TIMEOUT_MS: u32 = 5000;
+
+async fn get_local_subscription_bounded() -> Result<Option<JsValue>, ()> {
+    let work = Box::pin(get_local_subscription());
+    let timeout = Box::pin(gloo_timers::future::TimeoutFuture::new(
+        LOCAL_SUBSCRIPTION_TIMEOUT_MS,
+    ));
+    match futures::future::select(work, timeout).await {
+        futures::future::Either::Left((result, _)) => result,
+        futures::future::Either::Right(_) => {
+            web_sys::console::warn_1(
+                &"push: get_local_subscription timed out — service worker never became ready"
+                    .into(),
+            );
+            Err(())
+        }
+    }
+}
+
+/// #305: read THIS device's own live push subscription directly from the
+/// browser and extract its endpoint/keys — the only reliable per-DEVICE
+/// truth. `GET /api/push/config`'s `subscribed` flag is a per-ACCOUNT
+/// aggregate (true if ANY device the customer ever used subscribed), so it
+/// can NEVER answer "is THIS device subscribed" — a customer who subscribed
+/// on their desktop and then opens `/my/balance` on their phone (permission
+/// already `granted` there too, e.g. from an earlier unrelated grant) would
+/// see the switch lie "On" while the phone's own `PushManager` was never
+/// actually subscribed and silently receives nothing. The mount effect
+/// calls this INSTEAD of trusting `cfg.subscribed` for on/off state.
+async fn local_subscription_fields() -> Result<Option<(String, String, String)>, ()> {
+    match get_local_subscription_bounded().await? {
+        Some(sub_val) => Ok(extract_subscription_fields(&sub_val)),
+        None => Ok(None),
+    }
 }
 
 /// Await the SW registration, read the browser's OWN existing subscription
@@ -280,28 +377,31 @@ async fn subscribe_flow(
 ///
 /// `Ok(None)` means the browser already had no subscription (nothing to
 /// unsubscribe from, nothing to tell the server) — a benign no-op, not an
-/// error. `Err(())` means a subscription EXISTED but the browser's own
-/// `.unsubscribe()` call genuinely rejected — the subscription is still
-/// live, so the caller must NOT treat the device as off (#303 review
-/// finding: silently swallowing this and still returning `Ok` would let
-/// the UI claim "off" for a device that can still receive pushes).
+/// error. `Err(())` means a subscription EXISTED but its unsubscribe
+/// could NOT be confirmed — the browser's own `.unsubscribe()` call
+/// genuinely rejected, OR `unsubscribe` was missing/malformed (no
+/// function, or didn't return a Promise) — in every such case the
+/// subscription may still be live, so the caller must NOT treat the
+/// device as off (#303 review finding, and this PR's own deep-review
+/// finding for the two malformed-object cases: silently swallowing any
+/// of these and still returning `Ok` would let the UI claim "off" for a
+/// device that can still receive pushes).
 async fn unsubscribe_flow() -> Result<Option<String>, ()> {
-    let window = web_sys::window().ok_or(())?;
-    let sw_container = window.navigator().service_worker();
-    let ready_promise = sw_container.ready().map_err(|_| ())?;
-    let registration_val = JsFuture::from(ready_promise).await.map_err(|_| ())?;
-    let registration: web_sys::ServiceWorkerRegistration =
-        registration_val.dyn_into().map_err(|_| ())?;
-    let push_manager = registration.push_manager().map_err(|_| ())?;
-
-    let get_sub_promise = push_manager.get_subscription().map_err(|_| ())?;
-    let sub_val = JsFuture::from(get_sub_promise).await.map_err(|_| ())?;
-    if sub_val.is_null() || sub_val.is_undefined() {
-        return Ok(None);
-    }
+    let sub_val = match get_local_subscription_bounded().await? {
+        Some(v) => v,
+        None => return Ok(None),
+    };
 
     let endpoint = get_prop(&sub_val, "endpoint").as_string();
 
+    // Deep-review finding (this PR): both fallback branches below used to
+    // just warn and FALL THROUGH to the `Ok(endpoint)` at the end — which
+    // directly contradicts this function's own doc comment above ("must
+    // NOT treat the device as off" when we can't confirm the browser
+    // genuinely unsubscribed). A malformed `unsubscribe` (missing, or not
+    // returning a Promise) means we truly cannot confirm success, so both
+    // now return `Err(())` — same as the confirmed-rejected case above —
+    // instead of silently claiming the device is off.
     let unsubscribe_fn = get_prop(&sub_val, "unsubscribe");
     match unsubscribe_fn.dyn_ref::<Function>() {
         Some(f) => {
@@ -321,15 +421,20 @@ async fn unsubscribe_flow() -> Result<Option<String>, ()> {
                 None => {
                     // unsubscribe() didn't return a promise at all (a
                     // malformed subscription object) — can't confirm
-                    // success either way; best-effort proceed, logged.
+                    // success either way, so this is NOT a confirmed
+                    // unsubscribe: fail closed rather than claim "off".
                     web_sys::console::warn_1(
                         &"push: unsubscribe() did not return a promise".into(),
                     );
+                    return Err(());
                 }
             }
         }
         None => {
+            // Subscription object has no unsubscribe() method at all — a
+            // malformed object; same "can't confirm, fail closed" logic.
             web_sys::console::warn_1(&"push: subscription has no unsubscribe() method".into());
+            return Err(());
         }
     }
 
@@ -452,20 +557,73 @@ pub fn PushToggle() -> impl IntoView {
                         set_state.set(PushState::Blocked);
                         return;
                     }
-                    if cfg.subscribed {
-                        if push_user_disabled() {
-                            // Self-heal (#303 review finding): the LOCAL
-                            // device already decided "off", but the server
-                            // still has (or had) a row for this account —
-                            // e.g. a prior unsubscribe POST failed, or a
-                            // different device's subscription. Reconcile
-                            // silently rather than showing a lying "on" for
-                            // a device the customer explicitly turned off.
-                            do_unsubscribe(false);
-                        } else {
+                    // #305: never trust the server's per-ACCOUNT aggregate
+                    // for on/off state — ask the browser's OWN PushManager
+                    // what THIS device actually has. A customer who
+                    // subscribed on their desktop and then opens
+                    // /my/balance on a phone that never subscribed must
+                    // NOT see a lying "On" here.
+                    match local_subscription_fields().await {
+                        Ok(Some((endpoint, p256dh, auth))) => {
+                            if push_user_disabled() {
+                                // Self-heal (#303 review finding, extended
+                                // by #305): the LOCAL device already
+                                // decided "off" but still holds a live
+                                // browser subscription (e.g. a prior
+                                // unsubscribe() call never completed) —
+                                // reconcile silently rather than showing a
+                                // lying "on".
+                                do_unsubscribe(false);
+                                return;
+                            }
+                            // This device genuinely has a live local
+                            // subscription. Reconcile the server row
+                            // (plain idempotent upsert) in case an earlier
+                            // subscribe POST failed silently while the
+                            // browser-side subscribe succeeded, then show
+                            // On regardless of this POST's own outcome —
+                            // the device demonstrably has a live
+                            // subscription either way (review finding: a
+                            // FAILING reconcile must not go completely
+                            // unlogged just because it isn't shown in the
+                            // UI, so it still gets a console warning here,
+                            // same pattern as unsubscribe_flow's own
+                            // best-effort warnings below).
+                            clear_push_user_disabled();
+                            let body = SubscribeReq {
+                                endpoint,
+                                keys: SubscribeKeysReq { p256dh, auth },
+                            };
+                            if let Err(e) =
+                                api::post::<_, serde_json::Value>("/api/push/subscribe", &body)
+                                    .await
+                            {
+                                web_sys::console::warn_1(
+                                    &format!(
+                                        "push: #305 reconcile of an existing local subscription failed: {e}"
+                                    )
+                                    .into(),
+                                );
+                            }
                             set_state.set(PushState::On);
+                            return;
                         }
-                        return;
+                        Ok(None) => {
+                            // No local subscription on THIS device — fall
+                            // through to the auto-subscribe / prompt logic
+                            // below regardless of what the server's
+                            // account-wide flag says (another device may
+                            // well be subscribed; irrelevant here).
+                        }
+                        Err(()) => {
+                            // Genuine browser-API failure reading local
+                            // push state — fail closed to nothing rendered
+                            // rather than a scary banner for a
+                            // non-essential affordance (same philosophy as
+                            // the outer Err(_) arm below).
+                            set_state.set(PushState::Unsupported);
+                            return;
+                        }
                     }
                     let permission = web_sys::Notification::permission();
                     if permission == web_sys::NotificationPermission::Granted {

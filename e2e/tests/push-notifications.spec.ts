@@ -309,6 +309,53 @@ test('an undecided permission shows the one-time prompt; dismissing it hides it 
     assertCleanConsole(messages);
 });
 
+test('#305: another device already subscribed does not fool THIS device — it still subscribes for itself', async ({
+    page,
+    context,
+}) => {
+    const messages = setupConsoleCheck(page);
+    const customer = await seedCustomer('push-multidev');
+    const deviceAEndpoint = fakeEndpoint(); // simulates the customer's desktop, already subscribed server-side
+    const deviceBEndpoint = fakeEndpoint(); // THIS browser's own, never-yet-subscribed endpoint
+
+    const token = await loginViaAPI(page, BASE_URL, customer.email, customer.password);
+
+    // Pre-seed a server-side subscription for a DIFFERENT endpoint — as if
+    // this customer had already subscribed on another device (desktop).
+    // GET /api/push/config's `subscribed` flag is a per-ACCOUNT aggregate,
+    // so it now reports `true` for the account even though THIS browser
+    // (device B) never subscribed.
+    const seedResp = await fetch(`${BASE_URL}/api/push/subscribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ endpoint: deviceAEndpoint, keys: FAKE_KEYS }),
+    });
+    if (!seedResp.ok) throw new Error(`pre-seed subscribe failed: ${seedResp.status} ${await seedResp.text()}`);
+
+    // Permission granted + subscribe() stubbed to this device's OWN
+    // endpoint — getSubscription() is deliberately left UNSTUBBED (a fresh
+    // browser context genuinely has no local subscription yet), so the
+    // mount effect's own local-truth check sees the real "nothing here".
+    await context.grantPermissions(['notifications'], { origin: BASE_URL });
+    await stubGrantedAndSubscribable(page, deviceBEndpoint);
+
+    // If the bug were present, the account-wide `subscribed: true` from
+    // device A's row would make the mount effect show "On" for device B
+    // with NO subscribe attempt ever made — this wait would time out.
+    const subscribeRequest = page.waitForResponse(
+        (resp) => resp.url().includes('/api/push/subscribe') && resp.request().method() === 'POST',
+    );
+    await page.goto('/my/balance');
+    const subscribeResp = await subscribeRequest;
+    expect(subscribeResp.status()).toBe(200);
+    expect(subscribeResp.request().postDataJSON().endpoint).toBe(deviceBEndpoint);
+
+    await expect(page.locator('[data-testid="push-toggle-on"]')).toBeVisible();
+    await expect(page.locator('[data-testid="push-toggle-switch"]')).toHaveAttribute('aria-checked', 'true');
+
+    assertCleanConsole(messages);
+});
+
 test('clicking "enable" in the one-time prompt requests permission from the click and subscribes', async ({ page }) => {
     const messages = setupConsoleCheck(page);
     const customer = await seedCustomer('push-ask');

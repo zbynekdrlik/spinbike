@@ -9,12 +9,31 @@
 //!
 //! **Low-credit gate (owner decision, 2026-08-07 — see #264's own
 //! comments): the low-credit reminder is customer-tier-scoped.** A
-//! one-off single-entry customer must NOT get it. It fires ONLY when BOTH
-//! hold: `credit <= LOW_CREDIT_THRESHOLD_EUR` AND the user's most recent
-//! top-up was `>= MIN_LAST_TOPUP_EUR`. A user with no top-up history at
-//! all never gets this reminder. The expiring-pass reminder is UNAFFECTED
-//! by this gate — it fires for any user with a pass ending within the
-//! window, regardless of top-up size.
+//! one-off single-entry customer must NOT get it. It fires ONLY when ALL
+//! THREE hold: `credit <= LOW_CREDIT_THRESHOLD_EUR` AND the user's most
+//! recent top-up was `>= MIN_LAST_TOPUP_EUR` AND the user does NOT hold an
+//! active monthly pass as of `today` (see #306 below). A user with no
+//! top-up history at all never gets this reminder. The expiring-pass
+//! reminder is UNAFFECTED by this gate — it fires for any user with a pass
+//! ending within the window, regardless of top-up size.
+//!
+//! **Active-pass suppression (#306, owner-confirmed root cause, 2026-08-08):
+//! while a customer holds an active monthly pass, their `credit` is 0 BY
+//! DESIGN** (every visit during the pass period is booked as
+//! `action='visit'`, amount 0 — nothing is ever deducted from credit while
+//! the pass covers it). `low_credit`'s original condition looked only at
+//! `credit`/`last_topup` and never checked pass status, so a pass holder
+//! whose most recent top-up happened to clear the 20 EUR gate got a
+//! nonsensical "Dochadza ti kredit" push while their pass was still fully
+//! valid. The fix reads the SAME canonical `user_active_pass` view (V18)
+//! the `pass_expiring` loop below already reads, via
+//! `db::users::get_user_pass_valid_until`, and suppresses `low_credit`
+//! whenever `pass_valid_until >= today` (inclusive — a pass expiring
+//! TODAY still covers the whole of today, so the customer must not be
+//! nagged about credit until tomorrow). This makes the sequence coherent:
+//! `pass_expiring` fires 3 days before the pass ends; the moment it
+//! actually expires, `low_credit` naturally unlocks (its own condition
+//! was true all along, just gated) and can remind the customer to top up.
 //!
 //! **Anti-spam (owner decision, 2026-08-08 — mandatory per the issue,
 //! refined with an episode cap):** per (user, reason), tracked in
@@ -137,12 +156,32 @@ pub async fn tick_as_of(pool: &SqlitePool, push: &PushHandle, today: NaiveDate) 
                 continue;
             }
         };
+        // #306: an active monthly pass suppresses low_credit — while it
+        // covers the customer, credit is 0 by design (see module doc) and
+        // "Dochadza ti kredit" is nonsensical. Same canonical
+        // `user_active_pass` view (V18) `pass_expiring` reads below.
+        // `>=` today (inclusive) — a pass expiring TODAY still covers the
+        // whole of today.
+        let pass_valid_until = match db::users::get_user_pass_valid_until(pool, user_id).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::error!(
+                    user_id,
+                    error = %e,
+                    "push: low_credit — failed to read pass status, skipping this user"
+                );
+                continue;
+            }
+        };
+        let has_active_pass = pass_valid_until.is_some_and(|vu| vu >= today);
         let condition = credit <= LOW_CREDIT_THRESHOLD_EUR
-            && last_topup.is_some_and(|t| t >= MIN_LAST_TOPUP_EUR);
+            && last_topup.is_some_and(|t| t >= MIN_LAST_TOPUP_EUR)
+            && !has_active_pass;
         tracing::debug!(
             user_id,
             credit = %format!("{credit:.2}"),
             last_topup = %last_topup.map(|t| format!("{t:.2}")).unwrap_or_else(|| "none".to_string()),
+            has_active_pass,
             condition,
             "push: low_credit evaluation"
         );
@@ -570,6 +609,135 @@ mod tests {
 
         let sent = tick_as_of(&pool, &push, test_today()).await.unwrap();
         assert_eq!(sent, 0, "credit just above the threshold must not notify");
+    }
+
+    // ── #306: an active monthly pass suppresses low_credit ─────────────────
+
+    #[tokio::test]
+    async fn low_credit_suppressed_while_pass_is_active() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST);
+                then.status(201);
+            })
+            .await;
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let today = test_today();
+
+        // Prod shape (#306): credit is 0 BY DESIGN while a pass covers every
+        // visit, and a qualifying top-up (>= MIN_LAST_TOPUP_EUR) would
+        // otherwise satisfy the low_credit condition — but the pass is
+        // active another 10 days, so it must NOT notify.
+        let uid = seed_customer(&pool, "pass-active@x", 0.0).await;
+        seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
+        seed_topup(&pool, uid, 35.0).await;
+        seed_pass(
+            &pool,
+            uid,
+            &(today + Days::new(10)).format("%Y-%m-%d").to_string(),
+        )
+        .await;
+
+        let sent = tick_as_of(&pool, &push, today).await.unwrap();
+        assert_eq!(
+            sent, 0,
+            "an active monthly pass (valid another 10 days) must suppress low_credit"
+        );
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn low_credit_re_enabled_once_the_pass_has_expired() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST);
+                then.status(201);
+            })
+            .await;
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let today = test_today();
+
+        // Same customer shape as above, but the pass expired YESTERDAY —
+        // the suppression must lift and low_credit must fire normally.
+        let uid = seed_customer(&pool, "pass-expired@x", 0.0).await;
+        seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
+        seed_topup(&pool, uid, 35.0).await;
+        seed_pass(
+            &pool,
+            uid,
+            &(today - chrono::Duration::days(1))
+                .format("%Y-%m-%d")
+                .to_string(),
+        )
+        .await;
+
+        let sent = tick_as_of(&pool, &push, today).await.unwrap();
+        assert_eq!(
+            sent, 1,
+            "low_credit must unlock the day after the pass has expired"
+        );
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn low_credit_still_suppressed_on_the_pass_expiry_day_itself() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST);
+                then.status(201);
+            })
+            .await;
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let today = test_today();
+
+        // Boundary: valid_until == today — the pass still covers the whole
+        // of today, so low_credit must stay suppressed. pass_expiring is a
+        // SEPARATE, independent reason and legitimately fires today too
+        // (today is inside its own inclusive [today, today+3] window) —
+        // total `sent` is 1, but it must be pass_expiring, never low_credit.
+        let uid = seed_customer(&pool, "pass-today@x", 0.0).await;
+        seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
+        seed_topup(&pool, uid, 35.0).await;
+        seed_pass(&pool, uid, &today.format("%Y-%m-%d").to_string()).await;
+
+        let sent = tick_as_of(&pool, &push, today).await.unwrap();
+        assert_eq!(
+            sent, 1,
+            "pass_expiring itself still legitimately fires on the expiry day"
+        );
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
+                .await
+                .unwrap()
+                .is_none(),
+            "low_credit must stay suppressed while the pass covers today"
+        );
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_PASS_EXPIRING)
+                .await
+                .unwrap()
+                .is_some(),
+            "pass_expiring is independent of the low_credit suppression"
+        );
     }
 
     #[tokio::test]
@@ -1022,7 +1190,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn low_credit_and_pass_expiring_are_independent_for_the_same_user() {
+    async fn low_credit_and_pass_expiring_can_never_co_fire_for_the_same_user() {
+        // #306 FIX to this pre-existing test: before #306, a customer with
+        // low credit AND a pass expiring soon got BOTH pushes (sent == 2)
+        // — that WAS the bug (see the module doc's #306 section). Any user
+        // for whom pass_expiring's condition is true necessarily holds an
+        // active pass (its own window is `valid_until` between today and
+        // today+PASS_EXPIRING_DAYS, i.e. `>= today`) — which is now
+        // EXACTLY the condition that suppresses low_credit. So the two
+        // reasons are structurally mutually exclusive for one user: this
+        // test now locks that invariant instead of the old buggy "both
+        // fire" expectation.
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         let server = MockServer::start_async().await;
@@ -1035,8 +1213,8 @@ mod tests {
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
         let today = test_today();
 
-        // Low credit AND a pass expiring soon at once — must send BOTH,
-        // and count both toward `sent`.
+        // Would otherwise qualify for low_credit (credit low, top-up
+        // clears the gate) AND has a pass expiring soon.
         let uid = seed_customer(&pool, "both@x", 1.0).await;
         seed_subscription(&pool, uid, &server.url("/wpush/both")).await;
         seed_topup(&pool, uid, 20.0).await;
@@ -1048,6 +1226,23 @@ mod tests {
         .await;
 
         let sent = tick_as_of(&pool, &push, today).await.unwrap();
-        assert_eq!(sent, 2, "both reasons must fire independently");
+        assert_eq!(
+            sent, 1,
+            "only pass_expiring must fire — the active pass suppresses low_credit"
+        );
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
+                .await
+                .unwrap()
+                .is_none(),
+            "low_credit must stay suppressed while the pass is active"
+        );
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_PASS_EXPIRING)
+                .await
+                .unwrap()
+                .is_some(),
+            "pass_expiring must still fire on its own"
+        );
     }
 }
