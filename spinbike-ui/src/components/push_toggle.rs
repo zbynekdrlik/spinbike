@@ -211,6 +211,23 @@ enum SubscribeError {
     Other,
 }
 
+/// Await the SW registration and return its `PushManager` — the exact
+/// acquisition sequence `subscribe_flow` and [`get_local_subscription`]
+/// both need. Deep-review finding (this PR): the two used to duplicate
+/// this verbatim; extracted here so a future fix to the sequence (e.g.
+/// handling a rejected `ready()` promise differently) can't silently
+/// drift between the two call sites. `Err(())` on any browser-API
+/// failure — callers map to their own error type as needed.
+async fn ready_push_manager() -> Result<web_sys::PushManager, ()> {
+    let window = web_sys::window().ok_or(())?;
+    let sw_container = window.navigator().service_worker();
+    let ready_promise = sw_container.ready().map_err(|_| ())?;
+    let registration_val = JsFuture::from(ready_promise).await.map_err(|_| ())?;
+    let registration: web_sys::ServiceWorkerRegistration =
+        registration_val.dyn_into().map_err(|_| ())?;
+    registration.push_manager().map_err(|_| ())
+}
+
 /// Request permission (if not already decided), await the SW registration,
 /// call `PushManager.subscribe`, and read back `{endpoint, p256dh, auth}`.
 /// Every JS boundary degrades to `Err(SubscribeError::Other)` rather than
@@ -241,17 +258,8 @@ async fn subscribe_flow(
         return Err(SubscribeError::Other);
     }
 
-    let window = web_sys::window().ok_or(SubscribeError::Other)?;
-    let sw_container = window.navigator().service_worker();
-    let ready_promise = sw_container.ready().map_err(|_| SubscribeError::Other)?;
-    let registration_val = JsFuture::from(ready_promise)
+    let push_manager = ready_push_manager()
         .await
-        .map_err(|_| SubscribeError::Other)?;
-    let registration: web_sys::ServiceWorkerRegistration = registration_val
-        .dyn_into()
-        .map_err(|_| SubscribeError::Other)?;
-    let push_manager = registration
-        .push_manager()
         .map_err(|_| SubscribeError::Other)?;
 
     let key_bytes = {
@@ -301,14 +309,7 @@ fn extract_subscription_fields(sub_val: &JsValue) -> Option<(String, String, Str
 /// need the browser's own local truth, never the server's per-account
 /// aggregate flag.
 async fn get_local_subscription() -> Result<Option<JsValue>, ()> {
-    let window = web_sys::window().ok_or(())?;
-    let sw_container = window.navigator().service_worker();
-    let ready_promise = sw_container.ready().map_err(|_| ())?;
-    let registration_val = JsFuture::from(ready_promise).await.map_err(|_| ())?;
-    let registration: web_sys::ServiceWorkerRegistration =
-        registration_val.dyn_into().map_err(|_| ())?;
-    let push_manager = registration.push_manager().map_err(|_| ())?;
-
+    let push_manager = ready_push_manager().await?;
     let get_sub_promise = push_manager.get_subscription().map_err(|_| ())?;
     let sub_val = JsFuture::from(get_sub_promise).await.map_err(|_| ())?;
     if sub_val.is_null() || sub_val.is_undefined() {
