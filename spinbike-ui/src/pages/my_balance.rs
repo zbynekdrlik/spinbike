@@ -129,8 +129,10 @@ pub fn MyBalancePage() -> impl IntoView {
         // installed or on a browser offering neither install path.
         <InstallPrompt />
 
-        // "Enable notifications" affordance (#264) — renders nothing while
-        // loading, unsupported, or server-disabled.
+        // Notification settings row + one-time permission prompt (#264,
+        // redesigned #303) — renders nothing while loading, unsupported, or
+        // server-disabled. Auto-subscribes silently when permission is
+        // already granted; otherwise shows a one-time proactive prompt.
         <PushToggle />
 
         // Loading spinner / error banner / recent visits — these update
