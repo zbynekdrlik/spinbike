@@ -17,12 +17,29 @@ paths:
   the only way to force a tick.
 - Two reasons, gated independently:
   - `low_credit` — `credit <= LOW_CREDIT_THRESHOLD_EUR (3.30)` **AND**
-    `last_topup >= MIN_LAST_TOPUP_EUR (20.0)`. The top-up gate is the owner's
-    explicit rule: a one-off single-entry customer must never be nagged. It
-    reads the **single most recent** credit-increasing transaction
-    (`action='topup' AND amount>0 AND deleted_at IS NULL`, `ORDER BY created_at
-    DESC, id DESC LIMIT 1`) — never a sum.
-  - `pass_expiring` — `PASS_EXPIRING_DAYS = 3`. **Not** subject to the 20 EUR gate.
+    `last_topup >= MIN_LAST_TOPUP_EUR (20.0)` **AND NOT** an active monthly
+    pass (`db::users::get_user_pass_valid_until >= today`, #306). The top-up
+    gate is the owner's explicit rule: a one-off single-entry customer must
+    never be nagged. It reads the **single most recent** credit-increasing
+    transaction (`action='topup' AND amount>0 AND deleted_at IS NULL`,
+    `ORDER BY created_at DESC, id DESC LIMIT 1`) — never a sum. The
+    active-pass gate exists because `credit` is 0 BY DESIGN while a pass is
+    active (visits during the pass period are booked `action='visit'`
+    amount 0) — without it, a pass holder whose last top-up cleared the 20
+    EUR gate got a nonsensical "Dochadza ti kredit" push (proven live on
+    prod: 26 affected customers, including the owner's own account).
+  - `pass_expiring` — `PASS_EXPIRING_DAYS = 3`. **Not** subject to the 20 EUR
+    gate.
+  - **Structural invariant (#306): `low_credit` and `pass_expiring` can
+    never co-fire for the SAME user.** `pass_expiring`'s own window
+    (`valid_until` in `[today, today+3]`) is a strict subset of
+    `low_credit`'s active-pass suppression condition (`valid_until >=
+    today`) — so any user for whom `pass_expiring` fires necessarily has
+    `low_credit` suppressed. If a future change to either condition makes
+    this invariant NOT hold anymore, re-check
+    `low_credit_and_pass_expiring_can_never_co_fire_for_the_same_user` in
+    `notifications.rs` (it locks this exact invariant with `sent == 1`,
+    not `sent == 2`).
 - Anti-spam state is per user **per reason** in `push_notify_log(user_id, reason,
   last_notified_at, sent_count)`: `NOTIFY_COOLDOWN_DAYS = 7`,
   `MAX_NOTIFICATIONS_PER_EPISODE = 2`, re-armed (both columns reset) when the
