@@ -1190,7 +1190,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn low_credit_and_pass_expiring_are_independent_for_the_same_user() {
+    async fn low_credit_and_pass_expiring_can_never_co_fire_for_the_same_user() {
+        // #306 FIX to this pre-existing test: before #306, a customer with
+        // low credit AND a pass expiring soon got BOTH pushes (sent == 2)
+        // — that WAS the bug (see the module doc's #306 section). Any user
+        // for whom pass_expiring's condition is true necessarily holds an
+        // active pass (its own window is `valid_until` between today and
+        // today+PASS_EXPIRING_DAYS, i.e. `>= today`) — which is now
+        // EXACTLY the condition that suppresses low_credit. So the two
+        // reasons are structurally mutually exclusive for one user: this
+        // test now locks that invariant instead of the old buggy "both
+        // fire" expectation.
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         let server = MockServer::start_async().await;
@@ -1203,8 +1213,8 @@ mod tests {
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
         let today = test_today();
 
-        // Low credit AND a pass expiring soon at once — must send BOTH,
-        // and count both toward `sent`.
+        // Would otherwise qualify for low_credit (credit low, top-up
+        // clears the gate) AND has a pass expiring soon.
         let uid = seed_customer(&pool, "both@x", 1.0).await;
         seed_subscription(&pool, uid, &server.url("/wpush/both")).await;
         seed_topup(&pool, uid, 20.0).await;
@@ -1216,6 +1226,23 @@ mod tests {
         .await;
 
         let sent = tick_as_of(&pool, &push, today).await.unwrap();
-        assert_eq!(sent, 2, "both reasons must fire independently");
+        assert_eq!(
+            sent, 1,
+            "only pass_expiring must fire — the active pass suppresses low_credit"
+        );
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
+                .await
+                .unwrap()
+                .is_none(),
+            "low_credit must stay suppressed while the pass is active"
+        );
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_PASS_EXPIRING)
+                .await
+                .unwrap()
+                .is_some(),
+            "pass_expiring must still fire on its own"
+        );
     }
 }
