@@ -94,6 +94,8 @@ Path-scoped rules under `.claude/rules/` load themselves when you touch a matchi
 - card search ranking or the search-result row's digit display → `.claude/rules/search-ranking.md` (auto-loads on `crates/spinbike-server/src/db/users.rs`, `spinbike-ui/src/pages/dashboard/mod.rs`, `e2e/tests/dashboard.spec.ts`, `e2e/tests/negative-balance.spec.ts` — tail-match ranking + row-vs-panel digit display, #290/#39)
 - `setupConsoleCheck`'s `allow4xxFor` opt-in filter → `.claude/rules/e2e-console-check.md` (auto-loads on `e2e/tests/helpers.ts`, `e2e/tests/console-check-4xx-scoping.spec.ts` — match `msg.location().url`, never `msg.text()`, #278)
 - ordering a `transactions` query by `created_at` → `.claude/rules/transaction-ordering.md` (auto-loads on `crates/spinbike-server/src/db/transactions.rs`, `crates/spinbike-server/src/routes/my_balance.rs`, `crates/spinbike-server/src/routes/payments.rs` — same-second ties need an `id DESC` tiebreaker, #291)
+- Web-Push notifications (daily job, VAPID key, anti-spam ledger) → `.claude/rules/push-notifications.md` (auto-loads on `crates/spinbike-server/src/jobs/notifications.rs`, `crates/spinbike-server/src/push.rs`, `crates/spinbike-server/src/routes/push.rs`, `spinbike-ui/sw.js` — #264)
+- Scheduling a new daily (or longer) background job → `.claude/rules/daily-job-scheduling.md` (auto-loads on `crates/spinbike-server/src/bin/server.rs`, `crates/spinbike-server/src/jobs/**` — wall-clock alignment, never `tokio::time::interval(86400s)`, #264/#297)
 
 | Area | Skill | When to load |
 |---|---|---|

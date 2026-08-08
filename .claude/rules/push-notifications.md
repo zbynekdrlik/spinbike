@@ -1,0 +1,64 @@
+---
+paths:
+  - "crates/spinbike-server/src/jobs/notifications.rs"
+  - "crates/spinbike-server/src/push.rs"
+  - "crates/spinbike-server/src/db/push.rs"
+  - "crates/spinbike-server/src/routes/push.rs"
+  - "spinbike-ui/sw.js"
+---
+
+# Web-Push notifications (#264)
+
+## Shape
+
+- `jobs::notifications::tick` runs **once at startup** and then on a sleep loop
+  aligned to `DAILY_RUN_HOUR = 9` (Europe/Bratislava). There is **no admin/debug
+  HTTP endpoint and no standalone bin** that fires it — restarting the unit is
+  the only way to force a tick.
+- Two reasons, gated independently:
+  - `low_credit` — `credit <= LOW_CREDIT_THRESHOLD_EUR (3.30)` **AND**
+    `last_topup >= MIN_LAST_TOPUP_EUR (20.0)`. The top-up gate is the owner's
+    explicit rule: a one-off single-entry customer must never be nagged. It
+    reads the **single most recent** credit-increasing transaction
+    (`action='topup' AND amount>0 AND deleted_at IS NULL`, `ORDER BY created_at
+    DESC, id DESC LIMIT 1`) — never a sum.
+  - `pass_expiring` — `PASS_EXPIRING_DAYS = 3`. **Not** subject to the 20 EUR gate.
+- Anti-spam state is per user **per reason** in `push_notify_log(user_id, reason,
+  last_notified_at, sent_count)`: `NOTIFY_COOLDOWN_DAYS = 7`,
+  `MAX_NOTIFICATIONS_PER_EPISODE = 2`, re-armed (both columns reset) when the
+  condition clears.
+
+## The two gotchas that decide how you can test it
+
+1. **`push::send()` performs no host validation.** The
+   `fcm.googleapis.com` / `updates.push.services.mozilla.com` /
+   `web.push.apple.com` / `*.notify.windows.com` allowlist lives **only in the
+   `/api/push/subscribe` route** (SSRF guard at the boundary). A subscription
+   seeded straight into the DB therefore reaches any endpoint the row names.
+2. **The anti-spam ledger is stamped ONLY on `SendOutcome::Sent` (a real 2xx).**
+   A failed or retryable send is retried on *every* tick with no cooldown until
+   `MAX_CONSECUTIVE_FAILURES = 10` prunes the subscription.
+
+Consequence: **a failed POST proves selection but can never prove the cooldown.**
+To verify anti-spam end-to-end you need a real 2xx, which a fabricated
+subscription will never get from a real push service. Point the seeded
+subscription at a **local mock HTTP server returning 201**, and use the
+`web-push` crate's own public test-fixture `p256dh`/`auth` keypair so RFC-8291
+encryption actually succeeds and a genuine VAPID-signed request is emitted.
+
+## VAPID key
+
+One secret only: `VAPID_PRIVATE_KEY` — a 32-byte raw P-256 private key,
+base64url **unpadded** (exactly 43 chars). The public key is derived at startup
+via `PartialVapidSignatureBuilder::get_public_key()` and served to the frontend
+by the auth-gated `GET /api/push/config`. Prod and dev hold **distinct** keys in
+their own `EnvironmentFile`; never print or copy the value. A wrong-length key
+used to panic inside `generic-array` — `push.rs` now length-validates first.
+
+## Verifying on prod
+
+Restart the unit and read the journal: `push: notified user_id=<id>
+reason="low_credit"` then `push: daily tick complete sent=<n>`. A tick that
+selected nobody logs `sent=0` with no `notified` line. Delete every synthetic
+row afterwards (`users`, `transactions`, `push_subscriptions`,
+`push_notify_log`) — prod holds real customer data.
