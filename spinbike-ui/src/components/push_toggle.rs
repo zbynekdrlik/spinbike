@@ -284,8 +284,14 @@ async fn unsubscribe_flow() -> Result<Option<String>, ()> {
     if let Some(f) = unsubscribe_fn.dyn_ref::<Function>()
         && let Ok(result) = f.call0(&sub_val)
         && let Ok(promise) = result.dyn_into::<js_sys::Promise>()
+        && let Err(e) = JsFuture::from(promise).await
     {
-        let _ = JsFuture::from(promise).await;
+        // Non-fatal: the server-side row is still dropped below (the push
+        // service will just have no subscription to deliver to). Logged so
+        // a real browser-side unsubscribe failure isn't silently invisible.
+        web_sys::console::warn_1(
+            &format!("push: browser-side unsubscribe() rejected: {e:?}").into(),
+        );
     }
 
     Ok(endpoint)
@@ -437,6 +443,7 @@ pub fn PushToggle() -> impl IntoView {
                 let testid = match state {
                     PushState::On => "push-toggle-on",
                     PushState::Blocked => "push-toggle-blocked",
+                    PushState::Busy => "push-toggle-busy",
                     _ => "push-toggle-off",
                 };
                 let checked = state == PushState::On;

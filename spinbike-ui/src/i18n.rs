@@ -1044,10 +1044,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         ("Zapnut upozornenia", "Enable notifications"),
     );
     m.insert(
-        "push_on",
-        ("Upozornenia su zapnute", "Notifications are on"),
-    );
-    m.insert(
         "push_blocked",
         (
             "Upozornenia su zablokovane v nastaveniach prehliadaca",
