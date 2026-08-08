@@ -1057,10 +1057,33 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "push_error_generic",
         (
-            "Nepodarilo sa zapnut upozornenia. Skus to znova.",
-            "Couldn't enable notifications. Try again.",
+            "Nepodarilo sa zmenit nastavenie upozorneni. Skus to znova.",
+            "Couldn't update notification settings. Try again.",
         ),
     );
+    m.insert("push_settings_label", ("Upozornenia", "Notifications"));
+    m.insert(
+        "push_settings_sublabel",
+        (
+            "Damy ti vediet, ked ti dochadza kredit alebo sa konci permanentka.",
+            "We'll let you know when your credit is low or your pass is expiring.",
+        ),
+    );
+    m.insert(
+        "push_blocked_hint",
+        (
+            "Over v nastaveniach prehliadaca (ikona zamku vedla adresy) a povol upozornenia pre tuto stranku.",
+            "Check your browser settings (the padlock icon next to the address bar) and allow notifications for this site.",
+        ),
+    );
+    m.insert(
+        "push_prompt_body",
+        (
+            "Chces dostavat upozornenia na dochadzajuci kredit a koniec permanentky?",
+            "Want to get notified when your credit is low or your pass is expiring?",
+        ),
+    );
+    m.insert("push_prompt_dismiss", ("Teraz nie", "Not now"));
     m.insert(
         "admin_allow_self_entry",
         ("Povolit samoobsluzny vstup", "Allow self-entry"),

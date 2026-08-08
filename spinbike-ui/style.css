@@ -1613,23 +1613,115 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
     margin: 0.75rem 0 0;
 }
 
-.push-toggle {
-    margin: 1rem 0;
-}
-.push-toggle--blocked,
-.push-toggle--on {
+/* Notification settings row (#303) — same shadowed-card idiom as
+   .card-credit/.card-pass, with a real role="switch" toggle instead of a
+   permanent CTA button. */
+.card-push {
     background: var(--surface, #fff);
     border-radius: 10px;
-    padding: 0.75rem 1rem;
-    font-size: 0.9rem;
-    color: var(--text-muted);
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.06);
 }
-.push-toggle--on {
-    color: var(--brand);
+.card-push__row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+}
+.card-push__text {
+    min-width: 0;
+}
+.card-push__label {
+    font-size: 0.95rem;
     font-weight: 600;
+    color: var(--text, #111827);
 }
-.push-toggle .alert {
+.card-push__sublabel {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-top: 0.15rem;
+}
+.card-push__hint {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-top: 0.35rem;
+}
+.card-push .alert {
     margin: 0.75rem 0 0;
+}
+
+/* The switch itself: a transparent min-44px tap-target button wrapping a
+   visually 51x31 track + animated knob, per --tap-min. */
+.push-switch {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--tap-min);
+    min-height: var(--tap-min);
+    padding: 0;
+    border: none;
+    background: transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+.push-switch:disabled {
+    cursor: not-allowed;
+}
+.push-switch__track {
+    position: relative;
+    width: 51px;
+    height: 31px;
+    border-radius: var(--r-pill);
+    background: var(--border-strong);
+    transition: background var(--dur) var(--ease-out);
+}
+.push-switch[aria-checked="true"] .push-switch__track {
+    background: var(--brand);
+}
+.push-switch:disabled .push-switch__track {
+    opacity: 0.5;
+}
+.push-switch__knob {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 27px;
+    height: 27px;
+    border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 2px rgba(0,0,0,0.25);
+    transition: transform var(--dur) var(--ease-out);
+}
+.push-switch[aria-checked="true"] .push-switch__knob {
+    transform: translateX(20px);
+}
+.push-switch--busy .push-switch__track {
+    opacity: 0.6;
+}
+
+/* One-time proactive permission prompt (#303 point 2) — the ONE sanctioned
+   soft-prompt banner, shown at most once (localStorage-gated). */
+.push-prompt {
+    background: var(--brand-tint);
+    border: 1px solid var(--brand);
+    border-radius: 10px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+}
+.push-prompt__text {
+    font-size: 0.9rem;
+    color: var(--text);
+}
+.push-prompt__actions {
+    display: flex;
+    gap: 0.5rem;
+}
+.push-prompt__actions .btn {
+    flex: 1;
 }
 
 .card-credit, .card-pass {
