@@ -146,14 +146,36 @@ async function stubDenied(page: import('@playwright/test').Page): Promise<void> 
 }
 
 /**
- * Permission left at its genuine fresh-context `"default"` (undecided) —
- * NO `context.grantPermissions` call (that is exactly what triggers the
- * getter-stuck-at-`"denied"` Chromium bug, see module doc point 2).
- * `Notification.requestPermission` is stubbed to resolve `"granted"`
- * immediately (bypasses the native dialog headless Chromium can't answer),
- * and `PushManager.prototype.subscribe` is stubbed like the other helpers.
+ * Permission explicitly forced to `"default"` (undecided) via the SAME
+ * `Object.defineProperty` override the other helpers use — headless
+ * Chromium's genuine unprompted `Notification.permission` state turned out
+ * NOT to be `"default"` in CI (confirmed live: both tests that relied on
+ * the real, unstubbed getter failed because the prompt never showed), so
+ * this is forced explicitly rather than assumed. No `context.grantPermissions`
+ * call (that triggers the getter-stuck-at-`"denied"` Chromium bug, see
+ * module doc point 2) — the override below is independent of that bug
+ * since it replaces the getter outright rather than relying on the
+ * browser's own permission engine.
+ */
+async function stubUndecided(page: import('@playwright/test').Page): Promise<void> {
+    await page.addInitScript(() => {
+        if (typeof (window as unknown as { Notification?: unknown }).Notification !== 'undefined') {
+            Object.defineProperty(Notification, 'permission', {
+                configurable: true,
+                get: () => 'default',
+            });
+        }
+    });
+}
+
+/**
+ * Undecided permission (see `stubUndecided`) plus `Notification.requestPermission`
+ * stubbed to resolve `"granted"` immediately (bypasses the native dialog
+ * headless Chromium can't answer) and `PushManager.prototype.subscribe`
+ * stubbed like the other helpers.
  */
 async function stubDefaultWithRequestGranted(page: import('@playwright/test').Page, endpoint: string): Promise<void> {
+    await stubUndecided(page);
     await page.addInitScript(({ ep, keys }: { ep: string; keys: typeof FAKE_KEYS }) => {
         if (typeof (window as unknown as { Notification?: unknown }).Notification !== 'undefined') {
             Notification.requestPermission = () => Promise.resolve('granted');
@@ -266,9 +288,10 @@ test('an undecided permission shows the one-time prompt; dismissing it hides it 
     const messages = setupConsoleCheck(page);
     const customer = await seedCustomer('push-dfl');
 
-    // Deliberately NOT calling context.grantPermissions and NOT stubbing
-    // anything push-related — permission stays at its genuine fresh-context
-    // "default", and no subscribe call should ever fire in this test.
+    // Force "default" explicitly (see stubUndecided doc) — no
+    // context.grantPermissions call, and no subscribe stub, since no
+    // subscribe call should ever fire in this test.
+    await stubUndecided(page);
     await loginViaAPI(page, BASE_URL, customer.email, customer.password);
     await page.goto('/my/balance');
 
