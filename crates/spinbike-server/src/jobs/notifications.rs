@@ -572,6 +572,135 @@ mod tests {
         assert_eq!(sent, 0, "credit just above the threshold must not notify");
     }
 
+    // ── #306: an active monthly pass suppresses low_credit ─────────────────
+
+    #[tokio::test]
+    async fn low_credit_suppressed_while_pass_is_active() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST);
+                then.status(201);
+            })
+            .await;
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let today = test_today();
+
+        // Prod shape (#306): credit is 0 BY DESIGN while a pass covers every
+        // visit, and a qualifying top-up (>= MIN_LAST_TOPUP_EUR) would
+        // otherwise satisfy the low_credit condition — but the pass is
+        // active another 10 days, so it must NOT notify.
+        let uid = seed_customer(&pool, "pass-active@x", 0.0).await;
+        seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
+        seed_topup(&pool, uid, 35.0).await;
+        seed_pass(
+            &pool,
+            uid,
+            &(today + Days::new(10)).format("%Y-%m-%d").to_string(),
+        )
+        .await;
+
+        let sent = tick_as_of(&pool, &push, today).await.unwrap();
+        assert_eq!(
+            sent, 0,
+            "an active monthly pass (valid another 10 days) must suppress low_credit"
+        );
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn low_credit_re_enabled_once_the_pass_has_expired() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST);
+                then.status(201);
+            })
+            .await;
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let today = test_today();
+
+        // Same customer shape as above, but the pass expired YESTERDAY —
+        // the suppression must lift and low_credit must fire normally.
+        let uid = seed_customer(&pool, "pass-expired@x", 0.0).await;
+        seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
+        seed_topup(&pool, uid, 35.0).await;
+        seed_pass(
+            &pool,
+            uid,
+            &(today - chrono::Duration::days(1))
+                .format("%Y-%m-%d")
+                .to_string(),
+        )
+        .await;
+
+        let sent = tick_as_of(&pool, &push, today).await.unwrap();
+        assert_eq!(
+            sent, 1,
+            "low_credit must unlock the day after the pass has expired"
+        );
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+
+    #[tokio::test]
+    async fn low_credit_still_suppressed_on_the_pass_expiry_day_itself() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST);
+                then.status(201);
+            })
+            .await;
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let today = test_today();
+
+        // Boundary: valid_until == today — the pass still covers the whole
+        // of today, so low_credit must stay suppressed. pass_expiring is a
+        // SEPARATE, independent reason and legitimately fires today too
+        // (today is inside its own inclusive [today, today+3] window) —
+        // total `sent` is 1, but it must be pass_expiring, never low_credit.
+        let uid = seed_customer(&pool, "pass-today@x", 0.0).await;
+        seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
+        seed_topup(&pool, uid, 35.0).await;
+        seed_pass(&pool, uid, &today.format("%Y-%m-%d").to_string()).await;
+
+        let sent = tick_as_of(&pool, &push, today).await.unwrap();
+        assert_eq!(
+            sent, 1,
+            "pass_expiring itself still legitimately fires on the expiry day"
+        );
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
+                .await
+                .unwrap()
+                .is_none(),
+            "low_credit must stay suppressed while the pass covers today"
+        );
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_PASS_EXPIRING)
+                .await
+                .unwrap()
+                .is_some(),
+            "pass_expiring is independent of the low_credit suppression"
+        );
+    }
+
     #[tokio::test]
     async fn tick_delegates_to_tick_as_of_with_real_today() {
         // `tick` (the public, non-`_as_of` entry point `server.rs` actually
