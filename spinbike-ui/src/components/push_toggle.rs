@@ -95,6 +95,30 @@ enum PushState {
     On,
 }
 
+/// Where a `PushToggle` instance is mounted (#316) — decides which
+/// [`PushState`]s render at all. See [`push_toggle_visible`] for the exact
+/// per-surface rule; the subscribe/unsubscribe/self-heal state machine
+/// below is completely unaffected by this — it only gates the final render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushToggleSurface {
+    /// `/my/balance` — `Off` (so the customer can turn it on), `Blocked`
+    /// (carries the explanation of why it can't be turned on), and `Busy`
+    /// (the in-flight subscribe the customer's own `Off -> tap` just
+    /// started — review finding, post-initial-implementation: hiding the
+    /// row on `Busy` too made the switch the customer just tapped vanish
+    /// instantly with no spinner and no confirmation, reading as "the app
+    /// ate my tap"; keeping it visible while busy is what makes the
+    /// SUBSEQUENT disappearance (once `On` settles and hides) read as
+    /// confirmation instead of a glitch). Only `On` renders nothing on the
+    /// main screen — once notifications are genuinely on, there is nothing
+    /// left to do here.
+    MainBalance,
+    /// `/my/settings` — the full row, every state, exactly like the
+    /// original (pre-#316) `/my/balance` behavior. This is where the
+    /// On -> Off switch click actually lives now.
+    Settings,
+}
+
 #[derive(Deserialize)]
 struct PushConfigResp {
     enabled: bool,
@@ -441,8 +465,37 @@ async fn unsubscribe_flow() -> Result<Option<String>, ()> {
     Ok(endpoint)
 }
 
+/// Whether the toggle row should render at all, given WHERE it is mounted
+/// and the current push state (#316). Pure decision function, extracted so
+/// it's unit-testable without mounting the component into a DOM — see the
+/// `visibility_tests` module below.
+///
+/// `Settings` keeps the original (pre-#316) rule: render for every state
+/// except the three that already render nothing everywhere (`Loading` — no
+/// answer yet; `Unsupported`/`Disabled` — the feature isn't available at
+/// all). `MainBalance` renders `Off` (the customer can turn it on),
+/// `Blocked` (carries the explanation of why they can't), AND `Busy` (the
+/// in-flight subscribe the customer's own tap just started — review
+/// finding: hiding the row here too made the switch vanish instantly with
+/// no spinner, reading as a dropped tap; keeping it visible while busy is
+/// what makes the row's SUBSEQUENT disappearance, once `On` settles, read
+/// as confirmation rather than a glitch). Only `On` renders nothing on the
+/// main screen — once notifications are genuinely on, there is nothing
+/// left to do here.
+fn push_toggle_visible(surface: PushToggleSurface, state: PushState) -> bool {
+    match surface {
+        PushToggleSurface::Settings => !matches!(
+            state,
+            PushState::Loading | PushState::Unsupported | PushState::Disabled
+        ),
+        PushToggleSurface::MainBalance => {
+            matches!(state, PushState::Off | PushState::Busy | PushState::Blocked)
+        }
+    }
+}
+
 #[component]
-pub fn PushToggle() -> impl IntoView {
+pub fn PushToggle(surface: PushToggleSurface) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (state, set_state) = signal(PushState::Loading);
     let (public_key, set_public_key) = signal(None::<String>);
@@ -668,83 +721,162 @@ pub fn PushToggle() -> impl IntoView {
     };
 
     view! {
-        {move || match state.get() {
-            PushState::Loading | PushState::Unsupported | PushState::Disabled => ().into_any(),
-            state => {
-                let testid = match state {
-                    PushState::On => "push-toggle-on",
-                    PushState::Blocked => "push-toggle-blocked",
-                    PushState::Busy => "push-toggle-busy",
-                    _ => "push-toggle-off",
-                };
-                let checked = state == PushState::On;
-                let disabled = matches!(state, PushState::Busy | PushState::Blocked);
-                let busy = state == PushState::Busy;
-                let switch_class = if busy {
-                    "push-switch push-switch--busy"
-                } else {
-                    "push-switch"
-                };
-                view! {
-                    <>
-                        {move || show_prompt.get().then(|| view! {
-                            <div class="push-prompt" data-testid="push-prompt">
-                                <div class="push-prompt__text">{move || i18n::t(lang.get(), "push_prompt_body")}</div>
-                                <div class="push-prompt__actions">
-                                    <button
-                                        class="btn btn--primary btn--compact"
-                                        data-testid="push-prompt-enable"
-                                        on:click=on_toggle_click
-                                    >
-                                        {move || i18n::t(lang.get(), "push_enable_button")}
-                                    </button>
-                                    <button
-                                        class="btn btn--ghost btn--compact"
-                                        data-testid="push-prompt-dismiss"
-                                        on:click=on_dismiss_prompt
-                                    >
-                                        {move || i18n::t(lang.get(), "push_prompt_dismiss")}
-                                    </button>
-                                </div>
-                            </div>
-                        })}
-                        <div class="card-push" data-testid=testid>
-                            <div class="card-push__row">
-                                <div class="card-push__text">
-                                    <div class="card-push__label">{move || i18n::t(lang.get(), "push_settings_label")}</div>
-                                    <div class="card-push__sublabel">
-                                        {move || if state == PushState::Blocked {
-                                            i18n::t(lang.get(), "push_blocked")
-                                        } else {
-                                            i18n::t(lang.get(), "push_settings_sublabel")
-                                        }}
-                                    </div>
-                                    {(state == PushState::Blocked).then(|| view! {
-                                        <div class="card-push__hint">{move || i18n::t(lang.get(), "push_blocked_hint")}</div>
-                                    })}
-                                </div>
+        {move || {
+            let state_now = state.get();
+            if !push_toggle_visible(surface, state_now) {
+                return ().into_any();
+            }
+            let state = state_now;
+            let testid = match state {
+                PushState::On => "push-toggle-on",
+                PushState::Blocked => "push-toggle-blocked",
+                PushState::Busy => "push-toggle-busy",
+                _ => "push-toggle-off",
+            };
+            let checked = state == PushState::On;
+            let disabled = matches!(state, PushState::Busy | PushState::Blocked);
+            let busy = state == PushState::Busy;
+            let switch_class = if busy {
+                "push-switch push-switch--busy"
+            } else {
+                "push-switch"
+            };
+            view! {
+                <>
+                    {move || show_prompt.get().then(|| view! {
+                        <div class="push-prompt" data-testid="push-prompt">
+                            <div class="push-prompt__text">{move || i18n::t(lang.get(), "push_prompt_body")}</div>
+                            <div class="push-prompt__actions">
                                 <button
-                                    class=switch_class
-                                    role="switch"
-                                    aria-checked=checked.to_string()
-                                    aria-label=move || i18n::t(lang.get(), "push_settings_label")
-                                    data-testid="push-toggle-switch"
-                                    disabled=disabled
+                                    class="btn btn--primary btn--compact"
+                                    data-testid="push-prompt-enable"
                                     on:click=on_toggle_click
                                 >
-                                    <span class="push-switch__track">
-                                        <span class="push-switch__knob"></span>
-                                    </span>
+                                    {move || i18n::t(lang.get(), "push_enable_button")}
+                                </button>
+                                <button
+                                    class="btn btn--ghost btn--compact"
+                                    data-testid="push-prompt-dismiss"
+                                    on:click=on_dismiss_prompt
+                                >
+                                    {move || i18n::t(lang.get(), "push_prompt_dismiss")}
                                 </button>
                             </div>
-                            {move || error.get().then(|| view! {
-                                <div class="alert alert-error">{move || i18n::t(lang.get(), "push_error_generic")}</div>
-                            })}
                         </div>
-                    </>
-                }
-                .into_any()
+                    })}
+                    <div class="card-push" data-testid=testid>
+                        <div class="card-push__row">
+                            <div class="card-push__text">
+                                <div class="card-push__label">{move || i18n::t(lang.get(), "push_settings_label")}</div>
+                                <div class="card-push__sublabel">
+                                    {move || if state == PushState::Blocked {
+                                        i18n::t(lang.get(), "push_blocked")
+                                    } else {
+                                        i18n::t(lang.get(), "push_settings_sublabel")
+                                    }}
+                                </div>
+                                {(state == PushState::Blocked).then(|| view! {
+                                    <div class="card-push__hint">{move || i18n::t(lang.get(), "push_blocked_hint")}</div>
+                                })}
+                            </div>
+                            <button
+                                class=switch_class
+                                role="switch"
+                                aria-checked=checked.to_string()
+                                aria-label=move || i18n::t(lang.get(), "push_settings_label")
+                                data-testid="push-toggle-switch"
+                                disabled=disabled
+                                on:click=on_toggle_click
+                            >
+                                <span class="push-switch__track">
+                                    <span class="push-switch__knob"></span>
+                                </span>
+                            </button>
+                        </div>
+                        {move || error.get().then(|| view! {
+                            <div class="alert alert-error">{move || i18n::t(lang.get(), "push_error_generic")}</div>
+                        })}
+                    </div>
+                </>
             }
+            .into_any()
         }}
+    }
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+    use wasm_bindgen_test::*;
+
+    // No wasm_bindgen_test_configure! — CI uses wasm-pack test --node (not browser).
+
+    // #316: on the customer's main screen, the row must vanish once there's
+    // nothing actionable left (was RED against the prior stub body in the
+    // commit that introduced this test — see that commit's message).
+    #[wasm_bindgen_test]
+    fn main_balance_hides_on() {
+        assert!(
+            !push_toggle_visible(PushToggleSurface::MainBalance, PushState::On),
+            "On is not actionable on the main screen — the row must not render"
+        );
+    }
+
+    // Review finding (post-initial-implementation): hiding Busy too made a
+    // customer's own Off -> tap vanish the row instantly with no spinner —
+    // "the app ate my tap". RED against the version that hid it.
+    #[wasm_bindgen_test]
+    fn main_balance_shows_busy() {
+        assert!(
+            push_toggle_visible(PushToggleSurface::MainBalance, PushState::Busy),
+            "a customer's own in-flight subscribe must stay visible (disabled/busy), not vanish"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn main_balance_shows_off() {
+        assert!(
+            push_toggle_visible(PushToggleSurface::MainBalance, PushState::Off),
+            "Off is actionable (turn it on) — the row must render"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn main_balance_shows_blocked() {
+        assert!(
+            push_toggle_visible(PushToggleSurface::MainBalance, PushState::Blocked),
+            "Blocked carries the explanation of why it can't be turned on — must render"
+        );
+    }
+
+    // Settings surface behavior is UNCHANGED from before #316 — every state
+    // except the three that already render nothing everywhere.
+    #[wasm_bindgen_test]
+    fn settings_shows_every_actionable_state() {
+        for state in [
+            PushState::Off,
+            PushState::Busy,
+            PushState::On,
+            PushState::Blocked,
+        ] {
+            assert!(
+                push_toggle_visible(PushToggleSurface::Settings, state),
+                "{state:?} must render on the settings surface"
+            );
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn settings_hides_loading_unsupported_disabled() {
+        for state in [
+            PushState::Loading,
+            PushState::Unsupported,
+            PushState::Disabled,
+        ] {
+            assert!(
+                !push_toggle_visible(PushToggleSurface::Settings, state),
+                "{state:?} must render nothing on either surface"
+            );
+        }
     }
 }

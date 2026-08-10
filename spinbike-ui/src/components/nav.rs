@@ -64,6 +64,8 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
                                 view! {
                                     <a href="/my/bookings">{move || i18n::t(lang.get(), "my_bookings")}</a>
                                     <a href="/my/balance">{move || i18n::t(lang.get(), "balance")}</a>
+                                    // #316: customer settings screen (push toggle lives here now).
+                                    <a href="/my/settings">{move || i18n::t(lang.get(), "my_settings")}</a>
                                 }.into_any()
                             } else {
                                 ().into_any()

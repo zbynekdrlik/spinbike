@@ -4,6 +4,7 @@ pub mod door;
 pub mod login;
 pub mod my_balance;
 pub mod my_bookings;
+pub mod my_settings;
 pub mod reports;
 pub mod schedule;
 pub mod staff_dashboard;

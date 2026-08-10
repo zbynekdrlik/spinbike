@@ -10,7 +10,7 @@ use wasm_bindgen_futures::spawn_local;
 use spinbike_core::reports::{EventKind, classify};
 
 use crate::api;
-use crate::components::{DoorButton, InstallPrompt, PushToggle};
+use crate::components::{DoorButton, InstallPrompt, PushToggle, PushToggleSurface};
 use crate::dates;
 use crate::i18n::{self, Lang, fmt_date_short, tf};
 
@@ -133,7 +133,10 @@ pub fn MyBalancePage() -> impl IntoView {
         // redesigned #303) — renders nothing while loading, unsupported, or
         // server-disabled. Auto-subscribes silently when permission is
         // already granted; otherwise shows a one-time proactive prompt.
-        <PushToggle />
+        // #316: the main screen only shows it while actionable (Off,
+        // Blocked) — once notifications are already on, the full row lives
+        // on /my/settings instead.
+        <PushToggle surface=PushToggleSurface::MainBalance />
 
         // Loading spinner / error banner / recent visits — these update
         // reactively on data changes.

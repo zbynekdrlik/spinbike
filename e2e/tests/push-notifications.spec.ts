@@ -1,15 +1,27 @@
 import { test, expect } from '@playwright/test';
-import { loginViaAPI, setupConsoleCheck, assertCleanConsole, uniqueLetterSuffix } from './helpers';
+import {
+    loginViaAPI,
+    setupConsoleCheck,
+    assertCleanConsole,
+    seedCustomerAccount,
+    PUSH_FAKE_KEYS as FAKE_KEYS,
+    pushFakeEndpoint as fakeEndpoint,
+    stubPushGrantedAndSubscribable as stubGrantedAndSubscribable,
+    stubPushDenied as stubDenied,
+} from './helpers';
 
 /**
- * E2E coverage for the notification settings row on `/my/balance` (#264,
- * redesigned #303 — a real `role="switch"` toggle replacing the old
- * permanent CTA button, working BOTH ways, plus a silent auto-subscribe and
- * a one-time proactive permission prompt per the owner's #303 follow-up
- * decision). Push DELIVERY itself is explicitly out of scope for
- * Playwright (do not fake it) — these tests never assert a notification
- * was shown to the OS; they exercise the real subscribe/unsubscribe wiring
- * only.
+ * E2E coverage for the notification toggle (#264, redesigned #303 — a real
+ * `role="switch"` toggle replacing the old permanent CTA button, working
+ * BOTH ways, plus a silent auto-subscribe and a one-time proactive
+ * permission prompt per the owner's #303 follow-up decision; #316 moved
+ * the full toggle — every state — to the new `/my/settings` customer
+ * screen, and restricted `/my/balance` to only the actionable `Off`/
+ * `Blocked` states, so tests below navigate to whichever surface can
+ * actually show the state they need to observe). Push DELIVERY itself is
+ * explicitly out of scope for Playwright (do not fake it) — these tests
+ * never assert a notification was shown to the OS; they exercise the real
+ * subscribe/unsubscribe wiring only.
  *
  * **Stubbed via `page.addInitScript`, working around limitations that have
  * nothing to do with this app's correctness:**
@@ -48,57 +60,9 @@ import { loginViaAPI, setupConsoleCheck, assertCleanConsole, uniqueLetterSuffix 
 
 const BASE_URL = 'http://localhost:8099';
 
-const FAKE_KEYS = {
-    p256dh:
-        'BH1HTeKM7-NwaLGHEqxeu2IamQaVVLkcsFHPIHmsCnqxcBHPQBprF41bEMOr3O1hUQ2jU1opNEm1F_lZV_sxMP8',
-    auth: 'sBXU5_tIYz-5w7G2B25BEw',
-};
-
+/** Thin wrapper over the shared `seedCustomerAccount` bound to this file's BASE_URL. */
 async function seedCustomer(prefix: string): Promise<{ user_id: number; email: string; password: string }> {
-    const suffix = uniqueLetterSuffix();
-    const email = `${prefix}-${suffix}@test.local`;
-    const password = `Pw-${suffix}`;
-    const resp = await fetch(`${BASE_URL}/api/test/seed-account`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, password, name: `${prefix} ${suffix}`, role: 'customer' }),
-    });
-    if (!resp.ok) throw new Error(`seed-account failed: ${resp.status} ${await resp.text()}`);
-    const { user_id } = await resp.json();
-    return { user_id, email, password };
-}
-
-/** Must be on the server's push-endpoint allowlist (routes/push.rs's
- * ALLOWED_PUSH_HOSTS, #264 SSRF-hardening review finding). */
-function fakeEndpoint(): string {
-    return `https://fcm.googleapis.com/fcm/send/e2e-${uniqueLetterSuffix()}`;
-}
-
-/**
- * Permission already GRANTED (stub point 2) + `PushManager.prototype.subscribe`
- * stubbed (stub point 1) — the "auto-subscribe / manual re-enable" environment.
- */
-async function stubGrantedAndSubscribable(page: import('@playwright/test').Page, endpoint: string): Promise<void> {
-    await page.addInitScript(({ ep, keys }: { ep: string; keys: typeof FAKE_KEYS }) => {
-        if (typeof (window as unknown as { Notification?: unknown }).Notification !== 'undefined') {
-            Object.defineProperty(Notification, 'permission', {
-                configurable: true,
-                get: () => 'granted',
-            });
-        }
-        if (typeof (window as unknown as { PushManager?: unknown }).PushManager === 'undefined') {
-            return;
-        }
-        const pm = (window as unknown as { PushManager: { prototype: Record<string, unknown> } }).PushManager;
-        pm.prototype.subscribe = function subscribe() {
-            return Promise.resolve({
-                endpoint: ep,
-                toJSON() {
-                    return { endpoint: ep, keys };
-                },
-            });
-        };
-    }, { ep: endpoint, keys: FAKE_KEYS });
+    return seedCustomerAccount(BASE_URL, prefix);
 }
 
 /**
@@ -131,18 +95,6 @@ async function stubGrantedWithExistingSubscription(page: import('@playwright/tes
             });
         };
     }, { ep: endpoint, keys: FAKE_KEYS });
-}
-
-/** Permission genuinely `"denied"` (no `context.grantPermissions` call needed). */
-async function stubDenied(page: import('@playwright/test').Page): Promise<void> {
-    await page.addInitScript(() => {
-        if (typeof (window as unknown as { Notification?: unknown }).Notification !== 'undefined') {
-            Object.defineProperty(Notification, 'permission', {
-                configurable: true,
-                get: () => 'denied',
-            });
-        }
-    });
 }
 
 /**
@@ -211,7 +163,11 @@ test('permission already granted + no server subscription auto-subscribes on loa
     const subscribeRequest = page.waitForResponse(
         (resp) => resp.url().includes('/api/push/subscribe') && resp.request().method() === 'POST',
     );
-    await page.goto('/my/balance');
+    // #316: the full toggle row (needed here to observe the resulting "On"
+    // state) now lives on /my/settings — /my/balance hides the row once
+    // notifications are on. The mount-effect subscribe logic itself is
+    // identical regardless of which surface mounts the component.
+    await page.goto('/my/settings');
     const subscribeResp = await subscribeRequest;
     expect(subscribeResp.status()).toBe(200);
 
@@ -242,7 +198,9 @@ test('the switch turns notifications off, unsubscribes, and stays off across a r
     await context.grantPermissions(['notifications'], { origin: BASE_URL });
     await stubGrantedWithExistingSubscription(page, endpoint);
 
-    await page.goto('/my/balance');
+    // #316: the On -> Off switch click needs the full row, which now only
+    // renders on /my/settings once the state is On.
+    await page.goto('/my/settings');
 
     const toggleSwitch = page.locator('[data-testid="push-toggle-switch"]');
     await expect(page.locator('[data-testid="push-toggle-on"]')).toBeVisible();
@@ -345,7 +303,8 @@ test('#305: another device already subscribed does not fool THIS device — it s
     const subscribeRequest = page.waitForResponse(
         (resp) => resp.url().includes('/api/push/subscribe') && resp.request().method() === 'POST',
     );
-    await page.goto('/my/balance');
+    // #316: needs the resulting "On" state to be visible — /my/settings.
+    await page.goto('/my/settings');
     const subscribeResp = await subscribeRequest;
     expect(subscribeResp.status()).toBe(200);
     expect(subscribeResp.request().postDataJSON().endpoint).toBe(deviceBEndpoint);
@@ -363,7 +322,11 @@ test('clicking "enable" in the one-time prompt requests permission from the clic
 
     await stubDefaultWithRequestGranted(page, endpoint);
     await loginViaAPI(page, BASE_URL, customer.email, customer.password);
-    await page.goto('/my/balance');
+    // #316: the prompt itself would still show on /my/balance (Off is still
+    // an actionable main-screen state), but the flow ends in "On", which
+    // only renders on /my/settings — use it throughout for one consistent
+    // navigation.
+    await page.goto('/my/settings');
 
     await expect(page.locator('[data-testid="push-prompt"]')).toBeVisible();
 
