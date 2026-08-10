@@ -41,10 +41,19 @@ fn trap_tab(ev: &ev::KeyboardEvent) {
     };
     let len = list.length();
     if len == 0 {
-        // No focusable descendant to trap around — assumed unreachable for
-        // all 8 current Sheet call sites (each renders at least one
-        // interactive control), but a future purely-informational Sheet
-        // would silently regress to pre-#320 (untrapped) Tab behavior.
+        // No focusable descendant to trap around right now. This DOES
+        // happen on 2 of the 8 current call sites (delete_user.rs,
+        // deleted_email_conflict.rs) during their transient busy/saving
+        // window, where every button shares one disabled=... signal — but
+        // when that's true, the previously-focused (now-disabled) button
+        // was ALREADY auto-blurred by the browser before any Tab could be
+        // pressed, so this keydown handler was never going to receive the
+        // event in the first place (its `current_target` — `.sheet` — is
+        // no longer an ancestor of `document.activeElement`). Closing that
+        // narrow, pre-existing (not a #320 regression — Tab always escaped
+        // unconditionally before this fix) gap needs a `focusout`-based
+        // reactive refocus, not more logic here — filed as a scoped
+        // follow-up, see #320's review thread.
         return;
     }
     let first = list
