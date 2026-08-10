@@ -80,6 +80,26 @@ subscription at a **local mock HTTP server returning 201**, and use the
 `web-push` crate's own public test-fixture `p256dh`/`auth` keypair so RFC-8291
 encryption actually succeeds and a genuine VAPID-signed request is emitted.
 
+## Widening `tick`/`tick_as_of`'s signature — grep by the STABLE PREFIX, never by trailing-arg literals (#311 gotcha)
+
+When `evaluate_reason`/`tick_as_of` gained its 4th parameter (`&MailHandle`,
+#311), a mechanical find-and-replace over the ~24 test call sites matched
+`tick_as_of(&pool, &push, test_today())` and `tick_as_of(&pool, &push,
+today)` — but MISSED 6 more call sites inside
+`low_credit_full_anti_spam_sequence_cooldown_episode_cap_then_rearm`, which
+uses its own locally-scoped `day0`/`day8`/`day16` variables instead of the
+common `today`/`test_today()` names. The tree still compiled locally
+(Tier-0 forbids local `cargo build`/`clippy`/`test`, so `cargo fmt --all
+--check` never caught it) and only failed on CI's `Lint` (clippy) job —
+one wasted CI cycle. **The fix: after ANY mechanical replace across a
+function's call sites, re-grep with ONLY the stable prefix** —
+`tick_as_of(&pool, &push,` (never `test_today()`/`today`, which vary per
+test) — **and count the matches against the known total** (e.g. `grep -c
+"async fn" | grep -c test` for "how many test functions exist" vs. `grep
+-c` for "how many now have the new arg"). A mismatch means a call site
+still has the OLD arg count and will only surface as a compile error on
+CI, never locally under this project's Tier-0 policy.
+
 ## VAPID key
 
 One secret only: `VAPID_PRIVATE_KEY` — a 32-byte raw P-256 private key,
