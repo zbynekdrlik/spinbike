@@ -20,27 +20,39 @@ const BURGER_SELECTOR: &str = "#navbar-burger-toggle";
 
 /// Moves keyboard focus to the FIRST focusable descendant of the element
 /// matching `container_selector` (falling back to the container itself if
-/// it has none) — deferred one macrotask so a just-mounted `Sheet` has
-/// actually landed in the DOM first. Used when the customer burger menu
-/// opens, so Escape (which `Sheet` only handles once focus is genuinely
-/// *inside* it — see `components::sheet::Sheet`'s doc comment) works
-/// without requiring a prior mouse click inside the panel.
+/// it has none). Used when the customer burger menu opens, so Escape
+/// (which `Sheet` only handles once focus is genuinely *inside* it — see
+/// `components::sheet::Sheet`'s doc comment) works without requiring a
+/// prior mouse click inside the panel.
+///
+/// **Polls rather than waiting a single fixed delay** — a just-toggled
+/// `menu_open` signal doesn't guarantee the `Sheet` has *already* landed
+/// in the DOM by the next microtask/macrotask; a single-shot
+/// `TimeoutFuture::new(0)` genuinely raced ahead of Leptos's own DOM
+/// patch in CI (confirmed live: the container query found nothing, so no
+/// focus ever moved, and Escape's keydown — bound on `.sheet` itself —
+/// never had anything inside it to bubble from). Retrying a few times
+/// over ~0.5s comfortably covers that without depending on Leptos's
+/// internal scheduling, and resolves near-instantly in the success case
+/// since the container is almost always already there.
 fn focus_first_in(container_selector: &'static str) {
     spawn_local(async move {
-        gloo_timers::future::TimeoutFuture::new(0).await;
         let Some(doc) = web_sys::window().and_then(|w| w.document()) else {
             return;
         };
-        let Ok(Some(container)) = doc.query_selector(container_selector) else {
-            return;
-        };
-        let target = container
-            .query_selector("a, button, input, select, textarea, [tabindex]")
-            .ok()
-            .flatten()
-            .unwrap_or(container);
-        if let Ok(html_el) = target.dyn_into::<web_sys::HtmlElement>() {
-            let _ = html_el.focus();
+        for _ in 0..20 {
+            if let Ok(Some(container)) = doc.query_selector(container_selector) {
+                let target = container
+                    .query_selector("a, button, input, select, textarea, [tabindex]")
+                    .ok()
+                    .flatten()
+                    .unwrap_or(container);
+                if let Ok(html_el) = target.dyn_into::<web_sys::HtmlElement>() {
+                    let _ = html_el.focus();
+                }
+                return;
+            }
+            gloo_timers::future::TimeoutFuture::new(25).await;
         }
     });
 }
