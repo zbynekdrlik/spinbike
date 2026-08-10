@@ -251,3 +251,42 @@ claim, no DB lookup on the CALLER. So verifying an admin-only UI change
   that actually fired (mechanism unclear, possibly a context-isolation
   quirk of the unsafe-code sandbox); the MCP's own tracked request list
   for the tab is the reliable source of truth.
+
+- **Running a whole multi-step scenario (clear SW, set a `page.addInitScript`
+  auth/push stub, navigate, screenshot, navigate again, screenshot) needs
+  `browser_run_code_unsafe`, not a chain of individual MCP tool calls** —
+  only `page.addInitScript` survives a REAL page navigation (a fresh JS
+  realm), so the stub has to be registered inside the SAME Playwright script
+  that then does `page.goto()`, not applied via a separate `browser_evaluate`
+  call before/after a `browser_navigate` (which resets the realm and loses
+  any prototype patches, e.g. `PushManager.prototype.getSubscription`).
+  Two mechanical gotchas when using `browser_run_code_unsafe` with
+  `filename:`:
+  - **The file must live under an allowed root** — `browser_run_code_unsafe`
+    refuses a path outside `.playwright-mcp/` (already gitignored) or the
+    repo root itself. A script parked in the OS scratchpad
+    (`/tmp/claude-*/…`) errors `File access denied`; copy it into
+    `.playwright-mcp/<name>.js` first (never commit it — that dir is
+    gitignored on purpose, see the root `.gitignore`).
+  - **The file's top-level content must be a bare expression** — literally
+    `async (page) => { ... }`, no `module.exports = ` prefix and no
+    trailing `;` after the final `}`. The tool wraps the file content in
+    `await (<content>)(page)`; a leading `module.exports =` or a trailing
+    `;` both produce `SyntaxError: Unexpected token ';'` with no other
+    detail. Strip both before running a script written for a plain Node
+    Playwright runner.
+
+## After verification — firing the `/autopilot` per-ticket run-card
+
+**`airuleset.py notify --run-card` silently no-ops (exit 0, NOTHING logged)
+if `--repo owner/name` is omitted** — `_notify_run_card` in airuleset.py
+returns early the instant `repo` or `issue` is falsy, with no stderr, no
+exception, and no `notify-delivery.log` line. A bare `--issue N
+--achieved "..." --pr N --merge-sha … --version …` call (no `--repo`) looks
+identical, from its exit code alone, to a successfully delivered card — the
+ONLY way to tell the difference is `grep 'spinbike#<N>'
+~/.claude/notify-delivery.log` afterwards. Always pass
+`--repo $(gh repo view --json nameWithOwner -q .nameWithOwner)` explicitly,
+and always confirm via the delivery-log grep, not the exit code — the exit
+code check the enforcement docs describe ("it must exit 0") is necessary but
+NOT sufficient on its own.
