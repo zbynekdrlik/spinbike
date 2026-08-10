@@ -129,6 +129,26 @@ claim, no DB lookup on the CALLER. So verifying an admin-only UI change
 
 ## Gotchas
 
+- **A long-lived Playwright MCP profile can carry a stale session from an
+  EARLIER, unrelated verification run (a different ticket, a different
+  synthetic user) — plain `localStorage.clear()` + service-worker
+  unregister is NOT reliable enough to shed it (#319 verify).** Symptom:
+  you `localStorage.clear()`, set fresh `spinbike_token`/`spinbike_user`,
+  navigate, and the DOM (and `localStorage.getItem('spinbike_user')` itself)
+  shows a DIFFERENT, older synthetic user's session — sometimes also
+  redirected to `/login`. The box's `mcp-chrome-*` profile is a real,
+  persistent Chrome instance that outlives one Claude session (`ps aux |
+  grep chrome` shows several `mcp-chrome-<hash>` instances from different
+  days), and a `browser_tabs new` call can also leave a SECOND tab open on
+  the same origin sharing the same storage. Fix: (1) `browser_tabs list`
+  and close every tab but one for the domain; (2) do a genuine full wipe via
+  CDP, not just `localStorage.clear()` — `page.context().newCDPSession(page)`
+  → `Storage.clearDataForOrigin({origin, storageTypes: 'all'})` +
+  `Network.clearBrowserCache` + `Network.clearBrowserCookies`, THEN
+  reload once to confirm `Object.keys(localStorage)` and `caches.keys()`
+  are genuinely empty BEFORE injecting the fresh token — only then set
+  `spinbike_token`/`spinbike_user`/`spinbike_lang` and navigate.
+
 - **Scripted API calls to the PUBLIC host `https://spinbike.sk` are blocked by
   Cloudflare (HTTP 403, `error code: 1010` — "banned based on browser
   signature").** Cloudflare fingerprints non-browser clients, so a `curl` /
