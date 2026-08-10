@@ -41,6 +41,10 @@ fn trap_tab(ev: &ev::KeyboardEvent) {
     };
     let len = list.length();
     if len == 0 {
+        // No focusable descendant to trap around — assumed unreachable for
+        // all 8 current Sheet call sites (each renders at least one
+        // interactive control), but a future purely-informational Sheet
+        // would silently regress to pre-#320 (untrapped) Tab behavior.
         return;
     }
     let first = list
@@ -62,6 +66,11 @@ fn trap_tab(ev: &ev::KeyboardEvent) {
             let first_node: &web_sys::Node = first_el.as_ref();
             if first_node.is_same_node(Some(active_node)) {
                 ev.prevent_default();
+                // `focus()` returns a `Result` (fails only if the target
+                // detached mid-event) — vanishingly unlikely for an
+                // element we just queried out of a live, attached `.sheet`,
+                // and there's nothing more useful to do here than leave
+                // focus wherever it currently is.
                 let _ = last_el.focus();
             }
         }
