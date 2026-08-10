@@ -733,73 +733,73 @@ pub fn PushToggle(surface: PushToggleSurface) -> impl IntoView {
                 PushState::Busy => "push-toggle-busy",
                 _ => "push-toggle-off",
             };
-                let checked = state == PushState::On;
-                let disabled = matches!(state, PushState::Busy | PushState::Blocked);
-                let busy = state == PushState::Busy;
-                let switch_class = if busy {
-                    "push-switch push-switch--busy"
-                } else {
-                    "push-switch"
-                };
-                view! {
-                    <>
-                        {move || show_prompt.get().then(|| view! {
-                            <div class="push-prompt" data-testid="push-prompt">
-                                <div class="push-prompt__text">{move || i18n::t(lang.get(), "push_prompt_body")}</div>
-                                <div class="push-prompt__actions">
-                                    <button
-                                        class="btn btn--primary btn--compact"
-                                        data-testid="push-prompt-enable"
-                                        on:click=on_toggle_click
-                                    >
-                                        {move || i18n::t(lang.get(), "push_enable_button")}
-                                    </button>
-                                    <button
-                                        class="btn btn--ghost btn--compact"
-                                        data-testid="push-prompt-dismiss"
-                                        on:click=on_dismiss_prompt
-                                    >
-                                        {move || i18n::t(lang.get(), "push_prompt_dismiss")}
-                                    </button>
-                                </div>
-                            </div>
-                        })}
-                        <div class="card-push" data-testid=testid>
-                            <div class="card-push__row">
-                                <div class="card-push__text">
-                                    <div class="card-push__label">{move || i18n::t(lang.get(), "push_settings_label")}</div>
-                                    <div class="card-push__sublabel">
-                                        {move || if state == PushState::Blocked {
-                                            i18n::t(lang.get(), "push_blocked")
-                                        } else {
-                                            i18n::t(lang.get(), "push_settings_sublabel")
-                                        }}
-                                    </div>
-                                    {(state == PushState::Blocked).then(|| view! {
-                                        <div class="card-push__hint">{move || i18n::t(lang.get(), "push_blocked_hint")}</div>
-                                    })}
-                                </div>
+            let checked = state == PushState::On;
+            let disabled = matches!(state, PushState::Busy | PushState::Blocked);
+            let busy = state == PushState::Busy;
+            let switch_class = if busy {
+                "push-switch push-switch--busy"
+            } else {
+                "push-switch"
+            };
+            view! {
+                <>
+                    {move || show_prompt.get().then(|| view! {
+                        <div class="push-prompt" data-testid="push-prompt">
+                            <div class="push-prompt__text">{move || i18n::t(lang.get(), "push_prompt_body")}</div>
+                            <div class="push-prompt__actions">
                                 <button
-                                    class=switch_class
-                                    role="switch"
-                                    aria-checked=checked.to_string()
-                                    aria-label=move || i18n::t(lang.get(), "push_settings_label")
-                                    data-testid="push-toggle-switch"
-                                    disabled=disabled
+                                    class="btn btn--primary btn--compact"
+                                    data-testid="push-prompt-enable"
                                     on:click=on_toggle_click
                                 >
-                                    <span class="push-switch__track">
-                                        <span class="push-switch__knob"></span>
-                                    </span>
+                                    {move || i18n::t(lang.get(), "push_enable_button")}
+                                </button>
+                                <button
+                                    class="btn btn--ghost btn--compact"
+                                    data-testid="push-prompt-dismiss"
+                                    on:click=on_dismiss_prompt
+                                >
+                                    {move || i18n::t(lang.get(), "push_prompt_dismiss")}
                                 </button>
                             </div>
-                            {move || error.get().then(|| view! {
-                                <div class="alert alert-error">{move || i18n::t(lang.get(), "push_error_generic")}</div>
-                            })}
                         </div>
-                    </>
-                }
-                .into_any()
+                    })}
+                    <div class="card-push" data-testid=testid>
+                        <div class="card-push__row">
+                            <div class="card-push__text">
+                                <div class="card-push__label">{move || i18n::t(lang.get(), "push_settings_label")}</div>
+                                <div class="card-push__sublabel">
+                                    {move || if state == PushState::Blocked {
+                                        i18n::t(lang.get(), "push_blocked")
+                                    } else {
+                                        i18n::t(lang.get(), "push_settings_sublabel")
+                                    }}
+                                </div>
+                                {(state == PushState::Blocked).then(|| view! {
+                                    <div class="card-push__hint">{move || i18n::t(lang.get(), "push_blocked_hint")}</div>
+                                })}
+                            </div>
+                            <button
+                                class=switch_class
+                                role="switch"
+                                aria-checked=checked.to_string()
+                                aria-label=move || i18n::t(lang.get(), "push_settings_label")
+                                data-testid="push-toggle-switch"
+                                disabled=disabled
+                                on:click=on_toggle_click
+                            >
+                                <span class="push-switch__track">
+                                    <span class="push-switch__knob"></span>
+                                </span>
+                            </button>
+                        </div>
+                        {move || error.get().then(|| view! {
+                            <div class="alert alert-error">{move || i18n::t(lang.get(), "push_error_generic")}</div>
+                        })}
+                    </div>
+                </>
+            }
+            .into_any()
         }}
     }
 }
