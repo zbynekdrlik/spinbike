@@ -159,4 +159,55 @@ test.describe('Customer header burger menu (#319)', () => {
 
         assertCleanConsole(messages);
     });
+
+    // #320: Sheet is `role="dialog"` + `aria-modal="true"` but (before this
+    // fix) had no real Tab-cycle trap — focus could leave the sheet into
+    // page content sitting behind the backdrop. The customer burger menu's
+    // Sheet has 5 focusable descendants in DOM order: my-bookings (a),
+    // balance (a), settings (a), lang-toggle (button), logout (button) —
+    // see nav.rs. First = menu-my-bookings, last = menu-logout.
+    test('Tab from the last focusable item wraps to the first (#320 focus trap)', async ({ page }) => {
+        const messages = setupConsoleCheck(page);
+        const { email, password } = await seedNamedCustomer(BASE_URL, 'Trap Tabber');
+        await loginViaAPI(page, BASE_URL, email, password);
+        await page.goto('/my/balance');
+
+        await page.locator('[data-testid="navbar-burger"]').click();
+        const sheet = page.locator('[data-testid="navbar-menu-sheet"]');
+        await expect(sheet).toBeVisible();
+
+        // Move focus directly to the last focusable item (logout), then
+        // Tab once more — a real focus trap must wrap back to the first
+        // item instead of leaving the sheet for whatever sits next in the
+        // page's overall DOM order behind the backdrop.
+        await sheet.locator('[data-testid="menu-logout"]').focus();
+        await expect(sheet.locator('[data-testid="menu-logout"]')).toBeFocused();
+
+        await page.keyboard.press('Tab');
+        await expect(sheet.locator('[data-testid="menu-my-bookings"]')).toBeFocused();
+
+        assertCleanConsole(messages);
+    });
+
+    test('Shift+Tab from the first focusable item wraps to the last (#320 focus trap)', async ({ page }) => {
+        const messages = setupConsoleCheck(page);
+        const { email, password } = await seedNamedCustomer(BASE_URL, 'Trap Shift Tabber');
+        await loginViaAPI(page, BASE_URL, email, password);
+        await page.goto('/my/balance');
+
+        await page.locator('[data-testid="navbar-burger"]').click();
+        const sheet = page.locator('[data-testid="navbar-menu-sheet"]');
+        await expect(sheet).toBeVisible();
+
+        // On open, focus already lands on the first focusable item
+        // (#319's focus_first_in) — no prior click needed inside the
+        // sheet, proving the trap works from a genuine keyboard-first
+        // open.
+        await expect(sheet.locator('[data-testid="menu-my-bookings"]')).toBeFocused();
+
+        await page.keyboard.press('Shift+Tab');
+        await expect(sheet.locator('[data-testid="menu-logout"]')).toBeFocused();
+
+        assertCleanConsole(messages);
+    });
 });
