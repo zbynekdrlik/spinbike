@@ -308,6 +308,8 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("logout", ("Odhlasit", "Logout"));
     m.insert("my_bookings", ("Moje rezervacie", "My Bookings"));
     m.insert("balance", ("Zostatok", "Balance"));
+    // #316: customer-facing /my/settings nav link + page title.
+    m.insert("my_settings", ("Nastavenia", "Settings"));
     m.insert("staff", ("Personal", "Staff"));
     m.insert("admin", ("Administracia", "Admin"));
 

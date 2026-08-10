@@ -464,16 +464,24 @@ async fn unsubscribe_flow() -> Result<Option<String>, ()> {
 /// it's unit-testable without mounting the component into a DOM — see the
 /// `visibility_tests` module below.
 ///
-/// RED (this commit): still the OLD, surface-blind rule everywhere — `_surface`
-/// is accepted but ignored. The `MainBalance`-only restriction lands in the
-/// #316 GREEN commit; until then this matches today's shipped behavior
-/// exactly (no user-visible regression from introducing the type/wiring
-/// alone).
-fn push_toggle_visible(_surface: PushToggleSurface, state: PushState) -> bool {
-    !matches!(
-        state,
-        PushState::Loading | PushState::Unsupported | PushState::Disabled
-    )
+/// `Settings` keeps the original (pre-#316) rule: render for every state
+/// except the three that already render nothing everywhere (`Loading` — no
+/// answer yet; `Unsupported`/`Disabled` — the feature isn't available at
+/// all). `MainBalance` additionally restricts to only the two ACTIONABLE
+/// states: `Off` (the customer can turn it on) and `Blocked` (carries the
+/// explanation of why they can't). `On`/`Busy` render nothing there —
+/// once notifications are already on, or a toggle click is mid-flight,
+/// there is nothing left to do on the customer's main screen.
+fn push_toggle_visible(surface: PushToggleSurface, state: PushState) -> bool {
+    match surface {
+        PushToggleSurface::Settings => !matches!(
+            state,
+            PushState::Loading | PushState::Unsupported | PushState::Disabled
+        ),
+        PushToggleSurface::MainBalance => {
+            matches!(state, PushState::Off | PushState::Blocked)
+        }
+    }
 }
 
 #[component]
@@ -794,9 +802,8 @@ mod visibility_tests {
     // No wasm_bindgen_test_configure! — CI uses wasm-pack test --node (not browser).
 
     // #316: on the customer's main screen, the row must vanish once there's
-    // nothing actionable left — RED today (2026-08-10): push_toggle_visible
-    // still ignores `surface` entirely, so this asserts the future/correct
-    // behavior and fails against the current stub body.
+    // nothing actionable left (was RED against the prior stub body in the
+    // commit that introduced this test — see that commit's message).
     #[wasm_bindgen_test]
     fn main_balance_hides_on() {
         assert!(

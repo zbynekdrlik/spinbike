@@ -107,6 +107,7 @@ use crate::pages::door::DoorPage;
 use crate::pages::login::LoginPage;
 use crate::pages::my_balance::MyBalancePage;
 use crate::pages::my_bookings::MyBookingsPage;
+use crate::pages::my_settings::MySettingsPage;
 use crate::pages::reports::ReportsPage;
 use crate::pages::schedule::SchedulePage;
 use crate::pages::staff_dashboard::StaffDashboardPage;
@@ -151,6 +152,9 @@ pub fn App() -> impl IntoView {
                         <Route path=path!("/welcome") view=WelcomePage />
                         <Route path=path!("/my/bookings") view=MyBookingsPage />
                         <Route path=path!("/my/balance") view=MyBalancePage />
+                        // Customer settings screen (#316) — not staff_gated,
+                        // same as the two routes above.
+                        <Route path=path!("/my/settings") view=MySettingsPage />
                         // Door page — minimal UI for admin/staff/customers
                         // with allow_self_entry=1. No role gate; server's
                         // allow_self_entry check is the actual authorization.
