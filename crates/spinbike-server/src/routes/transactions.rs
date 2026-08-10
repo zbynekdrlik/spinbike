@@ -221,7 +221,7 @@ async fn patch_created_at(
 
     // 30-day window check (inclusive). Future dates are also rejected — same
     // single error message covers both branches per spec.
-    let today = chrono::Local::now().date_naive();
+    let today = crate::util::today_bratislava();
     let earliest = today - chrono::Duration::days(30);
     if body.created_at_date < earliest || body.created_at_date > today {
         return Err(super::bad_request("Date must be within last 30 days"));
@@ -245,13 +245,10 @@ async fn patch_created_at(
             let local_dt = bratislava.from_utc_datetime(&utc_dt);
             let local_time = local_dt.time();
             let new_local_naive = chrono::NaiveDateTime::new(body.created_at_date, local_time);
-            // Pick .earliest() on DST-ambiguous local datetimes; treat
-            // gap (LocalResult::None) the same way via .single() fallback.
-            bratislava
-                .from_local_datetime(&new_local_naive)
-                .earliest()
-                .map(|dt| dt.naive_utc())
-                .unwrap_or_else(|| new_local_naive)
+            // DST-ambiguity resolution (earliest match on a fall-back fold,
+            // treat-as-UTC fallback on a spring-forward gap) is the shared
+            // util.rs implementation — do not hand-roll it here (#330).
+            crate::util::bratislava_local_to_utc(new_local_naive)
         }
         None => {
             // Existing value didn't parse — fall back to noon UTC on the
