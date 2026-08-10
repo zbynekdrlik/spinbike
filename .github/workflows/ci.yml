@@ -97,6 +97,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     needs: lint
+    env:
+      # #330 follow-up: the integration tests in transactions_date.rs (and the
+      # source-scan regression tests for #327/#330) compute their expected
+      # dates via chrono::Local::now(), on the stated assumption that "the CI
+      # runner already runs with TZ=Europe/Bratislava" — true on the dev box
+      # (/etc/timezone), FALSE on github-hosted ubuntu-latest (defaults UTC,
+      # no TZ set here before this line). Bratislava runs 1-2h ahead of UTC,
+      # so for that daily window today_bratislava() (production, tz-database
+      # driven, OS-independent) and chrono::Local::now() (test-only, OS clock)
+      # disagreed on the calendar date — see run 31439513457 (started 22:44
+      # UTC = 00:44 CEST) which failed exactly this way. Setting TZ here
+      # makes the runner's OS clock match the assumption those tests already
+      # depend on, instead of silently diverging near midnight CEST/CET.
+      TZ: Europe/Bratislava
     steps:
       - uses: actions/checkout@v4
 
@@ -329,6 +343,11 @@ jobs:
     # Re-gated for the single-trigger model (#103): runs on the dev push (was
     # pull_request-only). --in-diff compares dev's HEAD against origin/main.
     if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+    env:
+      # Same UTC-vs-Bratislava fold-window mismatch as the `test` job above
+      # (#330 follow-up) — this job runs the identical test binary (via
+      # nextest) and would hit the exact same near-midnight flakiness.
+      TZ: Europe/Bratislava
     strategy:
       # A survivor in one shard must NOT cancel the others — every surviving
       # mutant across all shards must be reported, not just the first shard's.

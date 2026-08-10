@@ -44,6 +44,44 @@ async fn topup_adds_exact_amount() {
     assert_eq!(resp["credit"].as_f64().unwrap(), 35.0);
 }
 
+/// Regression test for #325: `topup_user` rounded the balance delta
+/// (`db::update_credit` internally rounds via `round_cents`/`ROUND(...,2)`)
+/// but inserted the RAW, unrounded `body.amount` into the `transactions`
+/// ledger — so a sub-cent-precision amount (reachable from the UI's
+/// `type=text` input, not `step=0.01`) moved `users.credit` by the rounded
+/// value while the ledger row recorded the unrounded one, leaving the two
+/// permanently disagreeing. Both must land on the SAME rounded value.
+#[tokio::test]
+async fn topup_rounds_ledger_amount_to_match_credit_delta() {
+    let app = TestApp::new().await;
+    let user_id = app.seed_card("T3R", 10.0, None, None, None, None).await;
+    let body = serde_json::json!({ "user_id": user_id, "amount": 12.345 });
+    let (status, resp) = app
+        .request(post_json("/api/users/topup", &app.staff_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    // credit already rounds via db::update_credit — pin it too so this test
+    // documents the full expected contract, not just the ledger half.
+    assert_eq!(resp["credit"].as_f64().unwrap(), 22.35);
+
+    let tx_id = sqlx::query_scalar::<_, i64>(
+        "SELECT id FROM transactions WHERE user_id = ? AND action = 'topup' ORDER BY id DESC LIMIT 1",
+    )
+    .bind(user_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    let stored_amount: f64 = sqlx::query_scalar("SELECT amount FROM transactions WHERE id = ?")
+        .bind(tx_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        stored_amount, 12.35,
+        "ledger amount must be rounded the same way as the credit delta, not the raw client value"
+    );
+}
+
 #[tokio::test]
 async fn topup_forbidden_for_customer() {
     let app = TestApp::new().await;

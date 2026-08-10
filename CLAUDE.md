@@ -96,6 +96,9 @@ Path-scoped rules under `.claude/rules/` load themselves when you touch a matchi
 - ordering a `transactions` query by `created_at` → `.claude/rules/transaction-ordering.md` (auto-loads on `crates/spinbike-server/src/db/transactions.rs`, `crates/spinbike-server/src/routes/my_balance.rs`, `crates/spinbike-server/src/routes/payments.rs` — same-second ties need an `id DESC` tiebreaker, #291)
 - Web-Push notifications (daily job, VAPID key, anti-spam ledger) → `.claude/rules/push-notifications.md` (auto-loads on `crates/spinbike-server/src/jobs/notifications.rs`, `crates/spinbike-server/src/push.rs`, `crates/spinbike-server/src/routes/push.rs`, `spinbike-ui/sw.js` — #264)
 - Scheduling a new daily (or longer) background job → `.claude/rules/daily-job-scheduling.md` (auto-loads on `crates/spinbike-server/src/bin/server.rs`, `crates/spinbike-server/src/jobs/**` — wall-clock alignment, never `tokio::time::interval(86400s)`, #264/#297)
+- Any new day-boundary / local-time computation in a job or route → `.claude/rules/bratislava-tz.md` (auto-loads on `crates/spinbike-server/src/util.rs`, `crates/spinbike-server/src/jobs/**`, `crates/spinbike-server/src/routes/**` — never `chrono::Local`, always the shared `crate::util` helpers; the recurring #205/#222/#327/#330 bug class + the source-invariant regression-test pattern for it)
+- Any new money-mutating write (`users.credit` / `transactions.amount`) → `.claude/rules/money-rounding.md` (auto-loads on `db/users.rs`, `routes/payments.rs|users.rs|door.rs|admin.rs|charger.rs` — round ONCE and reuse everywhere, check prod for real drift before assuming a backfill is needed, #325/#326)
+- Adding a new `web_sys::` API surface to `spinbike-ui` → `.claude/rules/web-sys-features.md` (auto-loads on `spinbike-ui/Cargo.toml` — verify the Cargo feature gate without compiling, since local `cargo check` is Tier-0-banned, #320)
 
 | Area | Skill | When to load |
 |---|---|---|

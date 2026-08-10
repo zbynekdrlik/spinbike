@@ -221,7 +221,7 @@ async fn patch_created_at(
 
     // 30-day window check (inclusive). Future dates are also rejected — same
     // single error message covers both branches per spec.
-    let today = chrono::Local::now().date_naive();
+    let today = crate::util::today_bratislava();
     let earliest = today - chrono::Duration::days(30);
     if body.created_at_date < earliest || body.created_at_date > today {
         return Err(super::bad_request("Date must be within last 30 days"));
@@ -245,13 +245,10 @@ async fn patch_created_at(
             let local_dt = bratislava.from_utc_datetime(&utc_dt);
             let local_time = local_dt.time();
             let new_local_naive = chrono::NaiveDateTime::new(body.created_at_date, local_time);
-            // Pick .earliest() on DST-ambiguous local datetimes; treat
-            // gap (LocalResult::None) the same way via .single() fallback.
-            bratislava
-                .from_local_datetime(&new_local_naive)
-                .earliest()
-                .map(|dt| dt.naive_utc())
-                .unwrap_or_else(|| new_local_naive)
+            // DST-ambiguity resolution (earliest match on a fall-back fold,
+            // treat-as-UTC fallback on a spring-forward gap) is the shared
+            // util.rs implementation — do not hand-roll it here (#330).
+            crate::util::bratislava_local_to_utc(new_local_naive)
         }
         None => {
             // Existing value didn't parse — fall back to noon UTC on the
@@ -275,4 +272,45 @@ async fn patch_created_at(
         id,
         created_at_date: body.created_at_date,
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    /// Regression test for #330: `patch_created_at`'s 30-day-window "today"
+    /// must come from the shared `crate::util::today_bratislava()` helper
+    /// (not `chrono::Local::now()`, the OS-TZ-dependent #205/#222 bug
+    /// class), and its local->UTC DST-ambiguity resolution must reuse the
+    /// shared `crate::util::bratislava_local_to_utc()` helper instead of
+    /// hand-rolling the same `.from_local_datetime(...).earliest()...`
+    /// logic `util.rs` already implements and unit-tests.
+    ///
+    /// This is a source-level guard rather than a behavioral one: both this
+    /// dev box and the CI runner already run with `TZ=Europe/Bratislava`, so
+    /// `Local::now()` and `today_bratislava()` agree at test time regardless
+    /// of which one this handler calls — the divergence only exists on
+    /// prod's UTC-configured host and can't be reproduced behaviorally here.
+    #[test]
+    fn patch_created_at_reuses_shared_bratislava_helpers() {
+        let src = include_str!("transactions.rs");
+        let production_src = src
+            .split("#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("file always has content before its own test module marker");
+        assert!(
+            !production_src.contains("Local::now()"),
+            "patch_created_at must not call chrono::Local::now() directly (OS-TZ dependent — #330)"
+        );
+        assert!(
+            production_src.contains("crate::util::today_bratislava()"),
+            "patch_created_at must derive today via the shared crate::util::today_bratislava() helper (#330)"
+        );
+        assert!(
+            !production_src.contains(".unwrap_or_else(|| new_local_naive)"),
+            "patch_created_at must not hand-roll the DST-ambiguity fallback — reuse the shared helper instead of duplicating it (#330)"
+        );
+        assert!(
+            production_src.contains("crate::util::bratislava_local_to_utc("),
+            "patch_created_at must reuse the shared crate::util::bratislava_local_to_utc() helper for its local->UTC conversion (#330)"
+        );
+    }
 }

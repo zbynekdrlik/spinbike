@@ -30,6 +30,16 @@ jobs:
     runs-on: ubuntu-latest
     # Full tree (~269 mutants) split 8 ways → ~35 mutants/shard × ~60-100s.
     timeout-minutes: 360
+    env:
+      # ci.yml's `test`/`mutation-test` jobs set this to fix a real CI failure
+      # (#330 follow-up): github-hosted ubuntu-latest defaults OS clock to
+      # UTC, but transactions_date.rs's pre-existing tests compute expected
+      # dates via chrono::Local::now() on the documented assumption that the
+      # CI runner already runs Europe/Bratislava (true on the dev box, false
+      # here without this). Bratislava is 1-2h ahead of UTC, so without this
+      # the runner disagrees with production's today_bratislava() for that
+      # daily window. This job runs the identical test binary — same fix.
+      TZ: Europe/Bratislava
     strategy:
       # One shard's tooling failure must not cancel the others.
       fail-fast: false

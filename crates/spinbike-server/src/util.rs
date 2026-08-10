@@ -31,23 +31,45 @@ pub fn today_bratislava() -> NaiveDate {
     now_bratislava().date()
 }
 
+/// Convert a Bratislava-LOCAL naive datetime — any time of day, not just
+/// midnight — to the UTC instant it represents.
+///
+/// DST-ambiguous local times (the ~1h "fall back" fold each October, where
+/// one local clock time occurs twice) are resolved to the EARLIEST matching
+/// UTC instant. A local time that falls in the "spring forward" GAP
+/// (`LocalResult::None`, the ~1h/year that doesn't exist locally at all) has
+/// no genuine UTC equivalent; falls back to treating the naive value as if
+/// it were already UTC (~1-2h off, only possible for that ~1h/year gap).
+///
+/// The single shared implementation of this conversion — used by
+/// `bratislava_local_midnight_utc` below (calendar-date -> UTC midnight) and
+/// by `routes/transactions.rs`'s `patch_created_at` (arbitrary local
+/// time-of-day -> UTC, preserving the original time when backdating a
+/// transaction). #330 found `patch_created_at` hand-rolling this exact
+/// `.from_local_datetime(...).earliest()...` logic instead of reusing it;
+/// this generalizes the previously midnight-only helper so both sites share
+/// one implementation and one set of tests.
+pub fn bratislava_local_to_utc(local: NaiveDateTime) -> NaiveDateTime {
+    Bratislava
+        .from_local_datetime(&local)
+        .earliest()
+        .map(|dt| dt.naive_utc())
+        .unwrap_or(local)
+}
+
 /// The UTC instant of local midnight (00:00:00 Europe/Bratislava) on `day`.
 ///
 /// DST-correct: the offset (CET +01:00 / CEST +02:00) is taken from the tz
 /// database for `day`, never a hardcoded constant. Bratislava's DST transitions
 /// happen at 02:00/03:00 local, so local MIDNIGHT is never in a spring-forward
-/// gap or a fall-back fold — `.single()`/`.earliest()` always resolves; the
-/// `.unwrap_or` fallback (treating the naive value as UTC, mirroring
-/// `routes/transactions.rs`) can never actually fire.
+/// gap or a fall-back fold — `bratislava_local_to_utc`'s `.earliest()` always
+/// resolves here; its `.unwrap_or` fallback can never actually fire for a
+/// midnight input.
 fn bratislava_local_midnight_utc(day: NaiveDate) -> NaiveDateTime {
     let local_midnight = day
         .and_hms_opt(0, 0, 0)
         .expect("00:00:00 is a valid time on every date");
-    Bratislava
-        .from_local_datetime(&local_midnight)
-        .earliest()
-        .map(|dt| dt.naive_utc())
-        .unwrap_or(local_midnight)
+    bratislava_local_to_utc(local_midnight)
 }
 
 /// The half-open UTC instant range `[start, end)` covering the whole of the
@@ -235,6 +257,60 @@ mod tests {
         let (start, end) =
             super::bratislava_day_range_utc(NaiveDate::from_ymd_opt(2026, 7, 15).unwrap());
         assert_eq!(end - start, chrono::Duration::hours(24));
+    }
+
+    /// #330: `bratislava_local_to_utc` must handle an arbitrary local
+    /// TIME-of-day (not just midnight) — this is the capability
+    /// `patch_created_at` needs to preserve a transaction's original local
+    /// time-of-day when the user backdates its date.
+    ///
+    /// Winter (CET, UTC+1): 14:30 local == 13:30 UTC.
+    #[test]
+    fn local_to_utc_arbitrary_time_winter_is_utc_plus_one() {
+        let local = NaiveDate::from_ymd_opt(2026, 1, 15)
+            .unwrap()
+            .and_hms_opt(14, 30, 0)
+            .unwrap();
+        let utc = super::bratislava_local_to_utc(local);
+        assert_eq!(
+            utc,
+            NaiveDate::from_ymd_opt(2026, 1, 15)
+                .unwrap()
+                .and_hms_opt(13, 30, 0)
+                .unwrap(),
+            "14:30 CET == 13:30 UTC"
+        );
+    }
+
+    /// Summer (CEST, UTC+2): 14:30 local == 12:30 UTC.
+    #[test]
+    fn local_to_utc_arbitrary_time_summer_is_utc_plus_two() {
+        let local = NaiveDate::from_ymd_opt(2026, 7, 15)
+            .unwrap()
+            .and_hms_opt(14, 30, 0)
+            .unwrap();
+        let utc = super::bratislava_local_to_utc(local);
+        assert_eq!(
+            utc,
+            NaiveDate::from_ymd_opt(2026, 7, 15)
+                .unwrap()
+                .and_hms_opt(12, 30, 0)
+                .unwrap(),
+            "14:30 CEST == 12:30 UTC"
+        );
+    }
+
+    /// `bratislava_local_midnight_utc` (used by `bratislava_day_range_utc`)
+    /// is now a thin wrapper over `bratislava_local_to_utc` — pin that the
+    /// refactor didn't change its result: applying the shared helper
+    /// directly to a midnight local datetime must equal the day range's own
+    /// `start`.
+    #[test]
+    fn local_to_utc_at_midnight_matches_day_range_start() {
+        let day = NaiveDate::from_ymd_opt(2026, 1, 15).unwrap();
+        let (start, _) = super::bratislava_day_range_utc(day);
+        let via_shared_helper = super::bratislava_local_to_utc(day.and_hms_opt(0, 0, 0).unwrap());
+        assert_eq!(via_shared_helper, start);
     }
 
     #[test]

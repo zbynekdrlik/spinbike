@@ -448,6 +448,14 @@ async fn topup_user(
         return Err(super::bad_request("Note must be 200 characters or fewer"));
     }
     let note_for_db = body.note.as_deref().filter(|s| !s.trim().is_empty());
+    // Round ONCE and reuse everywhere (#325) — db::update_credit rounds
+    // internally, but the raw client-supplied body.amount used to also go
+    // straight into the transactions ledger, so a sub-cent-precision amount
+    // (reachable via the UI's plain-text amount input) could leave
+    // users.credit and the ledger row disagreeing. Same convention as
+    // payments.rs's charge/storno/sell_pass: round once, reuse the rounded
+    // value for the credit write, the ledger write, and the response.
+    let amount = db::round_cents(body.amount);
 
     let user = db::get_user_by_id(&state.pool, body.user_id)
         .await
@@ -462,7 +470,7 @@ async fn topup_user(
         return Err(ApiError::Forbidden(ErrorCode::UserBlocked));
     }
 
-    db::update_credit(&state.pool, body.user_id, body.amount)
+    db::update_credit(&state.pool, body.user_id, amount)
         .await
         .map_err(internal_error)?;
 
@@ -471,7 +479,7 @@ async fn topup_user(
         Some(body.user_id),
         Some(claims.sub),
         None,
-        body.amount,
+        amount,
         "topup",
         note_for_db,
     )
