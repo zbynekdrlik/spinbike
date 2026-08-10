@@ -31,7 +31,9 @@ test('a customer reaches /my/settings from the navbar and it shows the push togg
     await loginViaAPI(page, BASE_URL, customer.email, customer.password);
 
     await page.goto('/my/balance');
-    const settingsLink = page.locator('.navbar-links a[href="/my/settings"]');
+    // #319: the Settings link moved behind the customer burger menu.
+    await page.locator('[data-testid="navbar-burger"]').click();
+    const settingsLink = page.locator('[data-testid="menu-settings"]');
     await expect(settingsLink).toBeVisible();
     await settingsLink.click();
     await page.waitForURL('**/my/settings');

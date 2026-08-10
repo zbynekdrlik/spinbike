@@ -18,6 +18,11 @@ use crate::i18n::{self, Lang, fmt_date_short, tf};
 struct BalanceResp {
     #[allow(dead_code)]
     user_id: i64,
+    // #319: the personalized "Ahoj, {name}" greeting that used to read this
+    // field was removed — the shortened name now lives in the header
+    // (Navbar) instead. Kept here (not deleted) to preserve the honest
+    // wire shape of GET /api/my/balance.
+    #[allow(dead_code)]
     name: String,
     credit: f64,
     #[allow(dead_code)]
@@ -86,10 +91,11 @@ pub fn MyBalancePage() -> impl IntoView {
     });
 
     view! {
-        <h1 class="page-title">
-            {move || data.with(|d| d.as_ref().map(|d| tf(lang.get(), "my_balance_hello", &[&d.name]))
-                .unwrap_or_else(|| i18n::t(lang.get(), "my_balance").to_string()))}
-        </h1>
+        // #319: the standalone personalized "Ahoj, {name}" greeting was
+        // removed — the customer's (shortened) name now lives in the
+        // header (Navbar) instead, so this title is the same static,
+        // non-personalized one every other page already uses.
+        <h1 class="page-title">{move || i18n::t(lang.get(), "my_balance")}</h1>
 
         // Credit + pass cards — re-render reactively on data changes (no
         // remount of children; just text updates).

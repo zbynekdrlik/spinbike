@@ -1109,7 +1109,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "Monthly pass not active",
         ),
     );
-    m.insert("my_balance_hello", ("Ahoj, {}", "Hello, {}"));
     m.insert("my_balance_credit", ("Zostatok", "Credit"));
     m.insert(
         "my_balance_recent_movements",

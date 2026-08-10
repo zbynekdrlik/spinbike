@@ -29,12 +29,15 @@ test.describe('Authentication flows', () => {
         await form1.locator('button[type="submit"]').click();
         await page.waitForURL('/', { timeout: 10000 });
 
-        // Verify logged in
+        // Verify logged in — #319 shortens the header name display to
+        // "Firstname L." and moves Logout into the burger's Sheet.
         const nav = page.locator('.navbar-links');
-        await expect(nav.locator('.navbar-user')).toContainText('Test Customer');
+        await expect(nav.locator('[data-testid="navbar-user-name"]')).toHaveText('Test C.');
 
-        // Click Logout button (clears localStorage, bumps auth signal, then navigates to /)
-        await nav.locator('button', { hasText: 'Logout' }).click();
+        // Open the burger, then click Logout inside the sheet (clears
+        // localStorage, bumps auth signal, then navigates to /).
+        await page.locator('[data-testid="navbar-burger"]').click();
+        await page.locator('[data-testid="menu-logout"]').click();
 
         // The logout handler clears localStorage and does location.set_href("/").
         // The navigation to "/" while already on "/" may not fully reload in all browsers.
@@ -78,10 +81,13 @@ test.describe('Authentication flows', () => {
 
         await page.waitForURL('/', { timeout: 10000 });
 
-        // Verify logged-in state
+        // Verify logged-in state — #319 shortens the header name and
+        // moves the destination links behind the burger (see
+        // nav-burger-customer.spec.ts for the burger's own content
+        // coverage — this test only needs to prove login succeeded).
         const nav = page.locator('.navbar-links');
-        await expect(nav.locator('.navbar-user')).toContainText('Test Customer');
-        await expect(nav.locator('a[href="/my/bookings"]')).toBeVisible();
+        await expect(nav.locator('[data-testid="navbar-user-name"]')).toHaveText('Test C.');
+        await expect(nav.locator('[data-testid="navbar-burger"]')).toBeVisible();
 
         assertCleanConsole(consoleMessages);
     });
