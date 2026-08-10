@@ -59,6 +59,23 @@ test('visit button shows loading + success banner + auto-clears', async ({ page 
     const fitnessBtn = visitButtons.first();
     await expect(fitnessBtn).toContainText('Fitness');
 
+    // #315: hold the log-visit POST in flight for a fixed window before
+    // letting it reach the real server. On fast/unloaded CI hardware the
+    // whole click -> loading=true -> POST -> loading=false cycle can
+    // complete in single-digit ms (server + SQLite colocated with the test
+    // client on the SAME runner) — fast enough that Playwright's poll can
+    // miss the transient "disabled" state entirely (observed live: 5
+    // polls over 1000ms, all read "enabled" — CI run 31363382651). The
+    // client-side loading guard itself is correct (set synchronously
+    // before the POST is even dispatched); this only controls the
+    // network timing so the disabled window is reliably observable.
+    // Same established pattern as edit-info-fixes.spec.ts's "Delay the
+    // PUT so the save stays in flight long enough...".
+    await page.route('**/api/payments/log-visit', async (route) => {
+        await new Promise((r) => setTimeout(r, 400));
+        return route.continue();
+    });
+
     // Click. Within 1s the disabled binding must have repainted.
     await fitnessBtn.click();
     await expect(fitnessBtn).toBeDisabled({ timeout: 1000 });
@@ -122,6 +139,19 @@ test('visit button re-entry guard: rapid double-click fires only one POST', asyn
     await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
 
     const fitnessBtn = page.locator('[data-testid="log-visit-btn"]').first();
+
+    // #315: hold the log-visit POST in flight so the SECOND click below
+    // genuinely lands WHILE the first request is still outstanding — the
+    // guard's actual intended condition. Without this, on fast/unloaded CI
+    // hardware the first request can complete and re-enable the button
+    // BEFORE the second real click even fires, making it a legitimate,
+    // separate new click that correctly sends its own separate POST — not
+    // a double-submit at all (observed live: "Received: 2", CI run
+    // 31366920531). Same delay pattern as the test above.
+    await page.route('**/api/payments/log-visit', async (route) => {
+        await new Promise((r) => setTimeout(r, 500));
+        return route.continue();
+    });
 
     // Two clicks dispatched back-to-back. The first sets loading=true;
     // the second hits either the re-entry guard (loading still true at
