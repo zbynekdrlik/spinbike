@@ -377,10 +377,15 @@ async fn evaluate_reason(
     let subs = db::push::list_subscriptions_for_user(pool, user_id).await?;
     if subs.is_empty() {
         // #311: no push subscription at all -> fall back to e-mail, IF the
-        // customer has one on file. `filter` also excludes an empty-string
-        // address (defensive — `users.email` is either NULL or non-empty
-        // in practice, but never trust that from here).
-        let Some(addr) = email.filter(|e| !e.trim().is_empty()) else {
+        // customer has one on file. `filter` + `.trim()` also excludes an
+        // empty/whitespace-only address (defensive — every write path that
+        // sets `users.email` already trims (`routes/auth.rs`,
+        // `routes/users.rs`), but `evaluate_reason` has no visibility into
+        // that upstream guarantee, and `Mailbox::parse()` may reject a
+        // padded address outright). `addr` itself is the TRIMMED value, so
+        // a stray future untrimmed write can't turn into a
+        // permanently-failing, never-retried-successfully address.
+        let Some(addr) = email.map(str::trim).filter(|e| !e.is_empty()) else {
             // Neither push nor e-mail — leave the ledger untouched so this
             // is re-evaluated (cheaply) every day until the customer
             // subscribes or an e-mail is added, rather than being falsely
@@ -401,6 +406,7 @@ async fn evaluate_reason(
                 tracing::warn!(
                     user_id,
                     reason = %reason,
+                    to = %addr,
                     error = %e,
                     "push: email fallback send failed, ledger not stamped (retried next tick)"
                 );
