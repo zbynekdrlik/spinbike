@@ -33,6 +33,13 @@ async fn main() -> Result<()> {
     // agree on Enabled/Disabled deterministically.
     let push = spinbike_server::push::PushHandle::spawn();
 
+    // Independent MailHandle for the same background job loop (#311 — the
+    // e-mail fallback channel). Same reasoning as `push` above: its own
+    // instantiation rather than reaching into `AppState` (built separately
+    // inside `start_server`), reading the same `SMTP_*` env so both agree
+    // on Enabled/Disabled deterministically.
+    let mail = spinbike_server::mail::MailHandle::spawn();
+
     // Populate search_text for any users that pre-date the migration.
     let backfilled = db::users::backfill_search_text(&pool).await?;
     if backfilled > 0 {
@@ -67,7 +74,7 @@ async fn main() -> Result<()> {
     // Run the push-notification evaluation once at startup too (#264) — same
     // reasoning as token_purge above: an observable log line right after a
     // deploy, and covers the window while the server was down.
-    match spinbike_server::jobs::notifications::tick(&pool, &push).await {
+    match spinbike_server::jobs::notifications::tick(&pool, &push, &mail).await {
         Ok(n) if n > 0 => tracing::info!("push: sent {n} notifications at startup"),
         Ok(_) => {}
         Err(e) => tracing::error!("startup push notifications tick failed: {e}"),
@@ -131,11 +138,14 @@ async fn main() -> Result<()> {
     // whatever moment the server process last restarted (e.g. 03:00 after
     // an overnight deploy) forever. Startup already ran the job once above,
     // so this loop's first sleep waits for the NEXT occurrence of the
-    // aligned hour. `notifications::tick` takes an extra `&PushHandle` that
-    // `spawn_daily_job`'s signature doesn't carry, so it's captured by the
-    // closure instead of widening the helper for one caller (#299).
+    // aligned hour. `notifications::tick` takes extra `&PushHandle`/
+    // `&MailHandle` (#311 added the latter, the e-mail fallback channel)
+    // that `spawn_daily_job`'s signature doesn't carry, so both are
+    // captured by the closure instead of widening the helper for one
+    // caller (#299).
     {
         let push = push.clone();
+        let mail = mail.clone();
         spinbike_server::jobs::spawn_daily_job(
             pool.clone(),
             spinbike_server::jobs::notifications::DAILY_RUN_HOUR,
@@ -143,7 +153,8 @@ async fn main() -> Result<()> {
             "sent",
             move |pool| {
                 let push = push.clone();
-                async move { spinbike_server::jobs::notifications::tick(&pool, &push).await }
+                let mail = mail.clone();
+                async move { spinbike_server::jobs::notifications::tick(&pool, &push, &mail).await }
             },
         );
     }

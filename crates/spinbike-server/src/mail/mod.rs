@@ -76,15 +76,10 @@ impl MailHandle {
     pub fn spawn() -> Self {
         let test_mode = std::env::var("SMTP_TEST_MODE").ok();
         let from = std::env::var("SMTP_FROM").ok().unwrap_or_default();
-        let captured = Arc::new(Mutex::new(None));
 
         if test_mode.as_deref() == Some("capture") {
             tracing::info!("mail: SMTP_TEST_MODE=capture active — messages captured, never sent");
-            return Self {
-                transport: Some(Arc::new(Transport::Capture)),
-                from,
-                captured,
-            };
+            return Self::with_transport(Some(Transport::Capture), from);
         }
 
         let host = std::env::var("SMTP_HOST").ok().unwrap_or_default();
@@ -106,11 +101,7 @@ impl MailHandle {
                 from_set = !from.is_empty(),
                 "mail: disabled — required SMTP_* env vars unset"
             );
-            return Self {
-                transport: None,
-                from,
-                captured,
-            };
+            return Self::with_transport(None, from);
         }
 
         let port: u16 = match port_raw.parse() {
@@ -121,11 +112,7 @@ impl MailHandle {
                     error = %e,
                     "mail: disabled — SMTP_PORT is not a valid port number"
                 );
-                return Self {
-                    transport: None,
-                    from,
-                    captured,
-                };
+                return Self::with_transport(None, from);
             }
         };
 
@@ -133,11 +120,7 @@ impl MailHandle {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!(%host, error = %e, "mail: disabled — failed to build SMTP relay");
-                return Self {
-                    transport: None,
-                    from,
-                    captured,
-                };
+                return Self::with_transport(None, from);
             }
         };
 
@@ -147,10 +130,20 @@ impl MailHandle {
             .build();
 
         tracing::info!(%host, %port, "mail: SMTP transport configured");
+        Self::with_transport(Some(Transport::Real(transport)), from)
+    }
+
+    /// Shared struct-literal constructor — every `spawn()` branch (Disabled,
+    /// Capture, Real) and both env-free test constructors below funnel
+    /// through here, so a future field on `MailHandle` or a change to what
+    /// "disabled"/"capture" means needs editing in exactly ONE place
+    /// instead of N independent copies of the same literal (review finding
+    /// on #311).
+    fn with_transport(transport: Option<Transport>, from: String) -> Self {
         Self {
-            transport: Some(Arc::new(Transport::Real(transport))),
+            transport: transport.map(Arc::new),
             from,
-            captured,
+            captured: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -173,7 +166,16 @@ impl MailHandle {
 
         match transport.as_ref() {
             Transport::Capture => {
-                *self.captured.lock().expect("captured mutex poisoned") = Some(CapturedMail {
+                // #172 (CLAUDE.md): panic = "unwind" + CatchPanicLayer means
+                // a handler panic while holding this lock now poisons it
+                // instead of aborting the whole process — recover rather
+                // than `.expect()`, so one panic doesn't permanently 500
+                // every capture-mode send (login-link/code/invite) until
+                // restart.
+                *self
+                    .captured
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(CapturedMail {
                     to: to.to_string(),
                     subject: subject.to_string(),
                     text: text.to_string(),
@@ -192,10 +194,38 @@ impl MailHandle {
     /// The last message captured in `SMTP_TEST_MODE=capture`. `None`
     /// outside capture mode, or before any `send()` call.
     pub fn last_captured(&self) -> Option<CapturedMail> {
+        // Same poison-recovery reasoning as the lock in `send()` above.
         self.captured
             .lock()
-            .expect("captured mutex poisoned")
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    /// Deterministic, env-free constructor for tests that need a WORKING
+    /// handle without depending on ambient `SMTP_*` process env — mirrors
+    /// `PushHandle::from_base64_private_key`'s rationale (a caller in a
+    /// different module, e.g. `jobs::notifications`, must not race
+    /// `mail::tests`'s own `SMTP_*` env mutations). Always resolves to
+    /// capture mode: `send()` succeeds and records the message via
+    /// `last_captured()`, never touches the network.
+    pub fn capture() -> Self {
+        Self::with_transport(
+            Some(Transport::Capture),
+            "SpinBike <test@example.com>".to_string(),
+        )
+    }
+
+    /// Deterministic, env-free constructor for tests that need `send()` to
+    /// FAIL without any network I/O — always returns `Err(MailError::Disabled)`,
+    /// exactly like `spawn()` resolves when the required `SMTP_*` vars are
+    /// unset. Used by `jobs::notifications` tests to prove a failed send
+    /// never stamps the anti-spam ledger; the real SMTP-failure path is
+    /// already covered end-to-end by
+    /// `real_transport_send_error_surfaces_as_mail_error_send` below — which
+    /// specific `MailError` variant fires doesn't matter to a caller that
+    /// treats every `Err` from `send()` identically.
+    pub fn disabled() -> Self {
+        Self::with_transport(None, String::new())
     }
 }
 
@@ -460,6 +490,29 @@ mod tests {
             assert_eq!(h.last_captured(), None);
         })
         .await;
+    }
+
+    /// `MailHandle::capture()` (#311) must work WITHOUT touching env at
+    /// all — no `with_clean_env`/`set_var` here, unlike every other test in
+    /// this module, proving it is genuinely env-free.
+    #[tokio::test]
+    async fn capture_constructor_is_env_free_and_sends_ok() {
+        let h = MailHandle::capture();
+        let res = h.send("client@example.com", "s", "t", "h").await;
+        assert!(res.is_ok(), "got {res:?}");
+        assert_eq!(
+            h.last_captured().map(|c| c.to),
+            Some("client@example.com".to_string())
+        );
+    }
+
+    /// `MailHandle::disabled()` (#311) must always error, deterministically,
+    /// with no env involved.
+    #[tokio::test]
+    async fn disabled_constructor_is_env_free_and_always_errors() {
+        let h = MailHandle::disabled();
+        let res = h.send("client@example.com", "s", "t", "h").await;
+        assert!(matches!(res, Err(MailError::Disabled)), "got {res:?}");
     }
 
     /// Exercises the full capture round-trip and checks every field lands
