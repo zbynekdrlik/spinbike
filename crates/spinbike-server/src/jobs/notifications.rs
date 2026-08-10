@@ -1303,6 +1303,52 @@ mod tests {
         );
     }
 
+    /// Same guard as above, but for a subscription that EXISTS and is
+    /// FAILING this particular tick (a 500 from the push service) — the
+    /// channel choice is made on subscription EXISTENCE, never on whether
+    /// THIS TICK's delivery actually succeeded (`.claude/rules/
+    /// push-notifications.md`'s #311 section). Without this test, a future
+    /// regression that falls back to email whenever a push SEND fails
+    /// (rather than only when there's no subscription at all) would pass
+    /// `push_subscription_present_never_falls_back_to_email` above
+    /// unchanged (that test's mock always returns 201) and silently start
+    /// double-notifying customers with a flaky-but-present subscription.
+    #[tokio::test]
+    async fn push_subscription_failing_this_tick_still_never_falls_back_to_email() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST);
+                then.status(500);
+            })
+            .await;
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = MailHandle::capture();
+
+        let uid = seed_customer(&pool, "flaky@x", 1.0).await;
+        seed_subscription(&pool, uid, &server.url("/wpush/flaky")).await;
+        seed_topup(&pool, uid, 20.0).await;
+
+        let sent = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
+        assert_eq!(
+            sent, 0,
+            "the push send failed this tick, and a subscription still exists -> no email fallback"
+        );
+        assert!(
+            mail.last_captured().is_none(),
+            "a subscription that exists (even failing) must never trigger the email fallback"
+        );
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
+                .await
+                .unwrap()
+                .is_none(),
+            "a failed push send must not stamp the ledger either"
+        );
+    }
+
     /// Case 4: no push subscription, has an email, but the SMTP send
     /// itself FAILS -> the ledger is NOT stamped, so the very next tick
     /// (same day, no cooldown in the way since nothing was ever recorded)
