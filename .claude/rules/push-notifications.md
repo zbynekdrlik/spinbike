@@ -44,6 +44,23 @@ paths:
   last_notified_at, sent_count)`: `NOTIFY_COOLDOWN_DAYS = 7`,
   `MAX_NOTIFICATIONS_PER_EPISODE = 2`, re-armed (both columns reset) when the
   condition clears.
+- **E-mail FALLBACK (#311, owner decision variant (a), 2026-08-10): e-mail is
+  never a duplicate channel, only a fallback.** In `evaluate_reason`, the
+  choice of channel is made on whether the customer has ANY stored push
+  subscription **at all** (`db::push::list_subscriptions_for_user(...).is_empty()`)
+  — NOT on whether push delivery succeeded on THIS tick. A subscription that's
+  merely failing transiently still gets push-only treatment for as long as it
+  exists; the pre-existing `MAX_CONSECUTIVE_FAILURES` pruning is what
+  eventually moves a genuinely dead subscription's owner onto the e-mail path,
+  on a later tick — there is no separate "push failed this tick, try e-mail
+  too" branch, by design (would blur the "never both" guarantee). No stored
+  subscription + `users.email` present -> exactly one e-mail via
+  `MailHandle::send`, subject/text identical to the push title/body, html a
+  plain `<p>` wrap. No subscription + `users.email IS NULL` (typical for
+  card-migrated legacy accounts) -> skip silently, same as "no subscription"
+  always behaved. The ledger is stamped only on `Ok(())` from `send()` — a
+  failed SMTP send never stamps it, mirroring the push `SendOutcome::Sent`-only
+  stamping rule above.
 
 ## The two gotchas that decide how you can test it
 
@@ -76,6 +93,12 @@ used to panic inside `generic-array` — `push.rs` now length-validates first.
 
 Restart the unit and read the journal: `push: notified user_id=<id>
 reason="low_credit"` then `push: daily tick complete sent=<n>`. A tick that
-selected nobody logs `sent=0` with no `notified` line. Delete every synthetic
-row afterwards (`users`, `transactions`, `push_subscriptions`,
-`push_notify_log`) — prod holds real customer data.
+selected nobody logs `sent=0` with no `notified` line. A successful e-mail
+fallback send logs `mail: sent to=<addr> subject=<title>` (from
+`mail::send_via_transport`) right before the SAME `push: notified` line —
+`evaluate_reason` doesn't distinguish the log line by channel, only
+`mail`/`push`'s own modules do. A failed e-mail fallback logs `push: email
+fallback send failed, ledger not stamped (retried next tick)` with the
+underlying `MailError`. Delete every synthetic row afterwards (`users`,
+`transactions`, `push_subscriptions`, `push_notify_log`) — prod holds real
+customer data.
