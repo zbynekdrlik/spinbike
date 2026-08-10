@@ -57,11 +57,14 @@ test.describe('Customer header burger menu (#319)', () => {
         await expect(page.locator('.navbar-links a[href="/my/settings"]')).toHaveCount(0);
         await expect(page.locator('[data-testid="menu-logout"]')).toHaveCount(0);
 
-        // Materially shorter than the pre-#319 145px 3-row header.
+        // Materially shorter than the pre-#319 145px 3-row header — pinned
+        // close to the actual computed height (44px burger tap target +
+        // 2x12px .navbar padding = 68px) rather than a loose bound, so a
+        // future regression that re-wraps the header is caught precisely.
         const navHeight = await page
             .locator('.navbar')
             .evaluate((el) => el.getBoundingClientRect().height);
-        expect(navHeight).toBeLessThan(80);
+        expect(navHeight).toBeLessThan(75);
 
         assertCleanConsole(messages);
     });

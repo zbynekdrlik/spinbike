@@ -122,6 +122,12 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
         .expect("DeskReset context")
         .0;
 
+    // Derived once, reused by the inline-lang-toggle visibility gate and
+    // the Sheet mount gate below — both only need the boolean, unlike the
+    // main links block above which needs the full `AuthUser` (name, role
+    // branching).
+    let is_customer = move || matches!(user(), Some(u) if !u.role.is_staff_or_admin());
+
     // #319: the customer burger menu's open/close state. The Sheet below
     // is only ever mounted from this signal, and this signal is only ever
     // flipped from the customer branch's own toggle button — safe to gate
@@ -200,11 +206,7 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
                     // The language toggle stays inline for staff and the
                     // logged-out state; for a customer it moves inside the
                     // burger Sheet below instead (see #319).
-                    let show_inline = match user() {
-                        Some(u) => u.role.is_staff_or_admin(),
-                        None => true,
-                    };
-                    if show_inline {
+                    if !is_customer() {
                         view! {
                             <button
                                 class="btn btn--compact btn--ghost lang-toggle"
@@ -228,8 +230,7 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
         // overlay doesn't need to live inside the sticky header it's
         // triggered from).
         {move || {
-            let is_customer = matches!(user(), Some(u) if !u.role.is_staff_or_admin());
-            if is_customer && menu_open.get() {
+            if is_customer() && menu_open.get() {
                 view! {
                     <Sheet
                         id=MENU_SHEET_ID.to_string()
@@ -237,10 +238,20 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
                         title=i18n::t(lang.get(), "nav_more").to_string()
                         on_close=on_close_menu
                     >
+                        // These 3 links are PLAIN anchors — matches the rest
+                        // of this app's convention (see e.g. adaptive_nav.rs's
+                        // own more-sheet Settings link): a full navigation
+                        // reload remounts the whole app, so `menu_open`
+                        // resets for free. Still close it explicitly on
+                        // click, defensively — never rely on a full-reload
+                        // side effect alone to close a dialog, in case a
+                        // future change ever swaps these for `leptos_router`'s
+                        // `<A>` (client-side nav, no remount).
                         <a
                             href="/my/bookings"
                             class="btn btn--block btn--ghost"
                             data-testid="menu-my-bookings"
+                            on:click=move |_| set_menu_open.set(false)
                         >
                             {move || i18n::t(lang.get(), "my_bookings")}
                         </a>
@@ -248,6 +259,7 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
                             href="/my/balance"
                             class="btn btn--block btn--ghost"
                             data-testid="menu-balance"
+                            on:click=move |_| set_menu_open.set(false)
                         >
                             {move || i18n::t(lang.get(), "balance")}
                         </a>
@@ -255,6 +267,7 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
                             href="/my/settings"
                             class="btn btn--block btn--ghost"
                             data-testid="menu-settings"
+                            on:click=move |_| set_menu_open.set(false)
                         >
                             {move || i18n::t(lang.get(), "my_settings")}
                         </a>
