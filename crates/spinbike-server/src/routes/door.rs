@@ -29,6 +29,7 @@ use std::time::{Duration, Instant};
 
 use crate::AppState;
 use crate::auth::{AuthUser, StaffUser};
+use crate::db::users;
 use crate::error::ApiError;
 use crate::ewelink::EwelinkState;
 use crate::rate_limit::{RateLimitConfig, SlidingWindowLimiter};
@@ -241,6 +242,12 @@ async fn open(
             return Err(internal_error("no active single_entry service configured"));
         }
     };
+    // Round ONCE and reuse everywhere (#326) — services.default_price isn't
+    // guaranteed to be a clean 2-decimal value (admin.rs writes it with no
+    // rounding), and this was the only money-mutating write in the codebase
+    // with no round_cents()/ROUND(...,2) anywhere on its path. Same
+    // round-once-reuse convention as payments.rs / db::update_credit.
+    let single_entry_price = users::round_cents(single_entry_price);
 
     // 5. Build the row to insert (action/service_id/amount/note).
     let (action, service_id_opt, amount, note): (&str, Option<i64>, f64, String) = if n == 0 {
@@ -288,13 +295,17 @@ async fn open(
             ("visit", Some(single_entry_id), 0.0, "door: 1st".to_string())
         } else {
             // No pass — charge single_entry price and deduct from user.credit.
-            sqlx::query("UPDATE users SET credit = credit - ? WHERE id = ?")
+            // ROUND(...,2) in SQL is defense-in-depth against float drift
+            // already sitting in a pre-existing services.default_price value
+            // (mirrors payments.rs's charge/storno UPDATE statements) — the
+            // Rust-side price is already rounded above.
+            sqlx::query("UPDATE users SET credit = ROUND(credit - ?, 2) WHERE id = ?")
                 .bind(single_entry_price)
                 .bind(user_id)
                 .execute(&mut *tx)
                 .await
                 .map_err(internal_error)?;
-            credit -= single_entry_price;
+            credit = users::round_cents(credit - single_entry_price);
             charged = true;
             (
                 "charge",
