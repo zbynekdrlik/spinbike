@@ -21,7 +21,7 @@ pub use door_button::DoorButton;
 pub use install_prompt::{InAppBrowserBanner, InstallPrompt};
 pub use login_link_form::LoginLinkForm;
 pub use persistent_toggles::PersistentToggles;
-pub use push_toggle::PushToggle;
+pub use push_toggle::{PushToggle, PushToggleSurface};
 pub use segmented::Segmented;
 pub use sheet::Sheet;
 pub use upcoming_classes::UpcomingClasses;

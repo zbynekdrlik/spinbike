@@ -317,3 +317,90 @@ export async function activateUniqueCard(
     const result = await createUniqueUser(token, initialCredit, prefix);
     return { barcode: result.card_code, lastName: result.name.split(' ').slice(1).join('') };
 }
+
+/**
+ * A direct-login customer account (email + password) via `/api/test/seed-account`
+ * — distinct from `createUniqueUser` above, which creates an admin-managed
+ * CARD user via `/api/users` with no login credentials of its own. Shared
+ * by `push-notifications.spec.ts` and `my-settings.spec.ts` (#316) — both
+ * need a real customer session to log into via `loginViaAPI`.
+ */
+export interface SeededCustomer {
+    user_id: number;
+    email: string;
+    password: string;
+}
+
+export async function seedCustomerAccount(baseURL: string, prefix: string): Promise<SeededCustomer> {
+    const suffix = uniqueLetterSuffix();
+    const email = `${prefix}-${suffix}@test.local`;
+    const password = `Pw-${suffix}`;
+    const resp = await fetch(`${baseURL}/api/test/seed-account`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, name: `${prefix} ${suffix}`, role: 'customer' }),
+    });
+    if (!resp.ok) {
+        throw new Error(`seed-account failed: ${resp.status} ${await resp.text()}`);
+    }
+    const { user_id } = await resp.json();
+    return { user_id, email, password };
+}
+
+/**
+ * Shared push-notification browser-API stubs (#264/#303/#305, factored out
+ * for #316 so `my-settings.spec.ts` doesn't duplicate them). See
+ * `push-notifications.spec.ts`'s own module doc for WHY these three specific
+ * things are stubbed (external push-service calls; a confirmed Playwright/
+ * Chromium `Notification.permission` getter bug) — that reasoning is
+ * unchanged, only the location moved.
+ */
+export const PUSH_FAKE_KEYS = {
+    p256dh:
+        'BH1HTeKM7-NwaLGHEqxeu2IamQaVVLkcsFHPIHmsCnqxcBHPQBprF41bEMOr3O1hUQ2jU1opNEm1F_lZV_sxMP8',
+    auth: 'sBXU5_tIYz-5w7G2B25BEw',
+};
+
+/** Must be on the server's push-endpoint allowlist (routes/push.rs's ALLOWED_PUSH_HOSTS). */
+export function pushFakeEndpoint(): string {
+    return `https://fcm.googleapis.com/fcm/send/e2e-${uniqueLetterSuffix()}`;
+}
+
+/**
+ * Permission already GRANTED + `PushManager.prototype.subscribe` stubbed —
+ * the "auto-subscribe to On" environment.
+ */
+export async function stubPushGrantedAndSubscribable(page: Page, endpoint: string): Promise<void> {
+    await page.addInitScript(({ ep, keys }: { ep: string; keys: typeof PUSH_FAKE_KEYS }) => {
+        if (typeof (window as unknown as { Notification?: unknown }).Notification !== 'undefined') {
+            Object.defineProperty(Notification, 'permission', {
+                configurable: true,
+                get: () => 'granted',
+            });
+        }
+        if (typeof (window as unknown as { PushManager?: unknown }).PushManager === 'undefined') {
+            return;
+        }
+        const pm = (window as unknown as { PushManager: { prototype: Record<string, unknown> } }).PushManager;
+        pm.prototype.subscribe = function subscribe() {
+            return Promise.resolve({
+                endpoint: ep,
+                toJSON() {
+                    return { endpoint: ep, keys };
+                },
+            });
+        };
+    }, { ep: endpoint, keys: PUSH_FAKE_KEYS });
+}
+
+/** Permission genuinely `"denied"` (no `context.grantPermissions` call needed) — the Blocked state. */
+export async function stubPushDenied(page: Page): Promise<void> {
+    await page.addInitScript(() => {
+        if (typeof (window as unknown as { Notification?: unknown }).Notification !== 'undefined') {
+            Object.defineProperty(Notification, 'permission', {
+                configurable: true,
+                get: () => 'denied',
+            });
+        }
+    });
+}

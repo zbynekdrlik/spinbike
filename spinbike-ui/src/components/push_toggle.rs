@@ -95,6 +95,24 @@ enum PushState {
     On,
 }
 
+/// Where a `PushToggle` instance is mounted (#316) — decides which
+/// [`PushState`]s render at all. See [`push_toggle_visible`] for the exact
+/// per-surface rule; the subscribe/unsubscribe/self-heal state machine
+/// below is completely unaffected by this — it only gates the final render.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PushToggleSurface {
+    /// `/my/balance` — only the actionable states render (`Off`, so the
+    /// customer can turn it on; `Blocked`, which carries the explanation
+    /// of why it can't be turned on). `On`/`Busy` render nothing here —
+    /// once notifications are already on (or a click is mid-flight) there
+    /// is nothing left to do on the customer's main screen.
+    MainBalance,
+    /// `/my/settings` — the full row, every state, exactly like the
+    /// original (pre-#316) `/my/balance` behavior. This is where the
+    /// On -> Off switch click actually lives now.
+    Settings,
+}
+
 #[derive(Deserialize)]
 struct PushConfigResp {
     enabled: bool,
@@ -441,8 +459,25 @@ async fn unsubscribe_flow() -> Result<Option<String>, ()> {
     Ok(endpoint)
 }
 
+/// Whether the toggle row should render at all, given WHERE it is mounted
+/// and the current push state (#316). Pure decision function, extracted so
+/// it's unit-testable without mounting the component into a DOM — see the
+/// `visibility_tests` module below.
+///
+/// RED (this commit): still the OLD, surface-blind rule everywhere — `_surface`
+/// is accepted but ignored. The `MainBalance`-only restriction lands in the
+/// #316 GREEN commit; until then this matches today's shipped behavior
+/// exactly (no user-visible regression from introducing the type/wiring
+/// alone).
+fn push_toggle_visible(_surface: PushToggleSurface, state: PushState) -> bool {
+    !matches!(
+        state,
+        PushState::Loading | PushState::Unsupported | PushState::Disabled
+    )
+}
+
 #[component]
-pub fn PushToggle() -> impl IntoView {
+pub fn PushToggle(surface: PushToggleSurface) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     let (state, set_state) = signal(PushState::Loading);
     let (public_key, set_public_key) = signal(None::<String>);
@@ -668,15 +703,18 @@ pub fn PushToggle() -> impl IntoView {
     };
 
     view! {
-        {move || match state.get() {
-            PushState::Loading | PushState::Unsupported | PushState::Disabled => ().into_any(),
-            state => {
-                let testid = match state {
-                    PushState::On => "push-toggle-on",
-                    PushState::Blocked => "push-toggle-blocked",
-                    PushState::Busy => "push-toggle-busy",
-                    _ => "push-toggle-off",
-                };
+        {move || {
+            let state_now = state.get();
+            if !push_toggle_visible(surface, state_now) {
+                return ().into_any();
+            }
+            let state = state_now;
+            let testid = match state {
+                PushState::On => "push-toggle-on",
+                PushState::Blocked => "push-toggle-blocked",
+                PushState::Busy => "push-toggle-busy",
+                _ => "push-toggle-off",
+            };
                 let checked = state == PushState::On;
                 let disabled = matches!(state, PushState::Busy | PushState::Blocked);
                 let busy = state == PushState::Busy;
@@ -744,7 +782,81 @@ pub fn PushToggle() -> impl IntoView {
                     </>
                 }
                 .into_any()
-            }
         }}
+    }
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+    use wasm_bindgen_test::*;
+
+    // No wasm_bindgen_test_configure! — CI uses wasm-pack test --node (not browser).
+
+    // #316: on the customer's main screen, the row must vanish once there's
+    // nothing actionable left — RED today (2026-08-10): push_toggle_visible
+    // still ignores `surface` entirely, so this asserts the future/correct
+    // behavior and fails against the current stub body.
+    #[wasm_bindgen_test]
+    fn main_balance_hides_on() {
+        assert!(
+            !push_toggle_visible(PushToggleSurface::MainBalance, PushState::On),
+            "On is not actionable on the main screen — the row must not render"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn main_balance_hides_busy() {
+        assert!(
+            !push_toggle_visible(PushToggleSurface::MainBalance, PushState::Busy),
+            "a mid-flight click isn't actionable either — the row must not render"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn main_balance_shows_off() {
+        assert!(
+            push_toggle_visible(PushToggleSurface::MainBalance, PushState::Off),
+            "Off is actionable (turn it on) — the row must render"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn main_balance_shows_blocked() {
+        assert!(
+            push_toggle_visible(PushToggleSurface::MainBalance, PushState::Blocked),
+            "Blocked carries the explanation of why it can't be turned on — must render"
+        );
+    }
+
+    // Settings surface behavior is UNCHANGED from before #316 — every state
+    // except the three that already render nothing everywhere.
+    #[wasm_bindgen_test]
+    fn settings_shows_every_actionable_state() {
+        for state in [
+            PushState::Off,
+            PushState::Busy,
+            PushState::On,
+            PushState::Blocked,
+        ] {
+            assert!(
+                push_toggle_visible(PushToggleSurface::Settings, state),
+                "{state:?} must render on the settings surface"
+            );
+        }
+    }
+
+    #[wasm_bindgen_test]
+    fn settings_hides_loading_unsupported_disabled() {
+        for state in [
+            PushState::Loading,
+            PushState::Unsupported,
+            PushState::Disabled,
+        ] {
+            assert!(
+                !push_toggle_visible(PushToggleSurface::Settings, state),
+                "{state:?} must render nothing on either surface"
+            );
+        }
     }
 }
