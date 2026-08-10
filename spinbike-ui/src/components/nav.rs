@@ -4,6 +4,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::auth;
 use crate::components::Sheet;
+use crate::components::sheet::FOCUSABLE_SELECTOR;
 use crate::i18n::{self, Lang};
 
 /// DOM id for the customer burger's disclosure panel (`Sheet`) — the
@@ -43,7 +44,7 @@ fn focus_first_in(container_selector: &'static str) {
         for _ in 0..20 {
             if let Ok(Some(container)) = doc.query_selector(container_selector) {
                 let target = container
-                    .query_selector("a, button, input, select, textarea, [tabindex]")
+                    .query_selector(FOCUSABLE_SELECTOR)
                     .ok()
                     .flatten()
                     .unwrap_or(container);
