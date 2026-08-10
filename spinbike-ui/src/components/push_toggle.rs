@@ -101,11 +101,17 @@ enum PushState {
 /// below is completely unaffected by this — it only gates the final render.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PushToggleSurface {
-    /// `/my/balance` — only the actionable states render (`Off`, so the
-    /// customer can turn it on; `Blocked`, which carries the explanation
-    /// of why it can't be turned on). `On`/`Busy` render nothing here —
-    /// once notifications are already on (or a click is mid-flight) there
-    /// is nothing left to do on the customer's main screen.
+    /// `/my/balance` — `Off` (so the customer can turn it on), `Blocked`
+    /// (carries the explanation of why it can't be turned on), and `Busy`
+    /// (the in-flight subscribe the customer's own `Off -> tap` just
+    /// started — review finding, post-initial-implementation: hiding the
+    /// row on `Busy` too made the switch the customer just tapped vanish
+    /// instantly with no spinner and no confirmation, reading as "the app
+    /// ate my tap"; keeping it visible while busy is what makes the
+    /// SUBSEQUENT disappearance (once `On` settles and hides) read as
+    /// confirmation instead of a glitch). Only `On` renders nothing on the
+    /// main screen — once notifications are genuinely on, there is nothing
+    /// left to do here.
     MainBalance,
     /// `/my/settings` — the full row, every state, exactly like the
     /// original (pre-#316) `/my/balance` behavior. This is where the
@@ -467,11 +473,15 @@ async fn unsubscribe_flow() -> Result<Option<String>, ()> {
 /// `Settings` keeps the original (pre-#316) rule: render for every state
 /// except the three that already render nothing everywhere (`Loading` — no
 /// answer yet; `Unsupported`/`Disabled` — the feature isn't available at
-/// all). `MainBalance` additionally restricts to only the two ACTIONABLE
-/// states: `Off` (the customer can turn it on) and `Blocked` (carries the
-/// explanation of why they can't). `On`/`Busy` render nothing there —
-/// once notifications are already on, or a toggle click is mid-flight,
-/// there is nothing left to do on the customer's main screen.
+/// all). `MainBalance` renders `Off` (the customer can turn it on),
+/// `Blocked` (carries the explanation of why they can't), AND `Busy` (the
+/// in-flight subscribe the customer's own tap just started — review
+/// finding: hiding the row here too made the switch vanish instantly with
+/// no spinner, reading as a dropped tap; keeping it visible while busy is
+/// what makes the row's SUBSEQUENT disappearance, once `On` settles, read
+/// as confirmation rather than a glitch). Only `On` renders nothing on the
+/// main screen — once notifications are genuinely on, there is nothing
+/// left to do here.
 fn push_toggle_visible(surface: PushToggleSurface, state: PushState) -> bool {
     match surface {
         PushToggleSurface::Settings => !matches!(
@@ -479,7 +489,7 @@ fn push_toggle_visible(surface: PushToggleSurface, state: PushState) -> bool {
             PushState::Loading | PushState::Unsupported | PushState::Disabled
         ),
         PushToggleSurface::MainBalance => {
-            matches!(state, PushState::Off | PushState::Blocked)
+            matches!(state, PushState::Off | PushState::Busy | PushState::Blocked)
         }
     }
 }
@@ -812,11 +822,14 @@ mod visibility_tests {
         );
     }
 
+    // Review finding (post-initial-implementation): hiding Busy too made a
+    // customer's own Off -> tap vanish the row instantly with no spinner —
+    // "the app ate my tap". RED against the version that hid it.
     #[wasm_bindgen_test]
-    fn main_balance_hides_busy() {
+    fn main_balance_shows_busy() {
         assert!(
-            !push_toggle_visible(PushToggleSurface::MainBalance, PushState::Busy),
-            "a mid-flight click isn't actionable either — the row must not render"
+            push_toggle_visible(PushToggleSurface::MainBalance, PushState::Busy),
+            "a customer's own in-flight subscribe must stay visible (disabled/busy), not vanish"
         );
     }
 
