@@ -115,6 +115,34 @@ mod tests {
         (uid, tid)
     }
 
+    /// Regression test for #327: `sweep()` must derive "today" from the
+    /// shared, tz-database-driven `crate::util::today_bratislava()` helper,
+    /// never from `chrono::Local::now()` (which reads the server process's
+    /// OS/TZ config — UTC on the prod systemd unit, drifting from real
+    /// Bratislava local time around midnight; the #205/#222 bug class).
+    ///
+    /// This is a source-level guard rather than a behavioral one: both this
+    /// dev box and the CI runner already run with `TZ=Europe/Bratislava`, so
+    /// `Local::now()` and `today_bratislava()` agree at test time regardless
+    /// of which one `sweep()` calls — the divergence only exists on prod's
+    /// UTC-configured host and can't be reproduced behaviorally here.
+    #[test]
+    fn sweep_computes_today_via_shared_bratislava_helper() {
+        let src = include_str!("materialiser.rs");
+        let production_src = src
+            .split("#[cfg(test)]\nmod tests {")
+            .next()
+            .expect("file always has content before its own test module marker");
+        assert!(
+            !production_src.contains("Local::now()"),
+            "sweep() must not call chrono::Local::now() directly (OS-TZ dependent — #327)"
+        );
+        assert!(
+            production_src.contains("crate::util::today_bratislava()"),
+            "sweep() must derive today via the shared crate::util::today_bratislava() helper (#327)"
+        );
+    }
+
     #[tokio::test]
     async fn sweep_materialises_future_bookings() {
         let pool = create_memory_pool().await.unwrap();
