@@ -197,6 +197,38 @@ impl MailHandle {
             .expect("captured mutex poisoned")
             .clone()
     }
+
+    /// Deterministic, env-free constructor for tests that need a WORKING
+    /// handle without depending on ambient `SMTP_*` process env — mirrors
+    /// `PushHandle::from_base64_private_key`'s rationale (a caller in a
+    /// different module, e.g. `jobs::notifications`, must not race
+    /// `mail::tests`'s own `SMTP_*` env mutations). Always resolves to
+    /// capture mode: `send()` succeeds and records the message via
+    /// `last_captured()`, never touches the network.
+    pub fn capture() -> Self {
+        Self {
+            transport: Some(Arc::new(Transport::Capture)),
+            from: "SpinBike <test@example.com>".to_string(),
+            captured: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    /// Deterministic, env-free constructor for tests that need `send()` to
+    /// FAIL without any network I/O — always returns `Err(MailError::Disabled)`,
+    /// exactly like `spawn()` resolves when the required `SMTP_*` vars are
+    /// unset. Used by `jobs::notifications` tests to prove a failed send
+    /// never stamps the anti-spam ledger; the real SMTP-failure path is
+    /// already covered end-to-end by
+    /// `real_transport_send_error_surfaces_as_mail_error_send` below — which
+    /// specific `MailError` variant fires doesn't matter to a caller that
+    /// treats every `Err` from `send()` identically.
+    pub fn disabled() -> Self {
+        Self {
+            transport: None,
+            from: String::new(),
+            captured: Arc::new(Mutex::new(None)),
+        }
+    }
 }
 
 /// Build a text+HTML alternative message. Pure/network-free — errors only
@@ -460,6 +492,29 @@ mod tests {
             assert_eq!(h.last_captured(), None);
         })
         .await;
+    }
+
+    /// `MailHandle::capture()` (#311) must work WITHOUT touching env at
+    /// all — no `with_clean_env`/`set_var` here, unlike every other test in
+    /// this module, proving it is genuinely env-free.
+    #[tokio::test]
+    async fn capture_constructor_is_env_free_and_sends_ok() {
+        let h = MailHandle::capture();
+        let res = h.send("client@example.com", "s", "t", "h").await;
+        assert!(res.is_ok(), "got {res:?}");
+        assert_eq!(
+            h.last_captured().map(|c| c.to),
+            Some("client@example.com".to_string())
+        );
+    }
+
+    /// `MailHandle::disabled()` (#311) must always error, deterministically,
+    /// with no env involved.
+    #[tokio::test]
+    async fn disabled_constructor_is_env_free_and_always_errors() {
+        let h = MailHandle::disabled();
+        let res = h.send("client@example.com", "s", "t", "h").await;
+        assert!(matches!(res, Err(MailError::Disabled)), "got {res:?}");
     }
 
     /// Exercises the full capture round-trip and checks every field lands

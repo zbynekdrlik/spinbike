@@ -59,6 +59,7 @@ use chrono::{Days, NaiveDate};
 use sqlx::SqlitePool;
 
 use crate::db;
+use crate::mail::MailHandle;
 use crate::push::{PushHandle, SendOutcome};
 
 /// Below this many EUR of credit, a customer can no longer afford their
@@ -109,20 +110,33 @@ pub const DAILY_RUN_HOUR: u32 = 9;
 struct Ctx<'a> {
     pool: &'a SqlitePool,
     push: &'a PushHandle,
+    /// #311: e-mail FALLBACK channel — used only when a customer has no
+    /// stored push subscription at all (see `evaluate_reason`).
+    mail: &'a MailHandle,
     today: NaiveDate,
 }
 
 /// Run one evaluation pass. Returns the number of notifications actually
-/// sent (summed across both reasons).
-pub async fn tick(pool: &SqlitePool, push: &PushHandle) -> Result<usize> {
+/// sent (summed across both reasons, across both channels).
+pub async fn tick(pool: &SqlitePool, push: &PushHandle, mail: &MailHandle) -> Result<usize> {
     let today = crate::util::today_bratislava();
-    tick_as_of(pool, push, today).await
+    tick_as_of(pool, push, mail, today).await
 }
 
 /// `today` is injected so tests are deterministic — mirrors
 /// `charger::tick`/`tick_as_of`.
-pub async fn tick_as_of(pool: &SqlitePool, push: &PushHandle, today: NaiveDate) -> Result<usize> {
-    let ctx = Ctx { pool, push, today };
+pub async fn tick_as_of(
+    pool: &SqlitePool,
+    push: &PushHandle,
+    mail: &MailHandle,
+    today: NaiveDate,
+) -> Result<usize> {
+    let ctx = Ctx {
+        pool,
+        push,
+        mail,
+        today,
+    };
     let mut sent = 0usize;
 
     // ---- low_credit ----
@@ -300,6 +314,12 @@ pub async fn tick_as_of(pool: &SqlitePool, push: &PushHandle, today: NaiveDate) 
 /// check, send to every stored subscription, prune gone endpoints, and
 /// stamp the ledger only after an ACTUAL successful send. Returns `true`
 /// iff at least one subscription was successfully notified.
+///
+/// TODO(#311): `ctx.mail` is threaded through but not used yet — this
+/// function will grow an e-mail FALLBACK branch (customer has no push
+/// subscription at all -> try e-mail instead) in the next commit. The new
+/// `#311` tests in `mod tests` below already assert that behavior; they
+/// currently fail (RED) because it isn't implemented yet.
 async fn evaluate_reason(
     ctx: &Ctx<'_>,
     user_id: i64,
@@ -386,6 +406,7 @@ async fn evaluate_reason(
 mod tests {
     use super::*;
     use crate::db::{create_memory_pool, run_migrations, users};
+    use crate::mail::MailHandle;
     use crate::push::{PushHandle, TEST_AUTH_B64, TEST_P256DH_B64, TEST_VAPID_PRIVATE_KEY_B64};
     use httpmock::MockServer;
 
@@ -393,6 +414,27 @@ mod tests {
         users::create_user(
             pool,
             Some(email),
+            None,
+            "Test",
+            None,
+            None,
+            None,
+            "customer",
+            Some(credit),
+            None,
+            None,
+        )
+        .await
+        .unwrap()
+    }
+
+    /// #311: a legacy card-migrated account with NO email on file at all —
+    /// the owner's decision says this must skip silently (neither push nor
+    /// email), never error.
+    async fn seed_customer_no_email(pool: &SqlitePool, credit: f64) -> i64 {
+        users::create_user(
+            pool,
+            None,
             None,
             "Test",
             None,
@@ -473,11 +515,12 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
 
         let uid = seed_customer(&pool, "notopup@x", 1.0).await;
         seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
 
-        let sent = tick_as_of(&pool, &push, test_today()).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
         assert_eq!(sent, 0, "no top-up history -> never a low-credit push");
     }
 
@@ -493,13 +536,14 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
 
         // Last top-up 10 EUR (below the 20 EUR gate) + credit 1 EUR.
         let uid = seed_customer(&pool, "single-entry@x", 1.0).await;
         seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
         seed_topup(&pool, uid, 10.0).await;
 
-        let sent = tick_as_of(&pool, &push, test_today()).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
         assert_eq!(sent, 0, "last top-up below MIN_LAST_TOPUP_EUR -> no push");
     }
 
@@ -515,13 +559,14 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
 
         // Last top-up EXACTLY 20 EUR (the boundary is >=, not >) + credit 1 EUR.
         let uid = seed_customer(&pool, "regular@x", 1.0).await;
         seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
         seed_topup(&pool, uid, 20.0).await;
 
-        let sent = tick_as_of(&pool, &push, test_today()).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
         assert_eq!(sent, 1, "last top-up == MIN_LAST_TOPUP_EUR (>=) -> pushes");
     }
 
@@ -537,6 +582,7 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
 
         // An OLD large top-up, then a RECENT small one — must gate on the
         // most recent, not the largest or a sum/average (owner decision:
@@ -560,7 +606,7 @@ mod tests {
         .await
         .unwrap();
 
-        let sent = tick_as_of(&pool, &push, test_today()).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
         assert_eq!(
             sent, 0,
             "most recent top-up (5 EUR) is below the gate, even though an older one was 100 EUR"
@@ -581,12 +627,13 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
 
         let uid = seed_customer(&pool, "atthreshold@x", LOW_CREDIT_THRESHOLD_EUR).await;
         seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
         seed_topup(&pool, uid, MIN_LAST_TOPUP_EUR).await;
 
-        let sent = tick_as_of(&pool, &push, test_today()).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
         assert_eq!(sent, 1, "credit == threshold (<=) must still notify");
     }
 
@@ -602,12 +649,13 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
 
         let uid = seed_customer(&pool, "abovethreshold@x", LOW_CREDIT_THRESHOLD_EUR + 0.01).await;
         seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
         seed_topup(&pool, uid, MIN_LAST_TOPUP_EUR).await;
 
-        let sent = tick_as_of(&pool, &push, test_today()).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
         assert_eq!(sent, 0, "credit just above the threshold must not notify");
     }
 
@@ -625,6 +673,7 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
         let today = test_today();
 
         // Prod shape (#306): credit is 0 BY DESIGN while a pass covers every
@@ -641,7 +690,7 @@ mod tests {
         )
         .await;
 
-        let sent = tick_as_of(&pool, &push, today).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, today).await.unwrap();
         assert_eq!(
             sent, 0,
             "an active monthly pass (valid another 10 days) must suppress low_credit"
@@ -666,6 +715,7 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
         let today = test_today();
 
         // Same customer shape as above, but the pass expired YESTERDAY —
@@ -682,7 +732,7 @@ mod tests {
         )
         .await;
 
-        let sent = tick_as_of(&pool, &push, today).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, today).await.unwrap();
         assert_eq!(
             sent, 1,
             "low_credit must unlock the day after the pass has expired"
@@ -707,6 +757,7 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
         let today = test_today();
 
         // Boundary: valid_until == today — the pass still covers the whole
@@ -719,7 +770,7 @@ mod tests {
         seed_topup(&pool, uid, 35.0).await;
         seed_pass(&pool, uid, &today.format("%Y-%m-%d").to_string()).await;
 
-        let sent = tick_as_of(&pool, &push, today).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, today).await.unwrap();
         assert_eq!(
             sent, 1,
             "pass_expiring itself still legitimately fires on the expiry day"
@@ -755,11 +806,12 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
 
         // A user with no qualifying condition at all: tick() must return
         // 0 — proves it isn't hardcoded to always report a send.
         seed_customer(&pool, "realtick-clean@x", 100.0).await;
-        let sent = tick(&pool, &push).await.unwrap();
+        let sent = tick(&pool, &push, &mail).await.unwrap();
         assert_eq!(sent, 0, "tick() must report 0 when nothing qualifies");
 
         // Now a genuinely qualifying user: tick() must return 1 — proves
@@ -768,7 +820,7 @@ mod tests {
         seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
         seed_topup(&pool, uid, 20.0).await;
 
-        let sent = tick(&pool, &push).await.unwrap();
+        let sent = tick(&pool, &push, &mail).await.unwrap();
         assert_eq!(sent, 1, "tick() must actually evaluate and send");
     }
 
@@ -786,12 +838,13 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
 
         let uid = seed_customer(&pool, "low@x", 1.0).await;
         seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
         seed_topup(&pool, uid, 20.0).await;
 
-        let sent = tick_as_of(&pool, &push, test_today()).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
         assert_eq!(
             sent, 1,
             "condition true, no prior notification -> must send"
@@ -804,7 +857,7 @@ mod tests {
 
         // Same day, condition still true, but inside the 7-day cooldown ->
         // no second send.
-        let sent_again = tick_as_of(&pool, &push, test_today()).await.unwrap();
+        let sent_again = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
         assert_eq!(sent_again, 0, "must respect the cooldown");
         assert_eq!(mock.calls_async().await, 1);
     }
@@ -824,6 +877,7 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
         let today = test_today();
 
         // Six days ago -> still inside the cooldown, no resend.
@@ -852,7 +906,7 @@ mod tests {
         .await
         .unwrap();
 
-        let sent = tick_as_of(&pool, &push, today).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, today).await.unwrap();
         assert_eq!(sent, 1, "only the 7-day-old row must resend");
         assert_eq!(mock.calls_async().await, 1);
     }
@@ -876,6 +930,7 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
 
         let uid = seed_customer(&pool, "sequence@x", 1.0).await;
         seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
@@ -960,12 +1015,13 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
 
         let uid = seed_customer(&pool, "reup@x", 1.0).await;
         seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
         seed_topup(&pool, uid, 20.0).await;
 
-        let sent = tick_as_of(&pool, &push, test_today()).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
         assert_eq!(sent, 1);
 
         // Customer tops up — condition clears.
@@ -975,7 +1031,7 @@ mod tests {
             .await
             .unwrap();
 
-        let sent_after_topup = tick_as_of(&pool, &push, test_today()).await.unwrap();
+        let sent_after_topup = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
         assert_eq!(sent_after_topup, 0);
         assert!(
             db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
@@ -992,7 +1048,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let sent_again = tick_as_of(&pool, &push, test_today()).await.unwrap();
+        let sent_again = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
         assert_eq!(sent_again, 1, "must re-notify immediately after re-arm");
     }
 
@@ -1008,12 +1064,13 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
 
         let uid = seed_customer(&pool, "gone@x", 1.0).await;
         seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
         seed_topup(&pool, uid, 20.0).await;
 
-        let sent = tick_as_of(&pool, &push, test_today()).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
         assert_eq!(sent, 0, "a Gone endpoint is never counted as a real send");
         assert!(
             !db::push::has_subscription(&pool, uid).await.unwrap(),
@@ -1047,42 +1104,192 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
 
         let uid = seed_customer(&pool, "failing@x", 1.0).await;
         seed_subscription(&pool, uid, &server.url("/wpush/a")).await;
         seed_topup(&pool, uid, 20.0).await;
 
         for _ in 0..(MAX_CONSECUTIVE_FAILURES - 1) {
-            tick_as_of(&pool, &push, test_today()).await.unwrap();
+            tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
         }
         assert!(
             db::push::has_subscription(&pool, uid).await.unwrap(),
             "must not prune before reaching the threshold"
         );
 
-        tick_as_of(&pool, &push, test_today()).await.unwrap();
+        tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
         assert!(
             !db::push::has_subscription(&pool, uid).await.unwrap(),
             "must prune once failure_count reaches MAX_CONSECUTIVE_FAILURES"
         );
     }
 
+    /// No push subscription, and the e-mail FALLBACK channel itself is
+    /// unconfigured/failing (`MailHandle::disabled()`, e.g. SMTP_* env
+    /// missing on this deployment) — still nothing sent, no error, no
+    /// ledger write. Predates #311 (the customer used to just have no
+    /// subscription); still exercises a real code path after #311's
+    /// e-mail fallback landed, since a disabled mail transport always
+    /// errors on `send()` — see `email_fallback_send_failure_does_not_stamp_the_ledger`
+    /// below for the same shape spelled out explicitly as its own case.
     #[tokio::test]
     async fn no_subscription_no_send_no_ledger_write() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
 
         let uid = seed_customer(&pool, "nosub@x", 1.0).await;
         seed_topup(&pool, uid, 20.0).await;
 
-        let sent = tick_as_of(&pool, &push, test_today()).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
         assert_eq!(sent, 0);
         assert!(
             db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
                 .await
                 .unwrap()
                 .is_none()
+        );
+    }
+
+    // ── #311: e-mail fallback (owner decision, variant (a) — 2026-08-10) ───
+
+    /// Case 1: no push subscription at all, but the customer HAS an email
+    /// on file -> exactly one e-mail is sent, zero pushes.
+    #[tokio::test]
+    async fn no_push_subscription_with_email_sends_exactly_one_email() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = MailHandle::capture();
+
+        let uid = seed_customer(&pool, "fallback@x", 1.0).await;
+        seed_topup(&pool, uid, 20.0).await;
+        // Deliberately NO seed_subscription() call — no push subscription.
+
+        let sent = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
+        assert_eq!(
+            sent, 1,
+            "no push subscription + has email -> exactly 1 send"
+        );
+
+        let captured = mail
+            .last_captured()
+            .expect("the low_credit e-mail must have been sent via MailHandle");
+        assert_eq!(captured.to, "fallback@x");
+        assert!(
+            captured.subject.to_lowercase().contains("kredit"),
+            "subject should mention the low-credit reason, got {:?}",
+            captured.subject
+        );
+
+        let log = db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
+            .await
+            .unwrap()
+            .expect("a successful e-mail send must stamp the ledger exactly like a push send");
+        assert_eq!(log.sent_count, 1);
+    }
+
+    /// Case 2: no push subscription AND `users.email IS NULL` (the typical
+    /// legacy card-migrated account) -> nothing sent, no error, no ledger
+    /// write. Uses a WORKING mail transport (`capture()`) so a false pass
+    /// (mail unavailable, not "no address") is ruled out.
+    #[tokio::test]
+    async fn no_push_subscription_and_no_email_sends_nothing() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = MailHandle::capture();
+
+        let uid = seed_customer_no_email(&pool, 1.0).await;
+        seed_topup(&pool, uid, 20.0).await;
+
+        let sent = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
+        assert_eq!(
+            sent, 0,
+            "no push subscription and no email on file -> nothing sent"
+        );
+        assert!(
+            mail.last_captured().is_none(),
+            "a working mail transport must never be dialed for a NULL email"
+        );
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// Case 3 (the variant-(a) guard): a customer with a WORKING push
+    /// subscription AND an email on file must get exactly the push — never
+    /// both, never the email instead.
+    #[tokio::test]
+    async fn push_subscription_present_never_falls_back_to_email() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let server = MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::POST);
+                then.status(201);
+            })
+            .await;
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = MailHandle::capture();
+
+        let uid = seed_customer(&pool, "hasboth@x", 1.0).await;
+        seed_subscription(&pool, uid, &server.url("/wpush/hasboth")).await;
+        seed_topup(&pool, uid, 20.0).await;
+
+        let sent = tick_as_of(&pool, &push, &mail, test_today()).await.unwrap();
+        assert_eq!(sent, 1, "exactly one notification, the push");
+        assert!(
+            mail.last_captured().is_none(),
+            "a customer with a working push subscription must never also get an email"
+        );
+    }
+
+    /// Case 4: no push subscription, has an email, but the SMTP send
+    /// itself FAILS -> the ledger is NOT stamped, so the very next tick
+    /// (same day, no cooldown in the way since nothing was ever recorded)
+    /// retries and can succeed once the transport recovers.
+    #[tokio::test]
+    async fn email_fallback_send_failure_does_not_stamp_the_ledger() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let failing_mail = MailHandle::disabled();
+
+        let uid = seed_customer(&pool, "retry@x", 1.0).await;
+        seed_topup(&pool, uid, 20.0).await;
+
+        let sent = tick_as_of(&pool, &push, &failing_mail, test_today())
+            .await
+            .unwrap();
+        assert_eq!(sent, 0, "a failed SMTP send must not count as sent");
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
+                .await
+                .unwrap()
+                .is_none(),
+            "a failed send must NEVER stamp the ledger"
+        );
+
+        // The transport "recovers" (a working handle this time) — since the
+        // ledger was never stamped, the SAME day retries immediately, with
+        // no cooldown blocking it.
+        let working_mail = MailHandle::capture();
+        let sent_retry = tick_as_of(&pool, &push, &working_mail, test_today())
+            .await
+            .unwrap();
+        assert_eq!(sent_retry, 1, "next tick must retry and succeed");
+        assert!(
+            db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
+                .await
+                .unwrap()
+                .is_some()
         );
     }
 
@@ -1098,6 +1305,7 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
         let today = test_today();
 
         // Within the 3-day window (today + 2).
@@ -1136,7 +1344,7 @@ mod tests {
         let uid_none = seed_customer(&pool, "none@x", 100.0).await;
         seed_subscription(&pool, uid_none, &server.url("/wpush/none")).await;
 
-        let sent = tick_as_of(&pool, &push, today).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, today).await.unwrap();
         assert_eq!(sent, 1, "only the within-window customer must be notified");
         assert!(
             db::push::notify_log(&pool, uid_soon, db::push::REASON_PASS_EXPIRING)
@@ -1169,6 +1377,7 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
         let today = test_today();
 
         // Plenty of credit (never triggers low_credit) and NO top-up
@@ -1182,7 +1391,7 @@ mod tests {
         )
         .await;
 
-        let sent = tick_as_of(&pool, &push, today).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, today).await.unwrap();
         assert_eq!(
             sent, 1,
             "pass-expiring must fire regardless of top-up history"
@@ -1211,6 +1420,7 @@ mod tests {
             })
             .await;
         let push = PushHandle::from_base64_private_key(TEST_VAPID_PRIVATE_KEY_B64);
+        let mail = crate::mail::MailHandle::disabled();
         let today = test_today();
 
         // Would otherwise qualify for low_credit (credit low, top-up
@@ -1225,7 +1435,7 @@ mod tests {
         )
         .await;
 
-        let sent = tick_as_of(&pool, &push, today).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, today).await.unwrap();
         assert_eq!(
             sent, 1,
             "only pass_expiring must fire — the active pass suppresses low_credit"
