@@ -3,11 +3,28 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
+/// CSS selector for elements that are ACTUALLY reachable by native Tab
+/// navigation — shared by `trap_tab` below (the boundary check) and
+/// `components::nav::focus_first_in` (the #319 focus-on-open move), so the
+/// two never drift out of sync (#320 review finding). Deliberately
+/// stricter than a bare `"a, button, input, select, textarea, [tabindex]"`:
+/// `a[href]` (a hrefless anchor isn't tabbable), `:not([disabled])` on
+/// every form control (several `Sheet` consumers — e.g.
+/// `dashboard/sheets/edit_pass_date.rs`, `edit_tx_date.rs`,
+/// `delete_user.rs` — disable their Save/Delete button while a `saving`/
+/// `loading` signal is true, and a disabled element is never actually
+/// focusable), and `[tabindex]:not([tabindex='-1'])` (a `tabindex="-1"`
+/// element is deliberately excluded from tab order). Using the loose
+/// selector as `first`/`last` here would silently break the trap whenever
+/// a non-tabbable element happened to be the DOM-order boundary match.
+pub(crate) const FOCUSABLE_SELECTOR: &str = "a[href], button:not([disabled]), \
+     input:not([disabled]), select:not([disabled]), textarea:not([disabled]), \
+     [tabindex]:not([tabindex='-1'])";
+
 /// #320: real WAI-ARIA dialog focus trap. `ev.current_target()` is the
 /// `.sheet` element itself (this handler is bound directly on it via
 /// `on:keydown`, not on a focused descendant), so this queries `.sheet`'s
-/// OWN focusable descendants — same selector `nav.rs`'s `focus_first_in`
-/// already uses for the initial focus-on-open move (#319). When the
+/// OWN focusable descendants via `FOCUSABLE_SELECTOR` above. When the
 /// currently-focused element is the LAST one and plain Tab was pressed, or
 /// the FIRST one and Shift+Tab was pressed, wrap focus back around instead
 /// of letting the browser's native tab order carry it out of the dialog
@@ -19,8 +36,7 @@ fn trap_tab(ev: &ev::KeyboardEvent) {
     else {
         return;
     };
-    let Ok(list) = container.query_selector_all("a, button, input, select, textarea, [tabindex]")
-    else {
+    let Ok(list) = container.query_selector_all(FOCUSABLE_SELECTOR) else {
         return;
     };
     let len = list.length();
