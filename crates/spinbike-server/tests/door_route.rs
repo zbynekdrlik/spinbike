@@ -488,6 +488,73 @@ async fn first_open_without_pass_deducts_exact_price_from_credit() {
     );
 }
 
+/// Regression test for #326: the door self-entry no-pass charge path wrote
+/// `UPDATE users SET credit = credit - ?` with NO `ROUND(...,2)`, unlike
+/// every other money-mutating write in the codebase. `single_entry_price`
+/// comes from `services.default_price`, which `admin.rs` writes with no
+/// rounding guarantee — so an admin-set price like 5.017 (simulated here by
+/// writing it straight to the DB, bypassing admin.rs, exactly like the
+/// ticket's failure scenario) drifted the persisted `users.credit` and the
+/// ledger row to 3-decimal precision instead of being rounded to cents.
+#[tokio::test]
+async fn no_pass_charge_rounds_credit_and_ledger_to_cents() {
+    let app = TestApp::with_door_mode("success").await;
+    enable_self_entry(&app).await;
+    sqlx::query("UPDATE users SET credit = 20.0 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    // Simulate an admin-set price that isn't a clean 2-decimal value.
+    sqlx::query(
+        "UPDATE services SET default_price = 5.017 WHERE kind = 'single_entry' AND active = 1",
+    )
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, body) = app
+        .request(post_json(
+            "/api/door/open",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["charged"], true);
+
+    // 20.0 - round_cents(5.017) = 20.0 - 5.02 = 14.98, rounded — NOT the raw
+    // 20.0 - 5.017 = 14.983 the unfixed code persisted.
+    let returned: f64 = body["new_credit"].as_f64().unwrap();
+    assert_eq!(
+        returned, 14.98,
+        "response new_credit must be rounded to cents"
+    );
+
+    let db_credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+        .bind(app.customer_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        db_credit, 14.98,
+        "persisted credit must be rounded to cents"
+    );
+
+    let ledger_amount: f64 = sqlx::query_scalar(
+        "SELECT amount FROM transactions \
+         WHERE user_id = ? AND action = 'charge' AND note = 'door: 1st'",
+    )
+    .bind(app.customer_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        ledger_amount, -5.02,
+        "ledger amount must be the rounded price, not the raw 3-decimal one"
+    );
+}
+
 // ─── /api/door/health role gating ───────────────────────────────────────────
 //
 // `require_admin_or_staff` is the inline guard. Mutation L297 replaces
