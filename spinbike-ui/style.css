@@ -257,6 +257,34 @@ a:hover { text-decoration: underline; }
     font-weight: 500;
 }
 
+/* #319: customer-only burger toggle — collapses the destination links,
+   Logout, and language toggle behind one control so the header stays a
+   single row even on a phone. Sized to the standard tap target. */
+.navbar-burger {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--tap-min);
+    height: var(--tap-min);
+    padding: 0;
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background var(--dur-fast) var(--ease-out),
+                color var(--dur-fast) var(--ease-out);
+}
+
+.navbar-burger:hover { background: var(--surface-3); color: var(--text); }
+
+.navbar-burger__icon {
+    display: inline-flex;
+    width: 22px;
+    height: 22px;
+}
+.navbar-burger__icon svg { width: 100%; height: 100%; }
+
 .lang-toggle {
     background: var(--surface-2);
     border: 1px solid var(--border-strong);
@@ -1067,10 +1095,18 @@ table tbody tr:last-child td {
         gap: var(--s-2);
     }
 
-    .navbar-links {
-        width: 100%;
-        justify-content: center;
-    }
+    /* #319: removed the old `.navbar-links { width: 100%; justify-content:
+       center }` rule here — it forced `.navbar-links` (a flex sibling of
+       `.navbar-brand`) onto its OWN full-width row REGARDLESS of how
+       little content it held, which was the actual mechanism behind the
+       pre-#319 145px 3-row customer header. Every remaining
+       `.navbar-links` shape (logged-out: login link + lang toggle;
+       customer: shortened name + burger; staff: hidden entirely by the
+       `body:has(.adaptive-nav) .navbar-links { display: none; }` rule
+       elsewhere in this file) is short enough to sit on the same row as
+       `.navbar-brand` without it — `.navbar { flex-wrap: wrap }` above
+       still catches a genuine overflow on an even narrower viewport, it
+       just no longer wraps unconditionally. */
 
     .inline-form { flex-direction: column; align-items: stretch; }
     .inline-form .form-group { min-width: 0; }

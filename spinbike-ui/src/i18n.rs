@@ -296,6 +296,80 @@ pub fn tf(lang: Lang, key: &str, args: &[&str]) -> String {
     result
 }
 
+/// Shortens a display name for the customer header (#319): first name plus
+/// the surname's first letter, e.g. "Zbynek Drlik" -> "Zbynek D.". Purely a
+/// cosmetic "am I logged in as the right account?" glance, never used for
+/// anything security-sensitive.
+///
+/// - A single-word name (or a name that only ever had one token) is
+///   returned unchanged — no trailing period.
+/// - An empty / all-whitespace name returns an empty string — never a lone
+///   period, never a panic.
+/// - 3+ words use the FIRST and LAST token (Slovak convention: given
+///   name(s) first, surname last) — e.g. "Jan Adam Novak" -> "Jan N.".
+/// - Unicode-safe: takes the surname's first Unicode scalar value (not a
+///   byte), so a diacritic surname never panics or splits a UTF-8
+///   boundary.
+pub fn short_display_name(name: &str) -> String {
+    let mut words = name.split_whitespace();
+    let Some(first) = words.next() else {
+        return String::new();
+    };
+    match words.next_back() {
+        Some(surname) => {
+            // split_whitespace never yields an empty token, so this is
+            // always Some — still avoid unwrapping to stay panic-proof.
+            match surname.chars().next() {
+                Some(c) => format!("{first} {}.", c.to_uppercase()),
+                None => first.to_string(),
+            }
+        }
+        None => first.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod short_display_name_tests {
+    use super::short_display_name;
+    use wasm_bindgen_test::*;
+
+    #[wasm_bindgen_test]
+    fn two_word_name_shortens_to_first_plus_surname_initial() {
+        assert_eq!(short_display_name("Zbynek Drlik"), "Zbynek D.");
+    }
+
+    #[wasm_bindgen_test]
+    fn single_word_name_has_no_trailing_period() {
+        assert_eq!(short_display_name("Zbynek"), "Zbynek");
+    }
+
+    #[wasm_bindgen_test]
+    fn empty_name_returns_empty_string_no_panic() {
+        assert_eq!(short_display_name(""), "");
+    }
+
+    #[wasm_bindgen_test]
+    fn whitespace_only_name_returns_empty_string_no_panic() {
+        assert_eq!(short_display_name("   "), "");
+    }
+
+    #[wasm_bindgen_test]
+    fn three_word_name_uses_first_and_last_token() {
+        assert_eq!(short_display_name("Jan Adam Novak"), "Jan N.");
+    }
+
+    #[wasm_bindgen_test]
+    fn diacritic_surname_uppercases_the_unicode_initial_safely() {
+        assert_eq!(short_display_name("Ludmila Stastna"), "Ludmila S.");
+        assert_eq!(short_display_name("Jozef \u{160}tefanik"), "Jozef \u{160}.");
+    }
+
+    #[wasm_bindgen_test]
+    fn collapses_repeated_internal_whitespace() {
+        assert_eq!(short_display_name("Zbynek   Drlik"), "Zbynek D.");
+    }
+}
+
 // (sk, en)
 type TransMap = HashMap<&'static str, (&'static str, &'static str)>;
 
@@ -1035,7 +1109,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "Monthly pass not active",
         ),
     );
-    m.insert("my_balance_hello", ("Ahoj, {}", "Hello, {}"));
     m.insert("my_balance_credit", ("Zostatok", "Credit"));
     m.insert(
         "my_balance_recent_movements",
