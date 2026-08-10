@@ -991,17 +991,17 @@ mod tests {
         let day0 = test_today();
 
         // Tick 1 (day 0): first notification, sent_count -> 1.
-        let sent = tick_as_of(&pool, &push, day0).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, day0).await.unwrap();
         assert_eq!(sent, 1, "first tick must notify");
 
         // Tick 2 (day 0, same day): cooldown -> nothing.
-        let sent = tick_as_of(&pool, &push, day0).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, day0).await.unwrap();
         assert_eq!(sent, 0, "1. second tick same day -> nothing (cooldown)");
         assert_eq!(mock.calls_async().await, 1);
 
         // Tick 3 (day 8): cooldown expired -> second notification, count -> 2.
         let day8 = day0 + Days::new(8);
-        let sent = tick_as_of(&pool, &push, day8).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, day8).await.unwrap();
         assert_eq!(sent, 1, "2. tick 8 days later -> second notification");
         assert_eq!(mock.calls_async().await, 2);
         let log = db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
@@ -1013,7 +1013,7 @@ mod tests {
         // Tick 4 (day 16): cooldown long expired, but episode cap (2)
         // already reached -> nothing, ever, until re-arm.
         let day16 = day8 + Days::new(8);
-        let sent = tick_as_of(&pool, &push, day16).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, day16).await.unwrap();
         assert_eq!(
             sent, 0,
             "3. tick 8 days after that -> nothing (episode cap 2)"
@@ -1028,7 +1028,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let sent = tick_as_of(&pool, &push, day16).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, day16).await.unwrap();
         assert_eq!(sent, 0, "condition cleared -> re-arm, no send");
         assert!(
             db::push::notify_log(&pool, uid, db::push::REASON_LOW_CREDIT)
@@ -1043,7 +1043,7 @@ mod tests {
             .execute(&pool)
             .await
             .unwrap();
-        let sent = tick_as_of(&pool, &push, day16).await.unwrap();
+        let sent = tick_as_of(&pool, &push, &mail, day16).await.unwrap();
         assert_eq!(
             sent, 1,
             "4. condition re-triggers -> sent immediately, counter from zero"
