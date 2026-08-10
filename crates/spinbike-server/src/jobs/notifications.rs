@@ -146,15 +146,20 @@ pub async fn tick_as_of(
     // keep the SQL simple and reuse the exact same helper the unit tests
     // exercise directly. Fitness-center scale (tens to low hundreds of
     // customers), so an N+1 here is negligible.
-    type CreditRow = (i64, f64);
+    // #311: `email` is fetched here too (not a separate per-user query) —
+    // reuses the ROW this loop already fetches instead of adding an N+1
+    // lookup, and is threaded into `evaluate_reason` as the e-mail
+    // FALLBACK address (used only when the customer has no push
+    // subscription at all).
+    type CreditRow = (i64, f64, Option<String>);
     let credit_rows: Vec<CreditRow> = sqlx::query_as(
-        "SELECT id, credit FROM users
+        "SELECT id, credit, email FROM users
          WHERE role = 'customer' AND blocked = 0 AND deleted_at IS NULL",
     )
     .fetch_all(pool)
     .await?;
 
-    for (user_id, credit) in credit_rows {
+    for (user_id, credit, email) in credit_rows {
         // A single row's DB error must NOT abort the whole batch (#264
         // review finding) — log and move on to the next customer instead
         // of propagating with `?`, which would silently skip every
@@ -208,6 +213,7 @@ pub async fn tick_as_of(
             condition,
             title,
             &body,
+            email.as_deref(),
         )
         .await
         {
@@ -240,9 +246,11 @@ pub async fn tick_as_of(
         .to_string();
     let today_s = today.format("%Y-%m-%d").to_string();
 
-    type PassRow = (i64, Option<String>);
+    // #311: `u.email` fetched alongside — same reasoning as `credit_rows`
+    // above (reuse the existing row, no extra N+1 query).
+    type PassRow = (i64, Option<String>, Option<String>);
     let pass_rows: Vec<PassRow> = sqlx::query_as(
-        "SELECT u.id, date(ap.valid_until)
+        "SELECT u.id, date(ap.valid_until), u.email
          FROM users u
          LEFT JOIN user_active_pass ap ON ap.user_id = u.id
          WHERE u.role = 'customer' AND u.blocked = 0 AND u.deleted_at IS NULL",
@@ -250,7 +258,7 @@ pub async fn tick_as_of(
     .fetch_all(pool)
     .await?;
 
-    for (user_id, valid_until) in pass_rows {
+    for (user_id, valid_until, email) in pass_rows {
         let condition = matches!(
             &valid_until,
             Some(vu) if vu.as_str() >= today_s.as_str() && vu.as_str() <= cutoff_s.as_str()
@@ -287,6 +295,7 @@ pub async fn tick_as_of(
             condition,
             &title,
             &body,
+            email.as_deref(),
         )
         .await
         {
@@ -313,13 +322,21 @@ pub async fn tick_as_of(
 /// One reason's per-user evaluation: re-arm on clear, episode cap, cooldown
 /// check, send to every stored subscription, prune gone endpoints, and
 /// stamp the ledger only after an ACTUAL successful send. Returns `true`
-/// iff at least one subscription was successfully notified.
+/// iff the customer was actually notified — by push OR, as a #311
+/// FALLBACK, by e-mail.
 ///
-/// TODO(#311): `ctx.mail` is threaded through but not used yet — this
-/// function will grow an e-mail FALLBACK branch (customer has no push
-/// subscription at all -> try e-mail instead) in the next commit. The new
-/// `#311` tests in `mod tests` below already assert that behavior; they
-/// currently fail (RED) because it isn't implemented yet.
+/// #311 (owner decision, variant (a) — 2026-08-10): e-mail is a FALLBACK
+/// ONLY, never a duplicate channel. The choice is made on whether the
+/// customer has ANY stored push subscription at all (`subs.is_empty()`),
+/// not on whether THIS TICK's push delivery actually succeeded — a
+/// customer with a subscription that is merely failing transiently still
+/// gets push-only treatment; the existing `MAX_CONSECUTIVE_FAILURES`
+/// pruning already handles the case where it's genuinely dead, at which
+/// point the customer naturally falls onto the e-mail path on a later
+/// tick. `email` is `None` for a legacy card-migrated account
+/// (`users.email IS NULL`) — that combination (no subscription, no email)
+/// skips silently: no error, no ledger write, same as "no subscription"
+/// always behaved before this ticket.
 async fn evaluate_reason(
     ctx: &Ctx<'_>,
     user_id: i64,
@@ -327,9 +344,11 @@ async fn evaluate_reason(
     condition: bool,
     title: &str,
     body: &str,
+    email: Option<&str>,
 ) -> Result<bool> {
     let pool = ctx.pool;
     let push = ctx.push;
+    let mail = ctx.mail;
     let today = ctx.today;
 
     if !condition {
@@ -357,10 +376,37 @@ async fn evaluate_reason(
 
     let subs = db::push::list_subscriptions_for_user(pool, user_id).await?;
     if subs.is_empty() {
-        // Nothing to notify — leave the ledger untouched so this is
-        // re-evaluated (cheaply) every day until the customer subscribes,
-        // rather than being falsely marked as already notified.
-        return Ok(false);
+        // #311: no push subscription at all -> fall back to e-mail, IF the
+        // customer has one on file. `filter` also excludes an empty-string
+        // address (defensive — `users.email` is either NULL or non-empty
+        // in practice, but never trust that from here).
+        let Some(addr) = email.filter(|e| !e.trim().is_empty()) else {
+            // Neither push nor e-mail — leave the ledger untouched so this
+            // is re-evaluated (cheaply) every day until the customer
+            // subscribes or an e-mail is added, rather than being falsely
+            // marked as already notified.
+            return Ok(false);
+        };
+        let html = format!("<p>{body}</p>");
+        return match mail.send(addr, title, body, &html).await {
+            Ok(()) => {
+                db::push::record_notified(pool, user_id, reason).await?;
+                Ok(true)
+            }
+            Err(e) => {
+                // Same discipline as a failed push send: NEVER stamp the
+                // ledger on failure, so the next tick retries instead of
+                // silently eating the customer's notification for
+                // NOTIFY_COOLDOWN_DAYS.
+                tracing::warn!(
+                    user_id,
+                    reason = %reason,
+                    error = %e,
+                    "push: email fallback send failed, ledger not stamped (retried next tick)"
+                );
+                Ok(false)
+            }
+        };
     }
 
     let mut any_sent = false;
