@@ -3,7 +3,7 @@
 //! next 14 days. Skips occurrences where the class is full. Idempotent.
 
 use anyhow::Result;
-use chrono::{Datelike, Duration, Local};
+use chrono::{Datelike, Duration};
 use sqlx::SqlitePool;
 
 pub const WINDOW_DAYS: i64 = 14;
@@ -17,7 +17,7 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
     .fetch_all(pool)
     .await?;
 
-    let today = Local::now().date_naive();
+    let today = crate::util::today_bratislava();
     let mut created = 0usize;
 
     for p in &persistents {
@@ -192,7 +192,7 @@ mod tests {
         .unwrap();
 
         // Pick a Monday strictly in the future (avoid "today is Monday" flake).
-        let today = Local::now().date_naive();
+        let today = crate::util::today_bratislava();
         let m = (7 - today.weekday().num_days_from_monday() as i64) % 7;
         let offset = if m == 0 { 7 } else { m };
         let next_mon = today + Duration::days(offset);
