@@ -1,6 +1,62 @@
 use leptos::ev;
 use leptos::prelude::*;
+use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
+
+/// #320: real WAI-ARIA dialog focus trap. `ev.current_target()` is the
+/// `.sheet` element itself (this handler is bound directly on it via
+/// `on:keydown`, not on a focused descendant), so this queries `.sheet`'s
+/// OWN focusable descendants — same selector `nav.rs`'s `focus_first_in`
+/// already uses for the initial focus-on-open move (#319). When the
+/// currently-focused element is the LAST one and plain Tab was pressed, or
+/// the FIRST one and Shift+Tab was pressed, wrap focus back around instead
+/// of letting the browser's native tab order carry it out of the dialog
+/// into page content behind the backdrop.
+fn trap_tab(ev: &ev::KeyboardEvent) {
+    let Some(container) = ev
+        .current_target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+    else {
+        return;
+    };
+    let Ok(list) = container.query_selector_all("a, button, input, select, textarea, [tabindex]")
+    else {
+        return;
+    };
+    let len = list.length();
+    if len == 0 {
+        return;
+    }
+    let first = list
+        .get(0)
+        .and_then(|n| n.dyn_into::<web_sys::HtmlElement>().ok());
+    let last = list
+        .get(len - 1)
+        .and_then(|n| n.dyn_into::<web_sys::HtmlElement>().ok());
+    let Some(active) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.active_element())
+    else {
+        return;
+    };
+    let active_node: &web_sys::Node = active.as_ref();
+
+    if ev.shift_key() {
+        if let (Some(first_el), Some(last_el)) = (&first, last) {
+            let first_node: &web_sys::Node = first_el.as_ref();
+            if first_node.is_same_node(Some(active_node)) {
+                ev.prevent_default();
+                let _ = last_el.focus();
+            }
+        }
+    } else if let (Some(last_el), Some(first_el)) = (&last, first) {
+        let last_node: &web_sys::Node = last_el.as_ref();
+        if last_node.is_same_node(Some(active_node)) {
+            ev.prevent_default();
+            let _ = first_el.focus();
+        }
+    }
+}
 
 /// Bottom sheet on mobile, centered modal on desktop (breakpoint handled via CSS, not Rust).
 ///
@@ -11,13 +67,15 @@ use wasm_bindgen_futures::spawn_local;
 ///
 /// Accessibility: `role="dialog"` + `aria-modal="true"` on `.sheet`. An
 /// optional `id` prop places a DOM id on `.sheet` so a trigger button can
-/// reference it via `aria-controls` (#319). The keydown Escape handler
-/// lives on `.sheet` itself, so it only fires once focus is actually
-/// *inside* the sheet — a caller that needs Escape to work without a prior
-/// mouse click (a genuine keyboard-first open) must move focus into the
-/// sheet itself right after mounting it (see `components::nav::Navbar`'s
-/// burger menu for the pattern).
-/// Keyboard: Escape on the sheet element triggers `on_close`.
+/// reference it via `aria-controls` (#319). The keydown handler lives on
+/// `.sheet` itself, so it only fires once focus is actually *inside* the
+/// sheet — a caller that needs Escape/Tab to work without a prior mouse
+/// click (a genuine keyboard-first open) must move focus into the sheet
+/// itself right after mounting it (see `components::nav::Navbar`'s burger
+/// menu for the pattern).
+/// Keyboard: Escape triggers `on_close`. Tab/Shift+Tab cycle within the
+/// sheet's own focusable descendants and wrap at the ends — a real
+/// focus trap, per the WAI-ARIA dialog pattern (#320).
 ///
 /// **Mounting:** the Sheet renders unconditionally when instantiated.
 /// Callers control visibility by mounting/unmounting the Sheet inside
@@ -68,14 +126,16 @@ pub fn Sheet(
             cb.run(());
         });
     };
-    let close_keyboard = move |ev: ev::KeyboardEvent| {
-        if ev.key() == "Escape" {
+    let close_keyboard = move |ev: ev::KeyboardEvent| match ev.key().as_str() {
+        "Escape" => {
             let cb = on_close_keyboard;
             spawn_local(async move {
                 gloo_timers::future::TimeoutFuture::new(0).await;
                 cb.run(());
             });
         }
+        "Tab" => trap_tab(&ev),
+        _ => {}
     };
 
     view! {
