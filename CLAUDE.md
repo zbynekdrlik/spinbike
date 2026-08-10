@@ -96,6 +96,7 @@ Path-scoped rules under `.claude/rules/` load themselves when you touch a matchi
 - ordering a `transactions` query by `created_at` → `.claude/rules/transaction-ordering.md` (auto-loads on `crates/spinbike-server/src/db/transactions.rs`, `crates/spinbike-server/src/routes/my_balance.rs`, `crates/spinbike-server/src/routes/payments.rs` — same-second ties need an `id DESC` tiebreaker, #291)
 - Web-Push notifications (daily job, VAPID key, anti-spam ledger) → `.claude/rules/push-notifications.md` (auto-loads on `crates/spinbike-server/src/jobs/notifications.rs`, `crates/spinbike-server/src/push.rs`, `crates/spinbike-server/src/routes/push.rs`, `spinbike-ui/sw.js` — #264)
 - Scheduling a new daily (or longer) background job → `.claude/rules/daily-job-scheduling.md` (auto-loads on `crates/spinbike-server/src/bin/server.rs`, `crates/spinbike-server/src/jobs/**` — wall-clock alignment, never `tokio::time::interval(86400s)`, #264/#297)
+- Any new money-mutating write (`users.credit` / `transactions.amount`) → `.claude/rules/money-rounding.md` (auto-loads on `db/users.rs`, `routes/payments.rs|users.rs|door.rs|admin.rs|charger.rs` — round ONCE and reuse everywhere, check prod for real drift before assuming a backfill is needed, #325/#326)
 
 | Area | Skill | When to load |
 |---|---|---|
