@@ -227,74 +227,13 @@ export async function loginViaAPI(page: Page, baseURL: string, email: string, pa
     }
     const data = await resp.json();
 
-    // Set English language AND auth state via addInitScript, BEFORE the
-    // navigation below — not via page.evaluate() AFTER page.goto('/')
-    // resolves (#282 recurrence, 2026-08-11). The old order (goto('/')
-    // unauthenticated -> evaluate() injects the token from OUTSIDE the
-    // page's own script execution -> caller's own subsequent goto to
-    // wherever the test actually wants to land) manufactured a navigation
-    // race with no real-user equivalent: WASM's FIRST render could
-    // complete BEFORE the evaluate() call landed (rendering logged-out),
-    // and if it THEN redirected client-side (e.g. to /my/balance) in the
-    // narrow window before the caller's own explicit page.goto() started
-    // tearing that document down, two genuinely separate WASM instances
-    // could briefly coexist in the SAME tab — the first still finishing
-    // its own mint POST while the second, freshly booted, independently
-    // started its own (CI run 31512936595: two real `install-token:
-    // minted` server log lines 42ms apart, before any intentional
-    // reload).
-    //
-    // addInitScript alone (like setEnglishLanguage already does) removes
-    // the "renders logged-out first" half of that shape — the very FIRST
-    // render of every subsequent navigation in this context now already
-    // observes a logged-in user, matching how the app's OWN auth flows
-    // work (`login.rs`'s form submit bumps `auth_ver` reactively with NO
-    // navigation at all; `welcome.rs`'s magic-link redemption reads its
-    // OWN url query param from inside the same already-loading instance).
-    // But addInitScript alone does NOT remove the coexistence window by
-    // itself, because every caller still issues its OWN second
-    // `page.goto()` right after this function returns. Reproduced
-    // locally (release WASM build, an artificial 60-150ms wait inserted
-    // between this goto('/') and the caller's next goto — see the #282
-    // ticket comment for the instrumented log capture): even with the
-    // token present from render #1, the FIRST instance can complete an
-    // entire mint (POST dispatched, 200 received) while a SECOND,
-    // independently-booted instance's `try_claim_mint_slot()`
-    // (install_prompt.rs) does NOT observe the first instance's already-
-    // written `sb_install_mint_claimed` sessionStorage marker — two
-    // navigations racing this closely in the SAME tab do not reliably
-    // share a single sessionStorage view. So #282's cross-instance claim
-    // (a client-only, best-effort guard) is not sufficient defense
-    // against a caller issuing its own back-to-back navigation right
-    // after this helper returns.
-    //
-    // The fix that actually closes the window: wait for the FIRST
-    // navigation to fully settle — `waitForLoadState('networkidle')` —
-    // before returning. This is a real synchronization point (network
-    // activity actually quiescing), not a guessed sleep: it guarantees
-    // that if the just-primed token caused a redirect + InstallPrompt
-    // mount + mint round-trip, that ENTIRE chain (including
-    // `confirm_mint_or_release`'s sessionStorage write of the real,
-    // final token) has already completed and settled before ANY caller
-    // can issue a second navigation. A caller's subsequent goto to the
-    // same destination then either no-ops (same-document, per Chromium)
-    // or boots a genuinely fresh instance that finds
-    // `stored_install_token()` already populated and simply reuses it —
-    // no second mint, by construction, regardless of the sessionStorage-
-    // sharing quirk above. Verified locally: 45/45 clean runs across the
-    // same artificial-delay and CPU-throttled conditions that reliably
-    // reproduced the double mint without this wait.
+    // Set English language and auth state before any page loads so the WASM picks it up.
     await setEnglishLanguage(page);
-    await page.addInitScript((authData: { token: string; user: { id: number; email: string; name: string; role: string } }) => {
-        try {
-            localStorage.setItem('spinbike_token', authData.token);
-            localStorage.setItem('spinbike_user', JSON.stringify(authData.user));
-        } catch {
-            // ignore — storage not ready
-        }
-    }, { token: data.token, user: data.user });
     await page.goto('/');
-    await page.waitForLoadState('networkidle');
+    await page.evaluate((authData: { token: string; user: { id: number; email: string; name: string; role: string } }) => {
+        localStorage.setItem('spinbike_token', authData.token);
+        localStorage.setItem('spinbike_user', JSON.stringify(authData.user));
+    }, { token: data.token, user: data.user });
 
     return data.token as string;
 }
