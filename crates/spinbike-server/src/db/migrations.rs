@@ -2727,7 +2727,7 @@ mod tests {
             .expect_err("run_migrations must refuse to apply V13 while a user has 2+ linked cards");
         let msg = format!("{err:#}");
         assert!(
-            msg.contains("2+ linked") || msg.contains("multiple linked"),
+            msg.contains("2+ linked cards"),
             "error should explain the dangerous precondition, got: {msg}"
         );
         assert!(

@@ -146,19 +146,21 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
             )?;
 
             if !dupes.is_empty() {
-                let affected_count = dupes.len();
                 let details = dupes
                     .iter()
                     .map(|(user_id, count)| format!("user_id={user_id} has {count} cards"))
                     .collect::<Vec<_>>()
                     .join(", ");
                 anyhow::bail!(
-                    "migration 13 (users replace cards) refuses to apply: {affected_count} \
-                     user(s) have 2+ linked cards ({details}) — its card-to-user promotion \
-                     keeps only one arbitrary card's data per column and DROPs the cards table \
-                     in the same transaction, silently losing the rest. Consolidate each user \
-                     down to a single card (merge credit, keep one barcode) before retrying. \
-                     See issue #322."
+                    "migration 13 (users replace cards) refuses to apply: {} user(s) have 2+ \
+                     linked cards ({details}) — its card-to-user promotion keeps only one \
+                     arbitrary card's data per column and DROPs the cards table in the same \
+                     transaction, silently losing the rest. No automated repair tool exists for \
+                     this (the legacy `cards` table has no route/CLI of its own): resolve \
+                     manually by editing the `cards` rows directly (e.g. via sqlite3) to leave \
+                     exactly one card per user_id, preserving whichever credit/barcode is \
+                     correct, before retrying. See issue #322.",
+                    dupes.len()
                 );
             }
         }
