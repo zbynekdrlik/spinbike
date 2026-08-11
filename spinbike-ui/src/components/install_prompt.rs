@@ -67,6 +67,16 @@ use crate::{api, auth};
 /// worse footgun to clean up later.
 const INSTALL_TOKEN_STORAGE_KEY: &str = "sb_install_token";
 
+/// sessionStorage key for the CROSS-INSTANCE mint claim (#282 recurrence).
+/// Separate from `INSTALL_TOKEN_STORAGE_KEY` — this is written
+/// SYNCHRONOUSLY the instant a mint is claimed (before the mint POST is even
+/// sent), so a SECOND, genuinely separate WASM module instance booted a
+/// moment later in the SAME tab (a fast reload, or the login-race
+/// below) can see the claim BEFORE the first instance's async response has
+/// landed. See `try_claim_mint_slot()`'s doc for why `MINT_IN_FLIGHT` alone
+/// cannot do this (it resets to `false` on every fresh instantiation).
+const INSTALL_MINT_CLAIM_STORAGE_KEY: &str = "sb_install_mint_claimed";
+
 /// The `/welcome` URL an install token arms — the SAME formula the server's
 /// `manifest.rs::install_start_url` produces for the manifest `start_url`,
 /// duplicated client-side (not fetched) so `history.replaceState` can arm
@@ -137,33 +147,76 @@ fn store_install_token(token: &str) {
 /// link -> `/my/balance`), so it can actually guard ACROSS mounts.
 static MINT_IN_FLIGHT: AtomicBool = AtomicBool::new(false);
 
+/// Whether ANOTHER (possibly already-discarded) WASM instance has already
+/// claimed the mint slot in THIS browser tab — the cross-instance half of
+/// the guard (#282 recurrence). Unlike `MINT_IN_FLIGHT`, sessionStorage
+/// survives a full page navigation within the same tab, so a SECOND instance
+/// booted moments after the first (e.g. a fast reload, or the login-race
+/// interleaving documented on #282) can observe this claim even though the
+/// first instance's in-memory `AtomicBool` no longer exists to check.
+/// Degrades to "no claim" wherever real `sessionStorage` is unavailable
+/// (private browsing, a security exception, or `wasm-pack test --node`'s
+/// lack of a `window` at all — same discipline as every other storage call
+/// in this crate), which is exactly why `MINT_IN_FLIGHT` is kept as the
+/// primary, always-reliable same-instance guard below.
+fn cross_instance_claim_exists() -> bool {
+    crate::storage::cache_get(INSTALL_MINT_CLAIM_STORAGE_KEY).is_some()
+}
+
 /// Whether THIS `Effect` firing may proceed to mint a fresh install token:
-/// `false` when a token is already stored, OR when another firing already
-/// claimed the slot and hasn't finished (or failed) yet.
+/// `false` when a token is already stored, when another firing in THIS
+/// instance already claimed the slot and hasn't finished (or failed) yet,
+/// OR when a DIFFERENT WASM instance in this same tab already claimed it
+/// (#282 recurrence — see `cross_instance_claim_exists()`'s doc).
 ///
-/// #282 fix: a session-storage-only check is a check-then-act race — the
-/// mint POST is async and `store_install_token()` only runs after it
-/// resolves, so a SECOND `Effect` firing (e.g. `InstallPrompt`'s second
-/// mount on `/my/balance` after the `/welcome` CTA link, before the first
-/// mint's response has landed) used to also observe no stored token and
-/// also mint. The fix is `AtomicBool::swap` — a single SYNCHRONOUS
-/// check-and-set with no `.await` in between — so only the first firing in
-/// this WASM instance's lifetime can ever pass both checks. See the
-/// `only_one_effect_firing_may_claim_the_mint_slot_before_a_token_is_stored`
+/// #282 fix: a session-storage-only check on the FINAL token is a
+/// check-then-act race — the mint POST is async and `store_install_token()`
+/// only runs after it resolves, so a SECOND `Effect` firing (e.g.
+/// `InstallPrompt`'s second mount on `/my/balance` after the `/welcome` CTA
+/// link, before the first mint's response has landed) used to also observe
+/// no stored token and also mint. The fix is `AtomicBool::swap` — a single
+/// SYNCHRONOUS check-and-set with no `.await` in between — so only the
+/// first firing in ONE WASM instance's lifetime can ever pass both checks.
+/// See the `only_one_effect_firing_may_claim_the_mint_slot_before_a_token_is_stored`
 /// unit test below.
+///
+/// #282 recurrence: `MINT_IN_FLIGHT` alone does NOT close the race when the SECOND
+/// firing happens in a genuinely SEPARATE WASM instance (a fresh full page
+/// load resets the static to `false`) — CI evidence (#282) showed two real
+/// `install-token` POSTs ~45ms apart on the SAME test, before any
+/// intentional reload. The fix mirrors the existing pattern: claim a SECOND,
+/// SEPARATE sessionStorage marker SYNCHRONOUSLY (no `.await` before the
+/// write, same as the in-memory swap) the instant the in-memory slot is
+/// claimed — unlike `MINT_IN_FLIGHT`, sessionStorage survives the
+/// instance-destroying navigation, so any later instance in this tab sees
+/// the claim before it can also start a mint.
 fn try_claim_mint_slot() -> bool {
     if stored_install_token().is_some() {
         return false;
     }
-    !MINT_IN_FLIGHT.swap(true, Ordering::SeqCst)
+    if cross_instance_claim_exists() {
+        return false;
+    }
+    if MINT_IN_FLIGHT.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    crate::storage::cache_set(INSTALL_MINT_CLAIM_STORAGE_KEY, "1");
+    true
 }
 
 /// Release a previously-claimed mint slot after a FAILED mint (network
 /// error, non-2xx, etc.) so a later remount in this session can retry —
 /// matching this module's existing "every step degrades to a silent no-op
-/// on failure" discipline.
+/// on failure" discipline. Clears BOTH guards: the in-memory `MINT_IN_FLIGHT`
+/// (same-instance) AND the sessionStorage cross-instance claim (#282 recurrence) — a
+/// FAILURE is always OBSERVED by the instance that made the claim (it is
+/// still alive to run this), unlike the instance-destroyed-mid-flight case
+/// `try_claim_mint_slot()`'s doc describes, so it is always safe to clear
+/// the claim here and let a later remount retry immediately rather than
+/// wait out any window.
 fn release_mint_slot() {
     MINT_IN_FLIGHT.store(false, Ordering::SeqCst);
+    crate::storage::cache_remove(INSTALL_MINT_CLAIM_STORAGE_KEY);
 }
 
 /// Persist + arm the credential for a freshly, successfully minted token,
@@ -608,6 +661,38 @@ mod tests {
         assert!(
             try_claim_mint_slot(),
             "#282: a mint whose persist silently failed must release its slot so a later mount can retry"
+        );
+    }
+
+    /// #282 recurrence: the CROSS-instance half of the guard
+    /// (`cross_instance_claim_exists()` / the `INSTALL_MINT_CLAIM_STORAGE_KEY`
+    /// write in `try_claim_mint_slot()`) is NOT exercisable by a `wasm-pack
+    /// test --node` unit test at all — `--node` has no real `window`/
+    /// `sessionStorage` (see `storage.rs`'s own tests), so `cache_get`/
+    /// `cache_set` are permanent no-ops here regardless of what a REAL
+    /// second WASM instance would observe. This test documents that gap
+    /// explicitly rather than silently having no coverage for it: within
+    /// THIS runtime, the new cross-instance check can only ever observe "no
+    /// claim" (degrading to the pre-fix same-instance-only behavior), so it
+    /// must never change what the existing same-instance guard already
+    /// proves above. The REAL cross-instance race is reproduced (and this
+    /// fix is proven) by the actual browser E2E test —
+    /// `install-prompt.spec.ts`'s "sessionStorage guard: a reload reuses the
+    /// same token and mints only once" — which is what caught the CI
+    /// `mintCount == 2` failure this fix addresses.
+    #[wasm_bindgen_test]
+    fn cross_instance_guard_is_a_no_op_without_real_sessionstorage_and_same_instance_guard_still_holds()
+     {
+        release_mint_slot();
+        assert!(
+            crate::storage::cache_get(super::INSTALL_MINT_CLAIM_STORAGE_KEY).is_none(),
+            "no real sessionStorage in this test runtime — must read as no-claim"
+        );
+        assert!(try_claim_mint_slot(), "first firing must still succeed");
+        assert!(
+            !try_claim_mint_slot(),
+            "second firing in the SAME instance must still be refused by MINT_IN_FLIGHT, \
+             unaffected by the (no-op-in-this-runtime) cross-instance check"
         );
     }
 }
