@@ -40,6 +40,11 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
             .bind(spinbike_core::services::SPINNING_KIND)
             .fetch_one(pool)
             .await?;
+    // Round ONCE, right here where `price` enters the operation, and reuse
+    // this SAME rounded value for both the ledger `transactions.amount`
+    // INSERT and the `users.credit` UPDATE below — `default_price` carries
+    // no rounding guarantee at rest (money-rounding.md / #325/#326/#343).
+    let price = crate::db::users::round_cents(price);
 
     let mut charged = 0usize;
     for (booking_id, _template_id, date, _start, user_id) in rows {
