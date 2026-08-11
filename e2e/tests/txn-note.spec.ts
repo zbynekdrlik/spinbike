@@ -193,4 +193,50 @@ test.describe('Transaction notes — issue #26', () => {
         await expect(firstRow.locator('[data-testid="txn-void"]')).toHaveCount(0);
         assertCleanConsole(msgs);
     });
+
+    // #344 finding 2: per-row `editing`/`note_value` signals are created
+    // INSIDE the reactive block that re-runs on ANY txn_refresh bump — void'ing
+    // (or re-dating, or saving a note on) one row used to tear down and
+    // recreate every OTHER row's signals too, silently discarding an
+    // in-progress, unsaved note edit on an unrelated row.
+    test('an unrelated row action does not discard an unsaved, still-open note edit on another row', async ({ page }) => {
+        const msgs = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const { lastName } = await createUniqueUser(token, 50.0);
+        await page.goto('/staff');
+        await openCardByLastName(page, lastName);
+        // Two transactions: rows render newest-first, so after both charges
+        // row[0] = "second" (most recent) and row[1] = "first" (older).
+        await chargeWithNote(page, '1.00', 'first');
+        await chargeWithNote(page, '1.00', 'second');
+
+        const rows = page.locator('[data-testid="transaction-row"]');
+        const olderRow = rows.nth(1);
+        const newerRow = rows.nth(0);
+        await expect(olderRow.locator('[data-testid="txn-note-text"]')).toContainText('first');
+        await expect(newerRow.locator('[data-testid="txn-note-text"]')).toContainText('second');
+
+        // Start editing the OLDER row's note but do NOT save.
+        await olderRow.locator('[data-testid="txn-note-edit"]').click();
+        const editInput = olderRow.locator('[data-testid="txn-note-edit-input"]');
+        await expect(editInput).toBeVisible();
+        await editInput.fill('UNSAVED DRAFT');
+
+        // Void the OTHER (newer) row — this bumps txn_refresh and re-fetches,
+        // re-running the whole rows block.
+        const voidResp = page.waitForResponse(
+            (r) => /\/api\/transactions\/\d+$/.test(r.url()) && r.request().method() === 'DELETE',
+        );
+        page.once('dialog', (d) => d.accept());
+        await newerRow.locator('[data-testid="txn-void"]').click();
+        const resp = await voidResp;
+        expect(resp.ok()).toBe(true);
+
+        // The older row's editor must still be open with the unsaved text —
+        // not reverted, not closed.
+        await expect(editInput).toBeVisible();
+        await expect(editInput).toHaveValue('UNSAVED DRAFT');
+
+        assertCleanConsole(msgs);
+    });
 });

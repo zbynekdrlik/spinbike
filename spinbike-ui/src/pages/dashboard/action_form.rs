@@ -6,7 +6,7 @@ use web_sys::{HtmlInputElement, HtmlSelectElement};
 use crate::api;
 use crate::components::DateInput;
 use crate::i18n::{self, Lang};
-use crate::util::parse_money;
+use crate::util::{RequestId, parse_money};
 
 use super::helpers::pass_is_active;
 use super::{CardInfo, CardPass, PaymentResp, ServiceInfo};
@@ -31,7 +31,6 @@ pub fn ActionForm(
     card: CardInfo,
     services: ReadSignal<Vec<ServiceInfo>>,
     set_selected: WriteSignal<Option<CardInfo>>,
-    msg: ReadSignal<String>,
     set_msg: WriteSignal<String>,
     set_txn_refresh: WriteSignal<u32>,
 ) -> impl IntoView {
@@ -58,18 +57,24 @@ pub fn ActionForm(
     };
 
     let today = crate::relative_date::today_local();
-    let default_valid_until = card
-        .pass
-        .as_ref()
-        .map(|p| {
-            if p.valid_until > today {
-                p.valid_until
-            } else {
-                today
-            }
-        })
-        .unwrap_or(today)
-        + chrono::Duration::days(30);
+    // #344 finding 4: factored so it can be called again later (on
+    // reselecting the pass service), not just once at mount.
+    let compute_default_valid_until = {
+        let pass = card.pass.clone();
+        move || {
+            pass.as_ref()
+                .map(|p| {
+                    if p.valid_until > today {
+                        p.valid_until
+                    } else {
+                        today
+                    }
+                })
+                .unwrap_or(today)
+                + chrono::Duration::days(30)
+        }
+    };
+    let default_valid_until = compute_default_valid_until();
     let (valid_until, set_valid_until) = signal(default_valid_until);
 
     let (selected_service_id, set_selected_service_id) = signal::<Option<i64>>(None);
@@ -77,6 +82,41 @@ pub fn ActionForm(
     let (err, set_err) = signal(String::new());
     // #234: Some(..) while an "already visited today" confirm is showing.
     let (pending_visit, set_pending_visit) = signal(None::<PendingVisitConfirm>);
+
+    // #344 finding 3: generation counter backing the success-banner
+    // auto-clear. do_topup/do_charge/do_log_visit each schedule a 2.5s
+    // clear of `set_msg` after a successful action — comparing the banner's
+    // rendered TEXT (`msg.get_untracked() == m`) is ambiguous when two
+    // DIFFERENT actions render IDENTICAL text (e.g. two visit_added_format
+    // calls for the same service, different customers): the first action's
+    // stale timer could match the second action's still-current banner and
+    // clear it early. Each call captures the generation it was scheduled
+    // under and only clears if that generation is still current.
+    //
+    // Uses `RequestId` (plain Rc<Cell<u32>>, #66/util.rs) rather than a
+    // Leptos signal for the generation itself: the scheduled clear fires up
+    // to 2.5s later, and by then the staff member may already have
+    // switched to a different customer — which disposes THIS ActionForm's
+    // whole reactive scope (mod.rs's `{move || match selected.get() {...}}`
+    // rebuilds `CardActionPanel`/`ActionForm` from scratch on every
+    // `selected` change). A signal created inside this scope and read/
+    // written from a callback that outlives it risks the "access a
+    // reactive value that has already been disposed" WASM panic this
+    // codebase has hit before (edit_info_form.rs, #89) — `RequestId`'s
+    // plain `Rc<Cell>` carries no such risk regardless of which scope is
+    // current when the timer fires. `set_msg` itself stays safe to call
+    // from here either way — it's a `WriteSignal` owned by the Dashboard's
+    // own outer scope in mod.rs, not by this (disposable) component.
+    let msg_gen = RequestId::new();
+    let schedule_msg_clear = move || {
+        let token = msg_gen.next();
+        spawn_local(async move {
+            gloo_timers::future::TimeoutFuture::new(2500).await;
+            if token.is_latest() {
+                set_msg.set(String::new());
+            }
+        });
+    };
 
     let is_monthly_pass = move || match selected_service_id.get() {
         Some(id) => services
@@ -87,6 +127,21 @@ pub fn ActionForm(
             .unwrap_or(false),
         None => false,
     };
+
+    // #344 finding 4: default_valid_until was computed ONCE at mount and
+    // never re-derived when the staff member switches selected_service_id
+    // away from and back to the pass service — a manual date edit made
+    // during an earlier (abandoned) pass selection would leak into a
+    // later, unrelated pass selection instead of showing a fresh
+    // suggestion. Re-derive every time is_monthly_pass transitions from
+    // not-selected to selected.
+    Effect::new(move |prev: Option<bool>| {
+        let now = is_monthly_pass();
+        if now && prev != Some(true) {
+            set_valid_until.set(compute_default_valid_until());
+        }
+        now
+    });
 
     let on_service_change = move |_| {
         let raw = service_ref
@@ -151,17 +206,12 @@ pub fn ActionForm(
                         "topup_ok_format",
                         &[&format!("{credit:.2}")],
                     );
-                    set_msg.set(m.clone());
+                    set_msg.set(m);
                     clear_note();
-                    // Auto-clear after 2.5s if msg hasn't been replaced by a
-                    // newer action. Mirrors the visit-button banner from
+                    // Auto-clear after 2.5s, generation-guarded (#344
+                    // finding 3). Mirrors the visit-button banner from
                     // #53 and removes the asymmetry described in #61.
-                    spawn_local(async move {
-                        gloo_timers::future::TimeoutFuture::new(2500).await;
-                        if msg.get_untracked() == m {
-                            set_msg.set(String::new());
-                        }
-                    });
+                    schedule_msg_clear();
                 }
                 Err(e) => set_err.set(e),
             }
@@ -266,7 +316,7 @@ pub fn ActionForm(
                             "charge_ok_format",
                             &[&format!("{:.2}", r.new_credit)],
                         );
-                        set_msg.set(m.clone());
+                        set_msg.set(m);
                         set_selected.update(|s| {
                             if let Some(c) = s {
                                 c.credit = r.new_credit;
@@ -274,14 +324,9 @@ pub fn ActionForm(
                         });
                         set_txn_refresh.update(|n| *n += 1);
                         clear_note();
-                        // Auto-clear after 2.5s if msg hasn't been replaced by
-                        // a newer action. Mirrors visit-button banner / #53.
-                        spawn_local(async move {
-                            gloo_timers::future::TimeoutFuture::new(2500).await;
-                            if msg.get_untracked() == m {
-                                set_msg.set(String::new());
-                            }
-                        });
+                        // Auto-clear after 2.5s, generation-guarded (#344
+                        // finding 3). Mirrors visit-button banner / #53.
+                        schedule_msg_clear();
                     }
                     Err(e) => set_err.set(e),
                 }
@@ -335,19 +380,15 @@ pub fn ActionForm(
                     Ok(_) => {
                         set_pending_visit.set(None);
                         let m = i18n::tf(lang.get_untracked(), "visit_added_format", &[&svc_name]);
-                        set_msg.set(m.clone());
+                        set_msg.set(m);
                         set_txn_refresh.update(|n| *n += 1);
                         clear_note();
-                        // Auto-clear: 2.5s after this set, clear msg only if
-                        // it still equals m. A subsequent visit / charge in
-                        // the window will replace msg with new text, the
-                        // comparison fails, and this timer becomes a no-op.
-                        spawn_local(async move {
-                            gloo_timers::future::TimeoutFuture::new(2500).await;
-                            if msg.get_untracked() == m {
-                                set_msg.set(String::new());
-                            }
-                        });
+                        // Auto-clear: 2.5s after this set, generation-guarded
+                        // (#344 finding 3) instead of a text-equality check —
+                        // two visits of the SAME service for different
+                        // customers render identical text, which a bare
+                        // text comparison can't tell apart.
+                        schedule_msg_clear();
                     }
                     Err(e) => {
                         if let Some((last_entry_at, source)) = e.already_visited_today() {
@@ -467,6 +508,20 @@ pub fn ActionForm(
                                 "charge_ok_format",
                                 &[&format!("{:.2}", r.new_credit)],
                             ));
+                            // #344 review follow-up: this quick-charge chip
+                            // didn't participate in the finding-3 generation
+                            // guard above, which made it MORE exposed than
+                            // before that fix, not less — with a plain
+                            // generation counter (rather than the old exact-
+                            // TEXT comparison), any outstanding do_topup/
+                            // do_charge/do_log_visit timer would clear
+                            // WHATEVER banner is showing after 2.5s,
+                            // regardless of text, if this chip never bumped
+                            // the generation. Calling the same helper here
+                            // brings it under the same tracking (and gives
+                            // it the same consistent auto-clear the sibling
+                            // actions already have).
+                            schedule_msg_clear();
                             set_selected.update(|s| {
                                 if let Some(c) = s {
                                     c.credit = r.new_credit;

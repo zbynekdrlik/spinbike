@@ -265,4 +265,66 @@ test.describe('Edit-info form field fixes', () => {
         // set_selected → on_close disposal.
         expect(consoleMessages).toEqual([]);
     });
+
+    // #344 finding 1: close-then-reopen fires a SECOND lookup fetch while the
+    // FIRST is still in flight. The refresh Effect's `smart_set` guard only
+    // compares the input's CURRENT value against a baseline fixed at
+    // component mount ("cur == initial") -- it never checks which of the two
+    // dispatches is actually the most recent. Reopening resets the DOM back
+    // to that same fixed baseline, so whichever response happens to resolve
+    // while cur still equals it gets applied -- even a genuinely OLDER one,
+    // if a fresher response's own payload left cur unchanged (matched the
+    // baseline, the common no-op case). We force that ordering deterministically:
+    // the FIRST lookup response is poisoned with a wrong name and delayed; the
+    // SECOND is the correct (unchanged) name and resolves immediately.
+    test('reopening the edit-info sheet before an earlier lookup resolves never lets the stale response win', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page);
+
+        const staffToken = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const user = await createUniqueUser(staffToken, 0, 'RC');
+
+        await page.goto('/staff');
+        await page.waitForSelector('input[type="search"]');
+        await page.fill('input[type="search"]', user.card_code);
+        const result = page.locator('[data-testid="search-result"]').first();
+        await expect(result).toBeVisible({ timeout: 3000 });
+        await result.click();
+        await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+
+        let lookupCount = 0;
+        await page.route('**/api/users/lookup/**', async (route) => {
+            lookupCount += 1;
+            const isFirst = lookupCount === 1;
+            const response = await route.fetch();
+            const body = await response.json();
+            if (isFirst) {
+                // Poison ONLY the first (older) dispatch's payload -- if it
+                // ever wins, the name field shows this instead of the real one.
+                body.name = 'STALE POISON NAME';
+                await new Promise((r) => setTimeout(r, 1200));
+            }
+            await route.fulfill({ response, json: body });
+        });
+
+        const sheet = page.locator('[data-testid="sheet-edit-info"]');
+
+        // Open #1 -> dispatches the poisoned, delayed lookup.
+        await page.locator('[data-testid="edit-info-button"]').click();
+        await expect(sheet).toBeVisible();
+        // Close before the delayed response lands.
+        await page.keyboard.press('Escape');
+        await expect(sheet).not.toBeVisible();
+        // Reopen -> dispatches the correct, fast lookup.
+        await page.locator('[data-testid="edit-info-button"]').click();
+        await expect(sheet).toBeVisible();
+
+        // Wait long enough for BOTH responses to have landed.
+        await page.waitForTimeout(1800);
+
+        await expect(sheet.locator('input[type="text"]').first()).toHaveValue(user.name);
+
+        expect(consoleMessages).toEqual([]);
+    });
 });

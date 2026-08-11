@@ -4,6 +4,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::api;
 use crate::i18n::{self, Lang};
 use crate::pages::dashboard::helpers::urlencoding_light;
+use crate::util::RequestId;
 
 #[derive(Debug, Clone, serde::Deserialize)]
 struct Row {
@@ -28,12 +29,27 @@ pub fn UsersByMovement() -> impl IntoView {
 
     const PAGE: i64 = 50;
 
+    // #344 finding 5: two rapid "Show more" clicks (the second slipping
+    // through before the `disabled` binding repaints — this repo's
+    // documented #60 sub-frame race window) used to both unconditionally
+    // extend `rows`, producing a duplicated and possibly stale-ordered
+    // page. A single RequestId shared by the mount fetch AND every
+    // `on_show_more` dispatch (same pattern as transactions_list.rs /
+    // negative_balance_list.rs / edit_info_form.rs, #66) drops a response
+    // once a newer dispatch has superseded it.
+    let req_id = RequestId::new();
+
     Effect::new(move |_| {
         set_loading.set(true);
         set_error.set(String::new());
+        let token = req_id.next();
         spawn_local(async move {
             let url = format!("/api/users/by-last-movement?limit={PAGE}&offset=0");
-            match api::get::<Vec<Row>>(&url).await {
+            let result = api::get::<Vec<Row>>(&url).await;
+            if !token.is_latest() {
+                return; // stale — a newer dispatch superseded this fetch (#344)
+            }
+            match result {
                 Ok(r) => {
                     let len = r.len() as i64;
                     set_rows.set(r);
@@ -49,9 +65,14 @@ pub fn UsersByMovement() -> impl IntoView {
     let on_show_more = move |_| {
         set_loading.set(true);
         let cur_offset = offset.get();
+        let token = req_id.next();
         spawn_local(async move {
             let url = format!("/api/users/by-last-movement?limit={PAGE}&offset={cur_offset}");
-            match api::get::<Vec<Row>>(&url).await {
+            let result = api::get::<Vec<Row>>(&url).await;
+            if !token.is_latest() {
+                return; // stale — a newer dispatch superseded this fetch (#344)
+            }
+            match result {
                 Ok(r) => {
                     let len = r.len() as i64;
                     set_rows.update(|v| v.extend(r));
