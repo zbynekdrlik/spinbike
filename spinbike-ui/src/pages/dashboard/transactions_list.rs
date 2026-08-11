@@ -11,9 +11,9 @@ use crate::util::RequestId;
 
 use super::TxnInfo;
 
-/// Per-row (editing, note_value) state, keyed by tx.id. See `row_states`
-/// below (#344 finding 2).
-type RowEditState = (RwSignal<bool>, RwSignal<String>);
+/// Per-row (editing, note_value) state, keyed by tx.id — PLAIN values, not
+/// signals. See `row_states` below (#344 finding 2) for why.
+type RowEditState = (bool, String);
 
 #[component]
 pub fn TransactionsList(
@@ -32,11 +32,20 @@ pub fn TransactionsList(
     // OUTER (non-reactive) scope so it survives a re-run of the
     // `t.iter().map(...)` block below — which happens on ANY txn_refresh
     // bump (void/re-date/note-save on ANY row), not just this row's own
-    // action. Without this, that whole block recreated every row's
-    // `editing`/`note_value` signals from scratch on every refresh,
-    // silently discarding an in-progress edit on an unrelated row. Scoped
-    // to this component instance (one per selected card), so it's
-    // naturally cleared when a different card is opened.
+    // action. That whole block returns a FRESH `Vec<AnyView>` every run
+    // (the same reason `<For/>` exists), so any `RwSignal` created inside
+    // it belongs to a reactive scope that gets disposed on the very next
+    // run — storing the SIGNAL HANDLE itself in this map would still point
+    // at a disposed node on reuse. Storing PLAIN (bool, String) values
+    // instead sidesteps that entirely: nothing here is a reactive-graph
+    // object, so it's always safe to read/write regardless of which render
+    // pass is current. Each row's `editing`/`note_value` *signals* are
+    // still recreated fresh every render (exactly like before this fix),
+    // just SEEDED from this persisted plain state instead of a hardcoded
+    // default — and every mutation (edit/type/cancel/save) writes back
+    // into it so the NEXT render can restore it. Scoped to this component
+    // instance (one per selected card), so it's naturally cleared when a
+    // different card is opened.
     let row_states: StoredValue<HashMap<i64, RowEditState>> = StoredValue::new(HashMap::new());
 
     let lang_for_fetch = lang;
@@ -114,31 +123,28 @@ pub fn TransactionsList(
                 };
 
                 let note_initial = tx.note.clone().unwrap_or_default();
-                // Per-row (editing, note_value) state — reused across a
-                // re-run of this whole block if this row was ALREADY seen
-                // (see `row_states` above, #344 finding 2). Only re-synced
-                // from the fresh server note when NOT currently mid-edit, so
+                // Seed this render's (fresh, per-render) editing/note_value
+                // signals from the PERSISTED plain state if this row was
+                // already seen (#344 finding 2) — but only when it was
+                // mid-edit; otherwise fall back to the fresh server note, so
                 // a genuinely changed server-side note (e.g. edited on
-                // another device) still shows for rows nobody is editing,
-                // while an in-progress edit's typed text is never clobbered.
-                let existing_row_state = row_states.with_value(|m| m.get(&tx_id).copied());
-                let (editing, note_value) = match existing_row_state {
-                    Some((e, n)) => {
-                        if !e.get_untracked() {
-                            n.set(note_initial.clone());
-                        }
-                        (e, n)
-                    }
-                    None => {
-                        let pair = (RwSignal::new(false), RwSignal::new(note_initial.clone()));
-                        row_states.update_value(|m| {
-                            m.insert(tx_id, pair);
-                        });
-                        pair
-                    }
+                // another device) still shows for rows nobody is editing.
+                let (seed_editing, seed_note) = row_states
+                    .with_value(|m| m.get(&tx_id).cloned())
+                    .filter(|(e, _)| *e)
+                    .unwrap_or((false, note_initial.clone()));
+                let (editing, set_editing) = signal(seed_editing);
+                let (note_value, set_note_value) = signal(seed_note);
+                // Persist every local change back into `row_states` so a
+                // LATER re-run (triggered by an unrelated row's action)
+                // can restore this row's in-progress edit instead of
+                // losing it — writes PLAIN values only, never a signal
+                // handle (see the comment on `row_states` above).
+                let persist_row_state = move |editing: bool, note: String| {
+                    row_states.update_value(|m| {
+                        m.insert(tx_id, (editing, note));
+                    });
                 };
-                let set_editing = editing;
-                let set_note_value = note_value;
                 let editing_date = RwSignal::new(false);
                 // tx.created_at is UTC text; convert to Bratislava local so the date
                 // pre-filled in the sheet matches what the user sees in the row.
@@ -148,7 +154,10 @@ pub fn TransactionsList(
                     .map(|dt| dt.date_naive())
                     .unwrap_or_else(crate::relative_date::today_local);
 
-                let on_edit = move |_| set_editing.set(true);
+                let on_edit = move |_| {
+                    set_editing.set(true);
+                    persist_row_state(true, note_value.get_untracked());
+                };
 
                 let on_void = move |_| {
                     let confirm_msg = i18n::t(lang.get(), "confirm_void");
@@ -162,6 +171,12 @@ pub fn TransactionsList(
                     // prior failure here (or elsewhere in the panel) must
                     // not keep showing once a new action is underway.
                     set_err.set(String::new());
+                    // Voiding THIS row while it happens to be mid-edit
+                    // shouldn't leave a note editor open on a now-voided
+                    // row after the refetch (#344 finding 2 edge case).
+                    row_states.update_value(|m| {
+                        m.remove(&tx_id);
+                    });
                     spawn_local(async move {
                         match api::delete_empty(&format!("/api/transactions/{tx_id}")).await {
                             Ok(()) => txn_refresh.update(|n| *n += 1),
@@ -190,6 +205,13 @@ pub fn TransactionsList(
                                 let on_cancel = move |_| {
                                     set_note_value.set(note_initial.clone());
                                     set_editing.set(false);
+                                    // Drop the persisted override entirely —
+                                    // "not editing" is already the map-miss
+                                    // default, and this row's note may have
+                                    // changed server-side since we started.
+                                    row_states.update_value(|m| {
+                                        m.remove(&tx_id);
+                                    });
                                 };
                                 let on_save = move |_| {
                                     let new_note = note_value.get_untracked();
@@ -209,6 +231,14 @@ pub fn TransactionsList(
                                         ).await {
                                             Ok(_) => {
                                                 set_editing.set(false);
+                                                // Drop the persisted override — the
+                                                // upcoming refetch (from the bump
+                                                // below) carries the real saved
+                                                // note, and "not editing" is
+                                                // already the map-miss default.
+                                                row_states.update_value(|m| {
+                                                    m.remove(&tx_id);
+                                                });
                                                 txn_refresh.update(|n| *n += 1);
                                             }
                                             Err(e) => set_err.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
@@ -220,7 +250,8 @@ pub fn TransactionsList(
                                         .and_then(|t| t.dyn_into::<web_sys::HtmlInputElement>().ok())
                                         .map(|el| el.value())
                                         .unwrap_or_default();
-                                    set_note_value.set(v);
+                                    set_note_value.set(v.clone());
+                                    persist_row_state(true, v);
                                 };
                                 view! {
                                     <div class="list-row__note-edit">
