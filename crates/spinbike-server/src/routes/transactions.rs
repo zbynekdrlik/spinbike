@@ -131,6 +131,12 @@ async fn patch_valid_until(
     let Some(row) = row else {
         return Err(ApiError::NotFound(ErrorCode::TransactionNotFound));
     };
+    // #324: same voided guard as patch_note / patch_created_at — an
+    // already-voided (refunded) transaction is frozen; every sibling
+    // mutation endpoint rejects it with 409, this one must too.
+    if row.deleted_at.is_some() {
+        return Err(ApiError::conflict(ErrorCode::ValidUntilOnVoidedTransaction));
+    }
     if row.valid_until.is_none() {
         return Err(super::bad_request(
             "Only pass transactions have valid_until",

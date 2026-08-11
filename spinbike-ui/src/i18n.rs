@@ -246,6 +246,7 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
         | ErrorCode::ClassCancelled
         | ErrorCode::NoteOnVoidedTransaction
         | ErrorCode::DateOnVoidedTransaction
+        | ErrorCode::ValidUntilOnVoidedTransaction
         | ErrorCode::NoActiveMonthlyPass
         | ErrorCode::MonthlyPassExists
         | ErrorCode::UserAlreadyDeleted
