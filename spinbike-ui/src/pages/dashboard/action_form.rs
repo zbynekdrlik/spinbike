@@ -32,6 +32,14 @@ pub fn ActionForm(
     services: ReadSignal<Vec<ServiceInfo>>,
     set_selected: WriteSignal<Option<CardInfo>>,
     set_msg: WriteSignal<String>,
+    /// Success-banner auto-clear generation counter — owned by
+    /// `DashboardPage` (mod.rs), NOT created here. `ActionForm` itself is
+    /// rebuilt from scratch on every `selected` change (mod.rs's
+    /// `{move || match selected.get() {...}}}`), so a `RequestId` created
+    /// INSIDE this component would mint an independent counter per mount
+    /// and could never detect a newer action from a LATER mount — see the
+    /// #344 finding-3 follow-up note where `msg_gen` is created.
+    msg_gen: RequestId,
     set_txn_refresh: WriteSignal<u32>,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
@@ -93,21 +101,23 @@ pub fn ActionForm(
     // clear it early. Each call captures the generation it was scheduled
     // under and only clears if that generation is still current.
     //
-    // Uses `RequestId` (plain Arc<AtomicU32>, #66/util.rs) rather than a
-    // Leptos signal for the generation itself: the scheduled clear fires up
-    // to 2.5s later, and by then the staff member may already have
-    // switched to a different customer — which disposes THIS ActionForm's
-    // whole reactive scope (mod.rs's `{move || match selected.get() {...}}`
-    // rebuilds `CardActionPanel`/`ActionForm` from scratch on every
-    // `selected` change). A signal created inside this scope and read/
-    // written from a callback that outlives it risks the "access a
-    // reactive value that has already been disposed" WASM panic this
-    // codebase has hit before (edit_info_form.rs, #89) — `RequestId`'s
-    // plain `Arc<AtomicU32>` carries no such risk regardless of which scope
-    // is current when the timer fires. `set_msg` itself stays safe to call
-    // from here either way — it's a `WriteSignal` owned by the Dashboard's
-    // own outer scope in mod.rs, not by this (disposable) component.
-    let msg_gen = RequestId::new();
+    // `msg_gen` is a PROP (from `DashboardPage` via `CardActionPanel`), not
+    // created here — see its doc comment above and the #344 finding-3
+    // follow-up note in mod.rs for why: this component is rebuilt from
+    // scratch on every `selected` change, and a `RequestId` created inside
+    // it would mint an independent counter per mount, unable to detect a
+    // newer action dispatched from a LATER mount (a different customer, or
+    // even this SAME action's own `set_selected` success call). `RequestId`
+    // (plain `Arc<AtomicU32>`, #66/util.rs) is used instead of a Leptos
+    // signal for the generation itself because the scheduled clear fires up
+    // to 2.5s later, well after this component's own reactive scope may
+    // already be disposed — a signal read/written from a callback that
+    // outlives its creating scope risks the "access a reactive value that
+    // has already been disposed" WASM panic this codebase has hit before
+    // (edit_info_form.rs, #89); a plain `Arc` carries no such risk. `set_msg`
+    // itself stays safe to call from here either way — it's a `WriteSignal`
+    // owned by the Dashboard's own outer scope in mod.rs, not by this
+    // (disposable) component.
     let schedule_msg_clear = move || {
         let token = msg_gen.next();
         spawn_local(async move {

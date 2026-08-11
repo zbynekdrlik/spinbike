@@ -4,6 +4,7 @@ use leptos::prelude::*;
 use crate::components::{PersistentToggles, Segmented, UpcomingClasses};
 use crate::i18n::{self, Lang};
 use crate::relative_date::format_last_visit;
+use crate::util::RequestId;
 
 use super::action_form::ActionForm;
 use super::block_button::BlockButton;
@@ -33,6 +34,12 @@ pub fn CardActionPanel(
     services: ReadSignal<Vec<ServiceInfo>>,
     set_selected: WriteSignal<Option<CardInfo>>,
     set_msg: WriteSignal<String>,
+    /// The success-banner auto-clear generation counter — owned by
+    /// `DashboardPage` (mod.rs) so it survives every `CardActionPanel`/
+    /// `ActionForm` remount (switching customer, or a same-customer
+    /// topup/charge success). Passed straight through to `ActionForm`,
+    /// the only consumer. See the #344 finding-3 follow-up note in mod.rs.
+    msg_gen: RequestId,
     /// Red-alert channel (mod.rs:473-478) — errors from BlockButton,
     /// TransactionsList and EditInfoForm route here instead of the green
     /// `set_msg` success channel (#126). ActionForm/AddPersonForm keep
@@ -188,6 +195,7 @@ pub fn CardActionPanel(
                 services=services
                 set_selected=set_selected
                 set_msg=set_msg
+                msg_gen=msg_gen
                 set_txn_refresh=txn_refresh.write_only()
             />
 

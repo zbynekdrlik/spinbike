@@ -28,6 +28,7 @@ use web_sys::HtmlInputElement;
 
 use crate::api;
 use crate::i18n::{self, Lang};
+use crate::util::RequestId;
 
 use helpers::urlencoding_light;
 
@@ -177,6 +178,22 @@ pub fn DashboardPage() -> impl IntoView {
     let (show_add_person, set_show_add_person) = signal(false);
     let (msg, set_msg) = signal(String::new());
     let (err, set_err) = signal(String::new());
+    // #344 finding-3 follow-up: this MUST live here, not inside `ActionForm`
+    // itself. `{move || match selected.get() {...}}}` below rebuilds
+    // `CardActionPanel`/`ActionForm` from scratch on every `selected`
+    // change (switching customer, or even a same-customer topup/charge
+    // success, which also calls `set_selected.set/update(...)`) -- a
+    // `RequestId` created INSIDE `ActionForm` would mint a brand-new,
+    // independent `Arc<AtomicU32>` on every such rebuild, so an OLDER
+    // action's pending 2.5s auto-clear timer (holding a token from its own
+    // now-orphaned counter, which nothing else can ever bump again) would
+    // always see itself as "latest" and always fire -- defeating the whole
+    // point of the generation guard. `set_msg` above already lives at this
+    // scope for exactly this reason (it survives every `ActionForm`
+    // remount); `msg_gen` needs to as well, so ANY action from ANY
+    // `ActionForm` mount bumps the SAME shared counter. See the design
+    // note on #344.
+    let msg_gen = RequestId::new();
     // Keyboard-driven highlight within the search dropdown. 0 means "first
     // suggestion" — so typing + Enter picks the top match without a click.
     let (highlighted_idx, set_highlighted_idx) = signal(0usize);
@@ -579,6 +596,7 @@ pub fn DashboardPage() -> impl IntoView {
                     services=services
                     set_selected=set_selected
                     set_msg=set_msg
+                    msg_gen=msg_gen.clone()
                     set_err=set_err
                     on_close=Callback::new(clear_selection)
                 />
