@@ -2646,6 +2646,117 @@ mod tests {
         assert_eq!(integrity, "ok", "integrity_check must pass after V13");
     }
 
+    /// Issue #322: V13's card→user promotion (step 2, ~line 478) reads
+    /// `credit`/`card_code`/`blocked`/`allow_debit`/`company`/`search_text`
+    /// off `cards` via unguarded scalar subqueries (no LIMIT/ORDER BY/
+    /// aggregate). If a user has 2+ linked cards, SQLite silently picks one
+    /// arbitrary row per column instead of erroring — the other card(s)'
+    /// data (credit!) is destroyed with no error, no log, since `cards` is
+    /// DROPped in the very same migration transaction.
+    ///
+    /// V13's own SQL can't be edited (already applied on production,
+    /// protected by the V19 checksum tamper-detection guard below) — so the
+    /// fix is a precondition check `run_migrations` (db/mod.rs) runs
+    /// immediately before attempting V13: refuse to apply it at all while
+    /// any user has 2+ linked cards, converting the silent corruption into
+    /// a loud, safe failure. This test drives the REAL `run_migrations`
+    /// entry point (not `apply_sql_block`, which bypasses the runner) to
+    /// prove that guard exists.
+    #[tokio::test]
+    async fn v13_refuses_to_apply_when_a_user_has_two_linked_cards() {
+        use sqlx::sqlite::SqlitePoolOptions;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        // Bootstrap schema_version (run_migrations expects this table) and
+        // apply migrations 1..=12 manually so we can seed dangerous `cards`
+        // data before letting the REAL run_migrations attempt V13.
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL DEFAULT '',
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 12) {
+            apply_sql_block(&pool, sql).await;
+            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
+                .bind(v)
+                .bind(desc)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+
+        // Seed one user with TWO linked cards — the dangerous precondition.
+        let user_id: i64 = sqlx::query_scalar(
+            "INSERT INTO users(email,name,role) VALUES('dup@x','Dup User','customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        sqlx::query(
+            "INSERT INTO cards(barcode,user_id,blocked,credit,allow_debit)
+             VALUES('DUPE1', ?, 0, 10.0, 0)",
+        )
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO cards(barcode,user_id,blocked,credit,allow_debit)
+             VALUES('DUPE2', ?, 0, 25.0, 0)",
+        )
+        .bind(user_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // The REAL migration runner (crate::db::run_migrations) must refuse
+        // to proceed instead of silently applying V13's lossy promotion.
+        let result = run_migrations(&pool).await;
+        let err = result
+            .expect_err("run_migrations must refuse to apply V13 while a user has 2+ linked cards");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("2+ linked") || msg.contains("multiple linked"),
+            "error should explain the dangerous precondition, got: {msg}"
+        );
+        assert!(
+            msg.contains("322"),
+            "error should reference issue #322, got: {msg}"
+        );
+
+        // V13 must NOT have been committed: `cards` must still exist with
+        // both rows intact — no partial/lossy promotion, no drop.
+        let cards_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM cards")
+            .fetch_one(&pool)
+            .await
+            .expect("cards table must still exist — V13 must not have committed");
+        assert_eq!(
+            cards_count, 2,
+            "both cards must survive untouched — no partial/lossy promotion"
+        );
+
+        let applied_max: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM schema_version")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            applied_max, 12,
+            "schema_version must not record V13 as applied"
+        );
+    }
+
     #[tokio::test]
     async fn v14_renames_monthly_pass_label() {
         let pool = create_memory_pool().await.unwrap();
