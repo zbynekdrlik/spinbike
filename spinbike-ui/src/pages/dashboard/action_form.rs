@@ -93,7 +93,7 @@ pub fn ActionForm(
     // clear it early. Each call captures the generation it was scheduled
     // under and only clears if that generation is still current.
     //
-    // Uses `RequestId` (plain Rc<Cell<u32>>, #66/util.rs) rather than a
+    // Uses `RequestId` (plain Arc<AtomicU32>, #66/util.rs) rather than a
     // Leptos signal for the generation itself: the scheduled clear fires up
     // to 2.5s later, and by then the staff member may already have
     // switched to a different customer — which disposes THIS ActionForm's
@@ -103,8 +103,8 @@ pub fn ActionForm(
     // written from a callback that outlives it risks the "access a
     // reactive value that has already been disposed" WASM panic this
     // codebase has hit before (edit_info_form.rs, #89) — `RequestId`'s
-    // plain `Rc<Cell>` carries no such risk regardless of which scope is
-    // current when the timer fires. `set_msg` itself stays safe to call
+    // plain `Arc<AtomicU32>` carries no such risk regardless of which scope
+    // is current when the timer fires. `set_msg` itself stays safe to call
     // from here either way — it's a `WriteSignal` owned by the Dashboard's
     // own outer scope in mod.rs, not by this (disposable) component.
     let msg_gen = RequestId::new();
