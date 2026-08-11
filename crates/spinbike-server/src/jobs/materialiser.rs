@@ -121,11 +121,15 @@ mod tests {
     /// OS/TZ config — UTC on the prod systemd unit, drifting from real
     /// Bratislava local time around midnight; the #205/#222 bug class).
     ///
-    /// This is a source-level guard rather than a behavioral one: both this
-    /// dev box and the CI runner already run with `TZ=Europe/Bratislava`, so
-    /// `Local::now()` and `today_bratislava()` agree at test time regardless
-    /// of which one `sweep()` calls — the divergence only exists on prod's
-    /// UTC-configured host and can't be reproduced behaviorally here.
+    /// This stays a source-level guard rather than a behavioral one because
+    /// it pins the CALL SITE itself: a behavioral test could only observe a
+    /// divergence during the ~1-2h/day window where Europe/Bratislava and
+    /// UTC disagree on the calendar date, which would make the test flaky
+    /// by time-of-day. Since #336, CI additionally runs this whole suite
+    /// under `TZ=UTC` in the `test-tz-utc` job, so a regression here is now
+    /// ALSO caught behaviorally on every push — this guard just makes the
+    /// failure immediate and self-explanatory instead of a midnight-only
+    /// surprise.
     #[test]
     fn sweep_computes_today_via_shared_bratislava_helper() {
         let src = include_str!("materialiser.rs");

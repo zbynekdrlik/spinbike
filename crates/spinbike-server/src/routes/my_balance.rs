@@ -28,6 +28,11 @@ pub struct RecentTx {
     pub amount: f64,
     pub valid_until: Option<String>,
     pub note: Option<String>,
+    /// #328: whether this row was actually authored by the door route —
+    /// the trustworthy classifier the frontend uses to decide whether to
+    /// render the localized "door re-entry" label. NOT derived from `note`
+    /// text (a staff-editable field with no prefix guard).
+    pub is_door_press: bool,
     /// Joined from services (#147) — None when the transaction wasn't tied
     /// to a service (e.g. a plain top-up). Same join as
     /// `db::transactions::list_transactions_for_user_paginated`, used by the
@@ -140,6 +145,7 @@ async fn my_balance(
     tracing::debug!(user_id, "my_balance: querying recent transactions");
     let recent: Vec<RecentTx> = sqlx::query_as::<_, RecentTx>(
         "SELECT t.id, t.created_at, t.action, t.amount, t.valid_until, t.note, \
+                t.is_door_press, \
                 s.name_sk AS service_name_sk, s.name_en AS service_name_en \
            FROM transactions t \
            LEFT JOIN services s ON s.id = t.service_id \

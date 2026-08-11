@@ -69,6 +69,13 @@ pub enum ErrorCode {
     ClassCancelled,
     NoteOnVoidedTransaction,
     DateOnVoidedTransaction,
+    /// `patch_valid_until` (`routes/transactions.rs`) rejecting an edit of
+    /// `valid_until` on an already-voided (soft-deleted) pass transaction —
+    /// the same voided guard `patch_note`/`patch_created_at` already have
+    /// (#324, sibling of `NoteOnVoidedTransaction`/`DateOnVoidedTransaction`
+    /// above; `patch_valid_until` was the only one of the 4 mutation
+    /// endpoints missing it).
+    ValidUntilOnVoidedTransaction,
     NoActiveMonthlyPass,
     MonthlyPassExists,
     UserAlreadyDeleted,
@@ -132,6 +139,9 @@ impl ErrorCode {
             ErrorCode::ClassCancelled => "Class is cancelled",
             ErrorCode::NoteOnVoidedTransaction => "Cannot edit note on a voided transaction",
             ErrorCode::DateOnVoidedTransaction => "Cannot edit date on a voided transaction",
+            ErrorCode::ValidUntilOnVoidedTransaction => {
+                "Cannot edit valid_until on a voided transaction"
+            }
             ErrorCode::NoActiveMonthlyPass => {
                 "User has no active monthly pass; use /api/payments/charge"
             }
@@ -271,6 +281,11 @@ mod tests {
             ErrorCode::DateOnVoidedTransaction,
             "date_on_voided_transaction",
             "Cannot edit date on a voided transaction",
+        ),
+        (
+            ErrorCode::ValidUntilOnVoidedTransaction,
+            "valid_until_on_voided_transaction",
+            "Cannot edit valid_until on a voided transaction",
         ),
         (
             ErrorCode::NoActiveMonthlyPass,

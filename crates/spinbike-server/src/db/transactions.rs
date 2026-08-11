@@ -110,8 +110,17 @@ pub async fn list_transactions_for_user(
 /// Paginated variant of [`list_transactions_for_user`].
 ///
 /// * `limit`  — number of rows to return; defaults to 10, capped at 500.
-/// * `before` — ISO 8601 datetime cursor; when present, only rows with
-///   `created_at < before` are returned.
+/// * `before` — composite `(created_at, id)` keyset cursor, encoded as
+///   `"<created_at>|<id>"` (same wire format and parser as
+///   [`crate::db::reports::parse_before_cursor`]); when present, only rows
+///   ordering strictly BEFORE that `(created_at, id)` pair are returned.
+///   A malformed/unparseable cursor is treated as absent (matches
+///   `db::reports`'s day/range cursor fallback) — never a partial filter.
+///   A plain `created_at`-only string (the pre-#331 cursor shape) also
+///   parses as absent, since it has no `|` — see #331: the previous
+///   single-column `created_at < ?` filter gave SQLite no tiebreaker
+///   against its own `(created_at DESC, id DESC)` ordering and could
+///   silently drop same-second rows once a page boundary landed mid-tie.
 ///
 /// Soft-deleted rows are included (staff need to see voided entries).
 pub async fn list_transactions_for_user_paginated(
@@ -121,20 +130,23 @@ pub async fn list_transactions_for_user_paginated(
     before: Option<&str>,
 ) -> Result<Vec<TransactionRow>> {
     let effective_limit = limit.unwrap_or(10).min(500) as i64;
+    let before_parsed = before.and_then(crate::db::reports::parse_before_cursor);
 
-    let txns = match before {
-        Some(cursor) => sqlx::query_as::<_, TransactionRow>(
+    let txns = match before_parsed {
+        Some((ts, id)) => sqlx::query_as::<_, TransactionRow>(
             "SELECT t.id, t.user_id, t.staff_id, t.service_id,
                         t.amount, t.action, t.created_at, t.valid_until,
                         s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.deleted_at, t.note
                  FROM transactions t
                  LEFT JOIN services s ON s.id = t.service_id
-                 WHERE t.user_id = ? AND t.created_at < ?
+                 WHERE t.user_id = ? AND (t.created_at < ? OR (t.created_at = ? AND t.id < ?))
                  ORDER BY t.created_at DESC, t.id DESC
                  LIMIT ?",
         )
         .bind(user_id)
-        .bind(cursor)
+        .bind(&ts)
+        .bind(&ts)
+        .bind(id)
         .bind(effective_limit)
         .fetch_all(pool)
         .await
@@ -423,9 +435,18 @@ mod tests {
         let user_id = insert_test_user(&pool, "PAG-2 User").await;
         let timestamps = insert_n_transactions(&pool, user_id, 5).await;
 
-        // cursor is the 3rd timestamp (index 2, "2026-01-01T00:00:02").
-        // Only rows with created_at < cursor must be returned: indices 0 and 1.
-        let cursor = &timestamps[2];
+        // cursor is the composite (created_at, id) of the 3rd row (index 2,
+        // "2026-01-01T00:00:02") — #331 switched the cursor to the same
+        // "<created_at>|<id>" wire format db::reports::parse_before_cursor
+        // uses. Only rows with (created_at, id) < the cursor's own row must
+        // be returned: indices 0 and 1.
+        let cursor_ts = &timestamps[2];
+        let cursor_id: i64 = sqlx::query_scalar("SELECT id FROM transactions WHERE created_at = ?")
+            .bind(cursor_ts)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let cursor = format!("{cursor_ts}|{cursor_id}");
         let rows =
             list_transactions_for_user_paginated(&pool, user_id, None, Some(cursor.as_str()))
                 .await
@@ -438,10 +459,75 @@ mod tests {
         );
         for row in &rows {
             assert!(
-                row.created_at < *cursor,
+                row.created_at < *cursor_ts,
                 "every row must be strictly older than the cursor"
             );
         }
+    }
+
+    /// #331: the `before` cursor filtered only `t.created_at < ?` while the
+    /// query orders by `(t.created_at DESC, t.id DESC)` — a keyset cursor
+    /// missing the `id` tiebreaker `db::reports`'s day/range cursors already
+    /// have. When multiple same-user rows share a `created_at` second
+    /// (SQLite's `datetime('now')` second-precision — the #291 class
+    /// documented in `.claude/rules/transaction-ordering.md`), paging past
+    /// the boundary with a composite `(created_at, id)` cursor must return
+    /// exactly the REMAINING tied rows, not silently duplicate the row the
+    /// cursor was built from (the row-comparison bug a naive string `<`
+    /// against a composite `"ts|id"` cursor produces: "ts" is a strict
+    /// prefix of "ts|id", so BINARY-collation `<` treats every same-second
+    /// row, including the one already shown, as still "less than" the
+    /// cursor).
+    ///
+    /// [red -> green]: failed (page 2 duplicated the already-shown row,
+    /// returning 3 rows including the cursor's own row) before the
+    /// composite-cursor predicate existed; passes now that the query filters
+    /// on `(created_at, id) < (cursor_ts, cursor_id)`, excluding exactly the
+    /// row the cursor was built from and keeping the two older ties.
+    #[tokio::test]
+    async fn paginated_before_cursor_composite_key_excludes_only_the_cursor_row_on_ties() {
+        let pool = setup().await;
+        let user_id = insert_test_user(&pool, "PAG-TIE User").await;
+
+        let tied_at = "2026-01-01 12:00:00";
+        let mut ids = Vec::with_capacity(3);
+        for _ in 0..3 {
+            let id: i64 = sqlx::query_scalar(
+                "INSERT INTO transactions (user_id, amount, action, created_at)
+                 VALUES (?, ?, ?, ?) RETURNING id",
+            )
+            .bind(user_id)
+            .bind(1.0_f64)
+            .bind("charge")
+            .bind(tied_at)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            ids.push(id);
+        }
+        // ids[0] < ids[1] < ids[2] (AUTOINCREMENT, insertion order). Ordered
+        // by (created_at DESC, id DESC) all three tie on created_at, so the
+        // full order is ids[2], ids[1], ids[0].
+
+        // Page 1's last row is ids[2] — build the composite cursor from it.
+        let cursor = format!("{tied_at}|{}", ids[2]);
+
+        let rows =
+            list_transactions_for_user_paginated(&pool, user_id, None, Some(cursor.as_str()))
+                .await
+                .unwrap();
+
+        assert_eq!(
+            rows.len(),
+            2,
+            "page 2 must contain exactly the two remaining tied rows, never re-include \
+             the cursor's own row (ids[2]) nor drop the other ties"
+        );
+        assert_eq!(
+            rows[0].id, ids[1],
+            "remaining ties must stay ordered newest-id-first"
+        );
+        assert_eq!(rows[1].id, ids[0]);
     }
 
     #[tokio::test]

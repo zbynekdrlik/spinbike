@@ -138,7 +138,7 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
 mod tests {
     use super::*;
     use crate::db::{create_memory_pool, run_migrations};
-    use chrono::{Datelike, Duration, Local};
+    use chrono::{Datelike, Duration};
 
     /// Returns (user_id, booking_id) for a user booked for the nearest Monday
     /// at 18:00 (V6-seeded template). If `pass` is true, a pass transaction is
@@ -173,7 +173,7 @@ mod tests {
         .await
         .unwrap();
 
-        let today = Local::now().date_naive();
+        let today = crate::util::today_bratislava();
         let days_to_mon = (7 - today.weekday().num_days_from_monday() as i64) % 7;
         let mon = today + Duration::days(days_to_mon);
 
@@ -186,7 +186,7 @@ mod tests {
 
     /// Fake "now" of Monday 14:00 (= class_start - 4h, boundary inclusive).
     fn now_at_14() -> String {
-        let today = Local::now().date_naive();
+        let today = crate::util::today_bratislava();
         let days_to_mon = (7 - today.weekday().num_days_from_monday() as i64) % 7;
         let mon = today + Duration::days(days_to_mon);
         format!("{mon} 14:00:00")
@@ -328,8 +328,8 @@ mod tests {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
 
-        let now = chrono::Local::now();
-        let today = now.date_naive();
+        let now = crate::util::now_bratislava();
+        let today = now.date();
         let weekday = today.weekday().num_days_from_monday() as i64;
         // 30 minutes from now — always inside the 4h window but unlikely to
         // collide with V6's 18:00 seed (which, if matched, just yields a
@@ -363,7 +363,7 @@ mod tests {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         let (_cid, _bid) = seed_booking(&pool, true, 0.0).await;
-        let today = Local::now().date_naive();
+        let today = crate::util::today_bratislava();
         let days_to_mon = (7 - today.weekday().num_days_from_monday() as i64) % 7;
         let mon = today + Duration::days(days_to_mon);
         // 10:00 is 8 hours before 18:00, outside the 4h window.
@@ -418,7 +418,7 @@ mod tests {
         .fetch_one(&pool)
         .await
         .unwrap();
-        let today = Local::now().date_naive();
+        let today = crate::util::today_bratislava();
         let days_to_mon = (7 - today.weekday().num_days_from_monday() as i64) % 7;
         let mon = today + Duration::days(days_to_mon);
         let bid =

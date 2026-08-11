@@ -131,6 +131,12 @@ async fn patch_valid_until(
     let Some(row) = row else {
         return Err(ApiError::NotFound(ErrorCode::TransactionNotFound));
     };
+    // #324: same voided guard as patch_note / patch_created_at — an
+    // already-voided (refunded) transaction is frozen; every sibling
+    // mutation endpoint rejects it with 409, this one must too.
+    if row.deleted_at.is_some() {
+        return Err(ApiError::conflict(ErrorCode::ValidUntilOnVoidedTransaction));
+    }
     if row.valid_until.is_none() {
         return Err(super::bad_request(
             "Only pass transactions have valid_until",
@@ -284,11 +290,15 @@ mod tests {
     /// hand-rolling the same `.from_local_datetime(...).earliest()...`
     /// logic `util.rs` already implements and unit-tests.
     ///
-    /// This is a source-level guard rather than a behavioral one: both this
-    /// dev box and the CI runner already run with `TZ=Europe/Bratislava`, so
-    /// `Local::now()` and `today_bratislava()` agree at test time regardless
-    /// of which one this handler calls — the divergence only exists on
-    /// prod's UTC-configured host and can't be reproduced behaviorally here.
+    /// This stays a source-level guard rather than a behavioral one because
+    /// it pins the CALL SITE itself: a behavioral test could only observe a
+    /// divergence during the ~1-2h/day window where Europe/Bratislava and
+    /// UTC disagree on the calendar date, which would make the test flaky
+    /// by time-of-day. Since #336, CI additionally runs this whole suite
+    /// under `TZ=UTC` in the `test-tz-utc` job, so a regression here is now
+    /// ALSO caught behaviorally on every push — this guard just makes the
+    /// failure immediate and self-explanatory instead of a midnight-only
+    /// surprise.
     #[test]
     fn patch_created_at_reuses_shared_bratislava_helpers() {
         let src = include_str!("transactions.rs");

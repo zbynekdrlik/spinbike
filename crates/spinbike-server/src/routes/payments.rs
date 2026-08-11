@@ -374,7 +374,7 @@ async fn log_visit(
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
-            "SELECT created_at, note FROM transactions \
+            "SELECT created_at, is_door_press FROM transactions \
              WHERE user_id = ? AND deleted_at IS NULL \
                AND created_at >= ? AND created_at < ? \
                AND service_id IN (SELECT id FROM services WHERE name_en IN ({placeholders})) \
@@ -382,26 +382,22 @@ async fn log_visit(
                      OR (action = 'charge' AND amount < 0 AND valid_until IS NULL) ) \
              ORDER BY created_at DESC, id DESC LIMIT 1"
         );
-        let mut q = sqlx::query_as::<_, (String, Option<String>)>(&sql)
+        let mut q = sqlx::query_as::<_, (String, i64)>(&sql)
             .bind(body.user_id)
             .bind(&day_start)
             .bind(&day_end);
         for n in CLASS_VISIT_NAMES_EN {
             q = q.bind(*n);
         }
-        let existing: Option<(String, Option<String>)> = q
+        let existing: Option<(String, i64)> = q
             .fetch_optional(&state.pool)
             .await
             .map_err(internal_error)?;
-        if let Some((created_at, note)) = existing {
-            // Door rows carry the English `"door: 1st"`/`"door: 2nd"` note
-            // prefix written by routes/door.rs — anything else (including no
-            // note) is a manual log-visit.
-            let source = if note.as_deref().is_some_and(|n| n.starts_with("door:")) {
-                "door"
-            } else {
-                "manual"
-            };
+        if let Some((created_at, is_door_press)) = existing {
+            // #328: classified by the dedicated `is_door_press` column, NOT
+            // by re-deriving the `note.starts_with("door:")` convention —
+            // a staff-edited note must not be able to misreport this field.
+            let source = if is_door_press == 1 { "door" } else { "manual" };
             return Err(ApiError::conflict_extra(
                 ErrorCode::AlreadyVisitedToday,
                 serde_json::json!({

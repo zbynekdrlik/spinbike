@@ -48,15 +48,35 @@ literal (bypassing the `datetime('now')` default entirely) — reuse this
 pattern for any new same-pattern test rather than trying to race two real
 inserts within the same wall-clock second.
 
-## Known dormant gap — the `before` pagination cursor does not account for the tiebreaker
+## Fixed — the `before` pagination cursor now carries the tiebreaker (#331)
 
-`list_transactions_for_user_paginated`'s `before` cursor filters with
-`WHERE t.created_at < ?` (created_at ONLY). If a page boundary ever fell
-exactly on a same-second tie, the next page's filter would exclude the
-tied row with the smaller `id` (which the `id DESC` ordering now places
-SECOND within the tie) — silently dropping it instead of showing it on
-either page. **Currently unreachable**: no caller passes `before` today
+`list_transactions_for_user_paginated`'s `before` cursor used to filter
+with `WHERE t.created_at < ?` (created_at ONLY), which had no tiebreaker
+against a same-second tie — this is now fixed. The cursor is parsed by the
+shared `crate::db::reports::parse_before_cursor` (composite
+`"<created_at>|<id>"` wire format, same helper `db/reports.rs`'s day/range
+cursors already used) and the query filters on
+`(t.created_at < ? OR (t.created_at = ? AND t.id < ?))`, matching the
+`(created_at DESC, id DESC)` ordering exactly. A cursor with no `|`
+(malformed, or the old pre-#331 plain-timestamp shape) parses as absent and
+falls back to no cursor filter — same fallback `db/reports.rs` uses,
+never a partial/garbage filter.
+
+**Any NEW paginated query against `transactions` (or any other
+`created_at`-ordered table) should reuse `parse_before_cursor` and this
+same OR-predicate shape** rather than inventing a new cursor encoding — it
+is now the ONE established pattern, used by `db/reports.rs`'s day/range
+cursors AND `db/transactions.rs`'s user-history cursor.
+
+Still true: no real caller passes `before` to this endpoint today
 (`spinbike-ui/src/pages/dashboard/transactions_list.rs` always omits it),
-and no E2E test exercises the cursor. If real pagination is ever wired up
-here, the cursor needs to become a composite `(created_at, id)` key, not
-just `created_at`.
+so this remains dormant in production traffic — but the cursor CONTRACT is
+now correct for whenever real pagination gets wired up here.
+
+Test: `db/transactions.rs`'s
+`paginated_before_cursor_composite_key_excludes_only_the_cursor_row_on_ties`
+forces a 3-way same-second tie via raw SQL inserts and asserts the
+composite cursor built from the newest tied row excludes exactly that row
+on the next page (not the whole tied group, and not a duplicate of it) —
+same "raw SQL insert with an explicit `created_at` literal" test pattern
+as `same_created_at_transactions_break_ties_by_id_newest_first` above.

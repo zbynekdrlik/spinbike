@@ -58,7 +58,7 @@ async fn search(app: &TestApp, q: &str) -> (axum::http::StatusCode, Vec<UserResp
     .await
 }
 
-fn fmt(d: chrono::DateTime<chrono::Local>) -> String {
+fn fmt(d: chrono::NaiveDateTime) -> String {
     d.format("%Y-%m-%d %H:%M:%S").to_string()
 }
 
@@ -137,7 +137,7 @@ async fn last_visit_at_populated_correctly_for_each_seed_shape() {
         )
         .await;
 
-    let now = chrono::Local::now();
+    let now = spinbike_server::util::now_bratislava();
     let yesterday = (now - chrono::Duration::days(1))
         .format("%Y-%m-%d 12:00:00")
         .to_string();
@@ -329,7 +329,7 @@ async fn search_results_sort_by_last_visit_desc() {
         )
         .await;
 
-    let now = chrono::Local::now();
+    let now = spinbike_server::util::now_bratislava();
     let today_str = fmt(now);
     let yesterday = (now - chrono::Duration::days(1))
         .format("%Y-%m-%d 12:00:00")
@@ -393,7 +393,7 @@ async fn barcode_prefix_match_overrides_last_visit_sort() {
         .seed_card("XY_LVPFX99Z", 0.0, Some("NewVisit"), Some("Z"), None, None)
         .await;
 
-    let now = chrono::Local::now();
+    let now = spinbike_server::util::now_bratislava();
     let hundred_days = (now - chrono::Duration::days(100))
         .format("%Y-%m-%d 12:00:00")
         .to_string();

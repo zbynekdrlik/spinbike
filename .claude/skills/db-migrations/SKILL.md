@@ -43,6 +43,19 @@ When dropping or renaming a column on a heavily-referenced table:
 3. Add each match site to the plan task's "Files" block before writing the migration
 4. Verify sign/format invariants against actual prod data before writing comparison logic (legacy data may use different formats: `MM/DD/YY` vs `YYYY-MM-DD`, positive vs negative amount conventions)
 
+**The SAME exhaustive-grep discipline applies when REPLACING a free-text-derived
+heuristic with a dedicated column** (not just column rename/drop) — #328
+(is_door_press) added a column to replace `note.starts_with("door:")`
+classification and the FIRST grep sweep only covered
+`crates/spinbike-server/src` (backend query sites: `door.rs`, `payments.rs`).
+A deep-review pass on the merged diff caught a THIRD site the sweep missed:
+`spinbike-ui/src/pages/my_balance.rs` independently re-derived the same
+note-prefix convention for DISPLAY (whether to render a localized
+"door re-entry" label). Any heuristic classifying a row by matching text in
+a free-text/user-editable field is a candidate for this bug class — grep the
+literal string pattern (e.g. `starts_with("door:"`, `LIKE '...%'`) across
+BOTH `crates/spinbike-server/src` AND `spinbike-ui/src` before considering
+the sweep complete, not just the backend crate.
 A planning miss here causes a cascade of runtime failures (prod code) or CI failures (tests).
 
 ## Validate migrations against prod-synced dev DB before merge

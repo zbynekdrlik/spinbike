@@ -1,3 +1,13 @@
+//! Test-only fixture endpoints. `routes()` is mounted ONLY when
+//! `SPINBIKE_TEST_MODE=1` (gated in `lib.rs::build_router`, logged loudly at
+//! startup) — never reachable in production. `TestApp` (integration test
+//! helper) merges it unconditionally regardless of the env var, since the
+//! test harness always wants it. Any heuristic in here that mirrors a
+//! convention production code has since abandoned (e.g. `seed_transactions`
+//! deriving `is_door_press` from a `"door:"`-prefixed note, #328) is scoped
+//! to THIS test-only surface and does not reintroduce the corruptibility of
+//! that convention into anything customer-reachable.
+
 use axum::{
     Json, Router,
     extract::State,
@@ -323,9 +333,18 @@ async fn seed_transactions(
         // COALESCE lets callers override created_at for historical seeds (issue #57).
         // When None is bound, COALESCE falls back to datetime('now') — same as the
         // original hard-coded default.
+        //
+        // #328: production code no longer classifies a door press from the
+        // note text (a corruptible convention) — it reads `is_door_press`.
+        // This test-only (SPINBIKE_TEST_MODE-only) endpoint derives the flag
+        // from the caller-supplied door-style note so existing E2E callers
+        // that seed a `"door: 1st"`-style note (to simulate a door press,
+        // e.g. exercising the #234 duplicate-visit `source` branch) keep
+        // working without every call site needing to pass a new field.
+        let is_door_press = e.note.as_deref().is_some_and(|n| n.starts_with("door:"));
         sqlx::query(
-            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until, legacy_backfilled, created_at, note)
-             VALUES (?, ?, ?, ?, ?, 1, COALESCE(?, datetime('now')), ?)",
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until, legacy_backfilled, created_at, note, is_door_press)
+             VALUES (?, ?, ?, ?, ?, 1, COALESCE(?, datetime('now')), ?, ?)",
         )
         .bind(user_id)
         .bind(svc_id)
@@ -334,6 +353,7 @@ async fn seed_transactions(
         .bind(e.valid_until)
         .bind(e.created_at.as_deref())
         .bind(e.note.as_deref())
+        .bind(is_door_press)
         .execute(&state.pool)
         .await
         .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;

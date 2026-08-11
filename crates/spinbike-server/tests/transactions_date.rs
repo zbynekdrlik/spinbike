@@ -40,7 +40,7 @@ async fn patch_created_at_happy_path_preserves_time() {
         chrono::NaiveDateTime::parse_from_str(&original, "%Y-%m-%d %H:%M:%S").unwrap();
     let original_local_time = bratislava.from_utc_datetime(&original_utc).time();
 
-    let target = chrono::Local::now().date_naive() - chrono::Duration::days(3);
+    let target = spinbike_server::util::today_bratislava() - chrono::Duration::days(3);
     let target_str = target.format("%Y-%m-%d").to_string();
 
     let (status, resp) = app
@@ -83,7 +83,7 @@ async fn patch_created_at_31_days_back_rejected() {
     let app = TestApp::new().await;
     let tx_id = seed_charge(&app, "DATE-31").await;
 
-    let target = chrono::Local::now().date_naive() - chrono::Duration::days(31);
+    let target = spinbike_server::util::today_bratislava() - chrono::Duration::days(31);
     let (status, resp) = app
         .request(patch_json(
             &format!("/api/transactions/{tx_id}/created-at"),
@@ -107,7 +107,7 @@ async fn patch_created_at_future_date_rejected() {
     let app = TestApp::new().await;
     let tx_id = seed_charge(&app, "DATE-FUT").await;
 
-    let target = chrono::Local::now().date_naive() + chrono::Duration::days(1);
+    let target = spinbike_server::util::today_bratislava() + chrono::Duration::days(1);
     let (status, resp) = app
         .request(patch_json(
             &format!("/api/transactions/{tx_id}/created-at"),
@@ -129,7 +129,7 @@ async fn patch_created_at_future_date_rejected() {
 #[tokio::test]
 async fn patch_created_at_missing_id_returns_404() {
     let app = TestApp::new().await;
-    let target = chrono::Local::now().date_naive();
+    let target = spinbike_server::util::today_bratislava();
     let (status, _) = app
         .request(patch_json(
             "/api/transactions/9999999/created-at",
@@ -154,7 +154,7 @@ async fn patch_created_at_voided_returns_409() {
         .await;
     assert_eq!(void_status, axum::http::StatusCode::NO_CONTENT);
 
-    let target = chrono::Local::now().date_naive() - chrono::Duration::days(1);
+    let target = spinbike_server::util::today_bratislava() - chrono::Duration::days(1);
     let (status, _) = app
         .request(patch_json(
             &format!("/api/transactions/{tx_id}/created-at"),
@@ -170,7 +170,7 @@ async fn patch_created_at_non_staff_returns_403() {
     let app = TestApp::new().await;
     let tx_id = seed_charge(&app, "DATE-403").await;
 
-    let target = chrono::Local::now().date_naive();
+    let target = spinbike_server::util::today_bratislava();
     let (status, _) = app
         .request(patch_json(
             &format!("/api/transactions/{tx_id}/created-at"),
@@ -188,7 +188,7 @@ async fn patch_created_at_exactly_30_days_back_accepted() {
     let app = TestApp::new().await;
     let tx_id = seed_charge(&app, "DATE-30").await;
 
-    let target = chrono::Local::now().date_naive() - chrono::Duration::days(30);
+    let target = spinbike_server::util::today_bratislava() - chrono::Duration::days(30);
     let target_str = target.format("%Y-%m-%d").to_string();
 
     let (status, resp) = app
@@ -212,7 +212,7 @@ async fn patch_created_at_today_accepted() {
     let app = TestApp::new().await;
     let tx_id = seed_charge(&app, "DATE-TODAY").await;
 
-    let target = chrono::Local::now().date_naive();
+    let target = spinbike_server::util::today_bratislava();
     let target_str = target.format("%Y-%m-%d").to_string();
 
     let (status, resp) = app
@@ -250,7 +250,7 @@ async fn patch_created_at_preserves_local_time_across_utc_date_boundary() {
     let app = TestApp::new().await;
     let tx_id = seed_charge(&app, "DATE-TZ").await;
 
-    let today_local = chrono::Local::now().date_naive();
+    let today_local = spinbike_server::util::today_bratislava();
     let forced_utc_date = today_local - chrono::Duration::days(3);
     let forced_utc_str = format!("{} 23:00:00", forced_utc_date.format("%Y-%m-%d"));
 

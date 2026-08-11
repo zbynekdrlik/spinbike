@@ -42,7 +42,7 @@ async fn upcoming_classes_state_flips_free_to_booked_after_booking() {
     // the next Monday is `free`; after booking via /api/bookings it becomes
     // `booked`. Kills mutations that hard-code the state or drop the
     // my_row branch entirely.
-    use chrono::{Datelike, Duration, Local};
+    use chrono::{Datelike, Duration};
 
     let app = TestApp::new().await;
     let card_id = app.customer_card_id;
@@ -51,7 +51,7 @@ async fn upcoming_classes_state_flips_free_to_booked_after_booking() {
             .fetch_one(&app.pool)
             .await
             .unwrap();
-    let today = Local::now().date_naive();
+    let today = spinbike_server::util::today_bratislava();
     let m = (7 - today.weekday().num_days_from_monday() as i64) % 7;
     let next_mon = today + Duration::days(if m == 0 { 7 } else { m });
     let date = next_mon.to_string();

@@ -10,7 +10,20 @@ gate) tap "hold-to-open" on `/my/balance`. Server presses a **Sonoff MINI-D**
 Wi-Fi dry-contact relay over the eWeLink cloud WebSocket. The MINI-D drives
 the legacy fitness-center door buzzer. Billing mirrors reception:
 1st open/day = `visit` (or `charge -<single-entry>` if no pass), 2nd+ = `charge 0`;
-trail lives in `transactions.note` (`door: 1st` / `door: 2nd` …).
+`door.rs` still WRITES a readable `transactions.note` (`door: 1st` /
+`door: 2nd` …) on every row it authors, but **classification (same-day count,
+`payments.rs`'s duplicate-visit `source`, `/my/balance`'s door-relabeling
+display) reads the dedicated `transactions.is_door_press` column, NOT the
+note text** (#328, migration V26) — a note is staff-editable via
+`PATCH /api/transactions/{id}/note` with zero prefix validation, so the note
+alone was a corruptible signal. `note` is now a human-readable label only;
+`is_door_press=1` is written ONLY by `door.rs`'s own INSERT and is the single
+source of truth everywhere else. **When adding any NEW site that needs to
+know "was this row a door press", read `is_door_press` — never re-derive it
+from `note.starts_with("door:")` — and when auditing for the old convention,
+grep BOTH `crates/spinbike-server/src` AND `spinbike-ui/src` (the #328 review
+missed the frontend on the first pass, since the original grep only covered
+the server crate — see `db-migrations` skill's "Migration planning" gotcha).**
 
 ## Hard-won integration gotchas (all verified live 2026-07, device `10028e311b`)
 
@@ -66,7 +79,9 @@ sonoffLAN constants, hard-coded in `auth.rs`. Region defaults `eu`.
 2. `GET /api/door/health` (admin/staff JWT) → `{"ewelink_ws":"connected","last_ack_ms_ago":…}`.
    `null` = never pressed; a number = last device ack age (proof the frame round-trips).
 3. Live press: `POST /api/door/open` → `200 {"status":"opened"}`, health then shows
-   `last_ack_ms_ago` small (~100–200 ms), a `transactions` row `note='door: Nth'`.
+   `last_ack_ms_ago` small (~100–200 ms), a `transactions` row with
+   `note='door: Nth'` AND `is_door_press=1` (the latter is what any billing/
+   display logic actually reads — see the note-vs-column gotcha above).
    Physical buzz confirmation is user-only (remote relay) — ask the person on site.
 
 ## Test the WS protocol without the server

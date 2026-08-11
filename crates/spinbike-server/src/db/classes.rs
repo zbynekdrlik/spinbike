@@ -579,7 +579,7 @@ mod tests {
                 .unwrap();
 
         use chrono::{Datelike, Duration};
-        let today = chrono::Local::now().date_naive();
+        let today = crate::util::today_bratislava();
         // Find the next Monday (weekday 0) strictly in the future — avoids timing flakes if today *is* Monday.
         let days_to_mon = {
             let m = (7 - today.weekday().num_days_from_monday() as i64) % 7;

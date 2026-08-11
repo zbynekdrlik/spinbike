@@ -6,7 +6,7 @@
 
 mod helpers;
 
-use helpers::{TestApp, get, post_json};
+use helpers::{TestApp, get, patch_json, post_json};
 
 /// Enable self-service door entry on the seeded customer.
 async fn enable_self_entry(app: &TestApp) {
@@ -155,12 +155,21 @@ async fn first_of_day_with_pass_writes_visit_row() {
     assert_eq!(body["door_count_today"], 1);
 
     // A 'visit' row with amount=0 and note='door: 1st' should exist for today.
+    // #336: the day bound is the SAME Bratislava range production's door.rs
+    // computes (`bratislava_day_range_utc`), never SQLite's `'localtime'`
+    // modifier — that reads the process's OS/TZ config, so under the
+    // `test-tz-utc` CI job it would evaluate a different day than the handler
+    // under test does.
+    let (day_start, day_end) =
+        spinbike_server::util::bratislava_day_range_utc(spinbike_server::util::today_bratislava());
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
          WHERE user_id = ? AND action = 'visit' AND amount = 0 AND note = 'door: 1st' \
-           AND date(created_at, 'localtime') = date('now', 'localtime')",
+           AND created_at >= ? AND created_at < ?",
     )
     .bind(app.customer_id)
+    .bind(day_start.format("%Y-%m-%d %H:%M:%S").to_string())
+    .bind(day_end.format("%Y-%m-%d %H:%M:%S").to_string())
     .fetch_one(&app.pool)
     .await
     .unwrap();
@@ -239,12 +248,17 @@ async fn first_of_day_pass_expiring_today_grants_entry_without_charge() {
     );
 
     // A zero-amount 'visit' row (not a 'charge') should be written for today.
+    // #336: same Bratislava day range production uses — never `'localtime'`.
+    let (day_start, day_end) =
+        spinbike_server::util::bratislava_day_range_utc(spinbike_server::util::today_bratislava());
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
          WHERE user_id = ? AND action = 'visit' AND amount = 0 AND note = 'door: 1st' \
-           AND date(created_at, 'localtime') = date('now', 'localtime')",
+           AND created_at >= ? AND created_at < ?",
     )
     .bind(app.customer_id)
+    .bind(day_start.format("%Y-%m-%d %H:%M:%S").to_string())
+    .bind(day_end.format("%Y-%m-%d %H:%M:%S").to_string())
     .fetch_one(&app.pool)
     .await
     .unwrap();
@@ -358,10 +372,11 @@ async fn second_of_day_writes_zero_amount_row() {
     let app = TestApp::with_door_mode("success").await;
     enable_self_entry(&app).await;
 
-    // Seed a synthetic first open earlier today.
+    // Seed a synthetic first open earlier today. is_door_press=1 (#328) — the
+    // same-day count now reads this column, not the note prefix.
     sqlx::query(
-        "INSERT INTO transactions (user_id, amount, action, note) \
-         VALUES (?, 0, 'visit', 'door: 1st')",
+        "INSERT INTO transactions (user_id, amount, action, note, is_door_press) \
+         VALUES (?, 0, 'visit', 'door: 1st', 1)",
     )
     .bind(app.customer_id)
     .execute(&app.pool)
@@ -389,6 +404,69 @@ async fn second_of_day_writes_zero_amount_row() {
     .await
     .unwrap();
     assert_eq!(n, 1);
+}
+
+/// #328 — the same-day door-press count must NOT key off free-text
+/// `transactions.note`. Seeds a genuine, UNRELATED manual transaction for
+/// the customer today (no door route involved at all), then has staff edit
+/// its note via `PATCH /api/transactions/{id}/note` to `"door: 1st"` — the
+/// exact corruption vector #328 describes (`patch_note` validates only
+/// trim/emptiness + the 200-char cap, nothing rejects a caller-supplied
+/// `door:`-prefixed note). The customer's actual FIRST real door press of
+/// the day must still be billed as a genuine first press
+/// (`charged: true`, `door_count_today: 1`) — if the corrupted note were
+/// counted as a prior door row, this press would wrongly look like a
+/// second-of-day free re-entry (`charged: false`, `door_count_today: 2`),
+/// giving the customer a free entry they should have paid for.
+#[tokio::test]
+async fn staff_note_edit_starting_with_door_prefix_does_not_corrupt_same_day_count() {
+    let app = TestApp::with_door_mode("success").await;
+    enable_self_entry(&app).await;
+    sqlx::query("UPDATE users SET credit = 20.0 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    // A genuine, unrelated manual transaction for this customer today —
+    // e.g. a refreshments charge rung up at the counter. Not a door press.
+    let tx_id: i64 = sqlx::query_scalar(
+        "INSERT INTO transactions (user_id, amount, action, note) \
+         VALUES (?, -3.0, 'charge', 'refreshments') RETURNING id",
+    )
+    .bind(app.customer_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+
+    // Staff edits the note to a door-style prefix (accidentally, or
+    // otherwise) — the exact corruption vector.
+    let (patch_status, _) = app
+        .request(patch_json(
+            &format!("/api/transactions/{tx_id}/note"),
+            &app.staff_token,
+            &serde_json::json!({ "note": "door: 1st" }),
+        ))
+        .await;
+    assert_eq!(patch_status, axum::http::StatusCode::OK);
+
+    let (status, body) = app
+        .request(post_json(
+            "/api/door/open",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        body["door_count_today"], 1,
+        "the note-edited manual transaction must not count as a prior door press, got {body:?}"
+    );
+    assert_eq!(
+        body["charged"], true,
+        "the customer's real first door press today must be charged — a corrupted \
+         note prefix must not make it look like a free re-entry, got {body:?}"
+    );
 }
 
 #[tokio::test]
@@ -639,7 +717,7 @@ async fn blocked_customer_with_allow_self_entry_is_rejected() {
     // No door-tagged transaction row must exist for this user.
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
-         WHERE user_id = ? AND note LIKE 'door:%'",
+         WHERE user_id = ? AND is_door_press = 1",
     )
     .bind(app.customer_id)
     .fetch_one(&app.pool)
@@ -681,7 +759,7 @@ async fn blocked_admin_is_rejected_despite_role_bypass() {
 
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
-         WHERE user_id = ? AND note LIKE 'door:%'",
+         WHERE user_id = ? AND is_door_press = 1",
     )
     .bind(app.admin_id)
     .fetch_one(&app.pool)
@@ -723,7 +801,7 @@ async fn blocked_staff_is_rejected_despite_role_bypass() {
 
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
-         WHERE user_id = ? AND note LIKE 'door:%'",
+         WHERE user_id = ? AND is_door_press = 1",
     )
     .bind(app.staff_id)
     .fetch_one(&app.pool)
@@ -877,7 +955,7 @@ async fn door_open_soft_deleted_user_returns_401_session_invalid() {
 
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
-         WHERE user_id = ? AND note LIKE 'door:%'",
+         WHERE user_id = ? AND is_door_press = 1",
     )
     .bind(app.customer_id)
     .fetch_one(&app.pool)
@@ -927,7 +1005,7 @@ async fn hardware_failure_rolls_back_no_tx_written() {
     // No door-tagged transaction row should have been committed.
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
-         WHERE user_id = ? AND note LIKE 'door:%'",
+         WHERE user_id = ? AND is_door_press = 1",
     )
     .bind(app.customer_id)
     .fetch_one(&app.pool)
