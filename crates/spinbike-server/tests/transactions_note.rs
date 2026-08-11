@@ -65,7 +65,7 @@ async fn sell_pass_persists_note() {
     let card_id = app
         .seed_card("NOTE-PASS", 50.0, None, None, None, None)
         .await;
-    let valid_until = (chrono::Local::now().date_naive() + chrono::Duration::days(30))
+    let valid_until = (spinbike_server::util::today_bratislava() + chrono::Duration::days(30))
         .format("%Y-%m-%d")
         .to_string();
 
@@ -187,7 +187,7 @@ async fn log_visit_persists_note() {
         .await;
 
     // Give the card an active monthly pass so log-visit will succeed.
-    let valid_until = (chrono::Local::now().date_naive() + chrono::Duration::days(30))
+    let valid_until = (spinbike_server::util::today_bratislava() + chrono::Duration::days(30))
         .format("%Y-%m-%d")
         .to_string();
     let (status, _) = app
@@ -515,7 +515,7 @@ async fn sell_pass_at_200_chars_accepted() {
     let card_id = app
         .seed_card("PASS-200", 100.0, None, None, None, None)
         .await;
-    let valid_until = (chrono::Local::now().date_naive() + chrono::Duration::days(30))
+    let valid_until = (spinbike_server::util::today_bratislava() + chrono::Duration::days(30))
         .format("%Y-%m-%d")
         .to_string();
 
@@ -549,7 +549,7 @@ async fn sell_pass_over_200_chars_rejected() {
     let card_id = app
         .seed_card("PASS-201", 100.0, None, None, None, None)
         .await;
-    let valid_until = (chrono::Local::now().date_naive() + chrono::Duration::days(30))
+    let valid_until = (spinbike_server::util::today_bratislava() + chrono::Duration::days(30))
         .format("%Y-%m-%d")
         .to_string();
 
@@ -587,7 +587,7 @@ async fn log_visit_at_200_chars_accepted() {
         .await;
 
     // Give the card an active pass.
-    let valid_until = (chrono::Local::now().date_naive() + chrono::Duration::days(30))
+    let valid_until = (spinbike_server::util::today_bratislava() + chrono::Duration::days(30))
         .format("%Y-%m-%d")
         .to_string();
     let (status, _) = app
@@ -632,7 +632,7 @@ async fn log_visit_over_200_chars_rejected() {
         .await;
 
     // Give the card an active pass.
-    let valid_until = (chrono::Local::now().date_naive() + chrono::Duration::days(30))
+    let valid_until = (spinbike_server::util::today_bratislava() + chrono::Duration::days(30))
         .format("%Y-%m-%d")
         .to_string();
     let (status, _) = app

@@ -137,6 +137,52 @@ jobs:
       - name: Run tests
         run: cargo test -p spinbike-core -p spinbike-server
 
+  test-tz-utc:
+    name: Test (TZ=UTC)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: lint
+    # #336: the `test` job above deliberately runs with TZ=Europe/Bratislava
+    # (see its own comment) so the suite matches the assumption that ALL
+    # tests derive "today"/"now" from the same tz-database source production
+    # code uses. That pin makes the assumption invisible when it's wrong: a
+    # test that regresses back to chrono::Local::now() (the OS clock) would
+    # silently keep passing on the pinned job and only fail on the real
+    # github-hosted runner's own ambient zone, near midnight CEST/CET (the
+    # exact way #336 was discovered — run 31439513457). This job runs the
+    # IDENTICAL suite with TZ=UTC (ubuntu-latest's own un-pinned default) so
+    # that exact regression class is caught on every push, not just for a
+    # ~1-2h/day window. Do NOT remove the `test` job's TZ pin when this job
+    # exists — Europe/Bratislava is still the real production/CI-parity
+    # baseline; this job is the deliberate adversarial counterpart to it.
+    env:
+      TZ: UTC
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+
+      - name: Create placeholder dist for rust-embed
+        run: |
+          mkdir -p spinbike-ui/dist/assets
+          # Non-empty placeholder so static-file integration tests can assert
+          # the handler returns content (distinguishing from Default::default()).
+          echo "<!doctype html><title>spinbike-test</title>" > spinbike-ui/dist/index.html
+          # #212: sw.js/assets/manifest.json placeholders so static_files.rs
+          # integration tests can assert real Cache-Control header behavior
+          # (Asset::get requires the file to actually exist on disk in debug
+          # builds — rust-embed has no compiled-in fallback for a missing path).
+          echo "// placeholder service worker" > spinbike-ui/dist/sw.js
+          echo "// placeholder hashed asset" > spinbike-ui/dist/assets/app-abc123.js
+          echo '{"name":"spinbike-test"}' > spinbike-ui/dist/manifest.json
+
+      - name: Run tests (TZ=UTC)
+        run: cargo test -p spinbike-core -p spinbike-server
+
   build-wasm:
     name: Build WASM (UI)
     runs-on: ubuntu-latest
@@ -212,7 +258,10 @@ jobs:
     # blocks deploy-dev/deploy-prod (both `needs: e2e` transitively) rather
     # than merely racing it in parallel — cargo-deny is fast (no compile)
     # so this adds negligible wall-clock time to the critical path (#162).
-    needs: [test, build-wasm, supply-chain-audit]
+    # test-tz-utc (#336) is included for the same reason: it must actually
+    # BLOCK deploy, not just exist as an informational job in the workflow
+    # file — a real gate, per project CI policy (no advisory-only checks).
+    needs: [test, test-tz-utc, build-wasm, supply-chain-audit]
     steps:
       - uses: actions/checkout@v4
 

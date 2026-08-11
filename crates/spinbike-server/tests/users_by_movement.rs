@@ -40,7 +40,7 @@ async fn list_orders_by_oldest_movement_first() {
         .await;
 
     // Backdate B's transaction by 2 days.
-    let two_days_ago = (chrono::Local::now().date_naive() - chrono::Duration::days(2))
+    let two_days_ago = (spinbike_server::util::today_bratislava() - chrono::Duration::days(2))
         .format("%Y-%m-%d")
         .to_string();
     let _ = app

@@ -1306,7 +1306,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await
                 .unwrap();
-        let future = chrono::Local::now().date_naive() + chrono::Duration::days(10);
+        let future = crate::util::today_bratislava() + chrono::Duration::days(10);
 
         let tx_id = create_transaction_with_valid_until(
             &pool,

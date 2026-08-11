@@ -237,7 +237,7 @@ async fn delete_user_succeeds_with_active_permanentka() {
     let user_id = app
         .seed_card("WARN-PASS", 0.0, None, None, Some("HasPass"), None)
         .await;
-    let future = (chrono::Local::now().date_naive() + chrono::Duration::days(30))
+    let future = (spinbike_server::util::today_bratislava() + chrono::Duration::days(30))
         .format("%Y-%m-%d")
         .to_string();
     let pass_service: i64 =
