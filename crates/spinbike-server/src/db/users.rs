@@ -2,7 +2,7 @@ use crate::db::error::{DbError, Result};
 use sqlx::SqlitePool;
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
-use spinbike_core::services::CLASS_VISIT_NAMES_EN;
+use spinbike_core::services::CLASS_VISIT_KINDS;
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct UserRow {
@@ -288,15 +288,15 @@ pub async fn list_all_users_with_pass(
                 (SELECT MAX(created_at) FROM transactions
                  WHERE user_id = u.id
                    AND deleted_at IS NULL
-                   AND service_id IN (SELECT id FROM services WHERE name_en IN (?, ?))
+                   AND service_id IN (SELECT id FROM services WHERE kind IN (?, ?))
                 ) AS last_visit_at
          FROM users u
          LEFT JOIN user_active_pass ap ON ap.user_id = u.id
          WHERE u.deleted_at IS NULL
          ORDER BY u.name",
     )
-    .bind(CLASS_VISIT_NAMES_EN[0])
-    .bind(CLASS_VISIT_NAMES_EN[1])
+    .bind(CLASS_VISIT_KINDS[0])
+    .bind(CLASS_VISIT_KINDS[1])
     .fetch_all(pool)
     .await
     ?;
@@ -335,7 +335,7 @@ pub async fn search_users_with_pass(
                 (SELECT MAX(created_at) FROM transactions
                  WHERE user_id = u.id
                    AND deleted_at IS NULL
-                   AND service_id IN (SELECT id FROM services WHERE name_en IN (?, ?))
+                   AND service_id IN (SELECT id FROM services WHERE kind IN (?, ?))
                 ) AS last_visit_at
          FROM users u
          LEFT JOIN user_active_pass ap ON ap.user_id = u.id
@@ -353,8 +353,8 @@ pub async fn search_users_with_pass(
            u.card_code ASC
          LIMIT ?",
     )
-    .bind(CLASS_VISIT_NAMES_EN[0])
-    .bind(CLASS_VISIT_NAMES_EN[1])
+    .bind(CLASS_VISIT_KINDS[0])
+    .bind(CLASS_VISIT_KINDS[1])
     .bind(&like)
     .bind(&exact)
     .bind(&prefix)
@@ -545,7 +545,7 @@ pub async fn list_negative_balance(pool: &SqlitePool) -> Result<Vec<NegativeBala
             (SELECT MAX(t.created_at) FROM transactions t
                 WHERE t.user_id = u.id
                   AND t.deleted_at IS NULL
-                  AND t.service_id IN (SELECT id FROM services WHERE name_en IN (?, ?))
+                  AND t.service_id IN (SELECT id FROM services WHERE kind IN (?, ?))
             ) AS last_visit_at,
             ap.valid_until AS pass_valid_until,
             ap.pass_tx_id AS pass_tx_id
@@ -555,8 +555,8 @@ pub async fn list_negative_balance(pool: &SqlitePool) -> Result<Vec<NegativeBala
            AND u.deleted_at IS NULL
          ORDER BY u.credit ASC",
     )
-    .bind(CLASS_VISIT_NAMES_EN[0])
-    .bind(CLASS_VISIT_NAMES_EN[1])
+    .bind(CLASS_VISIT_KINDS[0])
+    .bind(CLASS_VISIT_KINDS[1])
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -1349,13 +1349,13 @@ mod tests {
         update_credit(&pool, mid, -3.5).await.unwrap();
         update_credit(&pool, deep, -10.0).await.unwrap();
 
-        let fitness_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name_en = ?")
-            .bind(CLASS_VISIT_NAMES_EN[0])
+        let fitness_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = ?")
+            .bind(CLASS_VISIT_KINDS[0])
             .fetch_one(&pool)
             .await
             .unwrap();
-        let spinning_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name_en = ?")
-            .bind(CLASS_VISIT_NAMES_EN[1])
+        let spinning_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = ?")
+            .bind(CLASS_VISIT_KINDS[1])
             .fetch_one(&pool)
             .await
             .unwrap();

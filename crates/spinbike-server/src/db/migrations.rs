@@ -114,6 +114,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "transactions: is_door_press column + backfill from note prefix (#328)",
         V26_TRANSACTIONS_IS_DOOR_PRESS,
     ),
+    (
+        27,
+        "services: widen kind CHECK to include 'group_class' + retag Spinning (#329)",
+        V27_SPINNING_GROUP_CLASS_KIND,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -1042,6 +1047,107 @@ CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
 const V26_TRANSACTIONS_IS_DOOR_PRESS: &str = r#"
 ALTER TABLE transactions ADD COLUMN is_door_press INTEGER NOT NULL DEFAULT 0;
 UPDATE transactions SET is_door_press = 1 WHERE note LIKE 'door:%';
+"#;
+
+// V27 (#329): class-visit services (Fitness, Spinning) were identified
+// everywhere by matching `name_en` string literals against the DB row,
+// even though `services.kind` already exists and is the stable, admin-
+// rename-proof handle for exactly this ("is this a class visit?" /
+// "which service is Spinning specifically?") purpose — already used that
+// way for Fitness (`kind='single_entry'`, V16). Spinning never got an
+// equivalent: it still shares `kind='generic'` with unrelated sellable
+// items (Refreshments, Supplements, Card activation fee) — confirmed on
+// prod read-only before writing this migration (services id=1,
+// kind='generic', name_sk='Spinning', name_en='Spinning').
+//
+// SQLite cannot widen a CHECK constraint in place, so we re-create the
+// services table — same DROP-TABLE + CREATE-new + INSERT + RENAME pattern
+// as V8/V11/V16/V21. `services` is referenced by V18's `user_active_pass`
+// VIEW and V20's `enforce_active_pass_invariant` TRIGGER, so — per the
+// GOTCHA both migrations document — this rebuild must DROP VIEW / DROP
+// TRIGGER before the rebuild and re-run their exact CREATE statements
+// after the RENAME, inside this same migration transaction, or the RENAME
+// fails with "no such table: main.services" (SQLite reparses every
+// dependent object's stored SQL at that step). Worked pattern:
+// db::migrations::tests::v8_drop_rename_pattern_works_with_fk_child_rows.
+//
+// Re-creating services also drops and re-adds the partial unique index on
+// kind='monthly_pass' (same reason V16 does: without it, a second
+// monthly_pass row could slip in between this migration and the next
+// index creation).
+//
+// `group_class` is a NEW, DISTINCT kind value — NOT merged into
+// `single_entry` — because `routes/door.rs`'s self-entry lookup
+// (`WHERE kind = 'single_entry' ... LIMIT 1`) and `jobs/charger.rs`'s
+// Spinning-price lookup (`fetch_one`) each need to resolve exactly ONE row
+// by kind alone; sharing a value would make both queries ambiguous between
+// the two rows. See `spinbike_core::services` for the resulting
+// `FITNESS_KIND`/`SPINNING_KIND`/`CLASS_VISIT_KINDS` constants.
+const V27_SPINNING_GROUP_CLASS_KIND: &str = r#"
+-- 1. Drop the view + trigger that reference `services`, per the V16/V18/V20
+--    rebuild GOTCHA.
+DROP VIEW user_active_pass;
+DROP TRIGGER IF EXISTS enforce_active_pass_invariant;
+
+-- 2. Widen services.kind CHECK to include 'group_class'.
+CREATE TABLE services_new (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind          TEXT    NOT NULL DEFAULT 'generic'
+                  CHECK (kind IN ('generic', 'monthly_pass', 'single_entry', 'group_class')),
+    name_sk       TEXT    NOT NULL,
+    name_en       TEXT    NOT NULL,
+    default_price REAL    NOT NULL,
+    active        INTEGER NOT NULL DEFAULT 1
+);
+
+INSERT INTO services_new (id, kind, name_sk, name_en, default_price, active)
+SELECT id, kind, name_sk, name_en, default_price, active
+  FROM services;
+
+DROP TABLE services;
+ALTER TABLE services_new RENAME TO services;
+
+-- 3. Re-create partial unique index on kind='monthly_pass'.
+CREATE UNIQUE INDEX idx_services_monthly_pass
+    ON services(kind) WHERE kind = 'monthly_pass';
+
+-- 4. Re-create the view + trigger dropped in step 1, unchanged.
+CREATE VIEW IF NOT EXISTS user_active_pass AS
+SELECT user_id, pass_tx_id, valid_until
+FROM (
+    SELECT t.user_id     AS user_id,
+           t.id          AS pass_tx_id,
+           t.valid_until AS valid_until,
+           ROW_NUMBER() OVER (
+               PARTITION BY t.user_id
+               ORDER BY t.valid_until DESC, t.id DESC
+           ) AS rn
+    FROM transactions t
+    WHERE t.action = 'charge'
+      AND t.service_id = (SELECT id FROM services WHERE kind = 'monthly_pass')
+      AND t.valid_until IS NOT NULL
+      AND t.deleted_at IS NULL
+)
+WHERE rn = 1;
+
+CREATE TRIGGER IF NOT EXISTS enforce_active_pass_invariant
+BEFORE INSERT ON transactions
+WHEN NEW.valid_until IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'valid_until requires action=charge and a monthly_pass service')
+    WHERE NEW.action != 'charge'
+       OR NOT EXISTS (
+            SELECT 1 FROM services
+            WHERE id = NEW.service_id AND kind = 'monthly_pass'
+       );
+END;
+
+-- 5. Re-tag the seeded Spinning row so every class-visit identification
+--    site can look it up by kind alone (name is i18n-mutable; kind is the
+--    stable handle) — same treatment V16 gave Fitness.
+UPDATE services
+   SET kind = 'group_class'
+ WHERE name_sk = 'Spinning';
 "#;
 
 #[cfg(test)]
@@ -3785,6 +3891,235 @@ mod tests {
             ],
             "V26 must backfill is_door_press=1 for exactly the pre-existing \
              door-prefixed-note rows, matching the old note LIKE 'door:%' classification"
+        );
+    }
+
+    // V27 — services: widen kind CHECK to 'group_class' + retag Spinning (#329) ----
+
+    #[tokio::test]
+    async fn v27_retags_spinning_to_group_class() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.expect("migrations");
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE kind = 'group_class'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "exactly one services row with kind='group_class'");
+
+        let name_sk: String =
+            sqlx::query_scalar("SELECT name_sk FROM services WHERE kind = 'group_class'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(name_sk, "Spinning", "name_sk preserved across migration");
+    }
+
+    #[tokio::test]
+    async fn v27_kind_check_rejects_unknown_value() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.expect("migrations");
+        let res = sqlx::query(
+            "INSERT INTO services (kind, name_sk, name_en, default_price)
+             VALUES ('foobar', 'X', 'Y', 1.0)",
+        )
+        .execute(&pool)
+        .await;
+        assert!(
+            res.is_err(),
+            "widened kind CHECK must still reject an unknown value"
+        );
+    }
+
+    #[tokio::test]
+    async fn v27_kind_check_accepts_group_class() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.expect("migrations");
+        let res = sqlx::query(
+            "INSERT INTO services (kind, name_sk, name_en, default_price)
+             VALUES ('group_class', 'Ine', 'Other', 1.0)",
+        )
+        .execute(&pool)
+        .await;
+        assert!(res.is_ok(), "widened kind CHECK must accept 'group_class'");
+    }
+
+    #[tokio::test]
+    async fn v27_monthly_pass_unique_index_still_enforced_after_rebuild() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.expect("migrations");
+        let err = sqlx::query(
+            "INSERT INTO services (kind, name_sk, name_en, default_price)
+             VALUES ('monthly_pass', 'Druhy', 'Second', 99.0)",
+        )
+        .execute(&pool)
+        .await
+        .expect_err("expected unique-index violation");
+        let msg = format!("{err:?}").to_lowercase();
+        assert!(
+            msg.contains("unique") || msg.contains("constraint"),
+            "expected unique-index error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v27_is_idempotent_on_rerun() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.expect("first run");
+        run_migrations(&pool).await.expect("second run");
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE kind = 'group_class'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "still exactly one group_class row after re-run");
+    }
+
+    /// Simulates a genuine upgrade from V26: a pre-existing Spinning
+    /// class-visit transaction AND an active monthly-pass transaction (so the
+    /// `user_active_pass` view — dropped and recreated by V27's `services`
+    /// rebuild — must still resolve correctly afterward) both survive the
+    /// rebuild, and the Spinning row is retagged to `kind='group_class'`.
+    #[tokio::test]
+    async fn v27_preserves_rows_and_view_on_genuine_upgrade_from_v26() {
+        use sqlx::sqlite::SqlitePoolOptions;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Apply 1..=26 the way run_migrations does — sqlx::raw_sql so SQLite
+        // parses each block itself (V20's trigger has internal semicolons),
+        // with foreign_keys OFF around the table-rebuild migrations.
+        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 26) {
+            let mut conn = pool.acquire().await.unwrap();
+            sqlx::query("PRAGMA foreign_keys = OFF")
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+            let mut tx = conn.begin().await.unwrap();
+            sqlx::raw_sql(sql).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
+                .bind(v)
+                .bind(desc)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            sqlx::query("PRAGMA foreign_keys = ON")
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+        }
+
+        // Pre-upgrade: Spinning still shares kind='generic', matching prod.
+        let spinning_kind_before: String =
+            sqlx::query_scalar("SELECT kind FROM services WHERE name_sk = 'Spinning'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            spinning_kind_before, "generic",
+            "test setup: Spinning must still be kind='generic' before V27"
+        );
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v27-upgrade@x', 'U', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let spinning_id: i64 =
+            sqlx::query_scalar("SELECT id FROM services WHERE name_sk = 'Spinning'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let pass_svc_id: i64 =
+            sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        // A Spinning class-visit charge, pre-existing.
+        let spinning_tx_id: i64 = sqlx::query_scalar(
+            "INSERT INTO transactions (user_id, service_id, amount, action)
+             VALUES (?, ?, -5.0, 'charge') RETURNING id",
+        )
+        .bind(uid)
+        .bind(spinning_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        // An active monthly pass, pre-existing — exercises the
+        // user_active_pass view (dropped + recreated by the V27 rebuild).
+        sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until)
+             VALUES (?, ?, -35.0, 'charge', date('now','+30 days'))",
+        )
+        .bind(uid)
+        .bind(pass_svc_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        run_migrations(&pool).await.unwrap();
+
+        // Spinning row survives with the same id, retagged to group_class.
+        let (kind_after, id_after): (String, i64) =
+            sqlx::query_as("SELECT kind, id FROM services WHERE name_sk = 'Spinning'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(kind_after, "group_class");
+        assert_eq!(id_after, spinning_id, "id must be preserved across rebuild");
+
+        // The pre-existing Spinning transaction's FK still resolves to the
+        // same (now-retagged) row.
+        let linked_service_id: i64 =
+            sqlx::query_scalar("SELECT service_id FROM transactions WHERE id = ?")
+                .bind(spinning_tx_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(linked_service_id, spinning_id);
+
+        // user_active_pass view still resolves the pre-existing active pass —
+        // proves the DROP VIEW + recreate in V27 didn't corrupt it.
+        let pass_rows: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM user_active_pass WHERE user_id = ?")
+                .bind(uid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            pass_rows, 1,
+            "user_active_pass view must survive the V27 rebuild"
+        );
+
+        // enforce_active_pass_invariant trigger still rejects a violating
+        // insert — proves the DROP TRIGGER + recreate in V27 didn't corrupt it.
+        let bad = sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until)
+             VALUES (?, ?, -5.0, 'charge', date('now','+30 days'))",
+        )
+        .bind(uid)
+        .bind(spinning_id) // NOT the monthly_pass service — must be rejected
+        .execute(&pool)
+        .await;
+        assert!(
+            bad.is_err(),
+            "enforce_active_pass_invariant trigger must survive the V27 rebuild"
         );
     }
 }

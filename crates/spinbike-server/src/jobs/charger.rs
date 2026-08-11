@@ -32,9 +32,12 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
     .fetch_all(pool)
     .await?;
 
+    // #329: identify the Spinning service by its stable `kind`, not by its
+    // (admin-editable) `name_en` — renaming Spinning via the admin Services
+    // tab must not make this lookup miss and the whole tick error out.
     let (service_id, price): (i64, f64) =
-        sqlx::query_as("SELECT id, default_price FROM services WHERE name_en = ?1 AND active = 1")
-            .bind(spinbike_core::services::SPINNING_NAME_EN)
+        sqlx::query_as("SELECT id, default_price FROM services WHERE kind = ?1 AND active = 1")
+            .bind(spinbike_core::services::SPINNING_KIND)
             .fetch_one(pool)
             .await?;
 

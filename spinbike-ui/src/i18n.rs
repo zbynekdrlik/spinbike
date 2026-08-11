@@ -736,6 +736,14 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         "service_kind_single_entry",
         ("Jednorazovy vstup", "Single entry"),
     );
+    // #329: Spinning was re-tagged from kind='generic' to kind='group_class'
+    // by migration V27. Without this key its admin Services-tab badge would
+    // regress into the "???" fallback #186 already fixed once for
+    // service_kind_single_entry.
+    m.insert(
+        "service_kind_group_class",
+        ("Skupinova hodina", "Group class"),
+    );
 
     // Monthly pass banner
     // #32: collapsed single-line pass status (active + expired). Used by
