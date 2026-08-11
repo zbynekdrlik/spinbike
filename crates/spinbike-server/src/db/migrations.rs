@@ -4063,6 +4063,17 @@ mod tests {
     async fn v27_kind_check_accepts_group_class() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.expect("migrations");
+        // V27's own step 5 already retags the seeded Spinning row to
+        // kind='group_class', and V27's own step 3 adds a partial UNIQUE
+        // index on kind='group_class' — so a second insert here would fail
+        // on THAT unique index, not on the CHECK constraint this test
+        // exists to verify (the unique-index behavior has its own dedicated
+        // test, v27_group_class_unique_index_enforced, right below). Remove
+        // the pre-existing row first so this insert isolates the CHECK.
+        sqlx::query("DELETE FROM services WHERE kind = 'group_class'")
+            .execute(&pool)
+            .await
+            .unwrap();
         let res = sqlx::query(
             "INSERT INTO services (kind, name_sk, name_en, default_price)
              VALUES ('group_class', 'Ine', 'Other', 1.0)",
