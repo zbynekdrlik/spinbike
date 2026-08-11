@@ -207,32 +207,7 @@ pub fn MyBalancePage() -> impl IntoView {
                                     .map(|s| format!(" \u{b7} {s}"))
                                     .unwrap_or_default();
 
-                                // Door-entry notes are stored as English "door: Nth"
-                                // (door.rs). Localize the DISPLAY only — the stored value
-                                // stays intact. #328: the special door-relabeling branch
-                                // below is gated on `t.is_door_press` (a dedicated column
-                                // only door.rs ever sets), NOT on the note text alone — a
-                                // staff-edited note that happens to start with "door: "
-                                // must render as a plain note, not a misleading "door
-                                // re-entry" label. (Neither door.rs's same-day count nor
-                                // the admin note editor read this note text for
-                                // classification anymore — both were switched to
-                                // `is_door_press` too.)
-                                let sub_note = match &t.note {
-                                    Some(n) if t.is_door_press && n.starts_with("door: ") => {
-                                        let count: String = n["door: ".len()..]
-                                            .chars()
-                                            .take_while(|c| c.is_ascii_digit())
-                                            .collect();
-                                        if count.is_empty() {
-                                            format!(" \u{b7} {n}")
-                                        } else {
-                                            format!(" \u{b7} {}", tf(lang_now, "door_note_reentry", &[&count]))
-                                        }
-                                    }
-                                    Some(n) if !n.is_empty() => format!(" \u{b7} {n}"),
-                                    _ => String::new(),
-                                };
+                                let sub_note = recent_tx_sub_note(t.note.as_deref(), t.is_door_press, lang_now);
 
                                 view! {
                                     <li data-testid="recent-visit" class="list-row">
@@ -261,6 +236,36 @@ fn format_tx_date_label(created_at: &str, lang: Lang) -> String {
         .unwrap_or_else(|| created_at.to_string())
 }
 
+/// Render a recent-transaction row's sub-note (the small text under the
+/// action label). Door-entry notes are stored as English "door: Nth"
+/// (door.rs) — localize the DISPLAY only, the stored value stays intact.
+///
+/// #328: the special door-relabeling branch is gated on `is_door_press` (a
+/// dedicated column only door.rs ever sets), NOT on the note text alone —
+/// a staff-edited note that happens to start with "door: " on an UNRELATED
+/// transaction must render as a plain note, not a misleading "door
+/// re-entry" label. (Neither door.rs's same-day count nor the admin note
+/// editor read this note text for classification anymore — both were
+/// switched to `is_door_press` too.) Extracted for testability — see #242's
+/// `format_tx_date_label` for the same pattern in this file.
+fn recent_tx_sub_note(note: Option<&str>, is_door_press: bool, lang: Lang) -> String {
+    match note {
+        Some(n) if is_door_press && n.starts_with("door: ") => {
+            let count: String = n["door: ".len()..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .collect();
+            if count.is_empty() {
+                format!(" \u{b7} {n}")
+            } else {
+                format!(" \u{b7} {}", tf(lang, "door_note_reentry", &[&count]))
+            }
+        }
+        Some(n) if !n.is_empty() => format!(" \u{b7} {n}"),
+        _ => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,5 +292,51 @@ mod tests {
             format_tx_date_label("2026-07-20 12:00:00", Lang::Sk),
             "20.07."
         );
+    }
+
+    /// A genuine door press (is_door_press=true) renders the localized
+    /// "door re-entry" label, not the raw English note text.
+    #[wasm_bindgen_test]
+    fn recent_tx_sub_note_renders_localized_label_for_a_genuine_door_press() {
+        assert_eq!(
+            recent_tx_sub_note(Some("door: 1st"), true, Lang::Sk),
+            " \u{b7} Vstup c. 1"
+        );
+        assert_eq!(
+            recent_tx_sub_note(Some("door: 1st"), true, Lang::En),
+            " \u{b7} Entry #1"
+        );
+    }
+
+    /// #328 — a `"door: "`-prefixed note on a row that was NOT actually
+    /// authored by the door route (is_door_press=false — e.g. a staff note
+    /// edit on an unrelated transaction) must render the RAW note text, not
+    /// the misleading localized door-re-entry label. This is the frontend
+    /// half of the same corruption vector the server-side regression tests
+    /// (`door_route.rs`'s `staff_note_edit_starting_with_door_prefix_...`,
+    /// `monthly_pass.rs`'s `..._is_manual_despite_door_prefixed_note`) cover
+    /// for billing/audit classification.
+    #[wasm_bindgen_test]
+    fn recent_tx_sub_note_shows_raw_note_when_door_prefixed_but_is_door_press_is_false() {
+        assert_eq!(
+            recent_tx_sub_note(Some("door: 1st"), false, Lang::Sk),
+            " \u{b7} door: 1st",
+            "a door-prefixed note with is_door_press=false must NOT get the \
+             localized re-entry label — the customer must see the honest raw note"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn recent_tx_sub_note_shows_plain_note_when_unrelated() {
+        assert_eq!(
+            recent_tx_sub_note(Some("refreshments"), false, Lang::Sk),
+            " \u{b7} refreshments"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn recent_tx_sub_note_is_empty_when_no_note() {
+        assert_eq!(recent_tx_sub_note(None, false, Lang::Sk), "");
+        assert_eq!(recent_tx_sub_note(Some(""), false, Lang::Sk), "");
     }
 }
