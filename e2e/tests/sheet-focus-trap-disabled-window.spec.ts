@@ -59,7 +59,15 @@ test.describe('Sheet focus trap — all-descendants-disabled transient window (#
                 return;
             }
             await deleteHeld;
-            await route.fulfill({ status: 204, body: '' });
+            // Mirrors the real DELETE /api/users/{id} success shape
+            // (`DeleteUserResp` in users.rs) — `api::delete` doesn't parse
+            // the body, but a real, well-formed response avoids relying on
+            // that.
+            await route.fulfill({
+                status: 200,
+                contentType: 'application/json',
+                body: JSON.stringify({ id: user.user_id, deleted_at: '2026-08-11T00:00:00Z' }),
+            });
         });
 
         const confirmBtn = page.locator('[data-testid="delete-user-confirm"]');
