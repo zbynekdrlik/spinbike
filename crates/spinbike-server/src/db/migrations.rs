@@ -3121,6 +3121,69 @@ mod tests {
         assert_eq!(n, 1, "still exactly one single_entry row after re-run");
     }
 
+    /// #339 regression: V16's `UPDATE services SET kind = 'single_entry'
+    /// WHERE name_sk = 'Fitness'` has no row-count guard. If the seeded
+    /// Fitness row's Slovak name was renamed before V16 actually runs (an
+    /// admin edit between merge and deploy), the UPDATE silently matches
+    /// zero rows and `run_migrations` used to report success anyway — the
+    /// exact "the retag quietly never happened" gap this issue closes.
+    /// Rename the row BEFORE applying V16 (not after, which would just be
+    /// an ordinary admin edit V16 already isn't watching for) and assert
+    /// `run_migrations` now refuses to proceed instead of silently
+    /// recording V16 as applied.
+    #[tokio::test]
+    async fn v16_postcondition_fails_loudly_when_fitness_retag_matches_zero_rows() {
+        let pool = pool_migrated_to(15).await;
+
+        // Simulate the pre-deploy rename race: the seeded Fitness row no
+        // longer carries the literal name_sk V16's UPDATE matches on.
+        sqlx::query(
+            "UPDATE services SET name_sk = 'Renamed Before Deploy' WHERE name_sk = 'Fitness'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = run_migrations(&pool).await;
+        let err = result.expect_err(
+            "run_migrations must refuse to apply V16 when its Fitness retag matches zero rows",
+        );
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("single_entry") && msg.contains("zero rows"),
+            "error should explain the V16 post-condition failure, got: {msg}"
+        );
+        assert!(
+            msg.contains("339"),
+            "error should reference issue #339, got: {msg}"
+        );
+
+        // V16 must NOT have been committed: schema_version stops at 15.
+        let applied_max: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM schema_version")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            applied_max, 15,
+            "schema_version must not record V16 as applied"
+        );
+
+        // And the rebuild-table side effects (widened CHECK, monthly_pass
+        // index) must not have leaked out of the rolled-back transaction
+        // either — services still has the pre-V16 shape (no single_entry
+        // rows at all, the renamed row still sitting at kind='generic').
+        let single_entry_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE kind = 'single_entry'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            single_entry_count, 0,
+            "the failed migration's table rebuild must have rolled back entirely"
+        );
+    }
+
     // V17 — login_tokens (magic-link) ---------------------------------
 
     #[tokio::test]
@@ -3996,6 +4059,80 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(n, 1, "still exactly one group_class row after re-run");
+    }
+
+    /// #339 regression: same race as V16's, one migration later. V27's
+    /// `UPDATE services SET kind = 'group_class' WHERE name_sk = 'Spinning'`
+    /// also has no row-count guard — if the seeded Spinning row's Slovak
+    /// name was renamed before V27 actually runs, the UPDATE silently
+    /// matches zero rows and `run_migrations` used to report success
+    /// anyway. This is the concrete failure mode issue #339 was filed for:
+    /// `jobs/charger.rs`'s Spinning-price lookup would then `fetch_one` on
+    /// `kind = 'group_class'`, get `RowNotFound`, and every subsequent
+    /// 4-hour auto-charge tick would error out with no other signal.
+    #[tokio::test]
+    async fn v27_postcondition_fails_loudly_when_spinning_retag_matches_zero_rows() {
+        let pool = pool_migrated_to(26).await;
+
+        // Simulate the pre-deploy rename race: the seeded Spinning row no
+        // longer carries the literal name_sk V27's UPDATE matches on.
+        sqlx::query(
+            "UPDATE services SET name_sk = 'Renamed Before Deploy' WHERE name_sk = 'Spinning'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = run_migrations(&pool).await;
+        let err = result.expect_err(
+            "run_migrations must refuse to apply V27 when its Spinning retag matches zero rows",
+        );
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("group_class") && msg.contains("zero rows"),
+            "error should explain the V27 post-condition failure, got: {msg}"
+        );
+        assert!(
+            msg.contains("339"),
+            "error should reference issue #339, got: {msg}"
+        );
+
+        // V27 must NOT have been committed: schema_version stops at 26.
+        let applied_max: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM schema_version")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            applied_max, 26,
+            "schema_version must not record V27 as applied"
+        );
+
+        // And the rebuild-table side effects must not have leaked out of
+        // the rolled-back transaction either.
+        let group_class_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE kind = 'group_class'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            group_class_count, 0,
+            "the failed migration's table rebuild must have rolled back entirely"
+        );
+
+        // The user_active_pass VIEW (dropped + recreated by V27's rebuild)
+        // must still exist — a rolled-back V27 must leave V26's state
+        // fully intact, not half-torn-down.
+        let view_exists: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type='view' AND name='user_active_pass'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(
+            view_exists.is_some(),
+            "user_active_pass view must survive a rolled-back V27 attempt"
+        );
     }
 
     /// Simulates a genuine upgrade from V26: a pre-existing Spinning
