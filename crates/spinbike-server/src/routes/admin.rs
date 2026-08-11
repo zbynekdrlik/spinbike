@@ -275,6 +275,9 @@ async fn update_template(
     let duration_minutes = body.duration_minutes.unwrap_or(existing.duration_minutes);
     let instructor_id = body.instructor_id.unwrap_or(existing.instructor_id);
     let capacity = body.capacity.unwrap_or(existing.capacity);
+    if capacity <= 0 {
+        return Err(super::bad_request("capacity must be greater than 0"));
+    }
     let active: i64 = body
         .active
         .map(|a| if a { 1 } else { 0 })
@@ -428,6 +431,17 @@ async fn create_service(
             "kind must be 'generic' or 'monthly_pass'",
         ));
     }
+    // Fix 6: the server used to bind default_price straight into SQL with no
+    // validation and no rounding. A negative price makes the charger and
+    // the door single-entry flow CREDIT the customer on every visit; an
+    // unrounded price is the upstream source of ledger/credit float drift
+    // (see #325/#326/money-rounding.md). Zero stays legal (a deliberate
+    // free service) — round ONCE here and reuse the rounded value for both
+    // the INSERT and the response, per money-rounding.md.
+    if body.default_price < 0.0 {
+        return Err(super::bad_request("default_price must not be negative"));
+    }
+    let default_price = users::round_cents(body.default_price);
     let id = sqlx::query_scalar::<_, i64>(
         "INSERT INTO services (kind, name_sk, name_en, default_price)
          VALUES (?, ?, ?, ?) RETURNING id",
@@ -435,7 +449,7 @@ async fn create_service(
     .bind(kind)
     .bind(&body.name_sk)
     .bind(&body.name_en)
-    .bind(body.default_price)
+    .bind(default_price)
     .fetch_one(&state.pool)
     .await
     .map_err(|e| {
@@ -456,7 +470,7 @@ async fn create_service(
             kind: kind.to_string(),
             name_sk: body.name_sk,
             name_en: body.name_en,
-            default_price: body.default_price,
+            default_price,
             active: 1,
         }),
     ))
@@ -479,7 +493,17 @@ async fn update_service(
 
     let name_sk = body.name_sk.unwrap_or(existing.name_sk);
     let name_en = body.name_en.unwrap_or(existing.name_en);
-    let default_price = body.default_price.unwrap_or(existing.default_price);
+    // Fix 6: same negative-price / no-rounding gap as create_service — only
+    // reject when the caller is actually SETTING a new price (an untouched
+    // existing value on an unrelated edit, e.g. renaming, must not start
+    // failing PUT requests it never asked to change). round_cents() is
+    // still applied to whichever value is persisted either way.
+    if let Some(dp) = body.default_price
+        && dp < 0.0
+    {
+        return Err(super::bad_request("default_price must not be negative"));
+    }
+    let default_price = users::round_cents(body.default_price.unwrap_or(existing.default_price));
     let active: i64 = body
         .active
         .map(|b| if b { 1 } else { 0 })

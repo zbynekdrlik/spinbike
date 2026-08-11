@@ -241,7 +241,7 @@ fn TemplatesTab() -> impl IntoView {
                 let cap_for_edit = t.capacity;
                 let on_del = move |_| {
                     spawn_local(async move {
-                        // #4: a rejected delete (FK constraint from existing
+                        // Fix 4: a rejected delete (FK constraint from existing
                         // bookings, 500, network blip) used to show nothing
                         // and leave the row in place — routed into set_m
                         // like every sibling handler in this file.
@@ -254,7 +254,7 @@ fn TemplatesTab() -> impl IntoView {
                 let on_save = move |_| {
                     let new_time = edit_time_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
                     let cap_str = edit_cap_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
-                    // #3: a class-template capacity that fails to parse (or
+                    // Fix 3: a class-template capacity that fails to parse (or
                     // is <= 0) used to silently save as 0, quietly filling
                     // every generated class from empty. Reject it in the UI
                     // instead of sending the request.
@@ -511,7 +511,7 @@ fn ServicesTab() -> impl IntoView {
                 el.value()
             })
             .unwrap_or_else(|| "generic".to_string());
-        // #2: an unparsable price used to silently save as 0.0 with no
+        // Fix 2: an unparsable price used to silently save as 0.0 with no
         // error shown — staff fat-fingering "5..0" got a free service.
         // Zero itself stays legal (a deliberate free service); only the
         // silent fallback from unparsable input is rejected.
@@ -613,7 +613,7 @@ fn ServicesTab() -> impl IntoView {
                     let new_name_sk = edit_name_sk_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
                     let new_name_en = edit_name_en_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
                     let price_str = edit_price_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
-                    // #2: same silent-fallback-to-0.0 as the create form —
+                    // Fix 2: same silent-fallback-to-0.0 as the create form —
                     // an unparsable edit still took the success path
                     // (set_editing.set(false), no error shown).
                     let new_price = match parse_money(&price_str) {

@@ -164,7 +164,7 @@ pub fn StaffDashboardPage() -> impl IntoView {
                     spawn_local(async move {
                         #[derive(serde::Serialize)]
                         struct Req { template_id: i64, date: String, reason: Option<String> }
-                        // #1: cancel_class (routes/admin.rs) returns 204 No
+                        // Fix 1: cancel_class (routes/admin.rs) returns 204 No
                         // Content on success — post_no_content skips the
                         // `.json()` parse that always failed (and was
                         // discarded) on an empty body, so a real failure

@@ -126,6 +126,68 @@ async fn update_template_applies_changes() {
     assert!(resp["active"].as_bool().unwrap());
 }
 
+// Fix 6: a class-template capacity of 0 is meaningless (every generated class
+// would be full-from-empty) — update_template rejects a resolved capacity
+// <= 0 with a 400. Zero and negative exercised as two independent branches
+// so a `<= 0` -> `< 0` mutant can't survive on the zero case alone.
+#[tokio::test]
+async fn update_template_rejects_zero_capacity() {
+    let app = TestApp::new().await;
+    let create = serde_json::json!({
+        "weekday": 3,
+        "start_time": "17:00",
+        "duration_minutes": 60,
+        "capacity": 10,
+    });
+    let (_, resp) = app
+        .request(post_json("/api/admin/templates", &app.admin_token, &create))
+        .await;
+    let tid = resp["id"].as_i64().unwrap();
+
+    let update = serde_json::json!({ "capacity": 0 });
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/admin/templates/{tid}"),
+            &app.admin_token,
+            &update,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+
+    // Rejected — the original capacity must survive untouched.
+    let capacity: i64 = sqlx::query_scalar("SELECT capacity FROM class_templates WHERE id = ?")
+        .bind(tid)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(capacity, 10);
+}
+
+#[tokio::test]
+async fn update_template_rejects_negative_capacity() {
+    let app = TestApp::new().await;
+    let create = serde_json::json!({
+        "weekday": 4,
+        "start_time": "17:00",
+        "duration_minutes": 60,
+        "capacity": 10,
+    });
+    let (_, resp) = app
+        .request(post_json("/api/admin/templates", &app.admin_token, &create))
+        .await;
+    let tid = resp["id"].as_i64().unwrap();
+
+    let update = serde_json::json!({ "capacity": -5 });
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/admin/templates/{tid}"),
+            &app.admin_token,
+            &update,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
 #[tokio::test]
 async fn list_templates_include_inactive_returns_soft_deleted() {
     // Kills the `list_all_templates -> Ok(vec![])` mutant: the include_inactive
@@ -489,6 +551,149 @@ async fn create_and_list_services_with_dual_language() {
     assert!(arr.iter().any(|r| r["name_sk"] == "Občerstvenie"));
     assert!(arr.iter().any(|r| r["name_sk"] == "Doplnky výživy"));
     assert!(arr.iter().any(|r| r["name_sk"] == "Aktivácia karty"));
+}
+
+// Fix 6: create_service used to bind default_price straight into SQL with no
+// validation. A negative price makes the charger and the door single-entry
+// flow CREDIT the customer on every visit.
+#[tokio::test]
+async fn create_service_with_negative_price_rejected() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({
+        "name_sk": "Zaporna",
+        "name_en": "Negative",
+        "default_price": -5.0,
+    });
+    let (status, _) = app
+        .request(post_json("/api/admin/services", &app.admin_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+
+    // Rejected — must not have been persisted at all.
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE name_sk = 'Zaporna'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+// A deliberately free service (price 0) is a legitimate business choice —
+// only the SILENT FALLBACK to zero from unparsable input is the bug, never
+// zero itself. Guards against a future "reject <= 0" over-tightening.
+#[tokio::test]
+async fn create_service_with_zero_price_accepted() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({
+        "name_sk": "Zdarma",
+        "name_en": "Free",
+        "default_price": 0.0,
+    });
+    let (status, row) = app
+        .request(post_json("/api/admin/services", &app.admin_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+    assert_eq!(row["default_price"], 0.0);
+}
+
+// Fix 6: default_price must be rounded to cents ONCE, server-side, before
+// persisting (money-rounding.md) — services.default_price previously
+// carried no rounding guarantee at all, the documented upstream source of
+// float drift downstream (#325/#326-class bugs).
+#[tokio::test]
+async fn create_service_price_is_rounded_to_cents() {
+    let app = TestApp::new().await;
+    let body = serde_json::json!({
+        "name_sk": "Nepresna",
+        "name_en": "Imprecise",
+        "default_price": 12.299_999_999_999_998_f64,
+    });
+    let (status, row) = app
+        .request(post_json("/api/admin/services", &app.admin_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+    assert_eq!(row["default_price"].as_f64().unwrap(), 12.30);
+
+    let persisted: f64 = sqlx::query_scalar("SELECT default_price FROM services WHERE id = ?")
+        .bind(row["id"].as_i64().unwrap())
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(persisted, 12.30);
+}
+
+#[tokio::test]
+async fn update_service_with_negative_price_rejected() {
+    let app = TestApp::new().await;
+    let sid: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind='generic' LIMIT 1")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    let before: f64 = sqlx::query_scalar("SELECT default_price FROM services WHERE id = ?")
+        .bind(sid)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+
+    let body = serde_json::json!({ "default_price": -1.0 });
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/admin/services/{sid}"),
+            &app.admin_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+
+    // Rejected — the existing price must survive untouched.
+    let after: f64 = sqlx::query_scalar("SELECT default_price FROM services WHERE id = ?")
+        .bind(sid)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(after, before);
+}
+
+#[tokio::test]
+async fn update_service_price_is_rounded_to_cents() {
+    let app = TestApp::new().await;
+    let sid: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind='generic' LIMIT 1")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+
+    let body = serde_json::json!({ "default_price": 7.005_000_000_1_f64 });
+    let (status, row) = app
+        .request(put_json(
+            &format!("/api/admin/services/{sid}"),
+            &app.admin_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(row["default_price"].as_f64().unwrap(), 7.01);
+}
+
+// An edit that does NOT touch default_price (e.g. a plain rename) must
+// never be blocked by the negative-price guard — the guard only fires when
+// the caller is actually SETTING a new price.
+#[tokio::test]
+async fn update_service_name_only_edit_does_not_require_price() {
+    let app = TestApp::new().await;
+    let sid: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind='generic' LIMIT 1")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+
+    let body = serde_json::json!({ "name_sk": "Premenovane" });
+    let (status, row) = app
+        .request(put_json(
+            &format!("/api/admin/services/{sid}"),
+            &app.admin_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(row["name_sk"], "Premenovane");
 }
 
 #[tokio::test]
