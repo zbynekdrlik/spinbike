@@ -121,6 +121,60 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
     ),
 ];
 
+/// Post-condition checks `db::run_migrations` runs at the end of a
+/// migration's own transaction — AFTER its SQL executes, BEFORE the
+/// transaction commits (#339). Each entry is `(migration_version,
+/// assertion_sql, failure_context)`: `assertion_sql` MUST be a scalar
+/// query returning a single INTEGER count. If it comes back `0`, the
+/// whole migration transaction rolls back (it was never committed) and
+/// `run_migrations` bails with `failure_context` — instead of recording
+/// the migration as applied while the outcome it depended on never
+/// happened, silently.
+///
+/// V16 and V27 both retag a seeded `services` row by matching its
+/// admin-editable `name_sk` (`UPDATE services SET kind = ... WHERE
+/// name_sk = '...'`). Both migrations are already applied on production —
+/// their SQL is checksum-frozen and can never be edited again
+/// (`database-migrations.md`) — so the ONLY place left to guard against
+/// "the owner renamed the row between merge and this migration's actual
+/// run" is here, at the runner level, for any FUTURE fresh deploy. Without
+/// this, the UPDATE would silently match zero rows with no other signal:
+/// `routes/door.rs`'s self-entry lookup / `jobs/charger.rs`'s Spinning
+/// price lookup would each `fetch_one` on a `kind` value that matches no
+/// row, returning `RowNotFound` — for charger.rs that means every 4-hour
+/// auto-charge tick errors out from then on, silently, until someone
+/// notices no one got charged.
+///
+/// Confirmed against the real prod DB before writing this (read-only,
+/// `sqlite3 /opt/spinbike/prod/spinbike.db`): exactly one
+/// `kind='single_entry'` row (Fitness) and one `kind='group_class'` row
+/// (Spinning) — both checks below pass against production data as it
+/// exists today; this only ever fires on a FUTURE fresh migration run
+/// where the pre-deploy rename race described above actually happened.
+pub(crate) static MIGRATION_POSTCONDITIONS: &[(i64, &str, &str)] = &[
+    (
+        16,
+        "SELECT COUNT(*) FROM services WHERE kind = 'single_entry'",
+        "migration 16 (door self-entry) post-condition failed: its \
+         `UPDATE services SET kind = 'single_entry' WHERE name_sk = 'Fitness'` matched zero rows. \
+         The seeded Fitness service's Slovak name was most likely renamed before this migration \
+         ran — routes/door.rs's self-entry lookup depends on exactly one kind='single_entry' row \
+         existing. Fix: rename the service back to name_sk='Fitness' (or set kind='single_entry' \
+         directly) via sqlite3/admin on the affected database, then retry. See issue #339.",
+    ),
+    (
+        27,
+        "SELECT COUNT(*) FROM services WHERE kind = 'group_class'",
+        "migration 27 (services group_class kind) post-condition failed: its \
+         `UPDATE services SET kind = 'group_class' WHERE name_sk = 'Spinning'` matched zero rows. \
+         The seeded Spinning service's Slovak name was most likely renamed before this migration \
+         ran — jobs/charger.rs's Spinning-price lookup depends on exactly one kind='group_class' \
+         row existing, and will error on every 4-hour auto-charge tick until this is fixed. Fix: \
+         rename the service back to name_sk='Spinning' (or set kind='group_class' directly) via \
+         sqlite3/admin on the affected database, then retry. See issue #339.",
+    ),
+];
+
 const V1_INITIAL_SCHEMA: &str = r#"
 CREATE TABLE users (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
