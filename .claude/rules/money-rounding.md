@@ -5,7 +5,7 @@ paths:
   - "crates/spinbike-server/src/routes/users.rs"
   - "crates/spinbike-server/src/routes/door.rs"
   - "crates/spinbike-server/src/routes/admin.rs"
-  - "crates/spinbike-server/src/routes/charger.rs"
+  - "crates/spinbike-server/src/jobs/charger.rs"
 ---
 
 # Money writes — round ONCE, reuse EVERYWHERE (#325/#326)
