@@ -434,12 +434,31 @@ async fn connect_loop_with_url_inner(
 /// per-connection monotonic counter (bumped on every call, never reset
 /// except on reconnect) that guarantees uniqueness regardless of clock
 /// resolution: two calls sharing the exact same `now_ms` still produce
-/// distinct keys. The millisecond stays in the wire value for
-/// debuggability/ordering, matching the existing `userOnline` convention.
+/// distinct keys.
+///
+/// Deliberately kept a PURE DIGIT STRING (zero-padded counter concatenated
+/// directly onto the millisecond, no separator) rather than e.g.
+/// `"{now_ms}-{n}"` — the real eWeLink cloud's exact validation of this
+/// field isn't documented beyond "opaque echo token" (`ewelink-door` skill),
+/// and the existing `userOnline` handshake (above) also sends a bare
+/// digit-string sequence. A 6-digit counter width leaves no realistic risk
+/// of ambiguity/collision within one connection's press volume while never
+/// introducing a character the cloud might reject as malformed.
+///
+/// Deliberately a COUNTER, not `auth::random_nonce()` (already used for the
+/// userOnline handshake's own `nonce` field): a random suffix only makes a
+/// collision *improbable*; a strictly-incrementing counter makes it
+/// *impossible* by construction. This mechanism guards a billing-affecting
+/// ack routing table — correctness here should not rest on "improbable
+/// enough" when a deterministic guarantee costs nothing extra.
 fn press_sequence(now_ms: i64, counter: &mut u64) -> String {
     let n = *counter;
+    // wrapping_add: deliberately never panics on overflow. Unreachable in
+    // practice (a connection would need >2^64 presses without reconnecting,
+    // which resets the counter — see the doc comment at the call site), but
+    // "never panic on a monotonic counter" costs nothing to guarantee.
     *counter = counter.wrapping_add(1);
-    format!("{now_ms}-{n}")
+    format!("{now_ms}{n:06}")
 }
 
 /// Parse a text frame and route any ack to the matching pending oneshot.

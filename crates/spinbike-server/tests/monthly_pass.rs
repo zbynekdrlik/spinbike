@@ -33,6 +33,25 @@ async fn service_id(app: &TestApp, name: &str) -> i64 {
         .unwrap()
 }
 
+/// Shared setup for the #328 door-vs-manual `source` classification tests:
+/// a customer with an active monthly pass (so `log-visit` reaches the
+/// duplicate-visit conflict path rather than a pass-check rejection), plus
+/// the Fitness (= `kind='single_entry'`, V16) service id a door press would
+/// land on. Returns `(user_id, fitness_id)`.
+async fn seed_customer_with_active_pass(app: &TestApp, barcode: &str) -> (i64, i64) {
+    let user_id = app.seed_card(barcode, 50.0, None, None, None, None).await;
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({ "user_id": user_id, "price": 35.0, "valid_until": "2030-01-01" }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let fitness_id = service_id(app, "Fitness").await;
+    (user_id, fitness_id)
+}
+
 #[tokio::test]
 async fn sell_pass_debits_credit_and_records_valid_until() {
     let app = TestApp::new().await;
@@ -545,24 +564,11 @@ async fn log_visit_force_true_logs_duplicate_anyway() {
 #[tokio::test]
 async fn log_visit_duplicate_source_is_door_when_is_door_press_flag_set() {
     let app = TestApp::new().await;
-    let user_id = app
-        .seed_card("DUP-VISIT-3", 50.0, None, None, None, None)
-        .await;
-    let (status, _) = app
-        .request(post_json(
-            "/api/payments/sell-pass",
-            &app.staff_token,
-            &json!({ "user_id": user_id, "price": 35.0, "valid_until": "2030-01-01" }),
-        ))
-        .await;
-    assert_eq!(status, axum::http::StatusCode::OK);
+    let (user_id, fitness_id) = seed_customer_with_active_pass(&app, "DUP-VISIT-3").await;
 
-    // Fitness IS the kind='single_entry' row after migration V16 — a door
-    // press today lands on this exact service_id. #328: `source` is now
-    // classified by the dedicated `is_door_press` column, not by re-deriving
-    // the note text — the note is still written for readability but is no
-    // longer what `source` reads.
-    let fitness_id = service_id(&app, "Fitness").await;
+    // #328: `source` is now classified by the dedicated `is_door_press`
+    // column, not by re-deriving the note text — the note is still written
+    // for readability but is no longer what `source` reads.
     sqlx::query(
         "INSERT INTO transactions (user_id, service_id, amount, action, note, created_at, is_door_press)
          VALUES (?, ?, 0.0, 'visit', 'door: 1st', datetime('now'), 1)",
@@ -594,19 +600,8 @@ async fn log_visit_duplicate_source_is_door_when_is_door_press_flag_set() {
 #[tokio::test]
 async fn log_visit_duplicate_source_is_manual_despite_door_prefixed_note() {
     let app = TestApp::new().await;
-    let user_id = app
-        .seed_card("DUP-VISIT-4", 50.0, None, None, None, None)
-        .await;
-    let (status, _) = app
-        .request(post_json(
-            "/api/payments/sell-pass",
-            &app.staff_token,
-            &json!({ "user_id": user_id, "price": 35.0, "valid_until": "2030-01-01" }),
-        ))
-        .await;
-    assert_eq!(status, axum::http::StatusCode::OK);
+    let (user_id, fitness_id) = seed_customer_with_active_pass(&app, "DUP-VISIT-4").await;
 
-    let fitness_id = service_id(&app, "Fitness").await;
     // A row whose note happens to start with "door:" (e.g. a staff note
     // edit) but is_door_press is NOT set — this was never an actual door
     // press.

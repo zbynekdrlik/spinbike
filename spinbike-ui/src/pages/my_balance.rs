@@ -41,6 +41,9 @@ struct RecentTx {
     amount: f64,
     valid_until: Option<String>,
     note: Option<String>,
+    /// #328: the trustworthy door-press classifier — see the matching
+    /// server-side doc comment on `RecentTx` (`routes/my_balance.rs`).
+    is_door_press: bool,
     service_name_sk: Option<String>,
     service_name_en: Option<String>,
 }
@@ -206,10 +209,17 @@ pub fn MyBalancePage() -> impl IntoView {
 
                                 // Door-entry notes are stored as English "door: Nth"
                                 // (door.rs). Localize the DISPLAY only — the stored value
-                                // stays intact (door.rs's `note LIKE 'door:%'` same-day
-                                // count query AND the admin note view depend on it).
+                                // stays intact. #328: the special door-relabeling branch
+                                // below is gated on `t.is_door_press` (a dedicated column
+                                // only door.rs ever sets), NOT on the note text alone — a
+                                // staff-edited note that happens to start with "door: "
+                                // must render as a plain note, not a misleading "door
+                                // re-entry" label. (Neither door.rs's same-day count nor
+                                // the admin note editor read this note text for
+                                // classification anymore — both were switched to
+                                // `is_door_press` too.)
                                 let sub_note = match &t.note {
-                                    Some(n) if n.starts_with("door: ") => {
+                                    Some(n) if t.is_door_press && n.starts_with("door: ") => {
                                         let count: String = n["door: ".len()..]
                                             .chars()
                                             .take_while(|c| c.is_ascii_digit())

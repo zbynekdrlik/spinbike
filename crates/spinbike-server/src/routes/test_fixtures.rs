@@ -1,3 +1,13 @@
+//! Test-only fixture endpoints. `routes()` is mounted ONLY when
+//! `SPINBIKE_TEST_MODE=1` (gated in `lib.rs::build_router`, logged loudly at
+//! startup) — never reachable in production. `TestApp` (integration test
+//! helper) merges it unconditionally regardless of the env var, since the
+//! test harness always wants it. Any heuristic in here that mirrors a
+//! convention production code has since abandoned (e.g. `seed_transactions`
+//! deriving `is_door_press` from a `"door:"`-prefixed note, #328) is scoped
+//! to THIS test-only surface and does not reintroduce the corruptibility of
+//! that convention into anything customer-reachable.
+
 use axum::{
     Json, Router,
     extract::State,

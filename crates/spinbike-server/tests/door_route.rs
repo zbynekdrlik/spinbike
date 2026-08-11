@@ -703,7 +703,7 @@ async fn blocked_customer_with_allow_self_entry_is_rejected() {
     // No door-tagged transaction row must exist for this user.
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
-         WHERE user_id = ? AND note LIKE 'door:%'",
+         WHERE user_id = ? AND is_door_press = 1",
     )
     .bind(app.customer_id)
     .fetch_one(&app.pool)
@@ -745,7 +745,7 @@ async fn blocked_admin_is_rejected_despite_role_bypass() {
 
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
-         WHERE user_id = ? AND note LIKE 'door:%'",
+         WHERE user_id = ? AND is_door_press = 1",
     )
     .bind(app.admin_id)
     .fetch_one(&app.pool)
@@ -787,7 +787,7 @@ async fn blocked_staff_is_rejected_despite_role_bypass() {
 
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
-         WHERE user_id = ? AND note LIKE 'door:%'",
+         WHERE user_id = ? AND is_door_press = 1",
     )
     .bind(app.staff_id)
     .fetch_one(&app.pool)
@@ -941,7 +941,7 @@ async fn door_open_soft_deleted_user_returns_401_session_invalid() {
 
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
-         WHERE user_id = ? AND note LIKE 'door:%'",
+         WHERE user_id = ? AND is_door_press = 1",
     )
     .bind(app.customer_id)
     .fetch_one(&app.pool)
@@ -991,7 +991,7 @@ async fn hardware_failure_rolls_back_no_tx_written() {
     // No door-tagged transaction row should have been committed.
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
-         WHERE user_id = ? AND note LIKE 'door:%'",
+         WHERE user_id = ? AND is_door_press = 1",
     )
     .bind(app.customer_id)
     .fetch_one(&app.pool)
