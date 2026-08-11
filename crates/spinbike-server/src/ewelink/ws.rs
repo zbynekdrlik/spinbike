@@ -323,6 +323,11 @@ async fn connect_loop_with_url_inner(
     // to the HTTP route.
     let mut pending: HashMap<String, oneshot::Sender<Result<(), EwelinkError>>> = HashMap::new();
     let (sweep_tx, mut sweep_rx) = mpsc::unbounded_channel::<String>();
+    // #323: disambiguates two presses generated within the same wall-clock
+    // millisecond — see `press_sequence`. Scoped to this connection's
+    // lifetime (resets on reconnect), which is fine: uniqueness is only
+    // ever needed among currently-pending presses on THIS `pending` map.
+    let mut seq_counter: u64 = 0;
 
     let mut ping_interval = tokio::time::interval(Duration::from_secs(60));
     // First tick fires immediately by default — skip it so we don't
@@ -338,7 +343,8 @@ async fn connect_loop_with_url_inner(
                     let _ = ws.send(Message::Close(None)).await;
                     return ConnectOutcome::ChannelClosed;
                 };
-                let sequence = press_sequence(chrono::Utc::now().timestamp_millis());
+                let sequence =
+                    press_sequence(chrono::Utc::now().timestamp_millis(), &mut seq_counter);
                 // MINI-D is a multi-outlet SONOFF product and only acks the
                 // multi-outlet `switches` array form. The legacy single-channel
                 // `{"switch":"on"}` is silently dropped (no ack → door route
@@ -422,9 +428,18 @@ async fn connect_loop_with_url_inner(
 
 /// Builds the per-press `sequence` id sent to the cloud and used as the
 /// `pending` HashMap key (#323) that routes the device's ack back to this
-/// press's oneshot sender.
-fn press_sequence(now_ms: i64) -> String {
-    now_ms.to_string()
+/// press's oneshot sender. `now_ms` alone is NOT enough — two presses
+/// queued back-to-back on the shared mpsc channel can be processed by the
+/// dispatch loop within the same wall-clock millisecond. `counter` is a
+/// per-connection monotonic counter (bumped on every call, never reset
+/// except on reconnect) that guarantees uniqueness regardless of clock
+/// resolution: two calls sharing the exact same `now_ms` still produce
+/// distinct keys. The millisecond stays in the wire value for
+/// debuggability/ordering, matching the existing `userOnline` convention.
+fn press_sequence(now_ms: i64, counter: &mut u64) -> String {
+    let n = *counter;
+    *counter = counter.wrapping_add(1);
+    format!("{now_ms}-{n}")
 }
 
 /// Parse a text frame and route any ack to the matching pending oneshot.
@@ -544,8 +559,9 @@ mod tests {
     #[test]
     fn press_sequence_is_unique_even_within_the_same_millisecond() {
         let same_ms = 1_700_000_000_123_i64;
-        let first = press_sequence(same_ms);
-        let second = press_sequence(same_ms);
+        let mut counter = 0u64;
+        let first = press_sequence(same_ms, &mut counter);
+        let second = press_sequence(same_ms, &mut counter);
         assert_ne!(
             first, second,
             "two presses processed within the same millisecond must get \
