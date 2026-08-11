@@ -155,12 +155,21 @@ async fn first_of_day_with_pass_writes_visit_row() {
     assert_eq!(body["door_count_today"], 1);
 
     // A 'visit' row with amount=0 and note='door: 1st' should exist for today.
+    // #336: the day bound is the SAME Bratislava range production's door.rs
+    // computes (`bratislava_day_range_utc`), never SQLite's `'localtime'`
+    // modifier — that reads the process's OS/TZ config, so under the
+    // `test-tz-utc` CI job it would evaluate a different day than the handler
+    // under test does.
+    let (day_start, day_end) =
+        spinbike_server::util::bratislava_day_range_utc(spinbike_server::util::today_bratislava());
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
          WHERE user_id = ? AND action = 'visit' AND amount = 0 AND note = 'door: 1st' \
-           AND date(created_at, 'localtime') = date('now', 'localtime')",
+           AND created_at >= ? AND created_at < ?",
     )
     .bind(app.customer_id)
+    .bind(day_start.format("%Y-%m-%d %H:%M:%S").to_string())
+    .bind(day_end.format("%Y-%m-%d %H:%M:%S").to_string())
     .fetch_one(&app.pool)
     .await
     .unwrap();
@@ -239,12 +248,17 @@ async fn first_of_day_pass_expiring_today_grants_entry_without_charge() {
     );
 
     // A zero-amount 'visit' row (not a 'charge') should be written for today.
+    // #336: same Bratislava day range production uses — never `'localtime'`.
+    let (day_start, day_end) =
+        spinbike_server::util::bratislava_day_range_utc(spinbike_server::util::today_bratislava());
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
          WHERE user_id = ? AND action = 'visit' AND amount = 0 AND note = 'door: 1st' \
-           AND date(created_at, 'localtime') = date('now', 'localtime')",
+           AND created_at >= ? AND created_at < ?",
     )
     .bind(app.customer_id)
+    .bind(day_start.format("%Y-%m-%d %H:%M:%S").to_string())
+    .bind(day_end.format("%Y-%m-%d %H:%M:%S").to_string())
     .fetch_one(&app.pool)
     .await
     .unwrap();

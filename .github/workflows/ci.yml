@@ -118,6 +118,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
+          shared-key: server-tests
           cache-on-failure: true
 
       - name: Create placeholder dist for rust-embed
@@ -162,8 +163,13 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # Shares the `test` job's cache entry (same shared-key) so this job
+      # reuses its warm workspace build instead of a cold debug build of the
+      # whole workspace + every integration-test binary against its own
+      # 10-minute budget — this job gates deploy via `e2e`'s `needs:`.
       - uses: Swatinem/rust-cache@v2
         with:
+          shared-key: server-tests
           cache-on-failure: true
 
       - name: Create placeholder dist for rust-embed
