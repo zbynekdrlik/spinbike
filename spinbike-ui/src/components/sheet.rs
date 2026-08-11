@@ -41,19 +41,27 @@ fn trap_tab(ev: &ev::KeyboardEvent) {
     };
     let len = list.length();
     if len == 0 {
-        // No focusable descendant to trap around right now. This DOES
-        // happen on 2 of the 8 current call sites (delete_user.rs,
-        // deleted_email_conflict.rs) during their transient busy/saving
-        // window, where every button shares one disabled=... signal — but
-        // when that's true, the previously-focused (now-disabled) button
-        // was ALREADY auto-blurred by the browser before any Tab could be
-        // pressed, so this keydown handler was never going to receive the
-        // event in the first place (its `current_target` — `.sheet` — is
-        // no longer an ancestor of `document.activeElement`). Closing that
-        // narrow, pre-existing (not a #320 regression — Tab always escaped
-        // unconditionally before this fix) gap needs a `focusout`-based
-        // reactive refocus, not more logic here — filed as a scoped
-        // follow-up, see #320's review thread.
+        // #334: no focusable descendant to trap around right now — 2 of
+        // the 8 current call sites (delete_user.rs,
+        // deleted_email_conflict.rs) hit this during their transient
+        // busy/saving window, where every button shares one disabled=...
+        // signal. `refocus_if_orphaned` below (bound as `.sheet`'s
+        // `on:focusout`) is what gets a keydown routed HERE at all in
+        // that case — without it, the previously-focused (now-disabled)
+        // button is auto-blurred by the browser straight to `<body>`
+        // before any Tab could be pressed, and this handler never sees
+        // the event (its `current_target` — `.sheet` — is no longer an
+        // ancestor of `document.activeElement`). Once `refocus_if_orphaned`
+        // has put focus back on `.sheet` itself, THIS keydown handler is
+        // reachable again — but `.sheet` has `tabindex="-1"`, which is
+        // excluded from the browser's own forward tab sequence, so a Tab
+        // pressed from here with zero focusable descendants would
+        // otherwise fall through to native tab order and carry focus
+        // into whatever page content follows `.sheet` in DOM order,
+        // behind the backdrop — the exact same escape, one step later.
+        // prevent_default traps it in place instead: nothing to tab TO,
+        // so Tab does nothing until a control re-enables.
+        ev.prevent_default();
         return;
     }
     let first = list
@@ -69,11 +77,23 @@ fn trap_tab(ev: &ev::KeyboardEvent) {
         return;
     };
     let active_node: &web_sys::Node = active.as_ref();
+    // #334 review follow-up: `refocus_if_orphaned` below can park focus on
+    // `.sheet` ITSELF (not any descendant) — e.g. once an in-flight
+    // request that triggered the all-disabled window then FAILS, controls
+    // re-enable again but nothing else ever moves focus off the container
+    // onto a real descendant. Treat the container as sitting "before the
+    // first" tabbable item: Tab from there enters at the first descendant,
+    // Shift+Tab wraps to the last — same as pressing those keys from a
+    // one-before-the-start position would, so the trap keeps working
+    // immediately once something becomes focusable again, without waiting
+    // for a second Tab press to hit a real descendant first.
+    let container_node: &web_sys::Node = container.as_ref();
+    let is_container_focused = container_node.is_same_node(Some(active_node));
 
     if ev.shift_key() {
-        if let (Some(first_el), Some(last_el)) = (&first, last) {
-            let first_node: &web_sys::Node = first_el.as_ref();
-            if first_node.is_same_node(Some(active_node)) {
+        let first_is_active = first.as_ref().is_some_and(|el| is_active(el, active_node));
+        if first_is_active || is_container_focused {
+            if let Some(last_el) = &last {
                 ev.prevent_default();
                 // `focus()` returns a `Result` (fails only if the target
                 // detached mid-event) — vanishingly unlikely for an
@@ -83,13 +103,130 @@ fn trap_tab(ev: &ev::KeyboardEvent) {
                 let _ = last_el.focus();
             }
         }
-    } else if let (Some(last_el), Some(first_el)) = (&last, first) {
-        let last_node: &web_sys::Node = last_el.as_ref();
-        if last_node.is_same_node(Some(active_node)) {
-            ev.prevent_default();
-            let _ = first_el.focus();
+    } else {
+        let last_is_active = last.as_ref().is_some_and(|el| is_active(el, active_node));
+        if last_is_active || is_container_focused {
+            if let Some(first_el) = &first {
+                ev.prevent_default();
+                let _ = first_el.focus();
+            }
         }
     }
+}
+
+/// Whether `el` (a `first`/`last` focusable descendant) is the currently
+/// active element — factored out so `trap_tab`'s shift/plain-Tab branches
+/// share one comparison instead of re-deriving `&web_sys::Node` inline
+/// twice each.
+fn is_active(el: &web_sys::HtmlElement, active_node: &web_sys::Node) -> bool {
+    let node: &web_sys::Node = el.as_ref();
+    node.is_same_node(Some(active_node))
+}
+
+/// #334: catches focus LEAVING `.sheet` without a legitimate close — the
+/// gap `trap_tab`'s own `len == 0` branch above documents. The concrete
+/// trigger: 2 of the 8 current call sites (`delete_user.rs`,
+/// `deleted_email_conflict.rs`) disable EVERY focusable descendant off one
+/// shared busy/saving signal. The instant that flips `true`, the browser
+/// auto-blurs whatever was focused (now `disabled`) — to `<body>`, or
+/// nowhere reachable — BEFORE any keydown can fire, so `trap_tab`'s
+/// `keydown` listener never even runs (its `current_target`, `.sheet`, is
+/// no longer an ancestor of `document.activeElement`).
+///
+/// `focusout` (unlike `blur`/`focus`) bubbles, so binding it directly on
+/// `.sheet` (same binding point as `trap_tab`'s `keydown`) catches focus
+/// leaving ANY descendant, for ANY reason — not just Tab.
+/// `event.related_target()` is the element focus is MOVING TO (`None` when
+/// it went nowhere reachable).
+///
+/// A `focusout` with a `related_target` outside `.sheet` ALSO fires on
+/// every LEGITIMATE close (Escape, backdrop click, an item link navigating
+/// away). Most close paths (this file's own `close_backdrop`/
+/// `close_keyboard`, `nav.rs`'s `on_close_menu`, `delete_user.rs`,
+/// `edit_pass_date.rs`, `edit_tx_date.rs`, `edit_info_form.rs`) unmount
+/// `.sheet` via a `TimeoutFuture::new(0)`-deferred `show.set(false)` —
+/// but NOT all of them: `calendar_picker.rs`'s Cancel/Confirm and
+/// `deleted_email_conflict.rs`'s Cancel button call their `on_close`/
+/// `on_cancel` directly, with no macrotask defer at all (review finding on
+/// #334 — an earlier revision of this comment claimed uniformly deferred
+/// unmounts here, which was wrong). Telling a legitimate close apart from
+/// the transient-disabled-window case (where `.sheet` stays mounted) needs
+/// a check, not just a defer: after our own deferred tick, re-verify
+/// `.sheet` is STILL CONNECTED to the document (`Node::is_connected()` —
+/// any close, deferred or not, has unmounted `.sheet` well before this
+/// point for every path EXCEPT a backdrop click specifically) AND that
+/// focus hasn't already landed back inside `.sheet` on its own.
+///
+/// A backdrop click is the one path where this check does NOT catch the
+/// close before we act: the native `focusout` from the browser's
+/// `mousedown`-driven blur is dispatched (and schedules our deferred
+/// check) strictly BEFORE the later `click` event whose handler schedules
+/// `close_backdrop`'s own deferred unmount — two equal-delay timers
+/// resolve FIFO, so `is_connected()` is deterministically still `true`
+/// when we check, not merely possibly true. We refocus `.sheet` a moment
+/// before it closes anyway. This is harmless regardless: `.focus()` on a
+/// node that gets detached moments later has no lasting effect once it
+/// IS detached, and any consumer with its own explicit focus-restore-to-
+/// trigger step (only `nav.rs`'s burger menu, currently) schedules that
+/// through the close callback's own LATER macrotask, so the final
+/// settled focus state is unaffected either way.
+fn refocus_if_orphaned(ev: ev::FocusEvent) {
+    let Some(container) = ev
+        .current_target()
+        .and_then(|t| t.dyn_into::<web_sys::Element>().ok())
+    else {
+        return;
+    };
+    let left_sheet = match ev
+        .related_target()
+        .and_then(|t| t.dyn_into::<web_sys::Node>().ok())
+    {
+        Some(node) => !container.contains(Some(&node)),
+        None => true,
+    };
+    if !left_sheet {
+        return;
+    }
+    spawn_local(async move {
+        gloo_timers::future::TimeoutFuture::new(0).await;
+        if !container.is_connected() {
+            // A legitimate close already unmounted `.sheet` — nothing to do.
+            return;
+        }
+        if let Some(active) = web_sys::window()
+            .and_then(|w| w.document())
+            .and_then(|d| d.active_element())
+        {
+            let active_node: &web_sys::Node = active.as_ref();
+            if container.contains(Some(active_node)) {
+                // Focus already landed back inside `.sheet` on its own —
+                // e.g. a click that focused a DIFFERENT still-enabled
+                // descendant, which is a completely normal focus move,
+                // not an orphaning.
+                return;
+            }
+        }
+        // #334 review follow-up: prefer a REAL focusable descendant over
+        // the bare container when one exists. `left_sheet` above only
+        // means focus moved outside `.sheet` — NOT that every descendant
+        // is disabled (e.g. clicking inert content like `.sheet__title`
+        // can blur the previously-focused button to `<body>` even while
+        // other buttons are still enabled). Parking focus on `.sheet`
+        // itself in that case would needlessly leave a real, clickable
+        // control unfocused; querying fresh (rather than trusting
+        // whatever `trap_tab` last saw) also self-heals the exact
+        // container-focused state `trap_tab`'s own container fallback
+        // exists for, the moment something becomes focusable again.
+        let target = container
+            .query_selector_all(FOCUSABLE_SELECTOR)
+            .ok()
+            .and_then(|list| list.get(0))
+            .and_then(|n| n.dyn_into::<web_sys::Element>().ok())
+            .unwrap_or(container);
+        if let Ok(html_el) = target.dyn_into::<web_sys::HtmlElement>() {
+            let _ = html_el.focus();
+        }
+    });
 }
 
 /// Bottom sheet on mobile, centered modal on desktop (breakpoint handled via CSS, not Rust).
@@ -186,6 +323,7 @@ pub fn Sheet(
                 data-testid=testid_value
                 on:click=|ev: ev::MouseEvent| ev.stop_propagation()
                 on:keydown=close_keyboard
+                on:focusout=refocus_if_orphaned
             >
                 <div class="sheet__grab"></div>
                 <div class="sheet__title">{title}</div>
