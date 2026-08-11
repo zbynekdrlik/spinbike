@@ -462,4 +462,105 @@ mod tests {
             "sweep() must not create a second booking on template 1 (no persistent there)"
         );
     }
+
+    /// Regression test for #345: a `ClassFull` from `create_booking()` must
+    /// not abort the whole sweep.
+    ///
+    /// Two persistent subscriptions (A, B) share a capacity-1 template —
+    /// the batched booked-count snapshot #341 introduced is taken ONCE, up
+    /// front, for the whole tick, so BOTH candidates read it as "not full"
+    /// even though only one INSERT can actually win the atomic capacity
+    /// check. The loser gets a genuine `DbError::ClassFull` from
+    /// `create_booking()` — exactly the race the issue describes (there, an
+    /// external `/api/classes` request racing the snapshot; here, an
+    /// earlier candidate in the very same tick, which is deterministic and
+    /// needs no real concurrency to reproduce). A third, unrelated
+    /// persistent subscription (C) on a DIFFERENT template proves the
+    /// sweep kept going instead of aborting on the loser's error.
+    #[tokio::test]
+    async fn sweep_continues_past_a_classfull_race_instead_of_aborting_the_whole_tick() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let today = crate::util::today_bratislava();
+        let weekday = today.weekday().num_days_from_monday() as i64;
+
+        // Capacity 1 — two persistents due on it guarantee exactly one
+        // ClassFull race per matching date.
+        let tid_full = crate::db::classes::create_template(&pool, weekday, "06:00", 45, None, 1)
+            .await
+            .unwrap();
+        // Capacity 5, unrelated — proves the sweep didn't abort.
+        let tid_other = crate::db::classes::create_template(&pool, weekday, "07:00", 45, None, 5)
+            .await
+            .unwrap();
+
+        let user_a: i64 =
+            sqlx::query_scalar("INSERT INTO users (email, name) VALUES ('a@x','a') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let user_b: i64 =
+            sqlx::query_scalar("INSERT INTO users (email, name) VALUES ('b@x','b') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let user_c: i64 =
+            sqlx::query_scalar("INSERT INTO users (email, name) VALUES ('c@x','c') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        crate::db::persistent_bookings::create(&pool, user_a, tid_full)
+            .await
+            .unwrap();
+        crate::db::persistent_bookings::create(&pool, user_b, tid_full)
+            .await
+            .unwrap();
+        crate::db::persistent_bookings::create(&pool, user_c, tid_other)
+            .await
+            .unwrap();
+
+        // Today's weekday recurs at offsets 0, 7 and 14 inside the 15-day
+        // (0..=WINDOW_DAYS) window — 3 distinct matching dates. Per date on
+        // tid_full: exactly one of {A, B} wins the atomic INSERT, the other
+        // gets ClassFull. tid_other has no capacity contention at all.
+        let made = sweep(&pool)
+            .await
+            .expect("a ClassFull race must not abort the whole sweep (#345)");
+        assert_eq!(
+            made, 6,
+            "3 winners on the capacity-1 template (one per matching date) + \
+             3 bookings for user C on the unrelated template"
+        );
+
+        let full_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM bookings WHERE template_id=? AND cancelled_at IS NULL",
+        )
+        .bind(tid_full)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            full_count, 3,
+            "capacity-1 template must end up with exactly one booking per matching date \
+             (capacity respected, and not zero — proving the sweep didn't abort)"
+        );
+
+        let other_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM bookings WHERE template_id=? AND user_id=? \
+             AND cancelled_at IS NULL",
+        )
+        .bind(tid_other)
+        .bind(user_c)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            other_count, 3,
+            "user C's bookings on the unrelated template must all be created — a \
+             ClassFull race on the OTHER template must never suppress materialisation \
+             for everyone else this tick (#345)"
+        );
+    }
 }
