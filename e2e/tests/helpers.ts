@@ -228,8 +228,41 @@ export async function loginViaAPI(page: Page, baseURL: string, email: string, pa
     const data = await resp.json();
 
     // Set English language and auth state before any page loads so the WASM picks it up.
+    //
+    // The warm-up navigation below goes to '/manifest.json', NOT '/' (#282,
+    // fourth recurrence, 2026-08-11). '/' serves the SPA's index.html and
+    // boots the real WASM bundle; Playwright's page.goto (waitUntil: 'load')
+    // does not wait for that WASM instance's own async instantiation +
+    // Leptos first render to finish, so there was a real window where this
+    // internal navigation's own WASM instance could finish booting AFTER the
+    // token below is written, observe an authenticated user on its first
+    // render, client-redirect to /my/balance, mount InstallPrompt, and fire
+    // its own install-token mint POST — all before the caller's own,
+    // immediately-following `page.goto(target)` tore that document down.
+    // That caller navigation then boots a SECOND, independent WASM instance
+    // which (per local repro on #282's issue thread) cannot be relied on to
+    // observe the first instance's already-written cross-instance
+    // sessionStorage claim when the two navigations land this close
+    // together — both instances mint, `mintCount == 2`.
+    //
+    // `/manifest.json` is a dedicated Axum route (never the SPA fallback) —
+    // same-origin, so localStorage still lands on the real app's origin
+    // exactly like before, but it never serves index.html or the WASM
+    // bundle. No WASM instance can ever boot from THIS navigation, so there
+    // is no "first instance" left to race against the caller's own single
+    // subsequent navigation — the coexistence window is closed by
+    // construction, not narrowed. (An earlier attempt at this fix used
+    // `page.addInitScript()` instead of the one-shot `page.evaluate()`
+    // below — reverted, because an init script re-fires on EVERY later
+    // navigation for the page's whole lifetime, silently undoing the
+    // several specs in this suite that deliberately clear the session and
+    // expect a subsequent navigation to stay logged out, e.g. `welcome`,
+    // `code-login`, and the session-invalidation specs — see
+    // .claude/skills/e2e-testing/SKILL.md's #276/#258 entries. Keeping the
+    // injection as a plain, single `page.evaluate()` call preserves the
+    // exact same one-shot semantics this suite already relies on.)
     await setEnglishLanguage(page);
-    await page.goto('/');
+    await page.goto('/manifest.json');
     await page.evaluate((authData: { token: string; user: { id: number; email: string; name: string; role: string } }) => {
         localStorage.setItem('spinbike_token', authData.token);
         localStorage.setItem('spinbike_user', JSON.stringify(authData.user));
