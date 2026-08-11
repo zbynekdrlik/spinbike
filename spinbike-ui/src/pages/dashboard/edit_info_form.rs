@@ -8,6 +8,7 @@ use crate::api;
 use crate::auth;
 use crate::components::Sheet;
 use crate::i18n::{self, Lang};
+use crate::util::RequestId;
 
 use super::CardInfo;
 use super::deleted_email_conflict::DeletedEmailConflictDialog;
@@ -190,6 +191,15 @@ pub fn EditInfoForm(
     let initial_email_for_eff = initial_email;
     let initial_company_for_eff = initial_company;
     let initial_phone_for_eff = initial_phone;
+    // #344 finding 1: a close-then-reopen (before the first lookup resolves)
+    // fires a SECOND fetch while the first is still in flight. The smart_set
+    // guard below only compares the DOM's current value against a baseline
+    // fixed at component mount — reopening resets the DOM to that SAME
+    // baseline, so whichever response resolves while it still matches gets
+    // applied, even a genuinely older one. RequestId (same pattern as
+    // transactions_list.rs / negative_balance_list.rs, #66) drops a response
+    // once a newer dispatch has superseded it, regardless of arrival order.
+    let req_id = RequestId::new();
     Effect::new(move |prev_shown: Option<bool>| {
         let now_shown = show.get();
         if !now_shown {
@@ -205,9 +215,14 @@ pub fn EditInfoForm(
             let initial_email = initial_email_for_eff.get_untracked();
             let initial_company = initial_company_for_eff.get_untracked();
             let initial_phone = initial_phone_for_eff.get_untracked();
+            let token = req_id.next();
             spawn_local(async move {
                 gloo_timers::future::TimeoutFuture::new(0).await;
-                if let Ok(c) = api::get::<CardInfo>(&format!("/api/users/lookup/{code}")).await {
+                let result = api::get::<CardInfo>(&format!("/api/users/lookup/{code}")).await;
+                if !token.is_latest() {
+                    return; // stale — a newer reopen superseded this fetch (#344)
+                }
+                if let Ok(c) = result {
                     // Overwrite only if the input's current DOM value matches
                     // the initial rendered value (user hasn't typed anything).
                     // Otherwise the user is mid-edit; leave it alone.
