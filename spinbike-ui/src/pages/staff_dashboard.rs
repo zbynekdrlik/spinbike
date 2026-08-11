@@ -153,24 +153,37 @@ pub fn StaffDashboardPage() -> impl IntoView {
                 let capacity = slot.capacity;
 
                 let (cancel_loading, set_cancel_loading) = signal(false);
+                let (cancel_err, set_cancel_err) = signal(String::new());
                 let (walkin_open, set_walkin_open) = signal(false);
 
                 let date_c = date.clone();
                 let on_cancel_class = move |_| {
                     let date = date_c.clone();
                     set_cancel_loading.set(true);
+                    set_cancel_err.set(String::new());
                     spawn_local(async move {
                         #[derive(serde::Serialize)]
                         struct Req { template_id: i64, date: String, reason: Option<String> }
-                        #[derive(serde::Deserialize)]
-                        struct Resp {}
-                        let _ = api::post::<Req, Resp>("/api/admin/cancel-class", &Req {
+                        // Fix 1: cancel_class (routes/admin.rs) returns 204 No
+                        // Content on success — post_no_content skips the
+                        // `.json()` parse that always failed (and was
+                        // discarded) on an empty body, so a real failure
+                        // (network, 409, expired auth) is no longer reported
+                        // as silent success.
+                        match api::post_no_content("/api/admin/cancel-class", &Req {
                             template_id,
                             date,
                             reason: None,
-                        }).await;
-                        set_cancel_loading.set(false);
-                        set_v.update(|v| *v += 1);
+                        }).await {
+                            Ok(_) => {
+                                set_cancel_loading.set(false);
+                                set_v.update(|v| *v += 1);
+                            }
+                            Err(e) => {
+                                set_cancel_loading.set(false);
+                                set_cancel_err.set(i18n::tf(lang.get_untracked(), "error_format", &[&e]));
+                            }
+                        }
                     });
                 };
 
@@ -216,6 +229,14 @@ pub fn StaffDashboardPage() -> impl IntoView {
                                 {actions}
                             </div>
                         </div>
+                        {move || {
+                            let e = cancel_err.get();
+                            if !e.is_empty() {
+                                view! { <div class="alert alert-error mt-1" style="margin-left:8px">{e}</div> }.into_any()
+                            } else {
+                                view! { <span></span> }.into_any()
+                            }
+                        }}
                         <div class="participants-list" style="margin-left:8px;margin-bottom:8px">
                             {move || {
                                 let list = participants.get();

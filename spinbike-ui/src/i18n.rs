@@ -709,6 +709,13 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("start_time", ("Zaciatok", "Start Time"));
     m.insert("duration", ("Trvanie", "Duration"));
     m.insert("capacity", ("Kapacita", "Capacity"));
+    m.insert(
+        "capacity_invalid",
+        (
+            "Neplatna kapacita (musi byt cele cislo vacsie ako 0)",
+            "Invalid capacity (must be a whole number greater than 0)",
+        ),
+    );
     m.insert("instructor_id", ("ID instruktora", "Instructor ID"));
     m.insert("create", ("Vytvorit", "Create"));
     m.insert("edit", ("Upravit", "Edit"));

@@ -59,6 +59,18 @@ pub fn cache_set(key: &str, value: &str) {
     }
 }
 
+/// Explicitly clear the cached value at `key` (unlike [`cache_get`], which
+/// never removes on read). Silent no-op on any storage failure or if the key
+/// was never set. Added for `install_prompt.rs`'s cross-instance mint-claim
+/// marker (#282 recurrence): unlike the one-shot [`flag_take`] shape
+/// (read-and-clear together), that caller needs to WRITE the claim in one
+/// call and clear it in a LATER, separate call (on an observed failure).
+pub fn cache_remove(key: &str) {
+    if let Some(s) = session_storage() {
+        let _ = s.remove_item(key);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -86,6 +98,17 @@ mod tests {
         cache_set("test_cache", "v");
         assert_eq!(
             cache_get("test_cache"),
+            None,
+            "no window/sessionStorage in this test runtime — must no-op, not panic"
+        );
+    }
+
+    #[wasm_bindgen_test]
+    fn cache_remove_degrades_gracefully_without_a_window() {
+        cache_set("test_cache_remove", "v");
+        cache_remove("test_cache_remove");
+        assert_eq!(
+            cache_get("test_cache_remove"),
             None,
             "no window/sessionStorage in this test runtime — must no-op, not panic"
         );

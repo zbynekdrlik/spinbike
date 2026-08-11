@@ -8,7 +8,7 @@ use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 
 use spinbike_core::auth::Role;
-use spinbike_core::services::CLASS_VISIT_KINDS;
+use spinbike_core::services::{CLASS_VISIT_KINDS, class_visit_filter_sql};
 use spinbike_core::stats::{MonthlyBucket, PeriodAgg, PeriodTotals, StatsResponse};
 
 use crate::AppState;
@@ -837,14 +837,10 @@ async fn user_stats(
     _: StaffUser,
     Path(id): Path<i64>,
 ) -> Result<Json<StatsResponse>, ApiError> {
-    // Build the IN-clause placeholders dynamically from the constants.
     // #329: identified by the stable `kind` column, not the admin-editable
-    // `name_en`.
-    let placeholders: String = std::iter::repeat_n("?", CLASS_VISIT_KINDS.len())
-        .collect::<Vec<_>>()
-        .join(",");
-    let visit_filter_sql =
-        format!("service_id IN (SELECT id FROM services WHERE kind IN ({placeholders}))");
+    // `name_en`. #339: the placeholder-building + subquery text itself is
+    // now the shared `class_visit_filter_sql` helper.
+    let visit_filter_sql = class_visit_filter_sql("service_id");
 
     // Gym-local (Europe/Bratislava) month/year boundaries, as UTC-instant
     // strings bound as params — so "this month" / "this year" key off the GYM

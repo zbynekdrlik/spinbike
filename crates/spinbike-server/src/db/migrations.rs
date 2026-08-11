@@ -121,6 +121,60 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
     ),
 ];
 
+/// Post-condition checks `db::run_migrations` runs at the end of a
+/// migration's own transaction — AFTER its SQL executes, BEFORE the
+/// transaction commits (#339). Each entry is `(migration_version,
+/// assertion_sql, failure_context)`: `assertion_sql` MUST be a scalar
+/// query returning a single INTEGER count. If it comes back `0`, the
+/// whole migration transaction rolls back (it was never committed) and
+/// `run_migrations` bails with `failure_context` — instead of recording
+/// the migration as applied while the outcome it depended on never
+/// happened, silently.
+///
+/// V16 and V27 both retag a seeded `services` row by matching its
+/// admin-editable `name_sk` (`UPDATE services SET kind = ... WHERE
+/// name_sk = '...'`). Both migrations are already applied on production —
+/// their SQL is checksum-frozen and can never be edited again
+/// (`database-migrations.md`) — so the ONLY place left to guard against
+/// "the owner renamed the row between merge and this migration's actual
+/// run" is here, at the runner level, for any FUTURE fresh deploy. Without
+/// this, the UPDATE would silently match zero rows with no other signal:
+/// `routes/door.rs`'s self-entry lookup / `jobs/charger.rs`'s Spinning
+/// price lookup would each `fetch_one` on a `kind` value that matches no
+/// row, returning `RowNotFound` — for charger.rs that means every 4-hour
+/// auto-charge tick errors out from then on, silently, until someone
+/// notices no one got charged.
+///
+/// Confirmed against the real prod DB before writing this (read-only,
+/// `sqlite3 /opt/spinbike/prod/spinbike.db`): exactly one
+/// `kind='single_entry'` row (Fitness) and one `kind='group_class'` row
+/// (Spinning) — both checks below pass against production data as it
+/// exists today; this only ever fires on a FUTURE fresh migration run
+/// where the pre-deploy rename race described above actually happened.
+pub(crate) static MIGRATION_POSTCONDITIONS: &[(i64, &str, &str)] = &[
+    (
+        16,
+        "SELECT COUNT(*) FROM services WHERE kind = 'single_entry'",
+        "migration 16 (door self-entry) post-condition failed: its \
+         `UPDATE services SET kind = 'single_entry' WHERE name_sk = 'Fitness'` matched zero rows. \
+         The seeded Fitness service's Slovak name was most likely renamed before this migration \
+         ran — routes/door.rs's self-entry lookup depends on exactly one kind='single_entry' row \
+         existing. Fix: rename the service back to name_sk='Fitness' (or set kind='single_entry' \
+         directly) via sqlite3/admin on the affected database, then retry. See issue #339.",
+    ),
+    (
+        27,
+        "SELECT COUNT(*) FROM services WHERE kind = 'group_class'",
+        "migration 27 (services group_class kind) post-condition failed: its \
+         `UPDATE services SET kind = 'group_class' WHERE name_sk = 'Spinning'` matched zero rows. \
+         The seeded Spinning service's Slovak name was most likely renamed before this migration \
+         ran — jobs/charger.rs's Spinning-price lookup depends on exactly one kind='group_class' \
+         row existing, and will error on every 4-hour auto-charge tick until this is fixed. Fix: \
+         rename the service back to name_sk='Spinning' (or set kind='group_class' directly) via \
+         sqlite3/admin on the affected database, then retry. See issue #339.",
+    ),
+];
+
 const V1_INITIAL_SCHEMA: &str = r#"
 CREATE TABLE users (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -2286,6 +2340,72 @@ mod tests {
             .unwrap();
     }
 
+    /// Build a fresh in-memory pool with `schema_version` bootstrapped and
+    /// migrations `1..=max_version` applied by hand — the exact "run the SQL
+    /// via `sqlx::raw_sql` inside a transaction, insert a schema_version
+    /// row, toggle `PRAGMA foreign_keys` around the transaction" sequence
+    /// `db::run_migrations` itself uses (see db/mod.rs) — WITHOUT going
+    /// through the real `run_migrations`, which would apply every migration
+    /// currently in `MIGRATIONS`, not stop at `max_version`. This is how a
+    /// test reaches "the on-disk shape an older binary would have left
+    /// mid-upgrade" so it can then seed data and observe a genuine
+    /// `run_migrations` call apply the REMAINING migrations for real.
+    ///
+    /// Extracted (#338) from 8 near-identical copies of this same ~15-line
+    /// bootstrap that had accumulated across these "genuine partial-upgrade"
+    /// tests. Standardizes every call site on `sqlx::raw_sql`-based
+    /// statement splitting (not the `apply_sql_block` helper above): 4 of
+    /// the 8 originals used `apply_sql_block`'s naive `;`-split instead,
+    /// which is unsafe past V20 (its `BEGIN...END` trigger body has an
+    /// internal `;` — see `apply_sql_block`'s own comment above) but
+    /// happened to be safe purely because those 4 call sites' `max_version`
+    /// never reached 20. `sqlx::raw_sql` is correct for every range (it's
+    /// what production `run_migrations` uses), so routing all 8 through it
+    /// here is a behavior-preserving consolidation, not a functional change
+    /// to any of the 8 tests' end state.
+    async fn pool_migrated_to(max_version: i64) -> sqlx::SqlitePool {
+        use sqlx::sqlite::SqlitePoolOptions;
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= max_version) {
+            let mut conn = pool.acquire().await.unwrap();
+            sqlx::query("PRAGMA foreign_keys = OFF")
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+            let mut tx = conn.begin().await.unwrap();
+            sqlx::raw_sql(sql).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
+                .bind(v)
+                .bind(desc)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            sqlx::query("PRAGMA foreign_keys = ON")
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+        }
+
+        pool
+    }
+
     #[tokio::test]
     async fn migration_13_users_replace_cards_full_round_trip() {
         // Apply migrations 1..=12 using run_migrations, then seed data, then
@@ -2309,35 +2429,7 @@ mod tests {
         // create_memory_pool().await applies run_migrations immediately.
         // So we need a raw pool without migrations, apply 1..=12, seed, apply 13.
 
-        use sqlx::sqlite::SqlitePoolOptions;
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-
-        // Bootstrap schema_version (run_migrations expects this table).
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER PRIMARY KEY,
-                description TEXT NOT NULL DEFAULT '',
-                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        // Apply migrations 1..=12 only.
-        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 12) {
-            apply_sql_block(&pool, sql).await;
-            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
-                .bind(v)
-                .bind(desc)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
+        let pool = pool_migrated_to(12).await;
 
         // Seed: 1 staff user, 1 linked card (alice), 1 unlinked named card (bob),
         //       1 unlinked nameless card.
@@ -2788,36 +2880,9 @@ mod tests {
     /// prove that guard exists.
     #[tokio::test]
     async fn v13_refuses_to_apply_when_a_user_has_two_linked_cards() {
-        use sqlx::sqlite::SqlitePoolOptions;
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-
-        // Bootstrap schema_version (run_migrations expects this table) and
-        // apply migrations 1..=12 manually so we can seed dangerous `cards`
+        // Apply migrations 1..=12 manually so we can seed dangerous `cards`
         // data before letting the REAL run_migrations attempt V13.
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER PRIMARY KEY,
-                description TEXT NOT NULL DEFAULT '',
-                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 12) {
-            apply_sql_block(&pool, sql).await;
-            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
-                .bind(v)
-                .bind(desc)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
+        let pool = pool_migrated_to(12).await;
 
         // Seed one user with TWO linked cards — the dangerous precondition.
         let user_id: i64 = sqlx::query_scalar(
@@ -2961,35 +3026,7 @@ mod tests {
         //   6. Apply V14, V15.
         //   7. Assert '(deleted)' user EXISTS and has deleted_at IS NOT NULL.
         //      fetch_one (not fetch_optional) — row absence must fail the test.
-        use sqlx::sqlite::SqlitePoolOptions;
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-
-        // Bootstrap schema_version (run_migrations expects this table).
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER PRIMARY KEY,
-                description TEXT NOT NULL DEFAULT '',
-                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        // Apply migrations 1..=12 only.
-        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 12) {
-            apply_sql_block(&pool, sql).await;
-            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
-                .bind(v)
-                .bind(desc)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
+        let pool = pool_migrated_to(12).await;
 
         // Seed a minimal staff user (required by transactions.staff_id FK).
         let staff_id: i64 = sqlx::query_scalar(
@@ -3138,6 +3175,69 @@ mod tests {
         assert_eq!(n, 1, "still exactly one single_entry row after re-run");
     }
 
+    /// #339 regression: V16's `UPDATE services SET kind = 'single_entry'
+    /// WHERE name_sk = 'Fitness'` has no row-count guard. If the seeded
+    /// Fitness row's Slovak name was renamed before V16 actually runs (an
+    /// admin edit between merge and deploy), the UPDATE silently matches
+    /// zero rows and `run_migrations` used to report success anyway — the
+    /// exact "the retag quietly never happened" gap this issue closes.
+    /// Rename the row BEFORE applying V16 (not after, which would just be
+    /// an ordinary admin edit V16 already isn't watching for) and assert
+    /// `run_migrations` now refuses to proceed instead of silently
+    /// recording V16 as applied.
+    #[tokio::test]
+    async fn v16_postcondition_fails_loudly_when_fitness_retag_matches_zero_rows() {
+        let pool = pool_migrated_to(15).await;
+
+        // Simulate the pre-deploy rename race: the seeded Fitness row no
+        // longer carries the literal name_sk V16's UPDATE matches on.
+        sqlx::query(
+            "UPDATE services SET name_sk = 'Renamed Before Deploy' WHERE name_sk = 'Fitness'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = run_migrations(&pool).await;
+        let err = result.expect_err(
+            "run_migrations must refuse to apply V16 when its Fitness retag matches zero rows",
+        );
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("single_entry") && msg.contains("zero rows"),
+            "error should explain the V16 post-condition failure, got: {msg}"
+        );
+        assert!(
+            msg.contains("339"),
+            "error should reference issue #339, got: {msg}"
+        );
+
+        // V16 must NOT have been committed: schema_version stops at 15.
+        let applied_max: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM schema_version")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            applied_max, 15,
+            "schema_version must not record V16 as applied"
+        );
+
+        // And the rebuild-table side effects (widened CHECK, monthly_pass
+        // index) must not have leaked out of the rolled-back transaction
+        // either — services still has the pre-V16 shape (no single_entry
+        // rows at all, the renamed row still sitting at kind='generic').
+        let single_entry_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE kind = 'single_entry'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            single_entry_count, 0,
+            "the failed migration's table rebuild must have rolled back entirely"
+        );
+    }
+
     // V17 — login_tokens (magic-link) ---------------------------------
 
     #[tokio::test]
@@ -3278,40 +3378,13 @@ mod tests {
     /// existing v18 database.
     #[tokio::test]
     async fn v19_checksum_backfills_on_genuine_upgrade_from_v18() {
-        use sqlx::sqlite::SqlitePoolOptions;
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-
         // Bootstrap schema_version exactly as it looked BEFORE V19 — no
         // checksum column at all (mirrors run_migrations' own
-        // CREATE TABLE IF NOT EXISTS, pre-#170).
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER PRIMARY KEY,
-                description TEXT NOT NULL,
-                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        // Apply 1..=18 the way an older binary already committed them: raw
-        // SQL + a plain (version, description) INSERT — never touching a
+        // CREATE TABLE IF NOT EXISTS, pre-#170) — and apply 1..=18 the way
+        // an older binary already committed them, never touching a
         // checksum column, because on THIS binary's schema_version table
         // there isn't one yet.
-        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 18) {
-            apply_sql_block(&pool, sql).await;
-            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
-                .bind(v)
-                .bind(desc)
-                .execute(&pool)
-                .await
-                .unwrap();
-        }
+        let pool = pool_migrated_to(18).await;
 
         // Sanity: confirm the pre-upgrade state genuinely has no checksum
         // column yet (not just NULL values) — otherwise this test would not
@@ -3489,48 +3562,7 @@ mod tests {
     /// them, seed rows, THEN run_migrations applies only V21.
     #[tokio::test]
     async fn v21_preserves_existing_rows_on_genuine_upgrade_from_v20() {
-        use sqlx::sqlite::SqlitePoolOptions;
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER PRIMARY KEY,
-                description TEXT NOT NULL,
-                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        // Apply 1..=20 the way run_migrations does — `sqlx::raw_sql` so SQLite
-        // parses each block itself (V20's trigger has internal semicolons that
-        // apply_sql_block's naive `;`-split would mangle), with foreign_keys OFF
-        // around the table-rebuild migrations.
-        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 20) {
-            let mut conn = pool.acquire().await.unwrap();
-            sqlx::query("PRAGMA foreign_keys = OFF")
-                .execute(&mut *conn)
-                .await
-                .unwrap();
-            let mut tx = conn.begin().await.unwrap();
-            sqlx::raw_sql(sql).execute(&mut *tx).await.unwrap();
-            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
-                .bind(v)
-                .bind(desc)
-                .execute(&mut *tx)
-                .await
-                .unwrap();
-            tx.commit().await.unwrap();
-            sqlx::query("PRAGMA foreign_keys = ON")
-                .execute(&mut *conn)
-                .await
-                .unwrap();
-        }
+        let pool = pool_migrated_to(20).await;
 
         // Pre-upgrade: login_tokens has NO attempts column yet.
         let cols_before: Vec<(String,)> =
@@ -3644,44 +3676,7 @@ mod tests {
     /// committed them, seed rows, THEN run_migrations applies only V22.
     #[tokio::test]
     async fn v22_preserves_existing_rows_on_genuine_upgrade_from_v21() {
-        use sqlx::sqlite::SqlitePoolOptions;
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER PRIMARY KEY,
-                description TEXT NOT NULL,
-                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 21) {
-            let mut conn = pool.acquire().await.unwrap();
-            sqlx::query("PRAGMA foreign_keys = OFF")
-                .execute(&mut *conn)
-                .await
-                .unwrap();
-            let mut tx = conn.begin().await.unwrap();
-            sqlx::raw_sql(sql).execute(&mut *tx).await.unwrap();
-            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
-                .bind(v)
-                .bind(desc)
-                .execute(&mut *tx)
-                .await
-                .unwrap();
-            tx.commit().await.unwrap();
-            sqlx::query("PRAGMA foreign_keys = ON")
-                .execute(&mut *conn)
-                .await
-                .unwrap();
-        }
+        let pool = pool_migrated_to(21).await;
 
         let cols_before: Vec<(String,)> =
             sqlx::query_as("SELECT name FROM pragma_table_info('login_tokens')")
@@ -3932,43 +3927,8 @@ mod tests {
     /// data across the upgrade.
     #[tokio::test]
     async fn v26_backfills_is_door_press_from_pre_existing_door_prefixed_notes() {
-        let pool = sqlx::sqlite::SqlitePoolOptions::new()
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER PRIMARY KEY,
-                description TEXT NOT NULL,
-                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
         // Apply 1..=25 the way run_migrations does.
-        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 25) {
-            let mut conn = pool.acquire().await.unwrap();
-            sqlx::query("PRAGMA foreign_keys = OFF")
-                .execute(&mut *conn)
-                .await
-                .unwrap();
-            let mut tx = conn.begin().await.unwrap();
-            sqlx::raw_sql(sql).execute(&mut *tx).await.unwrap();
-            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
-                .bind(v)
-                .bind(desc)
-                .execute(&mut *tx)
-                .await
-                .unwrap();
-            tx.commit().await.unwrap();
-            sqlx::query("PRAGMA foreign_keys = ON")
-                .execute(&mut *conn)
-                .await
-                .unwrap();
-        }
+        let pool = pool_migrated_to(25).await;
 
         let cols_before: Vec<(String,)> =
             sqlx::query_as("SELECT name FROM pragma_table_info('transactions')")
@@ -4155,6 +4115,80 @@ mod tests {
         assert_eq!(n, 1, "still exactly one group_class row after re-run");
     }
 
+    /// #339 regression: same race as V16's, one migration later. V27's
+    /// `UPDATE services SET kind = 'group_class' WHERE name_sk = 'Spinning'`
+    /// also has no row-count guard — if the seeded Spinning row's Slovak
+    /// name was renamed before V27 actually runs, the UPDATE silently
+    /// matches zero rows and `run_migrations` used to report success
+    /// anyway. This is the concrete failure mode issue #339 was filed for:
+    /// `jobs/charger.rs`'s Spinning-price lookup would then `fetch_one` on
+    /// `kind = 'group_class'`, get `RowNotFound`, and every subsequent
+    /// 4-hour auto-charge tick would error out with no other signal.
+    #[tokio::test]
+    async fn v27_postcondition_fails_loudly_when_spinning_retag_matches_zero_rows() {
+        let pool = pool_migrated_to(26).await;
+
+        // Simulate the pre-deploy rename race: the seeded Spinning row no
+        // longer carries the literal name_sk V27's UPDATE matches on.
+        sqlx::query(
+            "UPDATE services SET name_sk = 'Renamed Before Deploy' WHERE name_sk = 'Spinning'",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let result = run_migrations(&pool).await;
+        let err = result.expect_err(
+            "run_migrations must refuse to apply V27 when its Spinning retag matches zero rows",
+        );
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("group_class") && msg.contains("zero rows"),
+            "error should explain the V27 post-condition failure, got: {msg}"
+        );
+        assert!(
+            msg.contains("339"),
+            "error should reference issue #339, got: {msg}"
+        );
+
+        // V27 must NOT have been committed: schema_version stops at 26.
+        let applied_max: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM schema_version")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            applied_max, 26,
+            "schema_version must not record V27 as applied"
+        );
+
+        // And the rebuild-table side effects must not have leaked out of
+        // the rolled-back transaction either.
+        let group_class_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM services WHERE kind = 'group_class'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            group_class_count, 0,
+            "the failed migration's table rebuild must have rolled back entirely"
+        );
+
+        // The user_active_pass VIEW (dropped + recreated by V27's rebuild)
+        // must still exist — a rolled-back V27 must leave V26's state
+        // fully intact, not half-torn-down.
+        let view_exists: Option<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type='view' AND name='user_active_pass'",
+        )
+        .fetch_optional(&pool)
+        .await
+        .unwrap();
+        assert!(
+            view_exists.is_some(),
+            "user_active_pass view must survive a rolled-back V27 attempt"
+        );
+    }
+
     /// Simulates a genuine upgrade from V26: a pre-existing Spinning
     /// class-visit transaction AND an active monthly-pass transaction (so the
     /// `user_active_pass` view — dropped and recreated by V27's `services`
@@ -4162,47 +4196,8 @@ mod tests {
     /// rebuild, and the Spinning row is retagged to `kind='group_class'`.
     #[tokio::test]
     async fn v27_preserves_rows_and_view_on_genuine_upgrade_from_v26() {
-        use sqlx::sqlite::SqlitePoolOptions;
-        let pool = SqlitePoolOptions::new()
-            .max_connections(1)
-            .connect("sqlite::memory:")
-            .await
-            .unwrap();
-
-        sqlx::query(
-            "CREATE TABLE IF NOT EXISTS schema_version (
-                version INTEGER PRIMARY KEY,
-                description TEXT NOT NULL,
-                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-            )",
-        )
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        // Apply 1..=26 the way run_migrations does — sqlx::raw_sql so SQLite
-        // parses each block itself (V20's trigger has internal semicolons),
-        // with foreign_keys OFF around the table-rebuild migrations.
-        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 26) {
-            let mut conn = pool.acquire().await.unwrap();
-            sqlx::query("PRAGMA foreign_keys = OFF")
-                .execute(&mut *conn)
-                .await
-                .unwrap();
-            let mut tx = conn.begin().await.unwrap();
-            sqlx::raw_sql(sql).execute(&mut *tx).await.unwrap();
-            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
-                .bind(v)
-                .bind(desc)
-                .execute(&mut *tx)
-                .await
-                .unwrap();
-            tx.commit().await.unwrap();
-            sqlx::query("PRAGMA foreign_keys = ON")
-                .execute(&mut *conn)
-                .await
-                .unwrap();
-        }
+        // Apply 1..=26 the way run_migrations does.
+        let pool = pool_migrated_to(26).await;
 
         // Pre-upgrade: Spinning still shares kind='generic', matching prod.
         let spinning_kind_before: String =

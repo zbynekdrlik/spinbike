@@ -8,7 +8,7 @@ use crate::db::users;
 use crate::error::ApiError;
 use crate::routes::internal_error;
 use spinbike_core::errors::ErrorCode;
-use spinbike_core::services::CLASS_VISIT_KINDS;
+use spinbike_core::services::{CLASS_VISIT_KINDS, class_visit_filter_sql};
 
 #[derive(Deserialize)]
 pub struct ChargeRequest {
@@ -371,14 +371,12 @@ async fn log_visit(
         let (day_start, day_end) = crate::util::bratislava_day_range_utc(today);
         let day_start = day_start.format("%Y-%m-%d %H:%M:%S").to_string();
         let day_end = day_end.format("%Y-%m-%d %H:%M:%S").to_string();
-        let placeholders: String = std::iter::repeat_n("?", CLASS_VISIT_KINDS.len())
-            .collect::<Vec<_>>()
-            .join(", ");
+        let visit_filter = class_visit_filter_sql("service_id");
         let sql = format!(
             "SELECT created_at, is_door_press FROM transactions \
              WHERE user_id = ? AND deleted_at IS NULL \
                AND created_at >= ? AND created_at < ? \
-               AND service_id IN (SELECT id FROM services WHERE kind IN ({placeholders})) \
+               AND {visit_filter} \
                AND ( action = 'visit' \
                      OR (action = 'charge' AND amount < 0 AND valid_until IS NULL) ) \
              ORDER BY created_at DESC, id DESC LIMIT 1"

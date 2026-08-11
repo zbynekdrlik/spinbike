@@ -68,13 +68,40 @@ pub async fn day_report(
     }
     let events: Vec<ReportEvent> = rows.into_iter().map(Into::into).collect();
 
-    // Class-visit kinds bound from spinbike_core::services constants (#329:
-    // the stable `kind` column, not the admin-editable `name_en`) — `?3`
-    // is Spinning (for the new spinning_visits aggregate) and `?4` is
-    // Fitness (so the attendance aggregate still counts both).
-    // NOTE: `ELSE 0.0` (not `ELSE 0`) is required for cash_in_eur — otherwise
-    // SQLite returns INTEGER for the SUM when no rows match and sqlx refuses
-    // to decode that into f64.
+    let kpi_row = kpi_between(pool, &start_str, &end_str).await?;
+    let kpi = KpiSummary {
+        spinning_visits: kpi_row.spinning_visits,
+        attendance: kpi_row.attendance,
+        passes_sold: kpi_row.passes_sold,
+        cash_in_eur: kpi_row.cash_in_eur,
+    };
+
+    let category_revenue = category_revenue_between(pool, &start_str, &end_str).await?;
+
+    Ok((kpi, category_revenue, events, has_more))
+}
+
+/// KPI counts/sums over the half-open UTC-instant range `[start_str,
+/// end_str)` — shared by `day_report` and `range_report` (#339: this used
+/// to be an identical ~30-line query literal hand-copied into both
+/// functions, same pattern `category_revenue_between` below already uses
+/// to avoid the equivalent duplication for the category-revenue query).
+///
+/// Class-visit kinds are bound from `spinbike_core::services` constants
+/// (#329: the stable `kind` column, not the admin-editable `name_en`)
+/// using SQLite's NUMBERED `?N` parameters, not the anonymous-`?`
+/// `class_visit_filter_sql` helper `db/users.rs`/`routes/*.rs` use: `?3`
+/// (Spinning) is referenced TWICE in this query text (the `spinning_visits`
+/// aggregate AND inside the `attendance` IN-list) but bound only ONCE —
+/// SQLite lets every occurrence of `?3` share that single bound value.
+/// `class_visit_filter_sql`'s anonymous placeholders can't do that: each
+/// occurrence would need its own `.bind()` call, so this query keeps its
+/// own hand-written fragment instead of routing through that helper.
+///
+/// NOTE: `ELSE 0.0` (not `ELSE 0`) is required for cash_in_eur — otherwise
+/// SQLite returns INTEGER for the SUM when no rows match and sqlx refuses
+/// to decode that into f64.
+async fn kpi_between(pool: &SqlitePool, start_str: &str, end_str: &str) -> Result<DbKpiRow> {
     let kpi_row: DbKpiRow = sqlx::query_as::<_, DbKpiRow>(
         "SELECT
             COALESCE(SUM(
@@ -102,23 +129,13 @@ pub async fn day_report(
          FROM transactions
          WHERE created_at >= ?1 AND created_at < ?2 AND deleted_at IS NULL",
     )
-    .bind(&start_str)
-    .bind(&end_str)
+    .bind(start_str)
+    .bind(end_str)
     .bind(spinbike_core::services::SPINNING_KIND)
     .bind(spinbike_core::services::FITNESS_KIND)
     .fetch_one(pool)
     .await?;
-
-    let kpi = KpiSummary {
-        spinning_visits: kpi_row.spinning_visits,
-        attendance: kpi_row.attendance,
-        passes_sold: kpi_row.passes_sold,
-        cash_in_eur: kpi_row.cash_in_eur,
-    };
-
-    let category_revenue = category_revenue_between(pool, &start_str, &end_str).await?;
-
-    Ok((kpi, category_revenue, events, has_more))
+    Ok(kpi_row)
 }
 
 /// Revenue per active service over the half-open UTC-instant range
@@ -274,41 +291,7 @@ pub async fn range_report(
     }
     let events: Vec<ReportEvent> = rows.into_iter().map(Into::into).collect();
 
-    // Class-visit kinds bound from spinbike_core::services constants (#329)
-    // — see day_report. Bind order: `?3` Spinning, `?4` Fitness.
-    let kpi_row: DbKpiRow = sqlx::query_as::<_, DbKpiRow>(
-        "SELECT
-            COALESCE(SUM(
-              CASE
-                WHEN service_id IN (SELECT id FROM services WHERE kind = ?3)
-                 AND (
-                   (action = 'charge' AND amount < 0 AND valid_until IS NULL)
-                   OR action = 'visit'
-                 )
-                THEN 1 ELSE 0
-              END
-            ), 0) AS spinning_visits,
-            COALESCE(SUM(
-              CASE
-                WHEN service_id IN (SELECT id FROM services WHERE kind IN (?3, ?4))
-                 AND (
-                   (action = 'charge' AND amount < 0 AND valid_until IS NULL)
-                   OR action = 'visit'
-                 )
-                THEN 1 ELSE 0
-              END
-            ), 0) AS attendance,
-            COALESCE(SUM(CASE WHEN valid_until IS NOT NULL THEN 1 ELSE 0 END), 0) AS passes_sold,
-            COALESCE(SUM(CASE WHEN amount > 0 THEN amount ELSE 0.0 END), 0.0) AS cash_in_eur
-         FROM transactions
-         WHERE created_at >= ?1 AND created_at < ?2 AND deleted_at IS NULL",
-    )
-    .bind(&from_str)
-    .bind(&to_str)
-    .bind(spinbike_core::services::SPINNING_KIND)
-    .bind(spinbike_core::services::FITNESS_KIND)
-    .fetch_one(pool)
-    .await?;
+    let kpi_row = kpi_between(pool, &from_str, &to_str).await?;
 
     let category_revenue = category_revenue_between(pool, &from_str, &to_str).await?;
 

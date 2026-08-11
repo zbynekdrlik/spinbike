@@ -113,9 +113,16 @@ pub fn ActionForm(
                 el.value()
             })
             .unwrap_or_default();
+        // Fix 5: a blank/zero/negative top-up amount used to be a totally
+        // silent no-op (parse failure fell through to `_ => return` AFTER
+        // set_err was already cleared above) — no error, no spinner, no
+        // request. Symmetric with do_charge's same guard below.
         let amount = match parse_money(&typed) {
             Some(v) if v > 0.0 => v,
-            _ => return,
+            _ => {
+                set_err.set(i18n::t(lang.get_untracked(), "price_required").to_string());
+                return;
+            }
         };
         let note = read_note();
         set_loading.set(true);

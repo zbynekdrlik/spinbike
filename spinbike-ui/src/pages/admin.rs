@@ -241,13 +241,30 @@ fn TemplatesTab() -> impl IntoView {
                 let cap_for_edit = t.capacity;
                 let on_del = move |_| {
                     spawn_local(async move {
-                        let _ = api::delete(&format!("/api/admin/templates/{tid}")).await;
-                        set_v.update(|v| *v += 1);
+                        // Fix 4: a rejected delete (FK constraint from existing
+                        // bookings, 500, network blip) used to show nothing
+                        // and leave the row in place — routed into set_m
+                        // like every sibling handler in this file.
+                        match api::delete(&format!("/api/admin/templates/{tid}")).await {
+                            Ok(_) => set_v.update(|v| *v += 1),
+                            Err(e) => set_m.set(i18n::tf(lang.get_untracked(), "error_format", &[&e])),
+                        }
                     });
                 };
                 let on_save = move |_| {
                     let new_time = edit_time_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
-                    let new_cap: i64 = edit_cap_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default().parse().unwrap_or(0);
+                    let cap_str = edit_cap_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
+                    // Fix 3: a class-template capacity that fails to parse (or
+                    // is <= 0) used to silently save as 0, quietly filling
+                    // every generated class from empty. Reject it in the UI
+                    // instead of sending the request.
+                    let new_cap: i64 = match cap_str.parse::<i64>() {
+                        Ok(v) if v > 0 => v,
+                        _ => {
+                            set_m.set(i18n::t(lang.get_untracked(), "capacity_invalid").to_string());
+                            return;
+                        }
+                    };
                     spawn_local(async move {
                         #[derive(serde::Serialize)]
                         struct Req { start_time: Option<String>, capacity: Option<i64> }
@@ -494,7 +511,17 @@ fn ServicesTab() -> impl IntoView {
                 el.value()
             })
             .unwrap_or_else(|| "generic".to_string());
-        let price = parse_money(&price_str).unwrap_or(0.0);
+        // Fix 2: an unparsable price used to silently save as 0.0 with no
+        // error shown — staff fat-fingering "5..0" got a free service.
+        // Zero itself stays legal (a deliberate free service); only the
+        // silent fallback from unparsable input is rejected.
+        let price = match parse_money(&price_str) {
+            Some(v) => v,
+            None => {
+                set_msg.set(i18n::t(lang.get_untracked(), "price_required").to_string());
+                return;
+            }
+        };
         if name_sk.trim().is_empty() || name_en.trim().is_empty() {
             return;
         }
@@ -585,9 +612,17 @@ fn ServicesTab() -> impl IntoView {
                 let on_save = move |_| {
                     let new_name_sk = edit_name_sk_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
                     let new_name_en = edit_name_en_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
-                    let new_price = parse_money(
-                        &edit_price_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default()
-                    ).unwrap_or(0.0);
+                    let price_str = edit_price_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
+                    // Fix 2: same silent-fallback-to-0.0 as the create form —
+                    // an unparsable edit still took the success path
+                    // (set_editing.set(false), no error shown).
+                    let new_price = match parse_money(&price_str) {
+                        Some(v) => v,
+                        None => {
+                            set_m.set(i18n::t(lang.get_untracked(), "price_required").to_string());
+                            return;
+                        }
+                    };
                     spawn_local(async move {
                         #[derive(serde::Serialize)]
                         struct Req {

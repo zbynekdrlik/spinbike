@@ -152,6 +152,48 @@ pub async fn post_public_coded<B: Serialize, T: DeserializeOwned>(
     resp.json::<T>().await.map_err(CodedError::from_transport)
 }
 
+/// Shared response handling for a write call whose SUCCESS body carries no
+/// meaningful payload (mirrors `put`/`delete`'s existing shape — never calls
+/// `.json()`). Split out from [`post_no_content`] so the "an empty/204 body
+/// is a success, not a parse failure" contract is unit-testable against a
+/// synthetic [`gloo_net::http::Response`], without a real network
+/// round-trip — impractical in the `wasm-pack test --node` harness this
+/// crate's tests run under (no server is listening).
+///
+/// Fixes the bug behind admin.rs's `on_cancel_class` (staff_dashboard.rs):
+/// `cancel_class` (`routes/admin.rs`) returns `204 No Content` with NO body
+/// on success. `post`'s old unconditional `resp.json::<T>().await` fails to
+/// parse an empty body ("EOF while parsing a value"), so a call to an
+/// endpoint like this could never return `Ok` — every cancel-class click
+/// silently reported "success" to the caller while the underlying request
+/// had, in fact, always errored client-side.
+async fn handle_no_content_response(
+    resp: gloo_net::http::Response,
+    had_token: bool,
+) -> Result<(), String> {
+    if !resp.ok() {
+        if handle_unauthorized(resp.status(), had_token) {
+            return Err(session_expired_message());
+        }
+        let text = resp.text().await.unwrap_or_default();
+        return Err(extract_error(&text, resp.status()));
+    }
+    Ok(())
+}
+
+/// POST request that expects a no-body success response (204) — e.g.
+/// `/api/admin/cancel-class`. See [`handle_no_content_response`] for why
+/// this exists as its own helper rather than reusing [`post`].
+pub async fn post_no_content<B: Serialize>(path: &str, body: &B) -> Result<(), String> {
+    let url = format!("{}{}", base_url(), path);
+    let (req, had_token) = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::POST));
+    let req = req.json(body).map_err(|e| e.to_string())?;
+
+    let resp = req.send().await.map_err(|e| e.to_string())?;
+
+    handle_no_content_response(resp, had_token).await
+}
+
 pub async fn put<B: Serialize>(path: &str, body: &B) -> Result<(), String> {
     let url = format!("{}{}", base_url(), path);
     let (req, had_token) = add_auth(RequestBuilder::new(&url).method(gloo_net::http::Method::PUT));
@@ -475,4 +517,47 @@ fn request_failed_message(status: u16) -> String {
         "err_request_failed_format",
         &[&status.to_string()],
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wasm_bindgen_test::*;
+
+    // No wasm_bindgen_test_configure! — CI uses wasm-pack test --node (not browser).
+
+    /// Regression pin for the bug fixed by `handle_no_content_response`
+    /// (#1): a `204 No Content` response with an EMPTY body — exactly what
+    /// `cancel_class` (`routes/admin.rs`) sends on success — must be `Ok`.
+    /// Before this fix, `post`'s unconditional `resp.json::<T>().await`
+    /// failed to parse the empty body and every cancel-class call reported
+    /// `Err`, even though the server had genuinely succeeded.
+    #[wasm_bindgen_test]
+    async fn no_content_response_is_ok() {
+        let resp = gloo_net::http::Response::builder()
+            .status(204)
+            .body(None::<&str>)
+            .expect("building a synthetic 204 response must not fail");
+
+        let result = handle_no_content_response(resp, true).await;
+
+        assert!(result.is_ok(), "204 empty body must be Ok, got {result:?}");
+    }
+
+    /// A genuine failure (non-2xx, with a server error body) must still
+    /// surface as `Err` with the extracted human message — the fix only
+    /// changes how a SUCCESS body is handled, not error handling.
+    #[wasm_bindgen_test]
+    async fn error_response_still_extracts_message() {
+        let resp = gloo_net::http::Response::builder()
+            .status(409)
+            .body(Some(
+                r#"{"error":"Class is cancelled","error_code":"class_cancelled"}"#,
+            ))
+            .expect("building a synthetic 409 response must not fail");
+
+        let result = handle_no_content_response(resp, true).await;
+
+        assert_eq!(result, Err("Class is cancelled".to_string()));
+    }
 }

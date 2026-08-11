@@ -17,7 +17,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use sqlx::{Connection, Row, SqlitePool};
 use tracing::info;
 
-use migrations::MIGRATIONS;
+use migrations::{MIGRATION_POSTCONDITIONS, MIGRATIONS};
 
 pub use error::DbError;
 
@@ -191,6 +191,26 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
             .execute(&mut *tx)
             .await
             .with_context(|| format!("Migration v{version} failed"))?;
+
+        // #339: assert this migration's expected outcome actually held —
+        // inside the SAME (still-uncommitted) transaction the SQL above
+        // just ran in, so a failed check rolls back the whole migration
+        // atomically instead of recording it as applied. See
+        // `migrations::MIGRATION_POSTCONDITIONS`'s own doc comment.
+        for &(pc_version, assertion_sql, failure_context) in MIGRATION_POSTCONDITIONS {
+            if pc_version != version {
+                continue;
+            }
+            let count: i64 = sqlx::query_scalar(assertion_sql)
+                .fetch_one(&mut *tx)
+                .await
+                .with_context(|| {
+                    format!("Failed to run post-condition check for migration v{version}")
+                })?;
+            if count == 0 {
+                anyhow::bail!("{failure_context}");
+            }
+        }
 
         sqlx::query("INSERT INTO schema_version (version, description) VALUES (?, ?)")
             .bind(version)
