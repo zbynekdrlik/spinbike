@@ -32,7 +32,6 @@ pub fn CardActionPanel(
     card: CardInfo,
     services: ReadSignal<Vec<ServiceInfo>>,
     set_selected: WriteSignal<Option<CardInfo>>,
-    msg: ReadSignal<String>,
     set_msg: WriteSignal<String>,
     /// Red-alert channel (mod.rs:473-478) — errors from BlockButton,
     /// TransactionsList and EditInfoForm route here instead of the green
@@ -188,7 +187,6 @@ pub fn CardActionPanel(
                 card=card_for_form.clone()
                 services=services
                 set_selected=set_selected
-                msg=msg
                 set_msg=set_msg
                 set_txn_refresh=txn_refresh.write_only()
             />
