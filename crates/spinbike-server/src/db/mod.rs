@@ -120,6 +120,49 @@ pub async fn run_migrations(pool: &SqlitePool) -> Result<()> {
 
         info!(version, description, "applying migration");
 
+        // Issue #322: V13's card->user promotion uses unguarded scalar
+        // subqueries (no LIMIT/ORDER BY/aggregate) to pull credit/card_code/
+        // blocked/allow_debit/company/search_text off `cards` onto the
+        // matching `users` row. If a user_id has 2+ cards at this point,
+        // SQLite doesn't error on a multi-row scalar subquery — it silently
+        // picks one arbitrary row per column, and the other card(s)' data
+        // (credit!) is destroyed with no error/log, because `cards` is
+        // DROPed in the very same transaction (step 8). V13's own SQL is
+        // immutable (already applied on production; its text is checksummed
+        // for tamper detection below, so editing it would make prod refuse
+        // to boot) — so this precondition check runs BEFORE V13 is applied,
+        // for any FUTURE fresh migration run only. It is a no-op on every
+        // already-migrated database (including prod): the `continue` above
+        // already skips this iteration once V13 has been applied.
+        if version == 13 {
+            let dupes: Vec<(i64, i64)> = sqlx::query_as(
+                "SELECT user_id, COUNT(*) FROM cards \
+                 WHERE user_id IS NOT NULL GROUP BY user_id HAVING COUNT(*) > 1",
+            )
+            .fetch_all(pool)
+            .await
+            .context(
+                "Failed to check for users with 2+ linked cards before applying migration 13",
+            )?;
+
+            if !dupes.is_empty() {
+                let affected_count = dupes.len();
+                let details = dupes
+                    .iter()
+                    .map(|(user_id, count)| format!("user_id={user_id} has {count} cards"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                anyhow::bail!(
+                    "migration 13 (users replace cards) refuses to apply: {affected_count} \
+                     user(s) have 2+ linked cards ({details}) — its card-to-user promotion \
+                     keeps only one arbitrary card's data per column and DROPs the cards table \
+                     in the same transaction, silently losing the rest. Consolidate each user \
+                     down to a single card (merge credit, keep one barcode) before retrying. \
+                     See issue #322."
+                );
+            }
+        }
+
         // Acquire a single connection for the duration of this migration so
         // that the foreign-key PRAGMA toggles affect the same connection that
         // runs the migration SQL. (PRAGMA scope is per-connection.)
