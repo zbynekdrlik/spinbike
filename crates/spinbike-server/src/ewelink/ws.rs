@@ -338,7 +338,7 @@ async fn connect_loop_with_url_inner(
                     let _ = ws.send(Message::Close(None)).await;
                     return ConnectOutcome::ChannelClosed;
                 };
-                let sequence = chrono::Utc::now().timestamp_millis().to_string();
+                let sequence = press_sequence(chrono::Utc::now().timestamp_millis());
                 // MINI-D is a multi-outlet SONOFF product and only acks the
                 // multi-outlet `switches` array form. The legacy single-channel
                 // `{"switch":"on"}` is silently dropped (no ack → door route
@@ -418,6 +418,13 @@ async fn connect_loop_with_url_inner(
             }
         }
     }
+}
+
+/// Builds the per-press `sequence` id sent to the cloud and used as the
+/// `pending` HashMap key (#323) that routes the device's ack back to this
+/// press's oneshot sender.
+fn press_sequence(now_ms: i64) -> String {
+    now_ms.to_string()
 }
 
 /// Parse a text frame and route any ack to the matching pending oneshot.
@@ -521,6 +528,31 @@ pub async fn run_test_stub(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #323 — two presses queued back-to-back on the shared mpsc channel
+    /// (different users, or staff+customer) can be processed by
+    /// `connect_loop_with_url_inner`'s dispatch loop within the same
+    /// wall-clock millisecond. If their `sequence` ids collide, the second
+    /// `pending.insert` silently overwrites (and drops) the first press's
+    /// oneshot ack sender — that press's `ack_rx` then resolves
+    /// `Err(RecvError)`, the door route rolls back the customer's billing
+    /// transaction and returns 503 even though the relay frame was sent
+    /// (the door may have physically opened), while the real device ack for
+    /// the colliding sequence routes to the SECOND requester instead. Two
+    /// presses processed within the same millisecond must still get
+    /// distinct sequence ids.
+    #[test]
+    fn press_sequence_is_unique_even_within_the_same_millisecond() {
+        let same_ms = 1_700_000_000_123_i64;
+        let first = press_sequence(same_ms);
+        let second = press_sequence(same_ms);
+        assert_ne!(
+            first, second,
+            "two presses processed within the same millisecond must get \
+             distinct sequence ids — otherwise the second pending.insert \
+             silently overwrites (and drops) the first press's ack sender"
+        );
+    }
 
     /// `is_offline_code(503)` MUST be true; every other code MUST be false.
     /// Catches:
