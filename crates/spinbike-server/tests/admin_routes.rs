@@ -545,6 +545,47 @@ async fn create_service_with_invalid_kind_rejected() {
     assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
 }
 
+// #329 review finding: `single_entry` (Fitness, V16) and `group_class`
+// (Spinning, V27) must stay creatable ONLY via migration, never via this
+// API — `jobs/charger.rs`/`routes/door.rs` each resolve exactly ONE row by
+// one of these kinds (now backed by a DB-level partial UNIQUE INDEX too,
+// see migrations.rs V27), and this allow-list is the only thing stopping a
+// second row from ever being created through normal admin use. Pin both
+// explicitly so a future "reject only truly unknown kinds"-style
+// generalization of the create_service guard fails a test instead of
+// silently reopening that ambiguity.
+#[tokio::test]
+async fn create_service_with_single_entry_kind_rejected() {
+    let app = TestApp::new().await;
+
+    let body = serde_json::json!({
+        "name_sk": "X",
+        "name_en": "Y",
+        "default_price": 1.0,
+        "kind": "single_entry",
+    });
+    let (status, _) = app
+        .request(post_json("/api/admin/services", &app.admin_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn create_service_with_group_class_kind_rejected() {
+    let app = TestApp::new().await;
+
+    let body = serde_json::json!({
+        "name_sk": "X",
+        "name_en": "Y",
+        "default_price": 1.0,
+        "kind": "group_class",
+    });
+    let (status, _) = app
+        .request(post_json("/api/admin/services", &app.admin_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST);
+}
+
 // Each empty-name branch exercised separately so the OR-validation guard
 // can't degrade to AND without a test failing (mutation testing kills the
 // `||` -> `&&` mutant in admin.rs).

@@ -1074,7 +1074,9 @@ UPDATE transactions SET is_door_press = 1 WHERE note LIKE 'door:%';
 // Re-creating services also drops and re-adds the partial unique index on
 // kind='monthly_pass' (same reason V16 does: without it, a second
 // monthly_pass row could slip in between this migration and the next
-// index creation).
+// index creation) — and ADDS two new ones, on 'single_entry' and
+// 'group_class', hardening the uniqueness door.rs/charger.rs already
+// silently assume (review finding: nothing DB-level backed that before).
 //
 // `group_class` is a NEW, DISTINCT kind value — NOT merged into
 // `single_entry` — because `routes/door.rs`'s self-entry lookup
@@ -1107,9 +1109,23 @@ SELECT id, kind, name_sk, name_en, default_price, active
 DROP TABLE services;
 ALTER TABLE services_new RENAME TO services;
 
--- 3. Re-create partial unique index on kind='monthly_pass'.
+-- 3. Re-create partial unique index on kind='monthly_pass', and ADD the
+--    equivalent for 'single_entry' and 'group_class' — a review finding on
+--    this migration: door.rs's self-entry lookup and charger.rs's
+--    Spinning-price lookup each resolve ONE row by kind alone with no
+--    DB-level guarantee backing that assumption (the only thing preventing
+--    a second row is routes/admin.rs::create_service's allow-list, which
+--    only rejects kind at creation time — this index makes the invariant
+--    unconditional). 'single_entry' has been live since V16 with no index;
+--    backfilling it here is safe (exactly one existing row, Fitness).
+--    'group_class' has zero rows at this point (the retag is step 5,
+--    below), so creating its index here is also a no-op until then.
 CREATE UNIQUE INDEX idx_services_monthly_pass
     ON services(kind) WHERE kind = 'monthly_pass';
+CREATE UNIQUE INDEX idx_services_single_entry
+    ON services(kind) WHERE kind = 'single_entry';
+CREATE UNIQUE INDEX idx_services_group_class
+    ON services(kind) WHERE kind = 'group_class';
 
 -- 4. Re-create the view + trigger dropped in step 1, unchanged.
 CREATE VIEW IF NOT EXISTS user_active_pass AS
@@ -3950,6 +3966,48 @@ mod tests {
         let err = sqlx::query(
             "INSERT INTO services (kind, name_sk, name_en, default_price)
              VALUES ('monthly_pass', 'Druhy', 'Second', 99.0)",
+        )
+        .execute(&pool)
+        .await
+        .expect_err("expected unique-index violation");
+        let msg = format!("{err:?}").to_lowercase();
+        assert!(
+            msg.contains("unique") || msg.contains("constraint"),
+            "expected unique-index error, got: {msg}"
+        );
+    }
+
+    /// Review finding on #329: `jobs/charger.rs`'s Spinning-price lookup and
+    /// `routes/door.rs`'s Fitness self-entry lookup each resolve exactly ONE
+    /// row by `kind` alone — before this, nothing at the DB level backed
+    /// that assumption (only `single_entry`/`group_class` never being
+    /// creatable via the admin API did). Proves the new partial unique
+    /// indexes actually reject a second row of either kind.
+    #[tokio::test]
+    async fn v27_single_entry_unique_index_enforced() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.expect("migrations");
+        let err = sqlx::query(
+            "INSERT INTO services (kind, name_sk, name_en, default_price)
+             VALUES ('single_entry', 'Druhy', 'Second', 5.0)",
+        )
+        .execute(&pool)
+        .await
+        .expect_err("expected unique-index violation");
+        let msg = format!("{err:?}").to_lowercase();
+        assert!(
+            msg.contains("unique") || msg.contains("constraint"),
+            "expected unique-index error, got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn v27_group_class_unique_index_enforced() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.expect("migrations");
+        let err = sqlx::query(
+            "INSERT INTO services (kind, name_sk, name_en, default_price)
+             VALUES ('group_class', 'Druhy', 'Second', 5.0)",
         )
         .execute(&pool)
         .await
