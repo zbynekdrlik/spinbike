@@ -6,7 +6,7 @@ use web_sys::{HtmlInputElement, HtmlSelectElement};
 use crate::api;
 use crate::components::DateInput;
 use crate::i18n::{self, Lang};
-use crate::util::parse_money;
+use crate::util::{RequestId, parse_money};
 
 use super::helpers::pass_is_active;
 use super::{CardInfo, CardPass, PaymentResp, ServiceInfo};
@@ -92,13 +92,27 @@ pub fn ActionForm(
     // stale timer could match the second action's still-current banner and
     // clear it early. Each call captures the generation it was scheduled
     // under and only clears if that generation is still current.
-    let (msg_gen, set_msg_gen) = signal(0u64);
+    //
+    // Uses `RequestId` (plain Rc<Cell<u32>>, #66/util.rs) rather than a
+    // Leptos signal for the generation itself: the scheduled clear fires up
+    // to 2.5s later, and by then the staff member may already have
+    // switched to a different customer — which disposes THIS ActionForm's
+    // whole reactive scope (mod.rs's `{move || match selected.get() {...}}`
+    // rebuilds `CardActionPanel`/`ActionForm` from scratch on every
+    // `selected` change). A signal created inside this scope and read/
+    // written from a callback that outlives it risks the "access a
+    // reactive value that has already been disposed" WASM panic this
+    // codebase has hit before (edit_info_form.rs, #89) — `RequestId`'s
+    // plain `Rc<Cell>` carries no such risk regardless of which scope is
+    // current when the timer fires. `set_msg` itself stays safe to call
+    // from here either way — it's a `WriteSignal` owned by the Dashboard's
+    // own outer scope in mod.rs, not by this (disposable) component.
+    let msg_gen = RequestId::new();
     let schedule_msg_clear = move || {
-        let my_gen = msg_gen.get_untracked() + 1;
-        set_msg_gen.set(my_gen);
+        let token = msg_gen.next();
         spawn_local(async move {
             gloo_timers::future::TimeoutFuture::new(2500).await;
-            if msg_gen.get_untracked() == my_gen {
+            if token.is_latest() {
                 set_msg.set(String::new());
             }
         });
@@ -494,6 +508,20 @@ pub fn ActionForm(
                                 "charge_ok_format",
                                 &[&format!("{:.2}", r.new_credit)],
                             ));
+                            // #344 review follow-up: this quick-charge chip
+                            // didn't participate in the finding-3 generation
+                            // guard above, which made it MORE exposed than
+                            // before that fix, not less — with a plain
+                            // generation counter (rather than the old exact-
+                            // TEXT comparison), any outstanding do_topup/
+                            // do_charge/do_log_visit timer would clear
+                            // WHATEVER banner is showing after 2.5s,
+                            // regardless of text, if this chip never bumped
+                            // the generation. Calling the same helper here
+                            // brings it under the same tracking (and gives
+                            // it the same consistent auto-clear the sibling
+                            // actions already have).
+                            schedule_msg_clear();
                             set_selected.update(|s| {
                                 if let Some(c) = s {
                                     c.credit = r.new_credit;
