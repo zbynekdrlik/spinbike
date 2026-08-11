@@ -15,7 +15,7 @@ async fn day_report_aggregates_charges_topups_passes_and_excludes_voided() {
                  SELECT ?1, -5.0, 'charge', id, datetime('now') FROM services WHERE name_en = ?2 LIMIT 1",
     )
     .bind(card_id)
-    .bind(spinbike_core::services::SPINNING_NAME_EN)
+    .bind("Spinning")
     .execute(&app.pool)
     .await
     .unwrap();
@@ -96,7 +96,7 @@ async fn range_report_aggregates_across_days_and_rejects_over_93_days() {
     // Look up Spinning's service id and tag both charges with it so the
     // range KPI still asserts attendance == 2 across days.
     let spinning_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE name_en = ?1")
-        .bind(spinbike_core::services::SPINNING_NAME_EN)
+        .bind("Spinning")
         .fetch_one(&app.pool)
         .await
         .unwrap();

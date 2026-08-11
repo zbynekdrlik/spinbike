@@ -72,6 +72,32 @@ test.describe('Admin services — dual-language CRUD', () => {
         assertCleanConsole(msgs);
     });
 
+    test('the group_class service (Spinning) shows a real label, not ??? (#329)', async ({ page }) => {
+        const msgs = setupConsoleCheck(page);
+        await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+        // loginViaAPI defaults localStorage lang to 'en'; force Slovak so we
+        // assert the actual Slovak label the owner sees.
+        await page.addInitScript(() => {
+            try { localStorage.setItem('spinbike_lang', 'sk'); } catch { /* storage not ready */ }
+        });
+        await page.goto('/admin');
+        await page.waitForSelector('h1.page-title');
+        await page.locator('[data-testid="admin-tab-services"]').click();
+        await page.waitForFunction(() => !document.querySelector('.spinner'), { timeout: 10000 });
+
+        // Migration V27 (#329) re-tags the seeded "Spinning" row to
+        // kind='group_class', so identification no longer relies on
+        // name_en. Same #186 badge-fallback risk as single_entry: without
+        // an i18n key for the new kind, the badge renders "???".
+        const row = page.locator('tr', { hasText: 'Spinning' });
+        await expect(row).toBeVisible();
+        await expect(row.locator('.badge--group_class')).toBeVisible();
+        await expect(row.locator('.badge--group_class')).toHaveText('Skupinova hodina');
+        await expect(row.locator('.badge--group_class')).not.toHaveText('???');
+
+        assertCleanConsole(msgs);
+    });
+
     test('GET /api/admin/services returns rows with kind, name_sk, name_en', async ({ page }) => {
         const msgs = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');

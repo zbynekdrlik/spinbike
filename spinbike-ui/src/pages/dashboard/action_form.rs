@@ -1,5 +1,5 @@
 use leptos::prelude::*;
-use spinbike_core::services::{FITNESS_NAME_EN, SPINNING_NAME_EN};
+use spinbike_core::services::{FITNESS_KIND, SPINNING_KIND};
 use wasm_bindgen_futures::spawn_local;
 use web_sys::{HtmlInputElement, HtmlSelectElement};
 
@@ -393,7 +393,7 @@ pub fn ActionForm(
         }
         let Some(fitness) = svcs
             .iter()
-            .find(|s| s.name_en == FITNESS_NAME_EN && s.active != 0)
+            .find(|s| s.kind == FITNESS_KIND && s.active != 0)
             .cloned()
         else {
             return;
@@ -418,7 +418,7 @@ pub fn ActionForm(
     let spinning_chip = services
         .get_untracked()
         .into_iter()
-        .find(|s| s.name_en == SPINNING_NAME_EN && s.active != 0)
+        .find(|s| s.kind == SPINNING_KIND && s.active != 0)
         .map(|svc| {
             let svc_id = svc.id;
             let price = svc.default_price;
@@ -494,13 +494,24 @@ pub fn ActionForm(
                 view! {
                     <div class="chip-row chip-row--spaced chip-row--readable">
                         {
-                            // Sort so Fitness renders left of Spinning. is_class_visit()
-                            // restricts name_en to "Fitness" | "Spinning", so a plain
-                            // alphabetical sort (Fitness < Spinning) yields the right order.
+                            // Sort so Fitness renders left of Spinning. #329:
+                            // is_class_visit() restricts this to kind
+                            // "single_entry" (Fitness) | "group_class"
+                            // (Spinning) — sort explicitly by which class-
+                            // visit kind, not by the admin-editable name_en
+                            // text (alphabetically "group_class" <
+                            // "single_entry" would put Spinning first, the
+                            // wrong order, even before any admin rename).
+                            // NOTE (review, #329): this is a binary sort —
+                            // it assumes exactly the two known kinds. A
+                            // future THIRD class-visit kind would fall into
+                            // the `else` branch alongside Spinning with an
+                            // unspecified relative order; revisit this sort
+                            // if CLASS_VISIT_KINDS ever grows past 2.
                             let mut visits: Vec<_> = services.get().into_iter()
                                 .filter(|svc| svc.is_class_visit())
                                 .collect();
-                            visits.sort_by(|a, b| a.name_en.cmp(&b.name_en));
+                            visits.sort_by_key(|s| if s.kind == FITNESS_KIND { 0 } else { 1 });
                             visits.into_iter().map(|svc| {
                                 let service_id = svc.id;
                                 let svc_name = svc.display_name(lang.get_untracked()).to_string();
@@ -509,7 +520,7 @@ pub fn ActionForm(
                                 // the soft-blue sibling so the pair reads as primary /
                                 // secondary within one hue family — small visual difference,
                                 // not a radical color shift.
-                                let color_cls = if svc.name_en == FITNESS_NAME_EN {
+                                let color_cls = if svc.kind == FITNESS_KIND {
                                     "btn--info"
                                 } else {
                                     "btn--info-soft"

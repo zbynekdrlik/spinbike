@@ -1,33 +1,42 @@
-//! Service-name constants shared between the server (SQL queries, autocharger)
+//! Service-kind constants shared between the server (SQL queries, autocharger)
 //! and the UI (visit-row predicates, color logic).
 //!
-//! The legacy DB seeds class services by their English name (`name_en`), and
-//! several pieces of business logic key off those names: the staff dashboard's
-//! "Log Visit" buttons, the visit-row color split between Fitness (solid blue)
-//! and Spinning (soft blue), the 4-hour Spinning auto-charger, and the
-//! attendance KPI on reports.
+//! Class-visit services (Fitness, Spinning) are identified by their stable
+//! `services.kind` value, NOT by their (admin-editable) `name_en`/`name_sk`
+//! display strings. Several pieces of business logic key off "is this a
+//! class visit": the staff dashboard's "Log Visit" buttons, the visit-row
+//! color split between Fitness (solid blue) and Spinning (soft blue), the
+//! 4-hour Spinning auto-charger, and the attendance KPI on reports.
 //!
-//! Without this module those names lived as 5 independent string literals
-//! across two crates. Renaming a service in admin would silently miscount or
-//! mis-route. The constants here are the single source of truth — change
-//! either string here and every Rust call site picks it up.
+//! # History (#329)
 //!
-//! # Limitation
+//! Before #329, this module matched on `name_en` string literals
+//! ("Fitness"/"Spinning"). `services.kind` already existed and was used for
+//! exactly this purpose for the OTHER service kinds (`monthly_pass`), but
+//! only Fitness had a distinct class-visit kind (`single_entry`, added by
+//! migration V16 for the door self-entry feature) — Spinning still shared
+//! `kind='generic'` with unrelated sellable items (Refreshments,
+//! Supplements, Card activation fee). Migration V27 gave Spinning its own
+//! kind (`group_class`), which is what let every identification site here
+//! switch from `name_en` to `kind`. `kind` is immutable after a service is
+//! created (`routes/admin.rs::UpdateServiceRequest` has no `kind` field),
+//! so — unlike `name_en` — renaming a service via the admin Services tab
+//! can never desync it from these constants.
 //!
-//! These are compile-time constants. They DO NOT prevent the runtime DB row's
-//! `name_en` from drifting (e.g., admin renames "Spinning" via the admin
-//! services CRUD). The proper fix for that is a `kind = 'class_visit'` flag
-//! on the services table — see the doc comment on
-//! `spinbike_ui::pages::dashboard::ServiceInfo::is_class_visit`. Adding that
-//! flag is a schema migration and out of scope for this constants extraction.
+//! `single_entry` and `group_class` are deliberately TWO DISTINCT values,
+//! not one shared `class_visit` flag: `routes/door.rs`'s self-entry lookup
+//! (`WHERE kind = 'single_entry' ... LIMIT 1`) and `jobs/charger.rs`'s
+//! Spinning-price lookup (`fetch_one`) each need to resolve exactly ONE row
+//! by kind alone — a shared value would make both queries ambiguous.
 
-/// English name of the Fitness class service. Matches the `services.name_en`
-/// value seeded by `crates/spinbike-server/src/db/migrations.rs`.
-pub const FITNESS_NAME_EN: &str = "Fitness";
+/// Stable `services.kind` value identifying the Fitness (door/walk-in
+/// single-visit) service. Set by migration V16.
+pub const FITNESS_KIND: &str = "single_entry";
 
-/// English name of the Spinning class service.
-pub const SPINNING_NAME_EN: &str = "Spinning";
+/// Stable `services.kind` value identifying the Spinning (scheduled group
+/// class) service. Set by migration V27.
+pub const SPINNING_KIND: &str = "group_class";
 
-/// All class-visit service `name_en` values. Used by SQL `IN` clauses,
+/// All class-visit service `kind` values. Used by SQL `IN` clauses,
 /// `is_class_visit()` predicates, and dropdown filters.
-pub const CLASS_VISIT_NAMES_EN: &[&str] = &[FITNESS_NAME_EN, SPINNING_NAME_EN];
+pub const CLASS_VISIT_KINDS: &[&str] = &[FITNESS_KIND, SPINNING_KIND];

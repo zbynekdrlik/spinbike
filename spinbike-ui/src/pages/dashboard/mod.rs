@@ -85,8 +85,9 @@ pub struct CardInfo {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ServiceInfo {
     pub id: i64,
-    /// Stable identifier: "generic" or "monthly_pass". Used to detect the
-    /// pass row regardless of its display name.
+    /// Stable identifier: "generic", "monthly_pass", "single_entry", or
+    /// "group_class". Used to detect the pass/class-visit rows regardless
+    /// of their (admin-editable) display name.
     pub kind: String,
     pub name_sk: String,
     pub name_en: String,
@@ -114,12 +115,13 @@ impl ServiceInfo {
     /// (Refreshments, Supplements, Card activation fee) that share `kind=generic`
     /// with the class services but must NOT appear as visits.
     ///
-    /// NOTE: identification is by `name_en`, so renaming Spinning or Fitness
-    /// in the admin UI silently empties the visit row. If renaming is needed,
-    /// migrate the data model to a `kind=class` flag instead of patching this
-    /// list.
+    /// #329: identified by the stable `kind` column (`single_entry` for
+    /// Fitness, `group_class` for Spinning — `kind` is immutable after
+    /// creation, see `routes/admin.rs::UpdateServiceRequest`), NOT by
+    /// `name_en` — renaming Spinning or Fitness via the admin Services tab
+    /// no longer desyncs this predicate.
     pub fn is_class_visit(&self) -> bool {
-        spinbike_core::services::CLASS_VISIT_NAMES_EN.contains(&self.name_en.as_str())
+        spinbike_core::services::CLASS_VISIT_KINDS.contains(&self.kind.as_str())
     }
 }
 
@@ -607,18 +609,18 @@ pub fn DashboardPage() -> impl IntoView {
 
 #[cfg(test)]
 mod is_class_visit_tests {
-    // The truthy assertions pin the contents of CLASS_VISIT_NAMES_EN
-    // (currently "Spinning" + "Fitness"). If the const grows — e.g. a new
-    // class type like "HIIT" — add a positive case here so the gate
-    // surfaces the addition. Renaming an existing entry will break this
-    // test (intended), matching the doc comment on is_class_visit.
+    // The truthy assertions pin the contents of CLASS_VISIT_KINDS (currently
+    // "single_entry" + "group_class"). If the const grows — e.g. a new class
+    // type — add a positive case here so the gate surfaces the addition.
+    // Renaming an existing kind VALUE (not the display name) would break
+    // this test (intended), matching the doc comment on is_class_visit.
     use super::*;
     use wasm_bindgen_test::*;
 
-    fn make_svc(name_en: &str) -> ServiceInfo {
+    fn make_svc(kind: &str, name_en: &str) -> ServiceInfo {
         ServiceInfo {
             id: 1,
-            kind: "generic".to_string(),
+            kind: kind.to_string(),
             name_sk: "x".to_string(),
             name_en: name_en.to_string(),
             default_price: 0.0,
@@ -626,31 +628,57 @@ mod is_class_visit_tests {
         }
     }
 
-    // Strong: covers the two truthy class-visit names AND a sample of names
+    // Strong: covers the two truthy class-visit kinds AND a sample of kinds
     // that must return false. Catches mutants that flip the return constant
     // OR replace `contains` with always-true / always-false equivalents.
     #[wasm_bindgen_test]
-    fn is_class_visit_true_for_spinning() {
-        assert!(make_svc("Spinning").is_class_visit());
+    fn is_class_visit_true_for_spinning_group_class() {
+        assert!(make_svc("group_class", "Spinning").is_class_visit());
     }
 
     #[wasm_bindgen_test]
-    fn is_class_visit_true_for_fitness() {
-        assert!(make_svc("Fitness").is_class_visit());
+    fn is_class_visit_true_for_fitness_single_entry() {
+        assert!(make_svc("single_entry", "Fitness").is_class_visit());
     }
 
     #[wasm_bindgen_test]
-    fn is_class_visit_false_for_refreshments() {
-        assert!(!make_svc("Refreshments").is_class_visit());
+    fn is_class_visit_false_for_generic() {
+        assert!(!make_svc("generic", "Refreshments").is_class_visit());
     }
 
     #[wasm_bindgen_test]
-    fn is_class_visit_false_for_unknown() {
-        assert!(!make_svc("Whatever").is_class_visit());
+    fn is_class_visit_false_for_monthly_pass() {
+        assert!(!make_svc("monthly_pass", "Monthly pass").is_class_visit());
     }
 
     #[wasm_bindgen_test]
-    fn is_class_visit_false_for_empty() {
-        assert!(!make_svc("").is_class_visit());
+    fn is_class_visit_false_for_unknown_kind() {
+        assert!(!make_svc("whatever", "Whatever").is_class_visit());
+    }
+
+    #[wasm_bindgen_test]
+    fn is_class_visit_false_for_empty_kind() {
+        assert!(!make_svc("", "").is_class_visit());
+    }
+
+    // #329 regression: renaming Spinning/Fitness via the admin Services tab
+    // must NOT change classification — only `kind` (immutable after
+    // creation) may. A row keeping its OLD, matching name but with a
+    // non-class-visit kind (e.g. the impersonation case a bug reintroducing
+    // name_en-matching would still pass) must also read as false.
+    #[wasm_bindgen_test]
+    fn is_class_visit_survives_a_rename_when_kind_is_still_group_class() {
+        assert!(make_svc("group_class", "Renamed Spinning Class").is_class_visit());
+    }
+
+    #[wasm_bindgen_test]
+    fn is_class_visit_survives_a_rename_when_kind_is_still_single_entry() {
+        assert!(make_svc("single_entry", "Renamed Fitness").is_class_visit());
+    }
+
+    #[wasm_bindgen_test]
+    fn is_class_visit_false_when_name_matches_but_kind_does_not_the_impersonation_case() {
+        assert!(!make_svc("generic", "Spinning").is_class_visit());
+        assert!(!make_svc("generic", "Fitness").is_class_visit());
     }
 }

@@ -68,7 +68,8 @@ pub async fn day_report(
     }
     let events: Vec<ReportEvent> = rows.into_iter().map(Into::into).collect();
 
-    // Class-visit names bound from spinbike_core::services constants — `?3`
+    // Class-visit kinds bound from spinbike_core::services constants (#329:
+    // the stable `kind` column, not the admin-editable `name_en`) — `?3`
     // is Spinning (for the new spinning_visits aggregate) and `?4` is
     // Fitness (so the attendance aggregate still counts both).
     // NOTE: `ELSE 0.0` (not `ELSE 0`) is required for cash_in_eur — otherwise
@@ -78,7 +79,7 @@ pub async fn day_report(
         "SELECT
             COALESCE(SUM(
               CASE
-                WHEN service_id IN (SELECT id FROM services WHERE name_en = ?3)
+                WHEN service_id IN (SELECT id FROM services WHERE kind = ?3)
                  AND (
                    (action = 'charge' AND amount < 0 AND valid_until IS NULL)
                    OR action = 'visit'
@@ -88,7 +89,7 @@ pub async fn day_report(
             ), 0) AS spinning_visits,
             COALESCE(SUM(
               CASE
-                WHEN service_id IN (SELECT id FROM services WHERE name_en IN (?3, ?4))
+                WHEN service_id IN (SELECT id FROM services WHERE kind IN (?3, ?4))
                  AND (
                    (action = 'charge' AND amount < 0 AND valid_until IS NULL)
                    OR action = 'visit'
@@ -103,8 +104,8 @@ pub async fn day_report(
     )
     .bind(&start_str)
     .bind(&end_str)
-    .bind(spinbike_core::services::SPINNING_NAME_EN)
-    .bind(spinbike_core::services::FITNESS_NAME_EN)
+    .bind(spinbike_core::services::SPINNING_KIND)
+    .bind(spinbike_core::services::FITNESS_KIND)
     .fetch_one(pool)
     .await?;
 
@@ -273,13 +274,13 @@ pub async fn range_report(
     }
     let events: Vec<ReportEvent> = rows.into_iter().map(Into::into).collect();
 
-    // Class-visit names bound from spinbike_core::services constants — see
-    // day_report. Bind order: `?3` Spinning, `?4` Fitness.
+    // Class-visit kinds bound from spinbike_core::services constants (#329)
+    // — see day_report. Bind order: `?3` Spinning, `?4` Fitness.
     let kpi_row: DbKpiRow = sqlx::query_as::<_, DbKpiRow>(
         "SELECT
             COALESCE(SUM(
               CASE
-                WHEN service_id IN (SELECT id FROM services WHERE name_en = ?3)
+                WHEN service_id IN (SELECT id FROM services WHERE kind = ?3)
                  AND (
                    (action = 'charge' AND amount < 0 AND valid_until IS NULL)
                    OR action = 'visit'
@@ -289,7 +290,7 @@ pub async fn range_report(
             ), 0) AS spinning_visits,
             COALESCE(SUM(
               CASE
-                WHEN service_id IN (SELECT id FROM services WHERE name_en IN (?3, ?4))
+                WHEN service_id IN (SELECT id FROM services WHERE kind IN (?3, ?4))
                  AND (
                    (action = 'charge' AND amount < 0 AND valid_until IS NULL)
                    OR action = 'visit'
@@ -304,8 +305,8 @@ pub async fn range_report(
     )
     .bind(&from_str)
     .bind(&to_str)
-    .bind(spinbike_core::services::SPINNING_NAME_EN)
-    .bind(spinbike_core::services::FITNESS_NAME_EN)
+    .bind(spinbike_core::services::SPINNING_KIND)
+    .bind(spinbike_core::services::FITNESS_KIND)
     .fetch_one(pool)
     .await?;
 
@@ -380,10 +381,8 @@ mod tests {
     async fn attendance_counts_only_fitness_and_spinning_visits() {
         let (pool, user_id) = setup_pool_with_user().await;
 
-        let fitness_id =
-            service_id_by_name_en(&pool, spinbike_core::services::FITNESS_NAME_EN).await;
-        let spinning_id =
-            service_id_by_name_en(&pool, spinbike_core::services::SPINNING_NAME_EN).await;
+        let fitness_id = service_id_by_name_en(&pool, "Fitness").await;
+        let spinning_id = service_id_by_name_en(&pool, "Spinning").await;
         let monthly_pass_id = service_id_by_name_en(&pool, "Monthly pass").await;
         let refreshments_id = service_id_by_name_en(&pool, "Refreshments").await;
         let card_fee_id = service_id_by_name_en(&pool, "Card activation fee").await;
@@ -539,8 +538,7 @@ mod tests {
     #[tokio::test]
     async fn day_and_range_reports_bucket_by_bratislava_local_day_not_raw_utc_date() {
         let (pool, user_id) = setup_pool_with_user().await;
-        let fitness_id =
-            service_id_by_name_en(&pool, spinbike_core::services::FITNESS_NAME_EN).await;
+        let fitness_id = service_id_by_name_en(&pool, "Fitness").await;
 
         sqlx::query(
             "INSERT INTO transactions (user_id, service_id, amount, action, created_at)
@@ -611,8 +609,7 @@ mod tests {
     async fn category_revenue_sums_charges_per_service_excludes_visit_and_topup() {
         let (pool, user_id) = setup_pool_with_user().await;
 
-        let fitness_id =
-            service_id_by_name_en(&pool, spinbike_core::services::FITNESS_NAME_EN).await;
+        let fitness_id = service_id_by_name_en(&pool, "Fitness").await;
         let supplements_id = service_id_by_name_en(&pool, "Supplements").await;
         let monthly_pass_id = service_id_by_name_en(&pool, "Monthly pass").await;
 
