@@ -99,6 +99,7 @@ Path-scoped rules under `.claude/rules/` load themselves when you touch a matchi
 - Any new day-boundary / local-time computation in a job or route → `.claude/rules/bratislava-tz.md` (auto-loads on `crates/spinbike-server/src/util.rs`, `crates/spinbike-server/src/jobs/**`, `crates/spinbike-server/src/routes/**` — never `chrono::Local`, always the shared `crate::util` helpers; the recurring #205/#222/#327/#330 bug class + the source-invariant regression-test pattern for it)
 - Any new money-mutating write (`users.credit` / `transactions.amount`) → `.claude/rules/money-rounding.md` (auto-loads on `db/users.rs`, `routes/payments.rs|users.rs|door.rs|admin.rs|charger.rs` — round ONCE and reuse everywhere, check prod for real drift before assuming a backfill is needed, #325/#326)
 - Adding a new `web_sys::` API surface to `spinbike-ui` → `.claude/rules/web-sys-features.md` (auto-loads on `spinbike-ui/Cargo.toml` — verify the Cargo feature gate without compiling, since local `cargo check` is Tier-0-banned, #320)
+- Creating a synthetic account on PROD (mail testing, auth verification) → `.claude/rules/prod-test-data.md` (auto-loads on `crates/spinbike-server/src/mail/**`, `crates/spinbike-server/src/auth/**`, `routes/auth.rs`, `e2e/tests/auth*.spec.ts` — clean up same-ticket, check `deleted_at IS NULL` filters first, prod-DELETE approval+backup, #333)
 
 | Area | Skill | When to load |
 |---|---|---|
