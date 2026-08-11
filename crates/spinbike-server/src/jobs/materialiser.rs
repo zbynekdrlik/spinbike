@@ -8,11 +8,14 @@ use anyhow::Result;
 use chrono::{Datelike, Duration};
 use sqlx::SqlitePool;
 
+use crate::db::error::DbError;
+
 pub const WINDOW_DAYS: i64 = 14;
 
 /// One (persistent booking, occurrence date) pair the sweep needs to check
 /// and possibly materialise.
 struct Candidate {
+    persistent_id: i64,
     user_id: i64,
     template_id: i64,
     date: String,
@@ -56,6 +59,7 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
                 continue;
             }
             candidates.push(Candidate {
+                persistent_id: p.id,
                 user_id: p.user_id,
                 template_id: tpl.id,
                 date: d.to_string(),
@@ -63,6 +67,7 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
         }
     }
 
+    let total = candidates.len();
     if candidates.is_empty() {
         return Ok(0);
     }
@@ -140,6 +145,8 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
         templates.iter().map(|t| (t.id, t.capacity)).collect();
 
     let mut created = 0usize;
+    let mut skipped_full = 0usize;
+    let mut errored = 0usize;
 
     for c in candidates {
         let key = (c.template_id, c.date.clone());
@@ -155,7 +162,7 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
         // external request, OR by an earlier candidate processed earlier in
         // THIS SAME sweep (the count below is never incremented as the loop
         // creates bookings). `create_booking`'s own atomic check below is
-        // the real authority.
+        // the real authority; see the ClassFull arm.
         let booked = booked_counts.get(&key).copied().unwrap_or(0);
         let capacity = capacity_by_template
             .get(&c.template_id)
@@ -165,7 +172,17 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
             continue;
         }
 
-        crate::db::classes::create_booking(
+        // `ClassFull` here is an EXPECTED, per-item outcome, not a
+        // sweep-level failure (#345): the pre-check above is advisory, this
+        // atomic check is authoritative, and losing the race just means
+        // someone else (a normal booking request, or another candidate
+        // earlier in this same tick) took the slot first. Log it, count it,
+        // and keep processing the rest of the candidates — one full class
+        // must never suppress materialisation for every other subscriber.
+        // Any OTHER error is unexpected (pool/IO); it's also counted and
+        // logged rather than aborting, so a single bad row can't cost every
+        // other subscriber their materialisation either.
+        match crate::db::classes::create_booking(
             pool,
             c.template_id,
             &c.date,
@@ -173,9 +190,38 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
             None,
             "persistent",
         )
-        .await?;
-        created += 1;
+        .await
+        {
+            Ok(_) => created += 1,
+            Err(DbError::ClassFull) => {
+                skipped_full += 1;
+                tracing::warn!(
+                    "materialiser: persistent booking id={} user={} template={} date={} \
+                     skipped — class became full before insert",
+                    c.persistent_id,
+                    c.user_id,
+                    c.template_id,
+                    c.date
+                );
+            }
+            Err(e) => {
+                errored += 1;
+                tracing::error!(
+                    "materialiser: failed to materialise persistent booking id={} user={} \
+                     template={} date={}: {e}",
+                    c.persistent_id,
+                    c.user_id,
+                    c.template_id,
+                    c.date
+                );
+            }
+        }
     }
+
+    tracing::info!(
+        "materialiser sweep: candidates={total} created={created} \
+         skipped_full={skipped_full} errored={errored}"
+    );
 
     Ok(created)
 }
