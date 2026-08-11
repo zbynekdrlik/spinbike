@@ -40,41 +40,56 @@ async fn main() -> Result<()> {
     // on Enabled/Disabled deterministically.
     let mail = spinbike_server::mail::MailHandle::spawn();
 
-    // Populate search_text for any users that pre-date the migration.
-    let backfilled = db::users::backfill_search_text(&pool).await?;
+    // Five independent startup passes — none consumes another's output, so
+    // run them concurrently instead of one after another (#341): previously
+    // the listener only opened after the SUM of all five, instead of after
+    // the slowest. Each job's outcome is still checked/logged individually,
+    // exactly as before — a join! that merged the 5 outcomes into one log
+    // line, or let one job's failure swallow another's, would be worse than
+    // the serial version it replaces. backfill_search_text's `?`-propagates
+    // behavior is preserved too: its Result is still checked with `?`,
+    // right after every job has run, instead of before the other 4 even
+    // start (a narrow, deliberate behavior change — the other 4 are
+    // independent of backfill's success, and each already logs its own
+    // failure non-fatally, so a broken DB fails them too either way).
+    let (
+        backfill_result,
+        materialiser_result,
+        charger_result,
+        token_purge_result,
+        notifications_result,
+    ) = tokio::join!(
+        db::users::backfill_search_text(&pool),
+        spinbike_server::jobs::materialiser::sweep(&pool),
+        spinbike_server::jobs::charger::tick(&pool),
+        spinbike_server::jobs::token_purge::tick(&pool),
+        spinbike_server::jobs::notifications::tick(&pool, &push, &mail),
+    );
+
+    let backfilled = backfill_result?;
     if backfilled > 0 {
         tracing::info!("backfilled search_text for {backfilled} users");
     }
 
-    // Run persistent-booking materialiser once at startup so the DB reflects
-    // the full 14-day window before the first request arrives.
-    match spinbike_server::jobs::materialiser::sweep(&pool).await {
+    match materialiser_result {
         Ok(n) if n > 0 => tracing::info!("materialised {n} persistent bookings at startup"),
         Ok(_) => {}
         Err(e) => tracing::error!("startup materialiser sweep failed: {e}"),
     }
 
-    // Run charger once at startup to cover bookings that became eligible while
-    // the server was down — otherwise a restart inside the 4-hour window skips
-    // them until the next scheduled tick.
-    match spinbike_server::jobs::charger::tick(&pool).await {
+    match charger_result {
         Ok(n) if n > 0 => tracing::info!("charged {n} bookings at startup"),
         Ok(_) => {}
         Err(e) => tracing::error!("startup charger tick failed: {e}"),
     }
 
-    // Run the login_tokens purge once at startup too — cheap, and gives an
-    // observable log line right after a deploy instead of waiting a full day.
-    match spinbike_server::jobs::token_purge::tick(&pool).await {
+    match token_purge_result {
         Ok(n) if n > 0 => tracing::info!("login_tokens purge removed {n} rows at startup"),
         Ok(_) => {}
         Err(e) => tracing::error!("startup login_tokens purge failed: {e}"),
     }
 
-    // Run the push-notification evaluation once at startup too (#264) — same
-    // reasoning as token_purge above: an observable log line right after a
-    // deploy, and covers the window while the server was down.
-    match spinbike_server::jobs::notifications::tick(&pool, &push, &mail).await {
+    match notifications_result {
         Ok(n) if n > 0 => tracing::info!("push: sent {n} notifications at startup"),
         Ok(_) => {}
         Err(e) => tracing::error!("startup push notifications tick failed: {e}"),
