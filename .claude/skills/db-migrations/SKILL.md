@@ -178,6 +178,50 @@ THEN `run_migrations` applies only v19) — an independent code review
 caught that the first test alone doesn't actually exercise the real
 production upgrade path, only the fresh-install shape of it.
 
+## GOTCHA: fixing a bug in an ALREADY-APPLIED migration — never edit the SQL, add a runner-level precondition check instead (#322)
+
+A bug found INSIDE a migration's SQL (e.g. an unguarded scalar subquery that
+silently mispicks data when a join isn't 1:1) feels like it should be fixed by
+editing that migration's `const` string. **It cannot be, the moment the
+migration has ever run on production**: every migration's SQL text is
+checksummed and re-verified on EVERY boot (V19, #170 — `db::run_migrations`'s
+post-loop loop, `db/mod.rs` ~209-260). Editing an already-applied migration's
+SQL changes its checksum, and the very next prod restart fails with
+`"migration N has been modified after being applied — checksum mismatch"` —
+a guaranteed, self-inflicted outage for a migration that already executed and
+gains nothing from re-running.
+
+**Fix pattern:** add a **precondition check inside the `run_migrations` loop
+body**, gated on the specific `version` number (`if version == 13 { ... }`),
+placed BEFORE the migration's SQL is executed. Query for the dangerous
+condition and `anyhow::bail!` with a clear error if it holds, instead of
+letting the buggy SQL corrupt data silently. Because the loop's existing
+`if version <= current_version { continue; }` skips any version that has
+already been applied, this check is a **complete no-op on every
+already-migrated database, including prod** — it can only ever fire on a
+genuinely fresh migration run (a from-scratch legacy reimport, a dev/QA box
+replaying migrations forward from an old snapshot). This turns silent
+historical data corruption into a loud, safe failure for the future without
+touching a single byte of the frozen migration SQL. Worked example: `db::
+run_migrations`'s V13 duplicate-linked-card guard + `migrations::tests::
+v13_refuses_to_apply_when_a_user_has_two_linked_cards` (drives the REAL
+`run_migrations` entry point, not `apply_sql_block`, since the guard lives in
+the runner, not the migration SQL).
+
+**Quantifying real historical impact on PROD** (was any real data actually
+lost?) is possible even though the source table (`cards`) was long since
+`DROP`ped — check `/opt/spinbike/prod/backups/` and any stray
+`*.bak-*` files for a snapshot taken BEFORE the buggy migration's
+`applied_at` timestamp (read the target version's timestamp from the LIVE
+prod `schema_version` table first: `sqlite3 spinbike.db "SELECT version,
+applied_at FROM schema_version WHERE version=<N>"`), then confirm the
+candidate backup's OWN `schema_version` MAX(version) is below `<N>` (proves
+it predates that migration). Query the backup's still-intact source table
+directly for the dangerous condition (e.g. `GROUP BY user_id HAVING
+COUNT(*) > 1`) — this is real evidence, not guesswork, and can turn "this bug
+theoretically causes data loss" into "0 real users were ever affected"
+(exactly what happened for #322 — 552 cards, 0 duplicates).
+
 ## Dev CI must sync prod DB before install
 
 The `deploy-dev` job in `.github/workflows/ci.yml` MUST sync prod → dev BEFORE installing the new binary:
