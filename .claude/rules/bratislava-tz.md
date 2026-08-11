@@ -74,3 +74,35 @@ the SOURCE level instead of by observing different runtime output, because the
 runtime output genuinely can't differ in this environment. Reach for this
 pattern specifically for "call site uses banned pattern X instead of required
 helper Y" bugs where a real behavioral repro would need controlling the OS TZ.
+
+## Tests must use the SAME shared helper as the production code they exercise (#336)
+
+The bug class above isn't limited to PRODUCTION call sites — an integration
+test (or `#[cfg(test)]` module) that computes its OWN expected date/time via
+`chrono::Local::now()` while the endpoint under test computes "today" via
+`today_bratislava()`/`now_bratislava()` has the SAME divergence risk, just one
+level removed: the two only agree while the process's ambient `TZ` happens to
+already be Europe/Bratislava. #336 was discovered exactly this way — CI run
+`31439513457` on an unpinned UTC runner, `transactions_date.rs`'s 30-day-window
+tests computed the target date via `chrono::Local::now().date_naive()` while
+`payments.rs`'s `patch_created_at` validated it against `today_bratislava()`.
+**Never write a NEW test that calls `chrono::Local::now()`/`Local::now()` to
+derive a date/time it will compare against, or feed into, ANY endpoint that
+itself uses the `crate::util` helpers — use `spinbike_server::util::
+today_bratislava()`/`now_bratislava()` (integration tests, via the public
+`pub mod util`) or `crate::util::...` (in-crate `#[cfg(test)]` modules)
+instead, even when the site looks self-referential today.** A value that's
+merely used to seed a fixture and then compared only against itself has no
+CORRECTNESS risk from `chrono::Local` — but leaving it in test code is still
+a misleading precedent for the next person copying the pattern, and #336
+removed it everywhere for exactly that reason.
+
+**CI runs the suite against BOTH zones now, deliberately.** The `test` job in
+`ci.yml` pins `TZ: Europe/Bratislava` (490cdba) — the CI/prod-parity
+baseline — while a second job, `test-tz-utc`, runs the IDENTICAL suite with
+`TZ: UTC` (github-hosted `ubuntu-latest`'s own unpinned default) and is wired
+into `e2e`'s `needs:` so it actually blocks deploy, not just an informational
+job. If you ever regress a call site back to `chrono::Local`, `test-tz-utc`
+catches it on the very next push instead of only in the ~1-2h/day window
+where the two zones disagree on the calendar date. Do NOT remove either
+job's `TZ` setting — they're deliberately testing two different things.
