@@ -8,7 +8,7 @@ use chrono::Datelike;
 use serde::{Deserialize, Serialize};
 
 use spinbike_core::auth::Role;
-use spinbike_core::services::CLASS_VISIT_NAMES_EN;
+use spinbike_core::services::CLASS_VISIT_KINDS;
 use spinbike_core::stats::{MonthlyBucket, PeriodAgg, PeriodTotals, StatsResponse};
 
 use crate::AppState;
@@ -838,11 +838,13 @@ async fn user_stats(
     Path(id): Path<i64>,
 ) -> Result<Json<StatsResponse>, ApiError> {
     // Build the IN-clause placeholders dynamically from the constants.
-    let placeholders: String = std::iter::repeat_n("?", CLASS_VISIT_NAMES_EN.len())
+    // #329: identified by the stable `kind` column, not the admin-editable
+    // `name_en`.
+    let placeholders: String = std::iter::repeat_n("?", CLASS_VISIT_KINDS.len())
         .collect::<Vec<_>>()
         .join(",");
     let visit_filter_sql =
-        format!("service_id IN (SELECT id FROM services WHERE name_en IN ({placeholders}))");
+        format!("service_id IN (SELECT id FROM services WHERE kind IN ({placeholders}))");
 
     // Gym-local (Europe/Bratislava) month/year boundaries, as UTC-instant
     // strings bound as params — so "this month" / "this year" key off the GYM
@@ -891,17 +893,17 @@ async fn user_stats(
     // for visits_year; [year range] for topup_year; [vf names] for visits_all;
     // then `id`. Bind in exactly that order.
     let mut totals_q = sqlx::query_as::<_, (i64, f64, i64, f64, i64, f64)>(&totals_sql);
-    for n in CLASS_VISIT_NAMES_EN {
+    for n in CLASS_VISIT_KINDS {
         totals_q = totals_q.bind(*n);
     }
     totals_q = totals_q.bind(&month_start).bind(&month_end); // visits_month
     totals_q = totals_q.bind(&month_start).bind(&month_end); // topup_month
-    for n in CLASS_VISIT_NAMES_EN {
+    for n in CLASS_VISIT_KINDS {
         totals_q = totals_q.bind(*n);
     }
     totals_q = totals_q.bind(&year_start).bind(&year_end); // visits_year
     totals_q = totals_q.bind(&year_start).bind(&year_end); // topup_year
-    for n in CLASS_VISIT_NAMES_EN {
+    for n in CLASS_VISIT_KINDS {
         totals_q = totals_q.bind(*n);
     }
     totals_q = totals_q.bind(id);
@@ -958,7 +960,7 @@ async fn user_stats(
     for (i, label) in labels.iter().enumerate() {
         bucket_q = bucket_q.bind(bounds[i + 1].clone()).bind(label.clone());
     }
-    for n in CLASS_VISIT_NAMES_EN {
+    for n in CLASS_VISIT_KINDS {
         bucket_q = bucket_q.bind(*n);
     }
     bucket_q = bucket_q.bind(id).bind(&bounds[0]).bind(&bounds[12]);

@@ -37,7 +37,8 @@ pub struct ReportEvent {
     pub service_name_sk: Option<String>,
     /// English label for the service (NULL when the transaction has no service).
     pub service_name_en: Option<String>,
-    /// Stable kind enum: `"generic"` or `"monthly_pass"`. NULL when service is NULL.
+    /// Stable kind enum: `"generic"`, `"monthly_pass"`, `"single_entry"`, or
+    /// `"group_class"`. NULL when service is NULL.
     pub service_kind: Option<String>,
     pub created_at: String,
     pub valid_until: Option<chrono::NaiveDate>,

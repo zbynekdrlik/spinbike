@@ -8,7 +8,7 @@ use crate::db::users;
 use crate::error::ApiError;
 use crate::routes::internal_error;
 use spinbike_core::errors::ErrorCode;
-use spinbike_core::services::CLASS_VISIT_NAMES_EN;
+use spinbike_core::services::CLASS_VISIT_KINDS;
 
 #[derive(Deserialize)]
 pub struct ChargeRequest {
@@ -358,8 +358,9 @@ async fn log_visit(
     // visit/entry — from EITHER source. A manual log-visit and a door
     // self-entry both land here: door rows are written against the
     // `kind='single_entry'` services row, which migration V16 re-tags onto
-    // the SAME row as the seeded 'Fitness' service (name_en='Fitness'), so
-    // door entries are already inside the CLASS_VISIT_NAMES_EN filter below.
+    // the SAME row as the seeded 'Fitness' service, so door entries are
+    // already inside the CLASS_VISIT_KINDS filter below (#329: identified
+    // by the stable `kind` column, not the admin-editable `name_en`).
     // Canonical attendance definition — the same UNION `db/reports.rs` uses
     // (db-migrations skill): `action='visit'` OR a per-class pay-as-you-go
     // charge (amount<0, valid_until IS NULL; excludes pass purchases and
@@ -370,14 +371,14 @@ async fn log_visit(
         let (day_start, day_end) = crate::util::bratislava_day_range_utc(today);
         let day_start = day_start.format("%Y-%m-%d %H:%M:%S").to_string();
         let day_end = day_end.format("%Y-%m-%d %H:%M:%S").to_string();
-        let placeholders: String = std::iter::repeat_n("?", CLASS_VISIT_NAMES_EN.len())
+        let placeholders: String = std::iter::repeat_n("?", CLASS_VISIT_KINDS.len())
             .collect::<Vec<_>>()
             .join(", ");
         let sql = format!(
             "SELECT created_at, is_door_press FROM transactions \
              WHERE user_id = ? AND deleted_at IS NULL \
                AND created_at >= ? AND created_at < ? \
-               AND service_id IN (SELECT id FROM services WHERE name_en IN ({placeholders})) \
+               AND service_id IN (SELECT id FROM services WHERE kind IN ({placeholders})) \
                AND ( action = 'visit' \
                      OR (action = 'charge' AND amount < 0 AND valid_until IS NULL) ) \
              ORDER BY created_at DESC, id DESC LIMIT 1"
@@ -386,7 +387,7 @@ async fn log_visit(
             .bind(body.user_id)
             .bind(&day_start)
             .bind(&day_end);
-        for n in CLASS_VISIT_NAMES_EN {
+        for n in CLASS_VISIT_KINDS {
             q = q.bind(*n);
         }
         let existing: Option<(String, i64)> = q

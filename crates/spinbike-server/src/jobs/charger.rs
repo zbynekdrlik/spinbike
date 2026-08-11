@@ -32,9 +32,12 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
     .fetch_all(pool)
     .await?;
 
+    // #329: identify the Spinning service by its stable `kind`, not by its
+    // (admin-editable) `name_en` — renaming Spinning via the admin Services
+    // tab must not make this lookup miss and the whole tick error out.
     let (service_id, price): (i64, f64) =
-        sqlx::query_as("SELECT id, default_price FROM services WHERE name_en = ?1 AND active = 1")
-            .bind(spinbike_core::services::SPINNING_NAME_EN)
+        sqlx::query_as("SELECT id, default_price FROM services WHERE kind = ?1 AND active = 1")
+            .bind(spinbike_core::services::SPINNING_KIND)
             .fetch_one(pool)
             .await?;
 
@@ -458,5 +461,54 @@ mod tests {
             "credit must be debited when the pass is voided (10.0 - 5.0 price); a voided pass \
              must never produce a free visit"
         );
+    }
+
+    /// #329 RED: the charger must find "the Spinning service" by its stable
+    /// `services.kind` handle, NOT by matching the mutable `name_en` display
+    /// string. Renaming the Spinning row via the admin Services tab (a normal
+    /// admin action — `PUT /api/admin/services/{id}` only guards
+    /// name_sk/name_en non-empty, nothing stops a rename) must not break the
+    /// 4-hour auto-charger. Before the fix, `tick_as_of` looks the price up
+    /// with `WHERE name_en = 'Spinning'`, so a renamed row is invisible to
+    /// it and `fetch_one` returns `RowNotFound` — the whole tick errors out
+    /// and every booking in the batch silently stops getting charged.
+    #[tokio::test]
+    async fn charger_uses_spinning_kind_not_name_en() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // Simulate an admin renaming Spinning via the Services tab — same
+        // effect as `PUT /api/admin/services/{id}` with a new name_en, which
+        // the route allows unconditionally (no special-casing for this row).
+        sqlx::query("UPDATE services SET name_en = 'Renamed Class' WHERE name_sk = 'Spinning'")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let (uid, bid) = seed_booking(&pool, false, 10.0).await;
+        let n = tick_as_of(&pool, &now_at_14())
+            .await
+            .expect("charger must still find the renamed Spinning row by kind, not name_en");
+        assert_eq!(n, 1, "the booking must still get charged after the rename");
+
+        let (charged_at, txn_id): (Option<String>, Option<i64>) =
+            sqlx::query_as("SELECT charged_at, charge_transaction_id FROM bookings WHERE id = ?")
+                .bind(bid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(charged_at.is_some());
+        let amount: f64 = sqlx::query_scalar("SELECT amount FROM transactions WHERE id = ?")
+            .bind(txn_id.unwrap())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(amount, -5.0, "must still charge the Spinning default_price");
+        let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(credit, 5.0);
     }
 }

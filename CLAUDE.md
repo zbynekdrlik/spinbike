@@ -100,6 +100,7 @@ Path-scoped rules under `.claude/rules/` load themselves when you touch a matchi
 - Any new money-mutating write (`users.credit` / `transactions.amount`) → `.claude/rules/money-rounding.md` (auto-loads on `db/users.rs`, `routes/payments.rs|users.rs|door.rs|admin.rs|charger.rs` — round ONCE and reuse everywhere, check prod for real drift before assuming a backfill is needed, #325/#326)
 - Adding a new `web_sys::` API surface to `spinbike-ui` → `.claude/rules/web-sys-features.md` (auto-loads on `spinbike-ui/Cargo.toml` — verify the Cargo feature gate without compiling, since local `cargo check` is Tier-0-banned, #320)
 - Touching `Sheet`'s Tab-cycle focus trap (`trap_tab`/`refocus_if_orphaned` in `sheet.rs`) or any `Sheet` consumer's close/cancel handler → `.claude/rules/sheet-focus-trap.md` (auto-loads on `sheet.rs`, `nav.rs`, the dashboard sheets, `deleted_email_conflict.rs`, `calendar_picker.rs` — the container-itself-is-a-focus-state gotcha + the non-uniform close-defer pattern, #334)
+- Identifying a class-visit service (Fitness/Spinning), or adding a new `services.kind` value → `.claude/rules/service-kind.md` (auto-loads on `crates/spinbike-core/src/services.rs`, `jobs/charger.rs`, `routes/payments.rs|users.rs|admin.rs`, `db/users.rs|reports.rs`, `dashboard/mod.rs|action_form.rs` — identify by the stable `kind` column, never admin-editable `name_en`/`name_sk`; a new kind needs its own i18n badge key or it renders "???", #186/#329)
 
 | Area | Skill | When to load |
 |---|---|---|
