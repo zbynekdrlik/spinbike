@@ -77,11 +77,23 @@ fn trap_tab(ev: &ev::KeyboardEvent) {
         return;
     };
     let active_node: &web_sys::Node = active.as_ref();
+    // #334 review follow-up: `refocus_if_orphaned` below can park focus on
+    // `.sheet` ITSELF (not any descendant) — e.g. once an in-flight
+    // request that triggered the all-disabled window then FAILS, controls
+    // re-enable again but nothing else ever moves focus off the container
+    // onto a real descendant. Treat the container as sitting "before the
+    // first" tabbable item: Tab from there enters at the first descendant,
+    // Shift+Tab wraps to the last — same as pressing those keys from a
+    // one-before-the-start position would, so the trap keeps working
+    // immediately once something becomes focusable again, without waiting
+    // for a second Tab press to hit a real descendant first.
+    let container_node: &web_sys::Node = container.as_ref();
+    let is_container_focused = container_node.is_same_node(Some(active_node));
 
     if ev.shift_key() {
-        if let (Some(first_el), Some(last_el)) = (&first, last) {
-            let first_node: &web_sys::Node = first_el.as_ref();
-            if first_node.is_same_node(Some(active_node)) {
+        let first_is_active = first.as_ref().is_some_and(|el| is_active(el, active_node));
+        if first_is_active || is_container_focused {
+            if let Some(last_el) = &last {
                 ev.prevent_default();
                 // `focus()` returns a `Result` (fails only if the target
                 // detached mid-event) — vanishingly unlikely for an
@@ -91,13 +103,24 @@ fn trap_tab(ev: &ev::KeyboardEvent) {
                 let _ = last_el.focus();
             }
         }
-    } else if let (Some(last_el), Some(first_el)) = (&last, first) {
-        let last_node: &web_sys::Node = last_el.as_ref();
-        if last_node.is_same_node(Some(active_node)) {
-            ev.prevent_default();
-            let _ = first_el.focus();
+    } else {
+        let last_is_active = last.as_ref().is_some_and(|el| is_active(el, active_node));
+        if last_is_active || is_container_focused {
+            if let Some(first_el) = &first {
+                ev.prevent_default();
+                let _ = first_el.focus();
+            }
         }
     }
+}
+
+/// Whether `el` (a `first`/`last` focusable descendant) is the currently
+/// active element — factored out so `trap_tab`'s shift/plain-Tab branches
+/// share one comparison instead of re-deriving `&web_sys::Node` inline
+/// twice each.
+fn is_active(el: &web_sys::HtmlElement, active_node: &web_sys::Node) -> bool {
+    let node: &web_sys::Node = el.as_ref();
+    node.is_same_node(Some(active_node))
 }
 
 /// #334: catches focus LEAVING `.sheet` without a legitimate close — the
@@ -118,24 +141,35 @@ fn trap_tab(ev: &ev::KeyboardEvent) {
 ///
 /// A `focusout` with a `related_target` outside `.sheet` ALSO fires on
 /// every LEGITIMATE close (Escape, backdrop click, an item link navigating
-/// away) — every close path here and in every Sheet consumer's own
-/// `on_close` unmounts `.sheet` via a `TimeoutFuture::new(0)`-deferred
-/// `show.set(false)` (see `close_backdrop`/`close_keyboard` below). A
-/// same-tick refocus can race AHEAD of that close's own deferred unmount
-/// (a backdrop click's `focusout` fires during the browser's `mousedown`
-/// handling — strictly before the `click` event whose handler schedules
-/// the actual close), so telling the two cases apart needs a check, not
-/// just a defer: after our own deferred tick, re-verify `.sheet` is STILL
-/// CONNECTED to the document (`Node::is_connected()` — a legitimate
-/// close's unmount makes this `false`; calling `.focus()` on a detached
-/// node is also a documented no-op regardless, so even a same-tick race
-/// that refocuses `.sheet` a moment before it unmounts is harmless — this
-/// check just avoids doing that pointless work) AND that focus hasn't
-/// already landed back inside `.sheet` on its own (e.g. `trap_tab`'s own
-/// wrap, or anything else). Only refocuses `.sheet` itself (already
-/// `tabindex="-1"`, a valid programmatic target per the WAI-ARIA dialog
-/// pattern) rather than a specific descendant, since the whole point of
-/// the gap is that no descendant is currently focusable.
+/// away). Most close paths (this file's own `close_backdrop`/
+/// `close_keyboard`, `nav.rs`'s `on_close_menu`, `delete_user.rs`,
+/// `edit_pass_date.rs`, `edit_tx_date.rs`, `edit_info_form.rs`) unmount
+/// `.sheet` via a `TimeoutFuture::new(0)`-deferred `show.set(false)` —
+/// but NOT all of them: `calendar_picker.rs`'s Cancel/Confirm and
+/// `deleted_email_conflict.rs`'s Cancel button call their `on_close`/
+/// `on_cancel` directly, with no macrotask defer at all (review finding on
+/// #334 — an earlier revision of this comment claimed uniformly deferred
+/// unmounts here, which was wrong). Telling a legitimate close apart from
+/// the transient-disabled-window case (where `.sheet` stays mounted) needs
+/// a check, not just a defer: after our own deferred tick, re-verify
+/// `.sheet` is STILL CONNECTED to the document (`Node::is_connected()` —
+/// any close, deferred or not, has unmounted `.sheet` well before this
+/// point for every path EXCEPT a backdrop click specifically) AND that
+/// focus hasn't already landed back inside `.sheet` on its own.
+///
+/// A backdrop click is the one path where this check does NOT catch the
+/// close before we act: the native `focusout` from the browser's
+/// `mousedown`-driven blur is dispatched (and schedules our deferred
+/// check) strictly BEFORE the later `click` event whose handler schedules
+/// `close_backdrop`'s own deferred unmount — two equal-delay timers
+/// resolve FIFO, so `is_connected()` is deterministically still `true`
+/// when we check, not merely possibly true. We refocus `.sheet` a moment
+/// before it closes anyway. This is harmless regardless: `.focus()` on a
+/// node that gets detached moments later has no lasting effect once it
+/// IS detached, and any consumer with its own explicit focus-restore-to-
+/// trigger step (only `nav.rs`'s burger menu, currently) schedules that
+/// through the close callback's own LATER macrotask, so the final
+/// settled focus state is unaffected either way.
 fn refocus_if_orphaned(ev: ev::FocusEvent) {
     let Some(container) = ev
         .current_target()
@@ -165,11 +199,31 @@ fn refocus_if_orphaned(ev: ev::FocusEvent) {
         {
             let active_node: &web_sys::Node = active.as_ref();
             if container.contains(Some(active_node)) {
-                // Focus already landed back inside `.sheet` on its own.
+                // Focus already landed back inside `.sheet` on its own —
+                // e.g. a click that focused a DIFFERENT still-enabled
+                // descendant, which is a completely normal focus move,
+                // not an orphaning.
                 return;
             }
         }
-        if let Ok(html_el) = container.dyn_into::<web_sys::HtmlElement>() {
+        // #334 review follow-up: prefer a REAL focusable descendant over
+        // the bare container when one exists. `left_sheet` above only
+        // means focus moved outside `.sheet` — NOT that every descendant
+        // is disabled (e.g. clicking inert content like `.sheet__title`
+        // can blur the previously-focused button to `<body>` even while
+        // other buttons are still enabled). Parking focus on `.sheet`
+        // itself in that case would needlessly leave a real, clickable
+        // control unfocused; querying fresh (rather than trusting
+        // whatever `trap_tab` last saw) also self-heals the exact
+        // container-focused state `trap_tab`'s own container fallback
+        // exists for, the moment something becomes focusable again.
+        let target = container
+            .query_selector_all(FOCUSABLE_SELECTOR)
+            .ok()
+            .and_then(|list| list.get(0))
+            .and_then(|n| n.dyn_into::<web_sys::Element>().ok())
+            .unwrap_or(container);
+        if let Ok(html_el) = target.dyn_into::<web_sys::HtmlElement>() {
             let _ = html_el.focus();
         }
     });

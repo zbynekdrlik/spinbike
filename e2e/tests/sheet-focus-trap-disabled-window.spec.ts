@@ -16,7 +16,13 @@ import { setupConsoleCheck, assertCleanConsole, loginViaAPI, createUniqueUser } 
  *
  * This spec drives `DeleteUserSheet` (the simpler of the two call sites)
  * and holds the DELETE response open so the transient window is directly
- * observable rather than racing a sub-second timer.
+ * observable rather than racing a sub-second timer. It also exercises the
+ * FAILED-request recovery path (review follow-up on #334): once the held
+ * request resolves as an error, `saving` flips back to `false` and both
+ * buttons re-enable, but nothing else ever moves keyboard focus off
+ * `.sheet` itself onto a real button — `trap_tab`'s container-focused
+ * fallback is what a subsequent Tab press needs to still land inside the
+ * sheet instead of escaping via native tab order.
  */
 
 const BASE_URL = 'http://localhost:8099';
@@ -49,6 +55,10 @@ test.describe('Sheet focus trap — all-descendants-disabled transient window (#
         // Hold the DELETE response open so the shared `saving` signal — and
         // the resulting all-descendants-disabled window — stays observable
         // for the whole test instead of racing a sub-second real request.
+        // Resolved as a FAILURE (not success) so the sheet stays open and
+        // the recovery path below is observable too — a success would
+        // unmount the sheet entirely (delete_user.rs's on_confirm calls
+        // `show.set(false)` only in the Ok branch).
         let releaseDelete: () => void = () => {};
         const deleteHeld = new Promise<void>((resolve) => {
             releaseDelete = resolve;
@@ -59,14 +69,10 @@ test.describe('Sheet focus trap — all-descendants-disabled transient window (#
                 return;
             }
             await deleteHeld;
-            // Mirrors the real DELETE /api/users/{id} success shape
-            // (`DeleteUserResp` in users.rs) — `api::delete` doesn't parse
-            // the body, but a real, well-formed response avoids relying on
-            // that.
             await route.fulfill({
-                status: 200,
+                status: 500,
                 contentType: 'application/json',
-                body: JSON.stringify({ id: user.user_id, deleted_at: '2026-08-11T00:00:00Z' }),
+                body: JSON.stringify({ error: 'boom_test_error' }),
             });
         });
 
@@ -102,11 +108,32 @@ test.describe('Sheet focus trap — all-descendants-disabled transient window (#
         });
         expect(stillInsideSheet).toBe(true);
 
-        // Let the request complete and clean up — a real save afterward
-        // still succeeds through the trap.
+        // Now let the request FAIL — the sheet stays open (delete_user.rs
+        // only unmounts on success), `saving` flips back to false, and
+        // both buttons re-enable. Nothing moves keyboard focus off
+        // `.sheet` itself onto a real button when that happens — it was
+        // parked there by the fix above and nothing re-triggers on a
+        // plain signal change (no new focus event fires).
         releaseDelete();
-        await expect(sheet).toBeHidden();
+        await expect(page.locator('[data-testid="delete-user-error"]')).toBeVisible({
+            timeout: 3000,
+        });
+        await expect(confirmBtn).toBeEnabled();
+        const cancelBtn = page.locator('[data-testid="delete-user-cancel"]');
+        await expect(cancelBtn).toBeEnabled();
+        const focusIsContainer = await page.evaluate(() => {
+            const sheetEl = document.querySelector('[data-testid="sheet-delete-user"]');
+            return document.activeElement === sheetEl;
+        });
+        expect(focusIsContainer).toBe(true);
 
-        assertCleanConsole(messages);
+        // Tab, pressed from the container itself now that real descendants
+        // exist again, must land on the FIRST one (Cancel, DOM order) —
+        // not do nothing, and not escape via native tab order the way it
+        // would without `trap_tab`'s container-focused fallback.
+        await page.keyboard.press('Tab');
+        await expect(cancelBtn).toBeFocused();
+
+        assertCleanConsole(messages.filter((m) => !m.includes('500 (')));
     });
 });
