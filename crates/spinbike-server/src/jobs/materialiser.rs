@@ -98,7 +98,7 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
         );
         let mut q = sqlx::query_as::<_, (i64, String)>(&sql);
         for t in &template_ids {
-            q = q.bind(t);
+            q = q.bind(*t);
         }
         for d in &dates {
             q = q.bind(d);
@@ -113,7 +113,7 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
         );
         let mut q = sqlx::query_as::<_, (i64, String, i64)>(&sql);
         for t in &template_ids {
-            q = q.bind(t);
+            q = q.bind(*t);
         }
         for d in &dates {
             q = q.bind(d);
@@ -129,7 +129,7 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
         );
         let mut q = sqlx::query_as::<_, (i64, String, i64)>(&sql);
         for t in &template_ids {
-            q = q.bind(t);
+            q = q.bind(*t);
         }
         for d in &dates {
             q = q.bind(d);
