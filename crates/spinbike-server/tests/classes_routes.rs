@@ -451,8 +451,8 @@ async fn list_classes_returns_persistent_source_for_customer_auto_booking() {
         .unwrap();
 
     // Find the next Monday (strictly in future to avoid same-day flake).
-    use chrono::{Datelike, Duration, Local};
-    let today = Local::now().date_naive();
+    use chrono::{Datelike, Duration};
+    let today = spinbike_server::util::today_bratislava();
     let m = (7 - today.weekday().num_days_from_monday() as i64) % 7;
     let mon = today + Duration::days(if m == 0 { 7 } else { m });
 
