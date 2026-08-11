@@ -176,4 +176,38 @@ test.describe('Card action form — unified Charge / Top-up / Sell pass', () => 
 
         assertCleanConsole(msgs);
     });
+
+    // #344 finding 4: default_valid_until is computed ONCE at ActionForm
+    // mount and never re-derived when the staff member switches the
+    // selected service away from and back to the pass service — a manual
+    // edit made during an earlier (abandoned) pass selection leaks into a
+    // LATER, unrelated pass-selection instead of showing a fresh suggestion.
+    test('reselecting Monthly pass after switching away re-derives a fresh suggested date', async ({ page }) => {
+        const msgs = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const { lastName } = await activateUniqueCard(token, 50.0);
+        await page.goto('/staff');
+        await openCardByLastName(page, lastName);
+
+        await selectMonthlyPass(page);
+        const dateInput = page.locator('[data-testid="sell-pass-date-input"]');
+        await expect(dateInput).toBeVisible();
+        const original = await dateInput.inputValue();
+
+        // Manually move the date away from the default (two "next day" clicks).
+        const nextDayBtn = page.locator('[data-testid="sell-pass-date"] button[aria-label="next day"]');
+        await nextDayBtn.click();
+        await nextDayBtn.click();
+        await expect(dateInput).not.toHaveValue(original);
+
+        // Switch to a non-pass service (date row hides) and back to Monthly pass.
+        await page.locator('[data-testid="charge-service"]').selectOption({ index: 1 });
+        await expect(page.locator('[data-testid="valid-until-row"]')).toHaveCount(0);
+        await selectMonthlyPass(page);
+
+        // Must show a FRESH default, not the manually-changed leftover value.
+        await expect(dateInput).toHaveValue(original);
+
+        assertCleanConsole(msgs);
+    });
 });
