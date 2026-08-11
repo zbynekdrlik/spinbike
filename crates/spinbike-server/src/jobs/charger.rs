@@ -40,6 +40,11 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
             .bind(spinbike_core::services::SPINNING_KIND)
             .fetch_one(pool)
             .await?;
+    // Round ONCE, right here where `price` enters the operation, and reuse
+    // this SAME rounded value for both the ledger `transactions.amount`
+    // INSERT and the `users.credit` UPDATE below — `default_price` carries
+    // no rounding guarantee at rest (money-rounding.md / #325/#326/#343).
+    let price = crate::db::users::round_cents(price);
 
     let mut charged = 0usize;
     for (booking_id, _template_id, date, _start, user_id) in rows {
@@ -460,6 +465,69 @@ mod tests {
             credit, 5.0,
             "credit must be debited when the pass is voided (10.0 - 5.0 price); a voided pass \
              must never produce a free visit"
+        );
+    }
+
+    /// #343 RED: `charger.rs` must round `default_price` to cents exactly
+    /// ONCE, right after it enters the operation, and reuse that SAME
+    /// rounded value for BOTH the ledger `transactions.amount` INSERT and
+    /// the `users.credit` debit — matching the #325/#326 pattern the rest
+    /// of the codebase already follows (money-rounding.md). Before the fix,
+    /// `tick_as_of` inserts the RAW `-price` into the ledger while wrapping
+    /// the credit UPDATE in SQL `ROUND(credit - ?, 2)`, so a `default_price`
+    /// carrying sub-cent float drift (e.g. left over from before admin.rs's
+    /// own write-boundary fix, or any f64 JSON round-trip) produces a
+    /// ledger row permanently out of sync with the rounded credit delta.
+    /// This directly seeds an unrounded `default_price` via SQL (bypassing
+    /// the admin.rs boundary entirely, simulating pre-existing drift) to
+    /// prove the charger itself rounds regardless of what's already sitting
+    /// in the `services` row.
+    #[tokio::test]
+    async fn charger_rounds_ledger_amount_same_as_credit_debit() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        // Simulate a Spinning price carrying float/precision drift.
+        let unrounded_price = 12.301_f64;
+        sqlx::query("UPDATE services SET default_price = ? WHERE kind = 'group_class'")
+            .bind(unrounded_price)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let (uid, bid) = seed_booking(&pool, false, 100.0).await;
+        let n = tick_as_of(&pool, &now_at_14()).await.unwrap();
+        assert_eq!(n, 1);
+
+        let txn_id: i64 =
+            sqlx::query_scalar("SELECT charge_transaction_id FROM bookings WHERE id = ?")
+                .bind(bid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let amount: f64 = sqlx::query_scalar("SELECT amount FROM transactions WHERE id = ?")
+            .bind(txn_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let expected_rounded = crate::db::users::round_cents(unrounded_price);
+        assert!(
+            (amount - (-expected_rounded)).abs() < 1e-9,
+            "ledger amount must be rounded to cents like the credit debit, not the raw \
+             unrounded default_price ({unrounded_price}): got {amount}, expected {}",
+            -expected_rounded
+        );
+        let expected_credit = crate::db::users::round_cents(100.0 - expected_rounded);
+        assert!(
+            (credit - expected_credit).abs() < 1e-9,
+            "credit must debit by the SAME rounded amount as the ledger row: got {credit}, \
+             expected {expected_credit}"
         );
     }
 
