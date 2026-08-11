@@ -92,24 +92,24 @@ fn trap_tab(ev: &ev::KeyboardEvent) {
 
     if ev.shift_key() {
         let first_is_active = first.as_ref().is_some_and(|el| is_active(el, active_node));
-        if first_is_active || is_container_focused {
-            if let Some(last_el) = &last {
-                ev.prevent_default();
-                // `focus()` returns a `Result` (fails only if the target
-                // detached mid-event) — vanishingly unlikely for an
-                // element we just queried out of a live, attached `.sheet`,
-                // and there's nothing more useful to do here than leave
-                // focus wherever it currently is.
-                let _ = last_el.focus();
-            }
+        if (first_is_active || is_container_focused)
+            && let Some(last_el) = &last
+        {
+            ev.prevent_default();
+            // `focus()` returns a `Result` (fails only if the target
+            // detached mid-event) — vanishingly unlikely for an
+            // element we just queried out of a live, attached `.sheet`,
+            // and there's nothing more useful to do here than leave
+            // focus wherever it currently is.
+            let _ = last_el.focus();
         }
     } else {
         let last_is_active = last.as_ref().is_some_and(|el| is_active(el, active_node));
-        if last_is_active || is_container_focused {
-            if let Some(first_el) = &first {
-                ev.prevent_default();
-                let _ = first_el.focus();
-            }
+        if (last_is_active || is_container_focused)
+            && let Some(first_el) = &first
+        {
+            ev.prevent_default();
+            let _ = first_el.focus();
         }
     }
 }
