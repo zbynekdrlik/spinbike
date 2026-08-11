@@ -1087,8 +1087,10 @@ UPDATE transactions SET is_door_press = 1 WHERE note LIKE 'door:%';
 // `FITNESS_KIND`/`SPINNING_KIND`/`CLASS_VISIT_KINDS` constants.
 const V27_SPINNING_GROUP_CLASS_KIND: &str = r#"
 -- 1. Drop the view + trigger that reference `services`, per the V16/V18/V20
---    rebuild GOTCHA.
-DROP VIEW user_active_pass;
+--    rebuild GOTCHA. The view is always present by the time V27 runs (V18
+--    always precedes it), but IF EXISTS on both reads more consistently
+--    defensive than guarding only the trigger.
+DROP VIEW IF EXISTS user_active_pass;
 DROP TRIGGER IF EXISTS enforce_active_pass_invariant;
 
 -- 2. Widen services.kind CHECK to include 'group_class'.

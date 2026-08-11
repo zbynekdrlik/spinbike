@@ -502,6 +502,12 @@ pub fn ActionForm(
                             // text (alphabetically "group_class" <
                             // "single_entry" would put Spinning first, the
                             // wrong order, even before any admin rename).
+                            // NOTE (review, #329): this is a binary sort —
+                            // it assumes exactly the two known kinds. A
+                            // future THIRD class-visit kind would fall into
+                            // the `else` branch alongside Spinning with an
+                            // unspecified relative order; revisit this sort
+                            // if CLASS_VISIT_KINDS ever grows past 2.
                             let mut visits: Vec<_> = services.get().into_iter()
                                 .filter(|svc| svc.is_class_visit())
                                 .collect();
