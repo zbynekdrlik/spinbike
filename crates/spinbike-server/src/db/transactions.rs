@@ -444,6 +444,71 @@ mod tests {
         }
     }
 
+    /// #331: the `before` cursor filtered only `t.created_at < ?` while the
+    /// query orders by `(t.created_at DESC, t.id DESC)` — a keyset cursor
+    /// missing the `id` tiebreaker `db::reports`'s day/range cursors already
+    /// have. When multiple same-user rows share a `created_at` second
+    /// (SQLite's `datetime('now')` second-precision — the #291 class
+    /// documented in `.claude/rules/transaction-ordering.md`), paging past
+    /// the boundary with a composite `(created_at, id)` cursor must return
+    /// exactly the REMAINING tied rows, not silently duplicate the row the
+    /// cursor was built from (the row-comparison bug a naive string `<`
+    /// against a composite `"ts|id"` cursor produces: "ts" is a strict
+    /// prefix of "ts|id", so BINARY-collation `<` treats every same-second
+    /// row, including the one already shown, as still "less than" the
+    /// cursor).
+    ///
+    /// [red -> green]: failed (page 2 duplicated the already-shown row,
+    /// returning 3 rows including the cursor's own row) before the
+    /// composite-cursor predicate existed; passes now that the query filters
+    /// on `(created_at, id) < (cursor_ts, cursor_id)`, excluding exactly the
+    /// row the cursor was built from and keeping the two older ties.
+    #[tokio::test]
+    async fn paginated_before_cursor_composite_key_excludes_only_the_cursor_row_on_ties() {
+        let pool = setup().await;
+        let user_id = insert_test_user(&pool, "PAG-TIE User").await;
+
+        let tied_at = "2026-01-01 12:00:00";
+        let mut ids = Vec::with_capacity(3);
+        for _ in 0..3 {
+            let id: i64 = sqlx::query_scalar(
+                "INSERT INTO transactions (user_id, amount, action, created_at)
+                 VALUES (?, ?, ?, ?) RETURNING id",
+            )
+            .bind(user_id)
+            .bind(1.0_f64)
+            .bind("charge")
+            .bind(tied_at)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            ids.push(id);
+        }
+        // ids[0] < ids[1] < ids[2] (AUTOINCREMENT, insertion order). Ordered
+        // by (created_at DESC, id DESC) all three tie on created_at, so the
+        // full order is ids[2], ids[1], ids[0].
+
+        // Page 1's last row is ids[2] — build the composite cursor from it.
+        let cursor = format!("{tied_at}|{}", ids[2]);
+
+        let rows =
+            list_transactions_for_user_paginated(&pool, user_id, None, Some(cursor.as_str()))
+                .await
+                .unwrap();
+
+        assert_eq!(
+            rows.len(),
+            2,
+            "page 2 must contain exactly the two remaining tied rows, never re-include \
+             the cursor's own row (ids[2]) nor drop the other ties"
+        );
+        assert_eq!(
+            rows[0].id, ids[1],
+            "remaining ties must stay ordered newest-id-first"
+        );
+        assert_eq!(rows[1].id, ids[0]);
+    }
+
     #[tokio::test]
     async fn paginated_explicit_limit_and_cap() {
         let pool = setup().await;
