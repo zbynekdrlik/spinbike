@@ -653,6 +653,39 @@ async fn update_service_with_negative_price_rejected() {
     assert_eq!(after, before);
 }
 
+// A deliberately free service (price 0) is a legitimate business choice on
+// PUT too, mirroring create_service_with_zero_price_accepted above — only a
+// NEGATIVE price is rejected. Guards the `dp < 0.0` guard in update_service
+// against a future "reject <= 0" over-tightening (a mutation-testing
+// MISSED-mutant finding: `< 0.0` -> `<= 0.0` survived with nothing pinning
+// zero as legal on the update path, though create_service already had one).
+#[tokio::test]
+async fn update_service_with_zero_price_accepted() {
+    let app = TestApp::new().await;
+    let sid: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind='generic' LIMIT 1")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+
+    let body = serde_json::json!({ "default_price": 0.0 });
+    let (status, row) = app
+        .request(put_json(
+            &format!("/api/admin/services/{sid}"),
+            &app.admin_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(row["default_price"].as_f64().unwrap(), 0.0);
+
+    let persisted: f64 = sqlx::query_scalar("SELECT default_price FROM services WHERE id = ?")
+        .bind(sid)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(persisted, 0.0);
+}
+
 #[tokio::test]
 async fn update_service_price_is_rounded_to_cents() {
     let app = TestApp::new().await;
