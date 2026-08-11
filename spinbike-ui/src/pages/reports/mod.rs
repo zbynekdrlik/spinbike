@@ -3,6 +3,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
 use crate::i18n::{self, Lang};
+use crate::util::RequestId;
 use spinbike_core::reports::{
     CategoryRevenue as CategoryRevenueRow, KpiSummary, ReportEvent, ReportResponse,
 };
@@ -57,6 +58,12 @@ pub fn ReportsPage() -> impl IntoView {
 
     let (show_picker, set_show_picker) = signal(false);
 
+    // #344 finding 5: a fast anchor/mode change (e.g. Day -> Week before the
+    // Day fetch resolves) used to let whichever response landed LAST win,
+    // even a genuinely older/superseded one — RequestId (same pattern as
+    // transactions_list.rs / negative_balance_list.rs / edit_info_form.rs,
+    // #66) drops a response once a newer dispatch has superseded it.
+    let req_id = RequestId::new();
     Effect::new(move |_| {
         let a = anchor.get();
         let m = mode.get();
@@ -81,8 +88,13 @@ pub fn ReportsPage() -> impl IntoView {
                 )
             }
         };
+        let token = req_id.next();
         spawn_local(async move {
-            match api::get::<ReportResponse>(&url).await {
+            let result = api::get::<ReportResponse>(&url).await;
+            if !token.is_latest() {
+                return; // stale — a newer anchor/mode change superseded this fetch (#344)
+            }
+            match result {
                 Ok(r) => {
                     set_kpi.set(r.kpi);
                     set_category_revenue.set(r.category_revenue);
