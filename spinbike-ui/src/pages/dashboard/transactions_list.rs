@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
@@ -8,6 +10,10 @@ use crate::pages::dashboard::sheets::EditTxDateSheet;
 use crate::util::RequestId;
 
 use super::TxnInfo;
+
+/// Per-row (editing, note_value) state, keyed by tx.id. See `row_states`
+/// below (#344 finding 2).
+type RowEditState = (RwSignal<bool>, RwSignal<String>);
 
 #[component]
 pub fn TransactionsList(
@@ -22,6 +28,16 @@ pub fn TransactionsList(
     let (txns, set_txns) = signal(Vec::<TxnInfo>::new());
     let (limit, set_limit) = signal(10usize);
     let (has_more, set_has_more) = signal(false);
+    // #344 finding 2: per-row editing/note_value state, hoisted to this
+    // OUTER (non-reactive) scope so it survives a re-run of the
+    // `t.iter().map(...)` block below — which happens on ANY txn_refresh
+    // bump (void/re-date/note-save on ANY row), not just this row's own
+    // action. Without this, that whole block recreated every row's
+    // `editing`/`note_value` signals from scratch on every refresh,
+    // silently discarding an in-progress edit on an unrelated row. Scoped
+    // to this component instance (one per selected card), so it's
+    // naturally cleared when a different card is opened.
+    let row_states: StoredValue<HashMap<i64, RowEditState>> = StoredValue::new(HashMap::new());
 
     let lang_for_fetch = lang;
     let req_id = RequestId::new();
@@ -98,9 +114,31 @@ pub fn TransactionsList(
                 };
 
                 let note_initial = tx.note.clone().unwrap_or_default();
-                // Per-row signal so the editor opens independently for each row.
-                let (editing, set_editing) = signal(false);
-                let (note_value, set_note_value) = signal(note_initial.clone());
+                // Per-row (editing, note_value) state — reused across a
+                // re-run of this whole block if this row was ALREADY seen
+                // (see `row_states` above, #344 finding 2). Only re-synced
+                // from the fresh server note when NOT currently mid-edit, so
+                // a genuinely changed server-side note (e.g. edited on
+                // another device) still shows for rows nobody is editing,
+                // while an in-progress edit's typed text is never clobbered.
+                let existing_row_state = row_states.with_value(|m| m.get(&tx_id).copied());
+                let (editing, note_value) = match existing_row_state {
+                    Some((e, n)) => {
+                        if !e.get_untracked() {
+                            n.set(note_initial.clone());
+                        }
+                        (e, n)
+                    }
+                    None => {
+                        let pair = (RwSignal::new(false), RwSignal::new(note_initial.clone()));
+                        row_states.update_value(|m| {
+                            m.insert(tx_id, pair);
+                        });
+                        pair
+                    }
+                };
+                let set_editing = editing;
+                let set_note_value = note_value;
                 let editing_date = RwSignal::new(false);
                 // tx.created_at is UTC text; convert to Bratislava local so the date
                 // pre-filled in the sheet matches what the user sees in the row.
