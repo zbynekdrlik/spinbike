@@ -358,10 +358,11 @@ async fn second_of_day_writes_zero_amount_row() {
     let app = TestApp::with_door_mode("success").await;
     enable_self_entry(&app).await;
 
-    // Seed a synthetic first open earlier today.
+    // Seed a synthetic first open earlier today. is_door_press=1 (#328) — the
+    // same-day count now reads this column, not the note prefix.
     sqlx::query(
-        "INSERT INTO transactions (user_id, amount, action, note) \
-         VALUES (?, 0, 'visit', 'door: 1st')",
+        "INSERT INTO transactions (user_id, amount, action, note, is_door_press) \
+         VALUES (?, 0, 'visit', 'door: 1st', 1)",
     )
     .bind(app.customer_id)
     .execute(&app.pool)

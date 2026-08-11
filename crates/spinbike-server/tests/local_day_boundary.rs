@@ -26,11 +26,11 @@ async fn seed_user(pool: &sqlx::SqlitePool) -> i64 {
 
 /// Insert a `door:` transaction row at an explicit UTC `created_at` instant
 /// (`service_id` is nullable and irrelevant to the same-day count, which keys
-/// off `note LIKE 'door:%'`).
+/// off `is_door_press` — #328, no longer the `note` text).
 async fn seed_door(pool: &sqlx::SqlitePool, user_id: i64, created_at_utc: &str) {
     sqlx::query(
-        "INSERT INTO transactions (user_id, service_id, amount, action, note, created_at) \
-         VALUES (?, NULL, 0, 'visit', 'door: 1st', ?)",
+        "INSERT INTO transactions (user_id, service_id, amount, action, note, created_at, is_door_press) \
+         VALUES (?, NULL, 0, 'visit', 'door: 1st', ?, 1)",
     )
     .bind(user_id)
     .bind(created_at_utc)
@@ -49,7 +49,7 @@ async fn door_count_for_gym_day(
     let (start, end) = bratislava_day_range_utc(gym_today);
     sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
-         WHERE user_id = ? AND note LIKE 'door:%' \
+         WHERE user_id = ? AND is_door_press = 1 \
            AND created_at >= ? AND created_at < ? AND deleted_at IS NULL",
     )
     .bind(user_id)

@@ -543,7 +543,7 @@ async fn log_visit_force_true_logs_duplicate_anyway() {
 }
 
 #[tokio::test]
-async fn log_visit_duplicate_source_is_door_when_note_prefixed() {
+async fn log_visit_duplicate_source_is_door_when_is_door_press_flag_set() {
     let app = TestApp::new().await;
     let user_id = app
         .seed_card("DUP-VISIT-3", 50.0, None, None, None, None)
@@ -558,8 +558,58 @@ async fn log_visit_duplicate_source_is_door_when_note_prefixed() {
     assert_eq!(status, axum::http::StatusCode::OK);
 
     // Fitness IS the kind='single_entry' row after migration V16 — a door
-    // press today lands on this exact service_id with a "door: 1st" note.
+    // press today lands on this exact service_id. #328: `source` is now
+    // classified by the dedicated `is_door_press` column, not by re-deriving
+    // the note text — the note is still written for readability but is no
+    // longer what `source` reads.
     let fitness_id = service_id(&app, "Fitness").await;
+    sqlx::query(
+        "INSERT INTO transactions (user_id, service_id, amount, action, note, created_at, is_door_press)
+         VALUES (?, ?, 0.0, 'visit', 'door: 1st', datetime('now'), 1)",
+    )
+    .bind(user_id)
+    .bind(fitness_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, resp) = app
+        .request(post_json(
+            "/api/payments/log-visit",
+            &app.staff_token,
+            &json!({ "user_id": user_id, "service_id": fitness_id }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT);
+    assert_eq!(resp["error_code"], "already_visited_today");
+    assert_eq!(resp["source"], "door");
+}
+
+/// #328 — a transaction whose NOTE happens to start with `door:` but was
+/// NOT actually written by the door route (`is_door_press` stays its
+/// default 0) must classify as "manual", not "door". This is the
+/// payments.rs half of the same corruption vector `door_route.rs`'s
+/// `staff_note_edit_starting_with_door_prefix_does_not_corrupt_same_day_count`
+/// covers for door.rs's own same-day count.
+#[tokio::test]
+async fn log_visit_duplicate_source_is_manual_despite_door_prefixed_note() {
+    let app = TestApp::new().await;
+    let user_id = app
+        .seed_card("DUP-VISIT-4", 50.0, None, None, None, None)
+        .await;
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/sell-pass",
+            &app.staff_token,
+            &json!({ "user_id": user_id, "price": 35.0, "valid_until": "2030-01-01" }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let fitness_id = service_id(&app, "Fitness").await;
+    // A row whose note happens to start with "door:" (e.g. a staff note
+    // edit) but is_door_press is NOT set — this was never an actual door
+    // press.
     sqlx::query(
         "INSERT INTO transactions (user_id, service_id, amount, action, note, created_at)
          VALUES (?, ?, 0.0, 'visit', 'door: 1st', datetime('now'))",
@@ -579,7 +629,10 @@ async fn log_visit_duplicate_source_is_door_when_note_prefixed() {
         .await;
     assert_eq!(status, axum::http::StatusCode::CONFLICT);
     assert_eq!(resp["error_code"], "already_visited_today");
-    assert_eq!(resp["source"], "door");
+    assert_eq!(
+        resp["source"], "manual",
+        "a door-prefixed NOTE alone (is_door_press unset) must not be classified as door, got {resp:?}"
+    );
 }
 
 #[tokio::test]
