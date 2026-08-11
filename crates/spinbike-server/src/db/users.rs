@@ -53,6 +53,12 @@ pub fn compute_search_text(
 
 /// Populate `search_text` for users where it's empty. Safe to run on every
 /// startup — idempotent, and only touches rows that need it.
+///
+/// Runs unconditionally at every server start, before the listener accepts
+/// requests (`bin/server.rs`) — so the per-row loop below is wrapped in ONE
+/// transaction (#341) instead of leaving each `UPDATE` to auto-commit (and
+/// potentially fsync) on its own; nothing reads `search_text` before this
+/// completes either way.
 pub async fn backfill_search_text(pool: &SqlitePool) -> Result<usize> {
     let rows: Vec<UserRow> = sqlx::query_as::<_, UserRow>(
         "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
@@ -63,6 +69,11 @@ pub async fn backfill_search_text(pool: &SqlitePool) -> Result<usize> {
     .fetch_all(pool)
     .await?;
     let count = rows.len();
+    if count == 0 {
+        return Ok(0);
+    }
+
+    let mut tx = pool.begin().await?;
     for row in rows {
         let text = compute_search_text(
             Some(&row.name),
@@ -72,9 +83,10 @@ pub async fn backfill_search_text(pool: &SqlitePool) -> Result<usize> {
         sqlx::query("UPDATE users SET search_text = ? WHERE id = ?")
             .bind(&text)
             .bind(row.id)
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
     }
+    tx.commit().await?;
     Ok(count)
 }
 

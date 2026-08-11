@@ -1,8 +1,8 @@
 //! App-wide utility helpers shared across pages (e.g. money parsing used by
 //! both the dashboard charge/topup forms and the admin service price forms).
 
-use std::cell::Cell;
-use std::rc::Rc;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Stale-response guard for the `Effect::new + spawn_local` fetch pattern.
 ///
@@ -27,22 +27,33 @@ use std::rc::Rc;
 ///     });
 /// });
 /// ```
+///
+/// Backed by `Arc<AtomicU32>`, not `Rc<Cell<u32>>`: Leptos 0.8's reactive
+/// dynamic-children machinery (the `.into_any()` / `ReactiveFunction` path)
+/// requires stored closures to be `Send + Sync + 'static`, even in this
+/// CSR-only build. `Arc<AtomicU32>` satisfies that with zero behavioral
+/// change on wasm32 (single-threaded regardless — `fetch_add` is just as
+/// cheap as `Cell::set` there) and, crucially, carries no reactive
+/// Owner/arena lifetime coupling — unlike a Leptos `StoredValue`, it cannot
+/// be disposed out from under a callback that outlives its creating scope,
+/// which is the whole reason this type exists instead of a signal (see the
+/// module doc above).
 #[derive(Clone, Default)]
-pub struct RequestId(Rc<Cell<u32>>);
+pub struct RequestId(Arc<AtomicU32>);
 
 impl RequestId {
     pub fn new() -> Self {
-        Self(Rc::new(Cell::new(0)))
+        Self(Arc::new(AtomicU32::new(0)))
     }
 
     /// Mint a new token; the inner counter now holds this token's value.
     /// Subsequent calls to `next()` invalidate this token's `is_latest()`.
     pub fn next(&self) -> RequestToken {
-        let v = self.0.get().wrapping_add(1);
-        self.0.set(v);
+        // `fetch_add` wraps on overflow, same as the old `wrapping_add`.
+        let v = self.0.fetch_add(1, Ordering::Relaxed).wrapping_add(1);
         RequestToken {
             id: v,
-            latest: self.0.clone(),
+            latest: Arc::clone(&self.0),
         }
     }
 }
@@ -50,13 +61,13 @@ impl RequestId {
 #[derive(Clone)]
 pub struct RequestToken {
     id: u32,
-    latest: Rc<Cell<u32>>,
+    latest: Arc<AtomicU32>,
 }
 
 impl RequestToken {
     /// True iff no newer token has been minted from the parent `RequestId`.
     pub fn is_latest(&self) -> bool {
-        self.latest.get() == self.id
+        self.latest.load(Ordering::Relaxed) == self.id
     }
 }
 

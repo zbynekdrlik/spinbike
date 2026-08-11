@@ -167,3 +167,94 @@ test('visit button re-entry guard: rapid double-click fires only one POST', asyn
 
     assertCleanConsole(msgs);
 });
+
+async function seedActivePassBarcode(token: string, barcode: string): Promise<void> {
+    const validUntilIso = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 10);
+    const seed = await fetch(`${BASE_URL}/api/test/seed-transactions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+            barcode,
+            entries: [{
+                amount: -35.00,
+                action: 'charge',
+                service_name_sk: 'Mesačná permanentka',
+                valid_until: validUntilIso,
+            }],
+        }),
+    });
+    if (!seed.ok) {
+        throw new Error(`seedActivePassBarcode failed: ${seed.status} ${await seed.text()}`);
+    }
+}
+
+// #344 finding 3: the auto-clear timer for each of do_topup/do_charge/
+// do_log_visit compares the CURRENT banner text against the text it
+// captured at schedule time (`msg.get_untracked() == m`). Two DIFFERENT
+// customers logging the SAME service render IDENTICAL banner text ("Visit
+// added: Fitness") — the FIRST action's stale 2.5s timer then matches the
+// SECOND action's still-current banner and clears it early, ~1s ahead of
+// when it should.
+test('a stale timer from one visit must not early-clear a different, later visit with identical banner text', async ({
+    page,
+}) => {
+    const msgs = setupConsoleCheck(page);
+    const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+
+    const RUN_TAG = `BANGEN${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+    const barcodeA = `${RUN_TAG}A`;
+    const barcodeB = `${RUN_TAG}B`;
+    await seedActivePassBarcode(token, barcodeA);
+    await seedActivePassBarcode(token, barcodeB);
+
+    await page.goto('/staff');
+    const search = page.locator('input[type="search"]').first();
+    await search.waitFor();
+
+    const banner = page.locator('.alert-success');
+
+    // Customer A: log a Fitness visit.
+    await search.fill(barcodeA);
+    await expect(page.locator('[data-testid="search-result"]')).toHaveCount(1);
+    await page.locator('[data-testid="search-result"]').first().click();
+    await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+    const respA = page.waitForResponse(
+        (r) => r.url().includes('/api/payments/log-visit') && r.request().method() === 'POST',
+    );
+    await page.locator('[data-testid="log-visit-btn"]').first().click();
+    await respA;
+    const tA = Date.now();
+    await expect(banner).toHaveText('Visit added: Fitness');
+
+    // ~1s later, switch to a DIFFERENT customer and log the SAME service —
+    // identical banner text, but a distinct action with its own timer.
+    await page.waitForTimeout(1000);
+    await search.fill(barcodeB);
+    await expect(page.locator('[data-testid="search-result"]')).toHaveCount(1);
+    await page.locator('[data-testid="search-result"]').first().click();
+    await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+    const respB = page.waitForResponse(
+        (r) => r.url().includes('/api/payments/log-visit') && r.request().method() === 'POST',
+    );
+    await page.locator('[data-testid="log-visit-btn"]').first().click();
+    await respB;
+    const tB = Date.now();
+    await expect(banner).toHaveText('Visit added: Fitness');
+
+    // Wait until just past A's OWN 2.5s timer (measured from tA) — well
+    // before B's 2.5s timer (measured from tB, which started ~1s later).
+    // The banner must still be showing B's success.
+    const untilPastA = tA + 2700 - Date.now();
+    if (untilPastA > 0) await page.waitForTimeout(untilPastA);
+    await expect(banner).toBeVisible();
+    await expect(banner).toHaveText('Visit added: Fitness');
+
+    // Wait until past B's own timer — now it clears.
+    const untilPastB = tB + 2700 - Date.now();
+    if (untilPastB > 0) await page.waitForTimeout(untilPastB);
+    await expect(banner).not.toBeVisible({ timeout: 2000 });
+
+    assertCleanConsole(msgs);
+});

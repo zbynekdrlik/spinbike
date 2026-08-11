@@ -34,8 +34,41 @@ pub async fn day_report(
     let end_str = end.format("%Y-%m-%d %H:%M:%S").to_string();
     let before_parsed = before.as_deref().and_then(parse_before_cursor);
 
-    // Events — paginated with composite (created_at, id) cursor for stable
-    // ordering even when multiple rows share a second-precision timestamp.
+    // Events, KPI totals and per-category revenue are three independent
+    // reads over the same [start_str, end_str) range — none consumes
+    // another's output, so run them concurrently instead of one after
+    // another (#341; the pool is max_connections(5), see db/mod.rs).
+    let (events_result, kpi_result, category_result) = tokio::join!(
+        events_between(pool, &start_str, &end_str, limit, before_parsed),
+        kpi_between(pool, &start_str, &end_str),
+        category_revenue_between(pool, &start_str, &end_str),
+    );
+    let (events, has_more) = events_result?;
+    let kpi_row = kpi_result?;
+    let kpi = KpiSummary {
+        spinning_visits: kpi_row.spinning_visits,
+        attendance: kpi_row.attendance,
+        passes_sold: kpi_row.passes_sold,
+        cash_in_eur: kpi_row.cash_in_eur,
+    };
+    let category_revenue = category_result?;
+
+    Ok((kpi, category_revenue, events, has_more))
+}
+
+/// Paginated, non-voided transaction events for the half-open UTC-instant
+/// range `[start_str, end_str)`, joined with card + service data — the
+/// composite `(created_at, id)`-cursor query `day_report` and `range_report`
+/// both need (#341: previously duplicated verbatim in each; the same
+/// duplication `kpi_between`/`category_revenue_between` below were already
+/// extracted to avoid).
+async fn events_between(
+    pool: &SqlitePool,
+    start_str: &str,
+    end_str: &str,
+    limit: i64,
+    before_parsed: Option<(String, i64)>,
+) -> Result<(Vec<ReportEvent>, bool)> {
     let mut query = String::from(
         "SELECT t.id, t.user_id, t.amount, t.action, t.created_at, t.valid_until, t.deleted_at,
                 u.name AS card_name,
@@ -54,8 +87,8 @@ pub async fn day_report(
     query.push_str(" ORDER BY t.created_at DESC, t.id DESC LIMIT ?");
 
     let mut q = sqlx::query_as::<_, DbEventRow>(&query)
-        .bind(&start_str)
-        .bind(&end_str);
+        .bind(start_str)
+        .bind(end_str);
     if let Some((ref ts, id)) = before_parsed {
         q = q.bind(ts).bind(ts).bind(id);
     }
@@ -66,19 +99,7 @@ pub async fn day_report(
     if has_more {
         rows.pop();
     }
-    let events: Vec<ReportEvent> = rows.into_iter().map(Into::into).collect();
-
-    let kpi_row = kpi_between(pool, &start_str, &end_str).await?;
-    let kpi = KpiSummary {
-        spinning_visits: kpi_row.spinning_visits,
-        attendance: kpi_row.attendance,
-        passes_sold: kpi_row.passes_sold,
-        cash_in_eur: kpi_row.cash_in_eur,
-    };
-
-    let category_revenue = category_revenue_between(pool, &start_str, &end_str).await?;
-
-    Ok((kpi, category_revenue, events, has_more))
+    Ok((rows.into_iter().map(Into::into).collect(), has_more))
 }
 
 /// KPI counts/sums over the half-open UTC-instant range `[start_str,
@@ -260,40 +281,16 @@ pub async fn range_report(
     let to_str = to_end.format("%Y-%m-%d %H:%M:%S").to_string();
     let before_parsed = before.as_deref().and_then(parse_before_cursor);
 
-    let mut query = String::from(
-        "SELECT t.id, t.user_id, t.amount, t.action, t.created_at, t.valid_until, t.deleted_at,
-                u.name AS card_name,
-                u.card_code AS barcode,
-                s.name_sk AS service_name_sk, s.name_en AS service_name_en, s.kind AS service_kind, t.note
-         FROM transactions t
-         LEFT JOIN users u ON u.id = t.user_id  -- no deleted_at filter: historical txns for soft-deleted users still display (name/code shows blank)
-         LEFT JOIN services s ON s.id = t.service_id
-         WHERE t.created_at >= ? AND t.created_at < ?
-           AND t.deleted_at IS NULL",
+    // Same three independent reads as day_report, run concurrently (#341) —
+    // see that function's doc comment.
+    let (events_result, kpi_result, category_result) = tokio::join!(
+        events_between(pool, &from_str, &to_str, limit, before_parsed),
+        kpi_between(pool, &from_str, &to_str),
+        category_revenue_between(pool, &from_str, &to_str),
     );
-    if before_parsed.is_some() {
-        query.push_str(" AND (t.created_at < ? OR (t.created_at = ? AND t.id < ?))");
-    }
-    query.push_str(" ORDER BY t.created_at DESC, t.id DESC LIMIT ?");
-
-    let mut q = sqlx::query_as::<_, DbEventRow>(&query)
-        .bind(&from_str)
-        .bind(&to_str);
-    if let Some((ref ts, id)) = before_parsed {
-        q = q.bind(ts).bind(ts).bind(id);
-    }
-    q = q.bind(limit + 1);
-
-    let mut rows = q.fetch_all(pool).await?;
-    let has_more = rows.len() as i64 > limit;
-    if has_more {
-        rows.pop();
-    }
-    let events: Vec<ReportEvent> = rows.into_iter().map(Into::into).collect();
-
-    let kpi_row = kpi_between(pool, &from_str, &to_str).await?;
-
-    let category_revenue = category_revenue_between(pool, &from_str, &to_str).await?;
+    let (events, has_more) = events_result?;
+    let kpi_row = kpi_result?;
+    let category_revenue = category_result?;
 
     Ok((
         KpiSummary {

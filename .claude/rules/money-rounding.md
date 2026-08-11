@@ -5,7 +5,7 @@ paths:
   - "crates/spinbike-server/src/routes/users.rs"
   - "crates/spinbike-server/src/routes/door.rs"
   - "crates/spinbike-server/src/routes/admin.rs"
-  - "crates/spinbike-server/src/routes/charger.rs"
+  - "crates/spinbike-server/src/jobs/charger.rs"
 ---
 
 # Money writes — round ONCE, reuse EVERYWHERE (#325/#326)
@@ -38,7 +38,9 @@ drift that might already be sitting in a pre-existing DB value (e.g. a
 
 **Call sites currently following this convention:** `payments.rs`
 (`charge`/`storno`/`sell_pass`), `db::users::update_credit`, `users.rs`'s
-`topup_user` (#325), `door.rs`'s no-pass single-entry charge (#326). Any
+`topup_user` (#325), `door.rs`'s no-pass single-entry charge (#326),
+`admin.rs`'s `create_service`/`update_service` `default_price` write
+boundary, `charger.rs`'s 4-hour Spinning auto-charge (#343). Any
 NEW money-mutating write site should follow the same shape — round once,
 right after the value enters the function, reuse it everywhere.
 
