@@ -21,12 +21,31 @@ struct Candidate {
     date: String,
 }
 
+/// Per-tick outcome counts for a single [`sweep`] run.
+///
+/// Returned (not just logged) so both production callers and tests observe
+/// the exact same numbers — a counter that only ever escaped through a
+/// `tracing::info!` line was invisible to every test, which is how three
+/// mutants on the `skipped_full`/`errored` increments survived undetected
+/// (#345 follow-up).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SweepSummary {
+    /// Bookings actually materialised this tick.
+    pub created: usize,
+    /// Candidates skipped because the class filled up before the INSERT
+    /// (an expected, per-item outcome — see the `ClassFull` arm below).
+    pub skipped_full: usize,
+    /// Candidates that failed for any other reason (DB/IO/constraint
+    /// error) — also per-item, never aborts the rest of the sweep.
+    pub errored: usize,
+}
+
 /// `?, ?, ..., ?` — `n` placeholders, comma-joined, for a dynamic `IN (...)`.
 fn placeholders(n: usize) -> String {
     std::iter::repeat_n("?", n).collect::<Vec<_>>().join(", ")
 }
 
-pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
+pub async fn sweep(pool: &SqlitePool) -> Result<SweepSummary> {
     let persistents = crate::db::persistent_bookings::list_active_all(pool).await?;
     let templates = sqlx::query_as::<_, crate::db::classes::ClassTemplateRow>(
         "SELECT id, weekday, start_time, duration_minutes, instructor_id, capacity, active
@@ -69,7 +88,7 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
 
     let total = candidates.len();
     if candidates.is_empty() {
-        return Ok(0);
+        return Ok(SweepSummary::default());
     }
 
     // Batch-prefetch what the old code queried once PER candidate (#341):
@@ -223,7 +242,11 @@ pub async fn sweep(pool: &SqlitePool) -> Result<usize> {
          skipped_full={skipped_full} errored={errored}"
     );
 
-    Ok(created)
+    Ok(SweepSummary {
+        created,
+        skipped_full,
+        errored,
+    })
 }
 
 #[cfg(test)]
@@ -288,8 +311,8 @@ mod tests {
             .await
             .unwrap();
 
-        let made = sweep(&pool).await.unwrap();
-        assert!(made >= 1, "at least one Monday in next 14 days");
+        let summary = sweep(&pool).await.unwrap();
+        assert!(summary.created >= 1, "at least one Monday in next 14 days");
 
         let sources: Vec<(String,)> =
             sqlx::query_as("SELECT source FROM bookings WHERE user_id = ?")
@@ -311,8 +334,8 @@ mod tests {
 
         let first = sweep(&pool).await.unwrap();
         let second = sweep(&pool).await.unwrap();
-        assert_eq!(second, 0, "second sweep should create nothing");
-        assert!(first > 0);
+        assert_eq!(second.created, 0, "second sweep should create nothing");
+        assert!(first.created > 0);
     }
 
     #[tokio::test]
@@ -571,13 +594,23 @@ mod tests {
         // (0..=WINDOW_DAYS) window — 3 distinct matching dates. Per date on
         // tid_full: exactly one of {A, B} wins the atomic INSERT, the other
         // gets ClassFull. tid_other has no capacity contention at all.
-        let made = sweep(&pool)
+        let summary = sweep(&pool)
             .await
             .expect("a ClassFull race must not abort the whole sweep (#345)");
         assert_eq!(
-            made, 6,
+            summary.created, 6,
             "3 winners on the capacity-1 template (one per matching date) + \
              3 bookings for user C on the unrelated template"
+        );
+        // Pins the exact `skipped_full` VALUE (not just the side effects
+        // below) — kills the `197:30 replace += with *=` mutant on
+        // `skipped_full += 1`, which a value-blind test never noticed: 3
+        // losers (one per matching date), stuck permanently at 0 under a
+        // `*= 1` mutant since the counter starts at 0.
+        assert_eq!(
+            summary.skipped_full, 3,
+            "one ClassFull loser per matching date (A or B, whichever lost the atomic \
+             INSERT race) — the mutation-testing follow-up to #345"
         );
 
         let full_count: i64 = sqlx::query_scalar(
@@ -607,6 +640,126 @@ mod tests {
             "user C's bookings on the unrelated template must all be created — a \
              ClassFull race on the OTHER template must never suppress materialisation \
              for everyone else this tick (#345)"
+        );
+    }
+
+    /// Follow-up to #345: kills the `208:25 replace += with -=` and
+    /// `208:25 replace += with *=` mutants on `errored += 1`. Neither
+    /// survives by accident — before this test, NOTHING in the suite ever
+    /// drove `create_booking()` into a genuine non-`ClassFull` `Err`, so
+    /// that whole match arm was dead code from the test suite's point of
+    /// view and both mutants of an unexecuted line were trivially
+    /// unreachable.
+    ///
+    /// A dangling `bookings.user_id` foreign key is the deterministic way
+    /// to force this without real concurrency: `persistent_bookings.user_id`
+    /// is `ON DELETE CASCADE`, so a normal user delete would cascade away
+    /// the very candidate this test needs — toggling `PRAGMA foreign_keys`
+    /// off around the delete leaves the persistent booking (and its 3
+    /// matching candidate dates, same offsets-0/7/14 window as the
+    /// ClassFull test above) intact. Turning FK enforcement back on before
+    /// calling `sweep()` then makes `create_booking()`'s own INSERT fail
+    /// its `bookings.user_id` FK check every time — a genuine
+    /// `DbError::Sqlx(_)`, not `ClassFull`.
+    #[tokio::test]
+    async fn sweep_continues_past_a_non_classfull_db_error_instead_of_aborting_the_whole_tick() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let today = crate::util::today_bratislava();
+        let weekday = today.weekday().num_days_from_monday() as i64;
+
+        let tid_gone = crate::db::classes::create_template(&pool, weekday, "06:00", 45, None, 5)
+            .await
+            .unwrap();
+        // Unrelated template + user — proves the sweep kept going instead
+        // of aborting on the FK error.
+        let tid_other = crate::db::classes::create_template(&pool, weekday, "07:00", 45, None, 5)
+            .await
+            .unwrap();
+
+        let user_gone: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name) VALUES ('gone@x','gone') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let user_c: i64 =
+            sqlx::query_scalar("INSERT INTO users (email, name) VALUES ('c2@x','c2') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        crate::db::persistent_bookings::create(&pool, user_gone, tid_gone)
+            .await
+            .unwrap();
+        crate::db::persistent_bookings::create(&pool, user_c, tid_other)
+            .await
+            .unwrap();
+
+        // Leave a dangling persistent_bookings.user_id reference: disable FK
+        // enforcement for the delete only, so the CASCADE that would
+        // normally remove the persistent booking never fires.
+        sqlx::query("PRAGMA foreign_keys = OFF")
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("DELETE FROM users WHERE id = ?")
+            .bind(user_gone)
+            .execute(&pool)
+            .await
+            .unwrap();
+        sqlx::query("PRAGMA foreign_keys = ON")
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let summary = sweep(&pool)
+            .await
+            .expect("a non-ClassFull DB error must not abort the whole sweep");
+
+        // 3 matching dates (offsets 0, 7, 14) for tid_gone — every one of
+        // them fails create_booking()'s bookings.user_id FK check. Exact
+        // equality (not just >0) is what kills the `*= 1` mutant, which
+        // would otherwise silently leave `errored` pinned at 0 forever.
+        assert_eq!(
+            summary.errored, 3,
+            "one FK-violation error per matching date for the deleted user"
+        );
+        assert_eq!(
+            summary.skipped_full, 0,
+            "no capacity contention in this test"
+        );
+        assert_eq!(
+            summary.created, 3,
+            "user C's bookings on the unrelated template must all be created — an \
+             unrelated DB error must never suppress materialisation for everyone \
+             else this tick"
+        );
+
+        let other_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM bookings WHERE template_id=? AND user_id=? \
+             AND cancelled_at IS NULL",
+        )
+        .bind(tid_other)
+        .bind(user_c)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            other_count, 3,
+            "side-effect check: user C actually got 3 bookings"
+        );
+
+        let gone_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM bookings WHERE template_id=?")
+                .bind(tid_gone)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            gone_count, 0,
+            "every attempt on the deleted user's template failed — nothing inserted"
         );
     }
 }

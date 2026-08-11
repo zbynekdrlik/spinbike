@@ -72,7 +72,9 @@ async fn main() -> Result<()> {
     }
 
     match materialiser_result {
-        Ok(n) if n > 0 => tracing::info!("materialised {n} persistent bookings at startup"),
+        Ok(s) if s.created > 0 => {
+            tracing::info!("materialised {} persistent bookings at startup", s.created)
+        }
         Ok(_) => {}
         Err(e) => tracing::error!("startup materialiser sweep failed: {e}"),
     }
