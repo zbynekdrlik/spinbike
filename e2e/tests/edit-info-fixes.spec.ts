@@ -313,6 +313,14 @@ test.describe('Edit-info form field fixes', () => {
         // Open #1 -> dispatches the poisoned, delayed lookup.
         await page.locator('[data-testid="edit-info-button"]').click();
         await expect(sheet).toBeVisible();
+        // `Sheet`'s Escape handler is bound on `.sheet` itself and only
+        // fires while focus is INSIDE it (see sheet.rs's own doc comment) --
+        // clicking the trigger button above leaves focus on that button,
+        // outside `.sheet`, so a bare Escape here would never reach the
+        // handler. Focus the name input first (no value change) to move
+        // focus in, mirroring the sibling "cannot be dismissed by Escape"
+        // test above, which does the same via its email-input fill.
+        await sheet.locator('input[type="text"]').first().click();
         // Close before the delayed response lands.
         await page.keyboard.press('Escape');
         await expect(sheet).not.toBeVisible();

@@ -111,11 +111,24 @@ test('users_by_movement.rs: reopening the Users tab before an earlier fetch reso
 
     const showMore = page.locator('[data-testid="users-by-movement-show-more"]');
     await expect(showMore).toBeVisible();
-    // Two rapid clicks -- the second forced through, mirroring this repo's
-    // documented #60 sub-frame race window (the `disabled` binding may not
-    // have repainted yet before the second click lands).
-    await showMore.click();
-    await showMore.click({ force: true });
+    // Two rapid clicks are needed to get TWO real dispatches in flight --
+    // but two SEPARATE Playwright `.click()` calls (even the second with
+    // `force: true`) don't reproduce that here: each `.click()` is its own
+    // CDP round-trip, and Leptos applies the `disabled` DOM attribute
+    // (bound to the `loading` signal) synchronously within the FIRST
+    // click's own handler -- well before the second Playwright command
+    // reaches the browser. A genuinely `disabled` native `<button>` never
+    // dispatches a `click` event at all; `force: true` only bypasses
+    // Playwright's own pre-click actionability checks, not that browser
+    // behavior. Verified live: two sequential `.click()`/`.click({force})`
+    // calls produce exactly ONE dispatch beyond the mount fetch. Dispatch
+    // both native `click` events synchronously in ONE JS tick instead --
+    // what a genuine fast double-tap actually delivers at the hardware
+    // level, unlike two independently CDP-round-tripped Playwright calls.
+    await showMore.evaluate((el: HTMLButtonElement) => {
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+        el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    });
 
     // Wait long enough for BOTH "Show more" responses to have resolved.
     await page.waitForTimeout(1500);
