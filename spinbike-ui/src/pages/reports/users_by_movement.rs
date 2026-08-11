@@ -39,27 +39,38 @@ pub fn UsersByMovement() -> impl IntoView {
     // once a newer dispatch has superseded it.
     let req_id = RequestId::new();
 
-    Effect::new(move |_| {
-        set_loading.set(true);
-        set_error.set(String::new());
-        let token = req_id.next();
-        spawn_local(async move {
-            let url = format!("/api/users/by-last-movement?limit={PAGE}&offset=0");
-            let result = api::get::<Vec<Row>>(&url).await;
-            if !token.is_latest() {
-                return; // stale — a newer dispatch superseded this fetch (#344)
-            }
-            match result {
-                Ok(r) => {
-                    let len = r.len() as i64;
-                    set_rows.set(r);
-                    set_has_more.set(len == PAGE);
-                    set_offset.set(len);
+    // `req_id` is captured by TWO separate top-level `move` closures below
+    // (this `Effect::new` and `on_show_more`) — each `move` closure moves
+    // whatever it references out of this outer scope at creation time.
+    // Wrapping the `Effect::new` closure in its own block clones from the
+    // untouched original into a block-scoped shadow that only IT consumes,
+    // leaving the original available for `on_show_more` below (the last
+    // use). `Effect::new`'s own closure only ever borrows `req_id`
+    // (`.next(&self)`), so no per-invocation clone is needed inside it.
+    Effect::new({
+        let req_id = req_id.clone();
+        move |_| {
+            set_loading.set(true);
+            set_error.set(String::new());
+            let token = req_id.next();
+            spawn_local(async move {
+                let url = format!("/api/users/by-last-movement?limit={PAGE}&offset=0");
+                let result = api::get::<Vec<Row>>(&url).await;
+                if !token.is_latest() {
+                    return; // stale — a newer dispatch superseded this fetch (#344)
                 }
-                Err(e) => set_error.set(e),
-            }
-            set_loading.set(false);
-        });
+                match result {
+                    Ok(r) => {
+                        let len = r.len() as i64;
+                        set_rows.set(r);
+                        set_has_more.set(len == PAGE);
+                        set_offset.set(len);
+                    }
+                    Err(e) => set_error.set(e),
+                }
+                set_loading.set(false);
+            });
+        }
     });
 
     let on_show_more = move |_| {
@@ -141,6 +152,13 @@ pub fn UsersByMovement() -> impl IntoView {
                 />
             </ul>
             {move || if has_more.get() {
+                // This block re-runs on every `has_more` change (reactive
+                // view child, needs FnMut). `on:click` below moves whatever
+                // it's given into the button's attribute, so clone
+                // `on_show_more` per re-run rather than moving the single
+                // outer-captured copy away on the first one
+                // (clone-before-move, same reasoning as action_form.rs).
+                let on_show_more = on_show_more.clone();
                 view! {
                     <button class="btn btn--ghost"
                             data-testid="users-by-movement-show-more"

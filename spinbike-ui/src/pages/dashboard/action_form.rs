@@ -159,173 +159,75 @@ pub fn ActionForm(
         // submit-label flip continue to work.
     };
 
-    let do_topup = move |_ev: web_sys::MouseEvent| {
-        set_err.set(String::new());
-        let typed = amount_ref
-            .get()
-            .map(|el| {
-                let el: &HtmlInputElement = &el;
-                el.value()
-            })
-            .unwrap_or_default();
-        // Fix 5: a blank/zero/negative top-up amount used to be a totally
-        // silent no-op (parse failure fell through to `_ => return` AFTER
-        // set_err was already cleared above) — no error, no spinner, no
-        // request. Symmetric with do_charge's same guard below.
-        let amount = match parse_money(&typed) {
-            Some(v) if v > 0.0 => v,
-            _ => {
-                set_err.set(i18n::t(lang.get_untracked(), "price_required").to_string());
-                return;
-            }
-        };
-        let note = read_note();
-        set_loading.set(true);
-        spawn_local(async move {
-            #[derive(serde::Serialize)]
-            struct Req {
-                user_id: i64,
-                amount: f64,
-                note: Option<String>,
-            }
-            match api::post::<Req, CardInfo>(
-                "/api/users/topup",
-                &Req {
-                    user_id,
-                    amount,
-                    note,
-                },
-            )
-            .await
-            {
-                Ok(c) => {
-                    let credit = c.credit;
-                    set_selected.set(Some(c));
-                    let m = i18n::tf(
-                        lang.get_untracked(),
-                        "topup_ok_format",
-                        &[&format!("{credit:.2}")],
-                    );
-                    set_msg.set(m);
-                    clear_note();
-                    // Auto-clear after 2.5s, generation-guarded (#344
-                    // finding 3). Mirrors the visit-button banner from
-                    // #53 and removes the asymmetry described in #61.
-                    schedule_msg_clear();
+    // `schedule_msg_clear` is captured by FOUR separate top-level `move`
+    // closures below (do_topup, do_charge, the Spinning quick-charge chip's
+    // on_click, do_log_visit) — each `let ... = move |..| {..}` moves
+    // whatever it references OUT of the enclosing scope at closure-creation
+    // time. Wrapping each in its own `{ let schedule_msg_clear = ...clone();
+    // move |..| {..} }` block clones from the untouched original into a
+    // block-scoped shadow that only THAT closure consumes, leaving the
+    // original available for the next consumer (E0382 "use of moved value"
+    // otherwise).
+    let do_topup = {
+        let schedule_msg_clear = schedule_msg_clear.clone();
+        move |_ev: web_sys::MouseEvent| {
+            set_err.set(String::new());
+            let typed = amount_ref
+                .get()
+                .map(|el| {
+                    let el: &HtmlInputElement = &el;
+                    el.value()
+                })
+                .unwrap_or_default();
+            // Fix 5: a blank/zero/negative top-up amount used to be a totally
+            // silent no-op (parse failure fell through to `_ => return` AFTER
+            // set_err was already cleared above) — no error, no spinner, no
+            // request. Symmetric with do_charge's same guard below.
+            let amount = match parse_money(&typed) {
+                Some(v) if v > 0.0 => v,
+                _ => {
+                    set_err.set(i18n::t(lang.get_untracked(), "price_required").to_string());
+                    return;
                 }
-                Err(e) => set_err.set(e),
-            }
-            set_loading.set(false);
-        });
-    };
-
-    let do_charge = move |_ev: web_sys::MouseEvent| {
-        set_err.set(String::new());
-        let typed = amount_ref
-            .get()
-            .map(|el| {
-                let el: &HtmlInputElement = &el;
-                el.value()
-            })
-            .unwrap_or_default();
-        let amount = match parse_money(&typed) {
-            Some(v) => v,
-            None => {
-                set_err.set(i18n::t(lang.get_untracked(), "price_required").to_string());
-                return;
-            }
-        };
-        let service_id = selected_service_id.get_untracked();
-        let note = read_note();
-
-        if is_monthly_pass() {
-            let vu = valid_until.get_untracked();
+            };
+            let note = read_note();
             set_loading.set(true);
-            spawn_local(async move {
-                #[derive(serde::Serialize)]
-                struct Req {
-                    user_id: i64,
-                    price: f64,
-                    valid_until: chrono::NaiveDate,
-                    note: Option<String>,
-                }
-                #[derive(serde::Deserialize)]
-                struct Resp {
-                    transaction_id: i64,
-                    new_credit: f64,
-                    valid_until: chrono::NaiveDate,
-                    days_remaining: i32,
-                }
-                match api::post::<Req, Resp>(
-                    "/api/payments/sell-pass",
-                    &Req {
-                        user_id,
-                        price: amount,
-                        valid_until: vu,
-                        note,
-                    },
-                )
-                .await
-                {
-                    Ok(r) => {
-                        set_selected.update(|opt| {
-                            if let Some(c) = opt.as_mut() {
-                                c.credit = r.new_credit;
-                                c.pass = Some(CardPass {
-                                    valid_until: r.valid_until,
-                                    days_remaining: r.days_remaining,
-                                    transaction_id: r.transaction_id,
-                                });
-                            }
-                        });
-                        set_txn_refresh.update(|n| *n += 1);
-                        clear_note();
-                    }
-                    Err(e) => set_err.set(e),
-                }
-                set_loading.set(false);
-            });
-        } else {
-            if amount <= 0.0 {
-                set_err.set(i18n::t(lang.get_untracked(), "price_required").to_string());
-                return;
-            }
-            set_loading.set(true);
+            // Clone before moving into the async block — `do_topup` must stay
+            // callable on every click; `async move` always moves everything it
+            // references, so without this the FIRST click would move
+            // `schedule_msg_clear` out of `do_topup`'s own captured state,
+            // leaving nothing for the second (E0525 FnOnce-vs-FnMut).
+            let schedule_msg_clear = schedule_msg_clear.clone();
             spawn_local(async move {
                 #[derive(serde::Serialize)]
                 struct Req {
                     user_id: i64,
                     amount: f64,
-                    service_id: Option<i64>,
                     note: Option<String>,
                 }
-                match api::post::<Req, PaymentResp>(
-                    "/api/payments/charge",
+                match api::post::<Req, CardInfo>(
+                    "/api/users/topup",
                     &Req {
                         user_id,
                         amount,
-                        service_id,
                         note,
                     },
                 )
                 .await
                 {
-                    Ok(r) => {
+                    Ok(c) => {
+                        let credit = c.credit;
+                        set_selected.set(Some(c));
                         let m = i18n::tf(
                             lang.get_untracked(),
-                            "charge_ok_format",
-                            &[&format!("{:.2}", r.new_credit)],
+                            "topup_ok_format",
+                            &[&format!("{credit:.2}")],
                         );
                         set_msg.set(m);
-                        set_selected.update(|s| {
-                            if let Some(c) = s {
-                                c.credit = r.new_credit;
-                            }
-                        });
-                        set_txn_refresh.update(|n| *n += 1);
                         clear_note();
                         // Auto-clear after 2.5s, generation-guarded (#344
-                        // finding 3). Mirrors visit-button banner / #53.
+                        // finding 3). Mirrors the visit-button banner from
+                        // #53 and removes the asymmetry described in #61.
                         schedule_msg_clear();
                     }
                     Err(e) => set_err.set(e),
@@ -335,11 +237,135 @@ pub fn ActionForm(
         }
     };
 
+    // Same wrapped-block reasoning as do_topup above.
+    let do_charge = {
+        let schedule_msg_clear = schedule_msg_clear.clone();
+        move |_ev: web_sys::MouseEvent| {
+            set_err.set(String::new());
+            let typed = amount_ref
+                .get()
+                .map(|el| {
+                    let el: &HtmlInputElement = &el;
+                    el.value()
+                })
+                .unwrap_or_default();
+            let amount = match parse_money(&typed) {
+                Some(v) => v,
+                None => {
+                    set_err.set(i18n::t(lang.get_untracked(), "price_required").to_string());
+                    return;
+                }
+            };
+            let service_id = selected_service_id.get_untracked();
+            let note = read_note();
+
+            if is_monthly_pass() {
+                let vu = valid_until.get_untracked();
+                set_loading.set(true);
+                spawn_local(async move {
+                    #[derive(serde::Serialize)]
+                    struct Req {
+                        user_id: i64,
+                        price: f64,
+                        valid_until: chrono::NaiveDate,
+                        note: Option<String>,
+                    }
+                    #[derive(serde::Deserialize)]
+                    struct Resp {
+                        transaction_id: i64,
+                        new_credit: f64,
+                        valid_until: chrono::NaiveDate,
+                        days_remaining: i32,
+                    }
+                    match api::post::<Req, Resp>(
+                        "/api/payments/sell-pass",
+                        &Req {
+                            user_id,
+                            price: amount,
+                            valid_until: vu,
+                            note,
+                        },
+                    )
+                    .await
+                    {
+                        Ok(r) => {
+                            set_selected.update(|opt| {
+                                if let Some(c) = opt.as_mut() {
+                                    c.credit = r.new_credit;
+                                    c.pass = Some(CardPass {
+                                        valid_until: r.valid_until,
+                                        days_remaining: r.days_remaining,
+                                        transaction_id: r.transaction_id,
+                                    });
+                                }
+                            });
+                            set_txn_refresh.update(|n| *n += 1);
+                            clear_note();
+                        }
+                        Err(e) => set_err.set(e),
+                    }
+                    set_loading.set(false);
+                });
+            } else {
+                if amount <= 0.0 {
+                    set_err.set(i18n::t(lang.get_untracked(), "price_required").to_string());
+                    return;
+                }
+                set_loading.set(true);
+                // Same clone-before-move reasoning as do_topup above.
+                let schedule_msg_clear = schedule_msg_clear.clone();
+                spawn_local(async move {
+                    #[derive(serde::Serialize)]
+                    struct Req {
+                        user_id: i64,
+                        amount: f64,
+                        service_id: Option<i64>,
+                        note: Option<String>,
+                    }
+                    match api::post::<Req, PaymentResp>(
+                        "/api/payments/charge",
+                        &Req {
+                            user_id,
+                            amount,
+                            service_id,
+                            note,
+                        },
+                    )
+                    .await
+                    {
+                        Ok(r) => {
+                            let m = i18n::tf(
+                                lang.get_untracked(),
+                                "charge_ok_format",
+                                &[&format!("{:.2}", r.new_credit)],
+                            );
+                            set_msg.set(m);
+                            set_selected.update(|s| {
+                                if let Some(c) = s {
+                                    c.credit = r.new_credit;
+                                }
+                            });
+                            set_txn_refresh.update(|n| *n += 1);
+                            clear_note();
+                            // Auto-clear after 2.5s, generation-guarded (#344
+                            // finding 3). Mirrors visit-button banner / #53.
+                            schedule_msg_clear();
+                        }
+                        Err(e) => set_err.set(e),
+                    }
+                    set_loading.set(false);
+                });
+            }
+        }
+    };
+
     // #234: shared by the initial button click AND the "Pridat aj tak" retry
     // — `force` is false on the first attempt, true on the confirmed retry.
     // On an `already_visited_today` conflict (and !force) this raises the
     // in-form confirm instead of the generic red error banner.
-    let do_log_visit =
+    // Same wrapped-block reasoning as do_topup above.
+    let do_log_visit = {
+        let schedule_msg_clear = schedule_msg_clear.clone();
         move |service_id: i64, svc_name: String, note: Option<String>, force: bool| {
             // Re-entry guard, centralised for BOTH callers of this fn:
             // `visit_click_for` below already checks this before calling in,
@@ -353,6 +379,12 @@ pub fn ActionForm(
             }
             set_err.set(String::new());
             set_loading.set(true);
+            // `do_log_visit` itself is called from two sites below
+            // (`visit_click_for`'s returned handler and the force-confirm
+            // handler) — clone before the move-everything `async move`
+            // block so those repeat calls still have a `schedule_msg_clear`
+            // to reach for.
+            let schedule_msg_clear = schedule_msg_clear.clone();
             spawn_local(async move {
                 #[derive(serde::Serialize)]
                 struct Req {
@@ -406,20 +438,35 @@ pub fn ActionForm(
                 }
                 set_loading.set(false);
             });
-        };
+        }
+    };
 
-    let visit_click_for = move |service_id: i64, svc_name: String| {
-        move |_: web_sys::MouseEvent| {
-            // Re-entry guard: if a previous press is still in flight, the
-            // disabled binding may not have repainted yet. This protects
-            // against a fast double-tap before the next-frame disable
-            // takes effect.
-            if loading.get_untracked() {
-                return;
+    // `do_log_visit` is captured by TWO separate top-level `move` closures
+    // (`visit_click_for` here, and the pending-visit force-confirm block
+    // further below). Wrap `visit_click_for` the same way as do_topup etc.
+    // above, so this clones from the untouched original and leaves it
+    // available for the force-confirm block (the last use, below).
+    let visit_click_for = {
+        let do_log_visit = do_log_visit.clone();
+        move |service_id: i64, svc_name: String| {
+            // `visit_click_for` is called once per class-visit service (see
+            // the Fitness/Spinning chip-row map below) — clone
+            // `do_log_visit` again before building the returned `move`
+            // handler so a second service's call still finds it (same
+            // clone-before-move reasoning as above).
+            let do_log_visit = do_log_visit.clone();
+            move |_: web_sys::MouseEvent| {
+                // Re-entry guard: if a previous press is still in flight, the
+                // disabled binding may not have repainted yet. This protects
+                // against a fast double-tap before the next-frame disable
+                // takes effect.
+                if loading.get_untracked() {
+                    return;
+                }
+                set_pending_visit.set(None);
+                let note = read_note();
+                do_log_visit(service_id, svc_name.clone(), note, false);
             }
-            set_pending_visit.set(None);
-            let note = read_note();
-            do_log_visit(service_id, svc_name.clone(), note, false);
         }
     };
 
@@ -480,6 +527,8 @@ pub fn ActionForm(
                 }
                 set_err.set(String::new());
                 set_loading.set(true);
+                // Same clone-before-move reasoning as do_topup above.
+                let schedule_msg_clear = schedule_msg_clear.clone();
                 spawn_local(async move {
                     #[derive(serde::Serialize)]
                     struct Req {
@@ -684,6 +733,13 @@ pub fn ActionForm(
                 let Some(p) = pending_visit.get() else {
                     return view! { <div></div> }.into_any();
                 };
+                // This whole block re-runs on every `pending_visit` change
+                // (it's a reactive view child, needs FnMut) and below builds
+                // a fresh `move` on:click handler that captures
+                // `do_log_visit` — clone it here so each re-run still has
+                // its own copy to hand to that handler (clone-before-move,
+                // same reasoning as `visit_click_for` above).
+                let do_log_visit = do_log_visit.clone();
                 // Reuse the shared UTC→Bratislava-local HH:MM formatter (#168)
                 // rather than re-deriving parse_to_local + format here.
                 let time_str = i18n::fmt_time_str(&p.last_entry_at);
