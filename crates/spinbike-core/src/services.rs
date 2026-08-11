@@ -40,3 +40,54 @@ pub const SPINNING_KIND: &str = "group_class";
 /// All class-visit service `kind` values. Used by SQL `IN` clauses,
 /// `is_class_visit()` predicates, and dropdown filters.
 pub const CLASS_VISIT_KINDS: &[&str] = &[FITNESS_KIND, SPINNING_KIND];
+
+/// The `<column> IN (SELECT id FROM services WHERE kind IN (...))` SQL
+/// fragment that identifies a class-visit service (Fitness or Spinning) by
+/// the stable `kind` column — built with exactly `CLASS_VISIT_KINDS.len()`
+/// anonymous `?` placeholders, so it stays correct with no source edit if a
+/// THIRD class-visit kind is ever added. `column` is whatever the caller's
+/// query needs (`"service_id"`, `"t.service_id"`, ...).
+///
+/// Callers MUST `.bind()` each of `CLASS_VISIT_KINDS`, in that exact order,
+/// ONCE PER OCCURRENCE of this fragment in their SQL text — unlike
+/// SQLite's numbered `?N` parameters, anonymous `?` placeholders never
+/// share a bound value across occurrences.
+///
+/// Extracted (#339) from independently hand-rolled copies of the same
+/// placeholder-building + subquery text in `routes/payments.rs`,
+/// `routes/users.rs`, and `db/users.rs`. `db/reports.rs`'s KPI query uses
+/// SQLite's numbered `?N` params instead (so `?3` can be referenced twice
+/// in the SQL text while bound only once) and is deliberately NOT routed
+/// through this helper — see `db::reports::kpi_between`'s own doc comment.
+pub fn class_visit_filter_sql(column: &str) -> String {
+    let placeholders = std::iter::repeat_n("?", CLASS_VISIT_KINDS.len())
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("{column} IN (SELECT id FROM services WHERE kind IN ({placeholders}))")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn class_visit_filter_sql_builds_one_placeholder_per_kind() {
+        let sql = class_visit_filter_sql("service_id");
+        assert_eq!(
+            sql,
+            "service_id IN (SELECT id FROM services WHERE kind IN (?, ?))"
+        );
+        // Anti-drift: kills a mutant that hardcodes "?, ?" instead of
+        // deriving the placeholder count from CLASS_VISIT_KINDS.len().
+        assert_eq!(
+            sql.matches('?').count(),
+            CLASS_VISIT_KINDS.len(),
+            "placeholder count must track CLASS_VISIT_KINDS.len()"
+        );
+    }
+
+    #[test]
+    fn class_visit_filter_sql_uses_the_given_column() {
+        assert!(class_visit_filter_sql("t.service_id").starts_with("t.service_id IN"));
+    }
+}

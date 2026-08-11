@@ -2,7 +2,7 @@ use crate::db::error::{DbError, Result};
 use sqlx::SqlitePool;
 use unicode_normalization::{UnicodeNormalization, char::is_combining_mark};
 
-use spinbike_core::services::CLASS_VISIT_KINDS;
+use spinbike_core::services::{CLASS_VISIT_KINDS, class_visit_filter_sql};
 
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct UserRow {
@@ -279,7 +279,7 @@ impl UserRowWithPass {
 pub async fn list_all_users_with_pass(
     pool: &SqlitePool,
 ) -> Result<Vec<(UserRow, Option<(i64, chrono::NaiveDate)>, Option<String>)>> {
-    let rows: Vec<UserRowWithPass> = sqlx::query_as::<_, UserRowWithPass>(
+    let sql = format!(
         "SELECT u.id, u.email, u.name, u.password_hash, u.phone, u.company,
                 u.role, u.oauth_provider, u.oauth_id, u.credit, u.card_code,
                 u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at, u.allow_self_entry,
@@ -288,18 +288,19 @@ pub async fn list_all_users_with_pass(
                 (SELECT MAX(created_at) FROM transactions
                  WHERE user_id = u.id
                    AND deleted_at IS NULL
-                   AND service_id IN (SELECT id FROM services WHERE kind IN (?, ?))
+                   AND {visit_filter}
                 ) AS last_visit_at
          FROM users u
          LEFT JOIN user_active_pass ap ON ap.user_id = u.id
          WHERE u.deleted_at IS NULL
          ORDER BY u.name",
-    )
-    .bind(CLASS_VISIT_KINDS[0])
-    .bind(CLASS_VISIT_KINDS[1])
-    .fetch_all(pool)
-    .await
-    ?;
+        visit_filter = class_visit_filter_sql("service_id"),
+    );
+    let mut q = sqlx::query_as::<_, UserRowWithPass>(&sql);
+    for k in CLASS_VISIT_KINDS {
+        q = q.bind(*k);
+    }
+    let rows: Vec<UserRowWithPass> = q.fetch_all(pool).await?;
     Ok(rows.into_iter().map(UserRowWithPass::into_parts).collect())
 }
 
@@ -326,7 +327,7 @@ pub async fn search_users_with_pass(
     let exact = q.to_string();
     let prefix = format!("{q}%");
     let suffix = format!("%{q}");
-    let rows: Vec<UserRowWithPass> = sqlx::query_as::<_, UserRowWithPass>(
+    let sql = format!(
         "SELECT u.id, u.email, u.name, u.password_hash, u.phone, u.company,
                 u.role, u.oauth_provider, u.oauth_id, u.credit, u.card_code,
                 u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at, u.allow_self_entry,
@@ -335,7 +336,7 @@ pub async fn search_users_with_pass(
                 (SELECT MAX(created_at) FROM transactions
                  WHERE user_id = u.id
                    AND deleted_at IS NULL
-                   AND service_id IN (SELECT id FROM services WHERE kind IN (?, ?))
+                   AND {visit_filter}
                 ) AS last_visit_at
          FROM users u
          LEFT JOIN user_active_pass ap ON ap.user_id = u.id
@@ -352,17 +353,20 @@ pub async fn search_users_with_pass(
            u.name IS NULL, u.name ASC,
            u.card_code ASC
          LIMIT ?",
-    )
-    .bind(CLASS_VISIT_KINDS[0])
-    .bind(CLASS_VISIT_KINDS[1])
-    .bind(&like)
-    .bind(&exact)
-    .bind(&prefix)
-    .bind(&suffix)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    ?;
+        visit_filter = class_visit_filter_sql("service_id"),
+    );
+    let mut qb = sqlx::query_as::<_, UserRowWithPass>(&sql);
+    for k in CLASS_VISIT_KINDS {
+        qb = qb.bind(*k);
+    }
+    let rows: Vec<UserRowWithPass> = qb
+        .bind(&like)
+        .bind(&exact)
+        .bind(&prefix)
+        .bind(&suffix)
+        .bind(limit)
+        .fetch_all(pool)
+        .await?;
     Ok(rows.into_iter().map(UserRowWithPass::into_parts).collect())
 }
 
@@ -539,13 +543,13 @@ pub struct NegativeBalanceUserRow {
 /// LEFT JOIN on the canonical `user_active_pass` view (V18) for the pass
 /// columns; at current data scale this is sub-millisecond.
 pub async fn list_negative_balance(pool: &SqlitePool) -> Result<Vec<NegativeBalanceUserRow>> {
-    let rows = sqlx::query_as::<_, NegativeBalanceUserRow>(
+    let sql = format!(
         "SELECT
             u.id, u.card_code, u.credit, u.blocked, u.name, u.email, u.company,
             (SELECT MAX(t.created_at) FROM transactions t
                 WHERE t.user_id = u.id
                   AND t.deleted_at IS NULL
-                  AND t.service_id IN (SELECT id FROM services WHERE kind IN (?, ?))
+                  AND {visit_filter}
             ) AS last_visit_at,
             ap.valid_until AS pass_valid_until,
             ap.pass_tx_id AS pass_tx_id
@@ -554,11 +558,13 @@ pub async fn list_negative_balance(pool: &SqlitePool) -> Result<Vec<NegativeBala
          WHERE u.credit < 0
            AND u.deleted_at IS NULL
          ORDER BY u.credit ASC",
-    )
-    .bind(CLASS_VISIT_KINDS[0])
-    .bind(CLASS_VISIT_KINDS[1])
-    .fetch_all(pool)
-    .await?;
+        visit_filter = class_visit_filter_sql("t.service_id"),
+    );
+    let mut qb = sqlx::query_as::<_, NegativeBalanceUserRow>(&sql);
+    for k in CLASS_VISIT_KINDS {
+        qb = qb.bind(*k);
+    }
+    let rows = qb.fetch_all(pool).await?;
     Ok(rows)
 }
 

@@ -52,6 +52,20 @@ breaks the moment the owner renames a service. Grep
 list before adding a new one, so it's added to the SAME union rather than
 duplicating an inline literal.
 
+**For a `service_id IN (SELECT id FROM services WHERE kind IN (...))`
+filter specifically, use `spinbike_core::services::class_visit_filter_sql
+(column)` (#339) instead of hand-rolling the placeholder-building +
+subquery text again** — it was independently duplicated 5 times
+(`routes/payments.rs`, `routes/users.rs`, 3x in `db/users.rs`) before being
+extracted. Pass the column name your query needs (`"service_id"` or a
+qualified `"t.service_id"`); `.bind()` each of `CLASS_VISIT_KINDS`, in
+order, once per occurrence of the fragment in your SQL text (anonymous `?`
+placeholders don't share a bound value across occurrences — see the
+helper's own doc comment). **Exception: `db/reports.rs`'s `kpi_between`**
+keeps its own hand-written fragment because it uses SQLite's NUMBERED
+`?N` params (one kind value referenced twice in the SQL text, bound once)
+— read that function's doc comment before "fixing" it to use the helper.
+
 **A NEW class-visit-like service kind needs its own migration + a matching
 i18n badge key.** `spinbike-ui/src/i18n.rs`'s admin Services-tab badge
 renders `service_kind_<kind>` — a kind value with no matching key silently
