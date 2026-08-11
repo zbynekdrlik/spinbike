@@ -205,10 +205,15 @@ async fn open(
         crate::util::bratislava_day_range_utc(crate::util::today_bratislava());
     let day_start = day_start.format("%Y-%m-%d %H:%M:%S").to_string();
     let day_end = day_end.format("%Y-%m-%d %H:%M:%S").to_string();
+    // #328: keyed off the dedicated `is_door_press` column, NOT `note LIKE
+    // 'door:%'` — a staff member editing ANY transaction's note to start
+    // with "door:" via PATCH /api/transactions/{id}/note must not corrupt
+    // this count. `note` is a human-readable label only; nothing reads it
+    // for classification anymore.
     let n: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions \
          WHERE user_id = ? \
-           AND note LIKE 'door:%' \
+           AND is_door_press = 1 \
            AND created_at >= ? \
            AND created_at < ? \
            AND deleted_at IS NULL",
@@ -325,11 +330,14 @@ async fn open(
         ("charge", Some(single_entry_id), 0.0, format!("door: {ord}"))
     };
 
-    // 6. Insert the row (still uncommitted).
+    // 6. Insert the row (still uncommitted). is_door_press=1 marks it as the
+    // single source of truth read by the count query above and by
+    // payments.rs's duplicate-visit `source` check (#328) — `note` is a
+    // human-readable label only from here on.
     sqlx::query(
         "INSERT INTO transactions \
-           (user_id, staff_id, service_id, amount, action, valid_until, note) \
-         VALUES (?, NULL, ?, ?, ?, NULL, ?)",
+           (user_id, staff_id, service_id, amount, action, valid_until, note, is_door_press) \
+         VALUES (?, NULL, ?, ?, ?, NULL, ?, 1)",
     )
     .bind(user_id)
     .bind(service_id_opt)

@@ -109,6 +109,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "transactions: index on user_id (last_topup_amount + other existing per-user queries)",
         V25_TRANSACTIONS_USER_ID_INDEX,
     ),
+    (
+        26,
+        "transactions: is_door_press column + backfill from note prefix (#328)",
+        V26_TRANSACTIONS_IS_DOOR_PRESS,
+    ),
 ];
 
 const V1_INITIAL_SCHEMA: &str = r#"
@@ -1020,6 +1025,23 @@ ALTER TABLE push_notify_log ADD COLUMN sent_count INTEGER NOT NULL DEFAULT 0;
 // rebuild dance needed.
 const V25_TRANSACTIONS_USER_ID_INDEX: &str = r#"
 CREATE INDEX IF NOT EXISTS idx_transactions_user_id ON transactions(user_id);
+"#;
+
+// V26 (#328): `door.rs`'s same-day press count and `payments.rs`'s
+// duplicate-visit `source` classification both used to key off free-text
+// `note LIKE 'door:%'` — a convention `patch_note` never guards against, so
+// a staff member editing ANY transaction's note to start with `door:`
+// silently got counted as a door press. A dedicated boolean column is the
+// single source of truth going forward; `note` stays a human-readable label
+// only. Backfilled from the CURRENT `note LIKE 'door:%'` rows — this
+// matches production data exactly (checked read-only before writing this
+// migration: 225 matching rows out of 93166 total transactions on prod,
+// 212 of them the literal `'door: 1st'`), since that convention has been
+// accurate for every row written so far; only a FUTURE corrupting edit is
+// what this closes off.
+const V26_TRANSACTIONS_IS_DOOR_PRESS: &str = r#"
+ALTER TABLE transactions ADD COLUMN is_door_press INTEGER NOT NULL DEFAULT 0;
+UPDATE transactions SET is_door_press = 1 WHERE note LIKE 'door:%';
 "#;
 
 #[cfg(test)]
@@ -3638,6 +3660,131 @@ mod tests {
             name.as_deref(),
             Some("idx_transactions_user_id"),
             "V25 must create the index"
+        );
+    }
+
+    // ── V26: transactions.is_door_press column + backfill (#328) ───────────
+
+    #[tokio::test]
+    async fn v26_new_transactions_default_is_door_press_to_zero() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v26@x', 'V26', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        let is_door_press: i64 = sqlx::query_scalar(
+            "INSERT INTO transactions (user_id, amount, action) VALUES (?, 0.0, 'visit') \
+             RETURNING is_door_press",
+        )
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .expect("insert must succeed without specifying is_door_press (DEFAULT 0)");
+        assert_eq!(is_door_press, 0, "is_door_press must default to 0");
+    }
+
+    /// Simulates a genuine upgrade from V25: pre-existing rows written before
+    /// this migration existed (one door-prefixed, one not, one with no note
+    /// at all) must be classified correctly by the backfill, matching
+    /// exactly what `note LIKE 'door:%'` would have classified them as
+    /// before V26 — this preserves door.rs's/payments.rs's existing
+    /// same-day-count and duplicate-visit-source behavior for historical
+    /// data across the upgrade.
+    #[tokio::test]
+    async fn v26_backfills_is_door_press_from_pre_existing_door_prefixed_notes() {
+        let pool = sqlx::sqlite::SqlitePoolOptions::new()
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+
+        sqlx::query(
+            "CREATE TABLE IF NOT EXISTS schema_version (
+                version INTEGER PRIMARY KEY,
+                description TEXT NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Apply 1..=25 the way run_migrations does.
+        for &(v, desc, sql) in MIGRATIONS.iter().filter(|(v, _, _)| *v <= 25) {
+            let mut conn = pool.acquire().await.unwrap();
+            sqlx::query("PRAGMA foreign_keys = OFF")
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+            let mut tx = conn.begin().await.unwrap();
+            sqlx::raw_sql(sql).execute(&mut *tx).await.unwrap();
+            sqlx::query("INSERT INTO schema_version(version, description) VALUES (?, ?)")
+                .bind(v)
+                .bind(desc)
+                .execute(&mut *tx)
+                .await
+                .unwrap();
+            tx.commit().await.unwrap();
+            sqlx::query("PRAGMA foreign_keys = ON")
+                .execute(&mut *conn)
+                .await
+                .unwrap();
+        }
+
+        let cols_before: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('transactions')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert!(
+            !cols_before.iter().any(|(n,)| n == "is_door_press"),
+            "test setup: transactions must not have is_door_press before V26"
+        );
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v26-upgrade@x', 'U', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO transactions (user_id, amount, action, note) VALUES \
+                (?, 0.0, 'visit', 'door: 1st'), \
+                (?, 0.0, 'charge', 'door: 2nd'), \
+                (?, -3.0, 'charge', 'refreshments'), \
+                (?, 20.0, 'topup', NULL)",
+        )
+        .bind(uid)
+        .bind(uid)
+        .bind(uid)
+        .bind(uid)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        run_migrations(&pool).await.unwrap();
+
+        let rows: Vec<(Option<String>, i64)> = sqlx::query_as(
+            "SELECT note, is_door_press FROM transactions WHERE user_id = ? ORDER BY id",
+        )
+        .bind(uid)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (Some("door: 1st".to_string()), 1),
+                (Some("door: 2nd".to_string()), 1),
+                (Some("refreshments".to_string()), 0),
+                (None, 0),
+            ],
+            "V26 must backfill is_door_press=1 for exactly the pre-existing \
+             door-prefixed-note rows, matching the old note LIKE 'door:%' classification"
         );
     }
 }

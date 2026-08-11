@@ -323,6 +323,11 @@ async fn connect_loop_with_url_inner(
     // to the HTTP route.
     let mut pending: HashMap<String, oneshot::Sender<Result<(), EwelinkError>>> = HashMap::new();
     let (sweep_tx, mut sweep_rx) = mpsc::unbounded_channel::<String>();
+    // #323: disambiguates two presses generated within the same wall-clock
+    // millisecond — see `press_sequence`. Scoped to this connection's
+    // lifetime (resets on reconnect), which is fine: uniqueness is only
+    // ever needed among currently-pending presses on THIS `pending` map.
+    let mut seq_counter: u64 = 0;
 
     let mut ping_interval = tokio::time::interval(Duration::from_secs(60));
     // First tick fires immediately by default — skip it so we don't
@@ -338,7 +343,8 @@ async fn connect_loop_with_url_inner(
                     let _ = ws.send(Message::Close(None)).await;
                     return ConnectOutcome::ChannelClosed;
                 };
-                let sequence = chrono::Utc::now().timestamp_millis().to_string();
+                let sequence =
+                    press_sequence(chrono::Utc::now().timestamp_millis(), &mut seq_counter);
                 // MINI-D is a multi-outlet SONOFF product and only acks the
                 // multi-outlet `switches` array form. The legacy single-channel
                 // `{"switch":"on"}` is silently dropped (no ack → door route
@@ -418,6 +424,41 @@ async fn connect_loop_with_url_inner(
             }
         }
     }
+}
+
+/// Builds the per-press `sequence` id sent to the cloud and used as the
+/// `pending` HashMap key (#323) that routes the device's ack back to this
+/// press's oneshot sender. `now_ms` alone is NOT enough — two presses
+/// queued back-to-back on the shared mpsc channel can be processed by the
+/// dispatch loop within the same wall-clock millisecond. `counter` is a
+/// per-connection monotonic counter (bumped on every call, never reset
+/// except on reconnect) that guarantees uniqueness regardless of clock
+/// resolution: two calls sharing the exact same `now_ms` still produce
+/// distinct keys.
+///
+/// Deliberately kept a PURE DIGIT STRING (zero-padded counter concatenated
+/// directly onto the millisecond, no separator) rather than e.g.
+/// `"{now_ms}-{n}"` — the real eWeLink cloud's exact validation of this
+/// field isn't documented beyond "opaque echo token" (`ewelink-door` skill),
+/// and the existing `userOnline` handshake (above) also sends a bare
+/// digit-string sequence. A 6-digit counter width leaves no realistic risk
+/// of ambiguity/collision within one connection's press volume while never
+/// introducing a character the cloud might reject as malformed.
+///
+/// Deliberately a COUNTER, not `auth::random_nonce()` (already used for the
+/// userOnline handshake's own `nonce` field): a random suffix only makes a
+/// collision *improbable*; a strictly-incrementing counter makes it
+/// *impossible* by construction. This mechanism guards a billing-affecting
+/// ack routing table — correctness here should not rest on "improbable
+/// enough" when a deterministic guarantee costs nothing extra.
+fn press_sequence(now_ms: i64, counter: &mut u64) -> String {
+    let n = *counter;
+    // wrapping_add: deliberately never panics on overflow. Unreachable in
+    // practice (a connection would need >2^64 presses without reconnecting,
+    // which resets the counter — see the doc comment at the call site), but
+    // "never panic on a monotonic counter" costs nothing to guarantee.
+    *counter = counter.wrapping_add(1);
+    format!("{now_ms}{n:06}")
 }
 
 /// Parse a text frame and route any ack to the matching pending oneshot.
@@ -521,6 +562,32 @@ pub async fn run_test_stub(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #323 — two presses queued back-to-back on the shared mpsc channel
+    /// (different users, or staff+customer) can be processed by
+    /// `connect_loop_with_url_inner`'s dispatch loop within the same
+    /// wall-clock millisecond. If their `sequence` ids collide, the second
+    /// `pending.insert` silently overwrites (and drops) the first press's
+    /// oneshot ack sender — that press's `ack_rx` then resolves
+    /// `Err(RecvError)`, the door route rolls back the customer's billing
+    /// transaction and returns 503 even though the relay frame was sent
+    /// (the door may have physically opened), while the real device ack for
+    /// the colliding sequence routes to the SECOND requester instead. Two
+    /// presses processed within the same millisecond must still get
+    /// distinct sequence ids.
+    #[test]
+    fn press_sequence_is_unique_even_within_the_same_millisecond() {
+        let same_ms = 1_700_000_000_123_i64;
+        let mut counter = 0u64;
+        let first = press_sequence(same_ms, &mut counter);
+        let second = press_sequence(same_ms, &mut counter);
+        assert_ne!(
+            first, second,
+            "two presses processed within the same millisecond must get \
+             distinct sequence ids — otherwise the second pending.insert \
+             silently overwrites (and drops) the first press's ack sender"
+        );
+    }
 
     /// `is_offline_code(503)` MUST be true; every other code MUST be false.
     /// Catches:
