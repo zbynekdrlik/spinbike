@@ -6,7 +6,7 @@
 
 mod helpers;
 
-use helpers::{TestApp, get, post_json};
+use helpers::{TestApp, get, patch_json, post_json};
 
 /// Enable self-service door entry on the seeded customer.
 async fn enable_self_entry(app: &TestApp) {
@@ -389,6 +389,69 @@ async fn second_of_day_writes_zero_amount_row() {
     .await
     .unwrap();
     assert_eq!(n, 1);
+}
+
+/// #328 — the same-day door-press count must NOT key off free-text
+/// `transactions.note`. Seeds a genuine, UNRELATED manual transaction for
+/// the customer today (no door route involved at all), then has staff edit
+/// its note via `PATCH /api/transactions/{id}/note` to `"door: 1st"` — the
+/// exact corruption vector #328 describes (`patch_note` validates only
+/// trim/emptiness + the 200-char cap, nothing rejects a caller-supplied
+/// `door:`-prefixed note). The customer's actual FIRST real door press of
+/// the day must still be billed as a genuine first press
+/// (`charged: true`, `door_count_today: 1`) — if the corrupted note were
+/// counted as a prior door row, this press would wrongly look like a
+/// second-of-day free re-entry (`charged: false`, `door_count_today: 2`),
+/// giving the customer a free entry they should have paid for.
+#[tokio::test]
+async fn staff_note_edit_starting_with_door_prefix_does_not_corrupt_same_day_count() {
+    let app = TestApp::with_door_mode("success").await;
+    enable_self_entry(&app).await;
+    sqlx::query("UPDATE users SET credit = 20.0 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    // A genuine, unrelated manual transaction for this customer today —
+    // e.g. a refreshments charge rung up at the counter. Not a door press.
+    let tx_id: i64 = sqlx::query_scalar(
+        "INSERT INTO transactions (user_id, amount, action, note) \
+         VALUES (?, -3.0, 'charge', 'refreshments') RETURNING id",
+    )
+    .bind(app.customer_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+
+    // Staff edits the note to a door-style prefix (accidentally, or
+    // otherwise) — the exact corruption vector.
+    let (patch_status, _) = app
+        .request(patch_json(
+            &format!("/api/transactions/{tx_id}/note"),
+            &app.staff_token,
+            &serde_json::json!({ "note": "door: 1st" }),
+        ))
+        .await;
+    assert_eq!(patch_status, axum::http::StatusCode::OK);
+
+    let (status, body) = app
+        .request(post_json(
+            "/api/door/open",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        body["door_count_today"], 1,
+        "the note-edited manual transaction must not count as a prior door press, got {body:?}"
+    );
+    assert_eq!(
+        body["charged"], true,
+        "the customer's real first door press today must be charged — a corrupted \
+         note prefix must not make it look like a free re-entry, got {body:?}"
+    );
 }
 
 #[tokio::test]
