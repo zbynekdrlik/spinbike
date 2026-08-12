@@ -47,9 +47,12 @@ CREATE INDEX, etc.), the toggle is a harmless no-op.
 
 ## Running migrations against a copy of prod
 
-Both prod and dev databases live on this machine
-(`/opt/spinbike/{prod,dev}/spinbike.db`). Before a release that ships a
-new migration, dry-run against a fresh prod snapshot:
+Both prod and dev databases live on the SpinBike VPS
+(`/opt/spinbike/{prod,dev}/spinbike.db`), not this machine — migrated off
+dev1 on 2026-08-12 (#350). SSH in per `.claude/rules/vps-access.md`
+(`ssh -i ~/.ssh/spinbike_vps root@167.233.245.147 '<cmd>'`) before running
+any of this. Before a release that ships a new migration, dry-run against a
+fresh prod snapshot, on the VPS:
 
 ```bash
 sudo sqlite3 /opt/spinbike/prod/spinbike.db ".backup /tmp/prod-snapshot.db"
@@ -73,10 +76,11 @@ a valid parent — the post-migration health check.
 
 ## Backups
 
-Pre-deploy snapshots: `/opt/spinbike/prod/backups/spinbike-YYYYMMDD-HHMMSS.db`
-(CI keeps the last 10).
+Pre-deploy snapshots (on the VPS, see `.claude/rules/vps-access.md`):
+`/opt/spinbike/prod/backups/spinbike-YYYYMMDD-HHMMSS.db` (CI keeps the last 10).
 
-Restore from backup if a migration corrupts prod:
+Restore from backup if a migration corrupts prod — run this on the VPS
+(see `.claude/rules/vps-access.md`):
 
 ```bash
 sudo systemctl stop spinbike.service

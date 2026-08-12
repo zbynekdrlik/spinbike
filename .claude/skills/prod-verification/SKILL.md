@@ -27,15 +27,22 @@ customer-facing (`/my/*`) ticket.
 
 ## The recipe
 
-1. **Prod and dev run LOCAL** (see project `CLAUDE.md`) — read the JWT
-   secret straight off the running service, no SSH:
+**Prod and dev now live on the SpinBike VPS, not this machine (#350) —
+every `sqlite3`/`systemctl`/`sudo cat`/`curl 127.0.0.1:808x` command below
+runs there. SSH in per `.claude/rules/vps-access.md`
+(`ssh -i ~/.ssh/spinbike_vps root@167.233.245.147 '<cmd>'`) before running
+any of them; the same commands run bare in a dev1 session no longer reach
+anything.**
+
+1. **Read the JWT secret straight off the running service**, over ssh:
    ```bash
-   systemctl cat spinbike.service   # shows EnvironmentFile=/etc/default/spinbike-prod
-   sudo cat /etc/default/spinbike-prod   # JWT_SECRET=...
+   ssh -i ~/.ssh/spinbike_vps root@167.233.245.147 'systemctl cat spinbike.service'   # shows EnvironmentFile=/etc/default/spinbike-prod
+   ssh -i ~/.ssh/spinbike_vps root@167.233.245.147 'cat /etc/default/spinbike-prod'    # JWT_SECRET=...
    ```
    Never print the raw secret into the transcript — redirect straight to a
-   scratchpad file (`sudo cat ... | grep '^JWT_SECRET=' > /tmp/.../\.jwtsecret`)
-   and read it back only inside the signing step. Delete the file when done.
+   scratchpad file on THIS machine (`ssh ... 'cat ...' | grep '^JWT_SECRET=' >
+   /tmp/.../\.jwtsecret`) and read it back only inside the signing step.
+   Delete the file when done.
 
 2. **Insert a throwaway customer row directly into the prod SQLite DB**
    (`/opt/spinbike/prod/spinbike.db`) — a distinguishable name/email/card_code
@@ -155,9 +162,13 @@ claim, no DB lookup on the CALLER. So verifying an admin-only UI change
   `urllib` / `requests` probe with a default (or absent) User-Agent gets 1010,
   NOT your app's response — a silent false-negative if you read it as "the
   endpoint is down". Two fixes, use the right one per layer:
-  - **Scripted API verification → hit the LOCAL origin `http://127.0.0.1:8080`**
-    (prod runs local on :8080 behind the Cloudflare tunnel — see `ci-deploy`
-    skill). It bypasses Cloudflare entirely, so the exact same JWT + JSON body
+  - **Scripted API verification → hit the LOCAL origin `http://127.0.0.1:8080`,
+    run FROM the VPS over ssh** (prod runs on :8080 behind the Cloudflare
+    tunnel — both on the VPS now, see `.claude/rules/vps-access.md`). A
+    session-side `curl 127.0.0.1:8080` no longer reaches anything:
+    `ssh -i ~/.ssh/spinbike_vps root@167.233.245.147 "curl -s
+    http://127.0.0.1:8080/... -H 'Authorization: Bearer <token>'"`. It
+    bypasses Cloudflare entirely, so the exact same JWT + JSON body
     works. This is the correct target for any `python`/`curl` API assertion
     (login, sell-pass, reports, password-set, etc.).
   - **DOM / real-user-path verification → drive a REAL browser (Playwright).**
@@ -216,12 +227,17 @@ claim, no DB lookup on the CALLER. So verifying an admin-only UI change
   string, so ANY valid argon2id PHC hash verifies — the CLI's parameters do
   not have to match the server's:
   ```bash
+  # argon2 CLI runs LOCALLY on dev1 — pure hashing, touches no DB:
   H=$(printf '%s' 'Vrf276Test' | argon2 "$(head -c16 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c16)" -id -e -t 2 -m 15 -p 1)
-  sqlite3 /opt/spinbike/prod/spinbike.db "UPDATE users SET password_hash='$H' WHERE email LIKE 'vrf276-%';"
+  # the DB itself lives on the VPS — the UPDATE must run over ssh (see .claude/rules/vps-access.md):
+  ssh -i ~/.ssh/spinbike_vps root@167.233.245.147 "sqlite3 /opt/spinbike/prod/spinbike.db \"UPDATE users SET password_hash='$H' WHERE email LIKE 'vrf276-%';\""
   ```
-  `/usr/bin/argon2` is installed on dev1; python `argon2-cffi` is NOT. Use a
-  DISPOSABLE, non-secret literal password on the synthetic rows so the browser
-  half can drive the REAL login form (typing it into Playwright puts it in the
+  `/usr/bin/argon2` is installed LOCALLY on dev1 (hash generation needs no DB
+  access); python `argon2-cffi` is NOT installed there either. The DB the
+  hash gets written to is on the VPS, so this step deliberately splits across
+  two hosts — hash locally, write remotely over ssh. Use a DISPOSABLE,
+  non-secret literal password on the synthetic rows so the browser half can
+  drive the REAL login form (typing it into Playwright puts it in the
   transcript — fine for a row you delete minutes later, never for a real one).
   Create three rows in one insert (active / `blocked=1` / `deleted_at` set) so
   one run yields the whole matrix, and always include the POSITIVE control (a

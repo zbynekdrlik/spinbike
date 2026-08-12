@@ -111,7 +111,9 @@ used to panic inside `generic-array` — `push.rs` now length-validates first.
 
 ## Verifying on prod
 
-Restart the unit and read the journal: `push: notified user_id=<id>
+Prod lives on the SpinBike VPS, not this machine — run the restart and
+journal read over ssh (see `.claude/rules/vps-access.md`). Restart the unit
+and read the journal: `push: notified user_id=<id>
 reason="low_credit"` then `push: daily tick complete sent=<n>`. A tick that
 selected nobody logs `sent=0` with no `notified` line. A successful e-mail
 fallback send logs `mail: sent to=<addr> subject=<title>` (from

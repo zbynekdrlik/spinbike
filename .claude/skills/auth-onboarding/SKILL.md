@@ -101,16 +101,21 @@ Invites/login-links send on **prod** (dev stays Disabled → 503 `mail_not_confi
 
 ### Footgun: NEVER `source /etc/default/spinbike-prod` in bash
 
-The file has at least one **unquoted, space-containing value** (the eWeLink password on its own line). systemd's `EnvironmentFile` parser takes the whole rest of the line literally, so the service reads it fine — but bash `source`/`.` word-splits it, runs a fragment as a command (`command not found`), backgrounds part as a bogus `KEY=val`, and can echo a secret fragment into the transcript. To read a value in a script, extract the single key instead:
+The file has at least one **unquoted, space-containing value** (the eWeLink password on its own line). systemd's `EnvironmentFile` parser takes the whole rest of the line literally, so the service reads it fine — but bash `source`/`.` word-splits it, runs a fragment as a command (`command not found`), backgrounds part as a bogus `KEY=val`, and can echo a secret fragment into the transcript. To read a value in a script, extract the single key instead.
+
+Prod lives on the SpinBike VPS, not this machine (#350) — run this over ssh
+(see `.claude/rules/vps-access.md`):
 
 ```bash
 # safe — one key, no shell parsing of the rest of the file:
-JWT_SECRET=$(sed -n 's/^JWT_SECRET=//p' /etc/default/spinbike-prod)
+ssh -i ~/.ssh/spinbike_vps root@167.233.245.147 \
+  "sed -n 's/^JWT_SECRET=//p' /etc/default/spinbike-prod"
 # non-secret keys for inspection:
-grep -E '^(PORT|DATABASE_PATH|PUBLIC_BASE_URL|SMTP_HOST|SMTP_PORT)=' /etc/default/spinbike-prod
+ssh -i ~/.ssh/spinbike_vps root@167.233.245.147 \
+  "grep -E '^(PORT|DATABASE_PATH|PUBLIC_BASE_URL|SMTP_HOST|SMTP_PORT)=' /etc/default/spinbike-prod"
 ```
 
-Prod runs on **:8080**, DB `/opt/spinbike/prod/spinbike.db` (WAL); systemd `spinbike.service`. To act as admin on prod without a browser, mint a short-lived HS256 JWT in Python from `JWT_SECRET` (claims `{sub, email, role:"admin", iat, exp}`) — see git history / this session for the one-liner; keep exp ≤5 min and never print the token or secret.
+Prod runs on **:8080**, DB `/opt/spinbike/prod/spinbike.db` (WAL); systemd `spinbike.service` — all on the VPS. To act as admin on prod without a browser, mint a short-lived HS256 JWT in Python from `JWT_SECRET` (claims `{sub, email, role:"admin", iat, exp}`) — see git history / this session for the one-liner; keep exp ≤5 min and never print the token or secret.
 
 ## 6-digit email login code (#227) — the in-PWA login path
 

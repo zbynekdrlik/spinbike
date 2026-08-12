@@ -48,9 +48,10 @@ before confirming a report against a filtered read path is still true.
   `push_subscriptions`, ...) before deleting, same as any other prod
   `DELETE` — an orphaned reference is worse than a leftover row.
 
-## Prod and dev both run LOCALLY on this machine
+## Prod and dev now run on the SpinBike VPS — NOT this machine
 
 `/opt/spinbike/prod/spinbike.db` (service `spinbike.service`, port 8080)
-and the dev instance (port 8081) are both on THIS box — never SSH, never
-ask the user to paste `systemctl`/`sqlite3`/`journalctl` output. Run the
-commands yourself via Bash (see project `CLAUDE.md`'s always-apply rules).
+and the dev instance (port 8081) both moved to a dedicated Hetzner VPS on
+2026-08-12 (#350) — never ask the user to SSH or paste
+`systemctl`/`sqlite3`/`journalctl` output. Reach them yourself over the ssh
+recipe in `.claude/rules/vps-access.md` and run the commands there.

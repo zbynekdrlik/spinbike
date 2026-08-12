@@ -1,6 +1,11 @@
 # SpinBike Environments Runbook
 
-Two environments run on the same machine:
+Both environments run on the dedicated SpinBike Hetzner VPS
+(`167.233.245.147`), NOT on this machine — migrated off dev1 on 2026-08-12
+(#350). Reach the VPS with `ssh -i ~/.ssh/spinbike_vps root@167.233.245.147
+'<cmd>'` and run every `systemctl`/`sqlite3`/`journalctl` command below over
+that connection (see `.claude/rules/vps-access.md` for the canonical
+recipe) — never ask the user to SSH in or paste output.
 
 | Env  | URL                                 | Port | Service                | DB                                         | Branch |
 |------|-------------------------------------|------|------------------------|--------------------------------------------|--------|
@@ -10,7 +15,8 @@ Two environments run on the same machine:
 ## One-time rollout
 
 See `scripts/setup-environments.sh`. Run once as the `newlevel` user on the
-runner machine:
+runner machine — that machine is now the SpinBike VPS (ssh in per
+`.claude/rules/vps-access.md` first):
 
 ```bash
 ./scripts/setup-environments.sh
@@ -22,11 +28,14 @@ otherwise the edge caches a "hostname exists but no WebSocket" state for
 the new hostname and `/api/ws` upgrades return 400 until the next tunnel
 restart.
 
+Run this on the VPS (see `.claude/rules/vps-access.md`):
+
 ```bash
 # 1. Create the DNS CNAME first
 cloudflared tunnel route dns spinbike spinbike-dev.newlevel.media
 
-# 2. Edit ~/.cloudflared/config.yml per deploy/cloudflared/config.yml.example
+# 2. Edit /home/newlevel/.cloudflared/config.yml (on the VPS, not this
+#    machine) per deploy/cloudflared/config.yml.example
 
 # 3. Restart the tunnel LAST so it re-registers with the edge against the
 #    hostname that now exists in DNS
@@ -36,7 +45,8 @@ sudo systemctl restart spinbike-tunnel.service
 ### Adding another env hostname later
 
 Same ordering. If you ever see `400 Bad Request` on `/api/ws` for a newly-
-added hostname while regular HTTP works fine, fix with:
+added hostname while regular HTTP works fine, fix with (run on the VPS —
+see `.claude/rules/vps-access.md`):
 
 ```bash
 sudo systemctl restart spinbike-tunnel.service
@@ -80,6 +90,8 @@ reading before writing one.
 
 ## Inspecting service state
 
+Run these on the VPS (see `.claude/rules/vps-access.md`):
+
 ```bash
 systemctl status spinbike.service spinbike-dev.service
 journalctl -u spinbike.service -n 100
@@ -88,10 +100,13 @@ journalctl -u spinbike-dev.service -n 100
 
 ## Backups
 
-Pre-deploy snapshots live in `/opt/spinbike/prod/backups/` as
-`spinbike-YYYYMMDD-HHMMSS.db`. CI keeps the last 10.
+Pre-deploy snapshots live in `/opt/spinbike/prod/backups/` **on the VPS**
+(see `.claude/rules/vps-access.md`) as `spinbike-YYYYMMDD-HHMMSS.db`. CI
+keeps the last 10.
 
 ### Restore from backup
+
+Run this on the VPS (see `.claude/rules/vps-access.md`):
 
 ```bash
 sudo systemctl stop spinbike.service
@@ -101,6 +116,8 @@ sudo systemctl start spinbike.service
 ```
 
 ## Secret rotation
+
+Run this on the VPS (see `.claude/rules/vps-access.md`):
 
 ```bash
 # Generate new secret

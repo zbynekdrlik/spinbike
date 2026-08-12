@@ -48,7 +48,8 @@ right after the value enters the function, reuse it everywhere.
 
 When a rounding bug like this is found, don't assume `users.credit` /
 `transactions.amount` already contain drifted values in prod — CHECK,
-read-only, before proposing any backfill:
+read-only, before proposing any backfill. Prod lives on the SpinBike VPS,
+not this machine — run these over ssh (see `.claude/rules/vps-access.md`):
 
 ```bash
 sqlite3 /opt/spinbike/prod/spinbike.db \
