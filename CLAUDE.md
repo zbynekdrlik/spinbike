@@ -119,7 +119,7 @@ Path-scoped rules under `.claude/rules/` load themselves when you touch a matchi
 
 ## Project-wide always-apply rules
 
-**Prod and dev run on the same machine.** Both `/opt/spinbike/prod/` and `/opt/spinbike/dev/` are LOCAL. Never ask the user to SSH or paste `systemctl`/`sqlite3`/`journalctl` output — run those commands directly via Bash.
+**Prod and dev both run on the SpinBike Hetzner VPS** (`spinbike`, cx23, Ubuntu 24.04, x86_64, `167.233.245.147`, project `spinbike` in Hetzner Cloud) — migrated off dev1 on 2026-08-12 (#350). Both `/opt/spinbike/prod/` and `/opt/spinbike/dev/` live there, together with the `spinbike` Cloudflare tunnel, the `spinbike-deploy` Actions runner, and the nightly prod→dev sync timer. Reach them with `ssh -i ~/.ssh/spinbike_vps root@167.233.245.147 '<cmd>'` and run `systemctl`/`sqlite3`/`journalctl` yourself over that — never ask the user to SSH or paste output. Ingress is the Cloudflare tunnel, not DNS: all four hostnames (`spinbike.newlevel.media`, `spinbike-dev.newlevel.media`, `spinbike.sk`, `www.spinbike.sk`) follow whichever box runs `spinbike-tunnel.service`, so a host move needs no DNS change — but the tunnel must run in exactly ONE place, and eWeLink likewise allows only ONE WebSocket session per account, so two live prod instances fight and break door unlock.
 
 **Git staging: never `git add -A` or `git add .`** — untracked Playwright YAMLs and debug PNGs accumulate at the root. Always use explicit paths or `git add -u`.
 
