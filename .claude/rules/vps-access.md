@@ -2,6 +2,8 @@
 paths:
   - "crates/spinbike-server/src/db/**"
   - "crates/spinbike-server/src/jobs/**"
+  - "crates/spinbike-server/src/routes/**"
+  - "crates/spinbike-server/src/auth/**"
   - ".github/workflows/ci.yml"
 ---
 
@@ -45,6 +47,73 @@ run directly in a dev1 session against `127.0.0.1:808x` or
 `/opt/spinbike/...` will silently fail or hang — it is not "prod is down",
 it is the wrong host. Wrap it in the ssh recipe above, or run it from
 inside an ssh session.
+
+## SSH addresses the VPS by IP — there is no DNS name for the box
+
+`spinbike.sk`, `www.spinbike.sk`, `spinbike.newlevel.media` and
+`spinbike-dev.newlevel.media` all resolve to **Cloudflare** edge IPs
+(`104.21.x` / `172.67.x`), not to the VPS. The app is delivered through the
+Cloudflare Tunnel, so the box's real address appears in no DNS record at all,
+and Cloudflare's proxy forwards only HTTP/HTTPS — `ssh spinbike.sk` knocks on
+Cloudflare and is refused. Use the IP (or the `spinbike-vps` alias in dev1's
+`~/.ssh/config`).
+
+Consequence for credentials: **running the tunnel needs no Cloudflare API
+access.** It was created once by an interactive `cloudflared tunnel login`
+and since then only needs its credentials JSON, so there is no working
+Cloudflare API token on dev1 — the two in `~/.secrets/cloudflare-*` both
+answer `Invalid API Token` (checked 2026-08-12). Any DNS change to
+`spinbike.sk` therefore needs the owner: a fresh Zone:DNS:Edit token, or he
+clicks it in the dashboard. Do not assume tunnel access implies DNS access.
+
+## Hand-minting a JWT against the live server
+
+The claims struct is `crates/spinbike-core/src/auth.rs`. Two shapes bite:
+
+- **`sub` is `i64` — a bare JSON number, not a string.** Nearly every JWT
+  helper defaults `sub` to a string, and `serde` then refuses the payload.
+- `role` must be exactly `"admin"` / `"staff"` / `"customer"` (lowercase).
+
+`validate_token` collapses EVERY decode failure — bad signature, expired,
+wrong field type, missing field — into the single message
+`"Invalid or expired token"`, so a wrong-shape payload is indistinguishable
+from a genuinely bad token. If a freshly minted token 401s, suspect the claim
+types before suspecting the secret.
+
+Read `JWT_SECRET` on the VPS (never print it): sign and call from a script
+that runs there, so the value never crosses to this machine.
+
+**Calling the PUBLIC host from a script gets `403 error code: 1010`** —
+Cloudflare fingerprints non-browser clients and blocks `curl`/`urllib`
+defaults. It looks exactly like an app outage. Either send a normal browser
+`User-Agent`, or hit `http://127.0.0.1:8080` from ON the VPS. Full treatment
+(and the DOM-verification counterpart) is in
+`.claude/skills/prod-verification/SKILL.md` — this pointer exists because
+that skill only loads when a session deliberately asks for it, and the 1010
+has now cost two separate sessions (2026-07-24, 2026-08-12).
+
+## Moving prod between hosts — the ordering and the proof
+
+Learned doing #350; the same shape applies to any future host move.
+
+1. **Stop the writers BEFORE snapshotting.** Tunnel first (traffic stops),
+   then the app, and only THEN `sqlite3 ... ".backup"`. Snapshot-then-stop
+   loses everything written in between; stop-then-snapshot cannot.
+2. **`systemctl stop` is NOT `systemctl disable`.** The old host's units stay
+   enabled and a reboot resurrects the whole stack: a second tunnel replica
+   (Cloudflare load-balances between replicas, so real customers land on the
+   STALE database) and a second eWeLink session — the two then kick each
+   other every ~2s and door unlock breaks. Disable every unit on the old box
+   the moment it stops being the live one.
+3. **Prove no data was lost by checksum, not by counts.** Compare both sides
+   with `SELECT id||'|'||...` piped through `sha256sum`, over ALL rows of
+   `transactions` and `users` (credits included), plus per-table counts and
+   max ids. Expect ONE legitimate difference: `login_tokens` shrinks, because
+   `jobs::token_purge` deletes expired rows at startup (#119) — check the
+   missing row's `expires_at` before treating it as loss.
+4. **Verify reboot survival on the NEW box explicitly** (the owner has to
+   approve the reboot). #350's test: 28s of downtime, then both instances,
+   the tunnel, the sync timer and the Actions runner all returned unaided.
 
 ## The CI deploy runner is DIFFERENT — it needs NO ssh
 
