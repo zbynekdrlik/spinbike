@@ -19,12 +19,18 @@ triggers:
 
 ## Self-hosted runner: download-and-install only — NEVER build Rust locally
 
-The `spinbike-deploy` self-hosted runner runs on the user's dev PC. Deploy jobs must NEVER run `cargo build`, `trunk build`, or any Rust/WASM compilation — `target/` balloons to 10-20 GB.
+The `spinbike-deploy` self-hosted runner now runs ON the SpinBike VPS
+(registered runner name `spinbike-vps`, still labeled `spinbike-deploy` in
+workflows, as user `newlevel`) — migrated off the user's dev PC on
+2026-08-12 (#350; see `.claude/rules/vps-access.md`). Deploy jobs must NEVER
+run `cargo build`, `trunk build`, or any Rust/WASM compilation — `target/`
+balloons to 10-20 GB.
 
 **Correct pattern:**
 1. `build` job on `ubuntu-latest` → `actions/upload-artifact`
 2. `deploy-*` job on `spinbike-deploy` (`needs: [build]`) → `actions/download-artifact`
-3. Deploy job only does:
+3. Deploy job only does (these steps run genuinely LOCAL on the runner,
+   which is the VPS itself — no ssh needed inside the job):
    - `install -Dm755 spinbike-server /opt/spinbike/{dev,prod}/spinbike-server`
    - `sudo -n systemctl restart spinbike{-dev,}.service`
    - Health + smoke checks
@@ -528,7 +534,7 @@ advanced) and start your own ticket.
 
 ## Live post-deploy Playwright verification against `spinbike-dev`/`spinbike.sk`
 
-**Prod app is served at `https://spinbike.sk`** (primary, since 2026-07-08). `https://spinbike.newlevel.media` still works (same Cloudflare tunnel, same origin :8080) — both are fine to verify against; prefer `spinbike.sk`. Dev stays `https://spinbike-dev.newlevel.media`. All three are Cloudflare-tunnel hostnames → `localhost:8080/8081` (ingress in `/home/newlevel/.cloudflared/config.yml`, tunnel `4093c494-…`; no local nginx/caddy).
+**Prod app is served at `https://spinbike.sk`** (primary, since 2026-07-08). `https://spinbike.newlevel.media` still works (same Cloudflare tunnel, same origin :8080) — both are fine to verify against; prefer `spinbike.sk`. Dev stays `https://spinbike-dev.newlevel.media`. All three are Cloudflare-tunnel hostnames → `localhost:8080/8081` on the SpinBike VPS (ingress in `/home/newlevel/.cloudflared/config.yml` **on the VPS**, not this machine — see `.claude/rules/vps-access.md`; tunnel `4093c494-…`; no local nginx/caddy).
 
 **Consequence for any future feature needing the real client IP (#260):** `axum::serve(listener, app)` in `start_server()` has no `into_make_service_with_connect_info::<SocketAddr>()` wiring, so `ConnectInfo<SocketAddr>` is unavailable — and even if it were, the TCP peer would always be `cloudflared`'s own local hop, never the real visitor (no local nginx/caddy in front to preserve it either). The only real-client-IP signal is Cloudflare's own `Cf-Connecting-Ip` request header (set on every proxied request), with `X-Forwarded-For`'s first hop as a fallback for anything hitting `127.0.0.1:8080` directly (local dev, tests, or a bypass of the tunnel). See `crate::routes::metrics::client_ip_key` for the pattern (prefer `Cf-Connecting-Ip` → first `X-Forwarded-For` hop → a shared fallback bucket).
 
@@ -571,12 +577,16 @@ mounted there. To drive an authenticated staff/admin flow live without
 touching those real accounts, mirror the project's own #106 precedent
 ("synthetic test users created + JWT-signed + cleaned up, zero real
 customer data touched"):
+Both `dev`/`prod` live on the SpinBike VPS, not this machine — run the
+following over ssh (see `.claude/rules/vps-access.md`).
+
 1. `sqlite3 /opt/spinbike/{dev,prod}/spinbike-{dev,}.db` — INSERT a
    throwaway `role='staff'` row (`password_hash` can be `NULL`, you're not
    logging in via password).
 2. Sign a JWT yourself with the SAME secret the server uses
    (`JWT_SECRET` in `/etc/default/spinbike-dev` /
-   `/etc/default/spinbike`, read via `sudo -n cat` — local machine, no SSH)
+   `/etc/default/spinbike`, read via `sudo -n cat` over ssh — see
+   `.claude/rules/vps-access.md`)
    and the exact `Claims{sub,email,role,exp,iat}` shape from
    `crates/spinbike-server/src/auth/mod.rs` (`jsonwebtoken`, `HS256`,
    default `Header`). Sanity-check it once with a `curl -H "Authorization:

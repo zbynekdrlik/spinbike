@@ -66,6 +66,12 @@ For any PR that adds a schema migration mutating existing rows, a backfill/data-
 
 **CI green alone is NOT sufficient** — CI uses fresh in-memory SQLite that cannot catch real-data quirks.
 
+Prod and dev live on the SpinBike VPS, not this machine (#350) — every step
+below runs there. SSH in per `.claude/rules/vps-access.md`
+(`ssh -i ~/.ssh/spinbike_vps root@167.233.245.147 '<cmd>'`) and run
+`sqlite3`/`systemctl`/`journalctl` yourself over that connection; a
+session-side `cp`/`sqlite3 /opt/spinbike/...` no longer reaches anything.
+
 Steps before sending the completion report:
 1. Confirm sync is recent: `systemctl list-timers spinbike-sync-dev.timer`
 2. Snapshot dev DB: `cp /opt/spinbike/dev/spinbike-dev.db /tmp/dev-pre-X.db`
@@ -75,8 +81,6 @@ Steps before sending the completion report:
 6. If broken: restore snapshot, fix, re-run
 7. Restart dev service and verify via UI/API
 
-Both prod and dev run locally — no SSH needed. Run `sqlite3` / `systemctl` / `journalctl` directly via Bash.
-
 ## Lighter validation for a READ-ONLY predicate/VIEW migration (no row mutation)
 
 The full stop-service snapshot dance above is for migrations that MUTATE rows or
@@ -85,7 +89,7 @@ predicate (no `UPDATE`/`DELETE`, nothing that touches `dev`'s running service)
 needs a cheaper but still real validation: run the OLD predicate and the NEW
 predicate side-by-side as plain read-only `sqlite3` queries against the LIVE
 prod DB and diff the results — no service stop needed since nothing is
-written:
+written. Run this over ssh on the VPS (see `.claude/rules/vps-access.md`):
 
 ```bash
 sqlite3 /opt/spinbike/prod/spinbike.db "
@@ -213,7 +217,8 @@ the runner, not the migration SQL).
 **Quantifying real historical impact on PROD** (was any real data actually
 lost?) is possible even though the source table (`cards`) was long since
 `DROP`ped — check `/opt/spinbike/prod/backups/` and any stray
-`*.bak-*` files for a snapshot taken BEFORE the buggy migration's
+`*.bak-*` files (over ssh on the VPS — see `.claude/rules/vps-access.md`)
+for a snapshot taken BEFORE the buggy migration's
 `applied_at` timestamp (read the target version's timestamp from the LIVE
 prod `schema_version` table first: `sqlite3 spinbike.db "SELECT version,
 applied_at FROM schema_version WHERE version=<N>"`), then confirm the
@@ -226,7 +231,11 @@ theoretically causes data loss" into "0 real users were ever affected"
 
 ## Dev CI must sync prod DB before install
 
-The `deploy-dev` job in `.github/workflows/ci.yml` MUST sync prod → dev BEFORE installing the new binary:
+The `deploy-dev` job in `.github/workflows/ci.yml` runs on the
+`spinbike-deploy` self-hosted runner, which is now the VPS itself (#350) —
+this job's own steps are genuinely LOCAL there, so unlike the session-side
+commands elsewhere in this skill, this one needs NO ssh wrapper. It MUST
+sync prod → dev BEFORE installing the new binary:
 
 ```
 sqlite3 /opt/spinbike/prod/spinbike.db ".backup /opt/spinbike/dev/spinbike-dev.db"
@@ -243,32 +252,44 @@ For post-deploy verification of a backend route change (not a UI change),
 you don't have — and shouldn't need — any real customer's password. Build
 your own valid JWT locally instead of logging in:
 
-1. Read the running service's `JWT_SECRET` from its env file (local, no SSH):
-   `sudo -n cat /etc/default/spinbike-dev` / `spinbike-prod` (also has
-   `EWELINK_*` for the door route — dev is intentionally unset, prod is real).
-2. Insert a throwaway user row directly via `sqlite3` — give it an
-   unmistakable email so cleanup is trivial and unambiguous, e.g.
-   `autopilot-test-<issue#>-<case>@local.invalid`. Set exactly the columns
-   your test case needs (`blocked`, `allow_self_entry`, `role`, `credit`, …).
+Prod and dev live on the SpinBike VPS, not this machine — every step below
+runs over ssh (see `.claude/rules/vps-access.md`).
+
+1. Read the running service's `JWT_SECRET` from its env file, over ssh:
+   `ssh -i ~/.ssh/spinbike_vps root@167.233.245.147 'sudo -n cat
+   /etc/default/spinbike-dev'` / `spinbike-prod` (also has `EWELINK_*` for
+   the door route — dev is intentionally unset, prod is real).
+2. Insert a throwaway user row directly via `sqlite3`, over the same ssh
+   connection — give it an unmistakable email so cleanup is trivial and
+   unambiguous, e.g. `autopilot-test-<issue#>-<case>@local.invalid`. Set
+   exactly the columns your test case needs (`blocked`, `allow_self_entry`,
+   `role`, `credit`, …).
 3. Sign a token with `python3 -c 'import jwt; jwt.encode({...}, secret,
-   algorithm="HS256")'` (PyJWT is preinstalled) — match the exact `Claims`
-   shape (`sub`, `email`, `role`, `exp`, `iat`) from
+   algorithm="HS256")'` (PyJWT is preinstalled LOCALLY on dev1) — match the
+   exact `Claims` shape (`sub`, `email`, `role`, `exp`, `iat`) from
    `crates/spinbike-core/src/auth.rs`. Route handlers that re-query the DB
    for role/flags (like door.rs) don't even care what `role` the JWT claims —
    only `sub` (the user id) matters for those.
-4. `curl` the route directly on `127.0.0.1:<port>` (8081 dev / 8080 prod) with
-   `Authorization: Bearer <token>` — no need to go through the public HTTPS
-   domain or worry about CORS (CORS is browser-only, irrelevant to curl).
+4. `curl` the route on `127.0.0.1:<port>` (8081 dev / 8080 prod) **from the
+   VPS over ssh** — a session-side `curl 127.0.0.1:<port>` no longer reaches
+   anything: `ssh -i ~/.ssh/spinbike_vps root@167.233.245.147 "curl -s
+   http://127.0.0.1:<port>/... -H 'Authorization: Bearer <token>'"` — no need
+   to go through the public HTTPS domain or worry about CORS (CORS is
+   browser-only, irrelevant to curl).
 5. **Always clean up in the SAME session**: `DELETE FROM users WHERE email
-   LIKE 'autopilot-test-%'` (and any transaction rows it created) before
-   moving on. Verify the count is 0 afterward.
+   LIKE 'autopilot-test-%'` (and any transaction rows it created), over ssh,
+   before moving on. Verify the count is 0 afterward.
 
 This is safe on PROD too for a REJECTION-path test (e.g. a blocked-user gate)
 — by definition a working rejection never reaches a real side effect (relay
 press, charge), so the worst case of a bug is the SAME risk as the bug you're
 fixing, caught in a controlled way instead of by a real member.
 
-## Local access paths (no SSH needed)
+## VPS access paths (over ssh — see `.claude/rules/vps-access.md`)
+
+These paths/units are unchanged from before the #350 move — what changed is
+that they now live on the VPS, so every line below is run over ssh, not
+directly in a dev1 session:
 
 ```
 /opt/spinbike/prod/spinbike.db          # production SQLite

@@ -74,6 +74,9 @@ sonoffLAN constants, hard-coded in `auth.rs`. Region defaults `eu`.
 
 ## Verify after any change
 
+Prod (where the eWeLink creds live) is on the SpinBike VPS, not this
+machine — run these over ssh (see `.claude/rules/vps-access.md`).
+
 1. `journalctl -u spinbike -f | grep ewelink` → expect `WS connected + handshake ok`
    and NO repeating `peer sent close (Bye)` churn (churn = a second session on the account).
 2. `GET /api/door/health` (admin/staff JWT) → `{"ewelink_ws":"connected","last_ack_ms_ago":…}`.
