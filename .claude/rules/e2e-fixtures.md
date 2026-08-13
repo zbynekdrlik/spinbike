@@ -58,3 +58,38 @@ position for a query that could match multiple rows.
 grep -n "Date.now()" e2e/tests/*.spec.ts | grep -v uniqueLetterSuffix
 grep -n "\.first()" e2e/tests/dashboard.spec.ts
 ```
+
+## A shared seeded account + cleanup only on the success path = a deterministic local-only failure (#348)
+
+`schedule.spec.ts` booked a class on the SHARED `customer@test.com` and
+cancelled it only after five later assertions and two page loads. Any
+earlier failure left the booking behind, and the filter that picks the
+target class (`!c.user_booked`) then matched nothing on **every subsequent
+run against that database** — failing forever, not flakily.
+
+**The diagnostic signature is the valuable part:** *"green in CI, but
+reproduces identically on my machine even against unmodified `dev` HEAD"*
+means **persistent state**, not a race. CI starts from a fresh database each
+run; a local database survives between runs. An identical, repeatable
+failure is the opposite of what a timing race looks like — do not go hunting
+for a race when the repro is deterministic. This one cost a ticket and two
+hours of investigation before the shape was recognized.
+
+**Fix, in this order:**
+
+1. **Seed a throwaway account** (`seedCustomerAccount()` / `createUniqueUser()`)
+   instead of mutating a shared one. A fresh account cannot inherit state, so
+   a previous run's leftovers stop meaning anything. The shared accounts
+   (`customer@test.com`, `admin@test.com`) are for READ-ONLY use — logging in,
+   viewing a page — never for a spec that writes rows tied to that user.
+2. **Assert the isolation up front** (`expect(preBooked).toEqual([])` with a
+   message naming the cause), so a future regression fails where the message
+   explains it instead of on an undefined lookup result three lines later.
+3. **Undo the write in a `finally`.** Bookings consume capacity and a full
+   class answers `409 ClassFull`, so abandoned rows accumulate into a SECOND
+   deterministic failure mode on a long-lived local database.
+
+Do NOT "fix" this shape by forcing `workers: 1` locally to match CI. That
+addresses the genuine SQLite single-writer hazard the config comment
+describes, but a leftover row on a shared account fails the spec at one
+worker too.
