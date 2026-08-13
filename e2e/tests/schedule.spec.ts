@@ -1,5 +1,10 @@
 import { test, expect } from '@playwright/test';
-import { setupConsoleCheck, assertCleanConsole, setEnglishLanguage } from './helpers';
+import {
+    setupConsoleCheck,
+    assertCleanConsole,
+    setEnglishLanguage,
+    seedCustomerAccount,
+} from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -97,11 +102,19 @@ test.describe('Schedule and booking', () => {
     test('authenticated user can book and cancel a class via API and verify in UI', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
 
-        // Login via API
+        // Seed a throwaway customer instead of booking on the SHARED
+        // `customer@test.com` (#348). The cancel step sits behind five later
+        // assertions, so any earlier failure used to leave a live booking on
+        // the shared account -- and the `!c.user_booked` filter below then
+        // found nothing on EVERY subsequent run against that database,
+        // failing deterministically forever. CI never saw it (fresh DB per
+        // run); a local DB survives between runs. A fresh account cannot
+        // carry a booking in from a previous failure.
+        const customer = await seedCustomerAccount(BASE_URL, 'sched');
         const loginResp = await fetch(`${BASE_URL}/api/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ email: 'customer@test.com', password: 'password123' }),
+            body: JSON.stringify({ email: customer.email, password: customer.password }),
         });
         const loginData = await loginResp.json();
         const token = loginData.token;
@@ -135,6 +148,17 @@ test.describe('Schedule and booking', () => {
             { headers: { Authorization: `Bearer ${token}` } }
         );
         const classes = await classesResp.json();
+        // Isolation guard: a freshly seeded account must own no bookings at
+        // all. If this ever trips, the account is being shared again and the
+        // `!c.user_booked` filter below is about to fail for a reason that
+        // has nothing to do with the schedule UI (#348) -- fail here, where
+        // the message says so, instead of on an undefined `targetClass`.
+        const preBooked = classes.filter((c: any) => c.user_booked);
+        expect(
+            preBooked,
+            'freshly seeded customer already owns bookings -- account is not isolated'
+        ).toEqual([]);
+
         const targetClass = classes.find((c: any) => c.date === dateStr && !c.cancelled && !c.user_booked);
 
         expect(targetClass).toBeTruthy();
@@ -148,55 +172,70 @@ test.describe('Schedule and booking', () => {
         expect(bookResp.status).toBe(201);
         const bookingData = await bookResp.json();
         const bookingId = bookingData.id;
+        let released = false;
 
-        // Now verify in the UI that the booking shows as BOOKED
-        // Set auth in localStorage for the WASM app
-        await page.goto('/');
-        await page.evaluate((authData: any) => {
-            localStorage.setItem('spinbike_token', authData.token);
-            localStorage.setItem('spinbike_user', JSON.stringify(authData.user));
-        }, { token: loginData.token, user: loginData.user });
+        // Always give the seat back, even when an assertion below throws.
+        // A class has a capacity and a full one answers 409 ClassFull, so
+        // abandoned bookings accumulating on a long-lived local database
+        // would eventually break this test a second way (#348).
+        try {
+            // Now verify in the UI that the booking shows as BOOKED
+            // Set auth in localStorage for the WASM app
+            await page.goto('/');
+            await page.evaluate((authData: any) => {
+                localStorage.setItem('spinbike_token', authData.token);
+                localStorage.setItem('spinbike_user', JSON.stringify(authData.user));
+            }, { token: loginData.token, user: loginData.user });
 
-        // Authenticated customers now land on /my/balance from `/` (router
-        // redirect for the door self-entry feature, #92). Navigate directly
-        // to /schedule for the booking-verification UI flow.
-        await page.goto('/schedule');
-        await page.waitForSelector('h1.page-title');
-        await page.waitForFunction(() => {
-            return !document.querySelector('.spinner');
-        }, { timeout: 10000 });
+            // Authenticated customers now land on /my/balance from `/` (router
+            // redirect for the door self-entry feature, #92). Navigate directly
+            // to /schedule for the booking-verification UI flow.
+            await page.goto('/schedule');
+            await page.waitForSelector('h1.page-title');
+            await page.waitForFunction(() => {
+                return !document.querySelector('.spinner');
+            }, { timeout: 10000 });
 
-        // Click the day that has the booked class.
-        // targetDate weekday (1=Mon..5=Fri) maps to day-picker index (0=Mon..4=Fri).
-        const dayIdx = targetDate.getDay() - 1;
-        const dayPicker = page.locator('.day-picker');
-        await dayPicker.locator('button').nth(dayIdx).click();
-        await page.waitForTimeout(500);
+            // Click the day that has the booked class.
+            // targetDate weekday (1=Mon..5=Fri) maps to day-picker index (0=Mon..4=Fri).
+            const dayIdx = targetDate.getDay() - 1;
+            const dayPicker = page.locator('.day-picker');
+            await dayPicker.locator('button').nth(dayIdx).click();
+            await page.waitForTimeout(500);
 
-        // Verify CANCEL button is visible (booked state shows cancel button)
-        const cancelBtn = page.locator('.list-row--booked .btn--danger');
-        await expect(cancelBtn.first()).toBeVisible({ timeout: 10000 });
+            // Verify CANCEL button is visible (booked state shows cancel button)
+            const cancelBtn = page.locator('.list-row--booked .btn--danger');
+            await expect(cancelBtn.first()).toBeVisible({ timeout: 10000 });
 
-        // Cancel the booking via API
-        const cancelResp = await fetch(`${BASE_URL}/api/bookings/${bookingId}`, {
-            method: 'DELETE',
-            headers: { Authorization: `Bearer ${token}` },
-        });
-        expect(cancelResp.status).toBe(204);
+            // Cancel the booking via API
+            const cancelResp = await fetch(`${BASE_URL}/api/bookings/${bookingId}`, {
+                method: 'DELETE',
+                headers: { Authorization: `Bearer ${token}` },
+            });
+            expect(cancelResp.status).toBe(204);
+            released = true;
 
-        // Reload and verify the class is bookable again
-        await page.reload();
-        await page.waitForSelector('h1.page-title');
-        await page.waitForFunction(() => {
-            return !document.querySelector('.spinner');
-        }, { timeout: 10000 });
-        await dayPicker.locator('button').nth(dayIdx).click();
-        await page.waitForTimeout(500);
+            // Reload and verify the class is bookable again
+            await page.reload();
+            await page.waitForSelector('h1.page-title');
+            await page.waitForFunction(() => {
+                return !document.querySelector('.spinner');
+            }, { timeout: 10000 });
+            await dayPicker.locator('button').nth(dayIdx).click();
+            await page.waitForTimeout(500);
 
-        // BOOK button should be visible again
-        const bookButton = page.locator('.list-row .btn--primary', { hasText: 'BOOK' });
-        await expect(bookButton.first()).toBeVisible({ timeout: 10000 });
+            // BOOK button should be visible again
+            const bookButton = page.locator('.list-row .btn--primary', { hasText: 'BOOK' });
+            await expect(bookButton.first()).toBeVisible({ timeout: 10000 });
 
-        assertCleanConsole(consoleMessages);
+            assertCleanConsole(consoleMessages);
+        } finally {
+            if (!released) {
+                await fetch(`${BASE_URL}/api/bookings/${bookingId}`, {
+                    method: 'DELETE',
+                    headers: { Authorization: `Bearer ${token}` },
+                }).catch(() => {});
+            }
+        }
     });
 });
