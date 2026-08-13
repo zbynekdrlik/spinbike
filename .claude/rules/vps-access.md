@@ -60,11 +60,43 @@ Cloudflare and is refused. Use the IP (or the `spinbike-vps` alias in dev1's
 
 Consequence for credentials: **running the tunnel needs no Cloudflare API
 access.** It was created once by an interactive `cloudflared tunnel login`
-and since then only needs its credentials JSON, so there is no working
-Cloudflare API token on dev1 — the two in `~/.secrets/cloudflare-*` both
-answer `Invalid API Token` (checked 2026-08-12). Any DNS change to
-`spinbike.sk` therefore needs the owner: a fresh Zone:DNS:Edit token, or he
-clicks it in the dashboard. Do not assume tunnel access implies DNS access.
+and since then only needs its credentials JSON. Do not assume tunnel access
+implies DNS access — the two old tokens in `~/.secrets/cloudflare-account-*`
+and `~/.secrets/cloudflare-newlevelmedia-admin` are DEAD (`Invalid API
+Token`, checked 2026-08-12).
+
+**The working DNS token is `~/.secrets/cloudflare-spinbike`** (also on the
+VPS at the same path), scoped `Zone → DNS → Edit` on `spinbike.sk` only,
+named `spinbike-dns · claude` in the Cloudflare UI. Read it from there
+instead of asking the owner for another one.
+
+### `/user/tokens/verify` LIES about a scoped token (#443)
+
+A token scoped to one zone has no user-level permission, so
+`GET /user/tokens/verify` answers **`401 Invalid API Token` for a perfectly
+valid token**. Trusting that endpoint made this session report the owner's
+correct token as broken three times, across four round trips, until he said
+so outright. **Test a token against the resource it is FOR:**
+
+```bash
+# works  -> 200 and the zone object; this is the ONLY validity test
+curl -s -H "Authorization: Bearer $(cat ~/.secrets/cloudflare-spinbike)" \
+  "https://api.cloudflare.com/client/v4/zones?name=spinbike.sk"
+```
+
+Nor is length a test: this token is `xxxx_` + 48 chars (53 total), not the
+40 that older documentation describes. **The API decides, not the shape.**
+
+### Adding a record
+
+`POST /zones/<zone_id>/dns_records` with `{"type":"A","name":"vps",
+"content":"<ip>","ttl":1,"proxied":false}`. `proxied:false` is mandatory for
+anything reached by SSH — Cloudflare's proxy forwards only HTTP/HTTPS. The
+optional `comment` field is capped at **100 characters**; a longer one is a
+flat 400.
+
+`vps.spinbike.sk` already exists this way (created 2026-08-13, #350), so
+`ssh root@vps.spinbike.sk` works and is preferred over the bare IP.
 
 ## Hand-minting a JWT against the live server
 
