@@ -586,6 +586,48 @@ mod tests {
         );
     }
 
+    /// The allocator's exact contract, pinned value-by-value (#353).
+    ///
+    /// The two properties above (unique, small) are necessary but not
+    /// sufficient to describe it, and a test that only asserts them leaves
+    /// the comparison and the increment free to be anything: `>` could be
+    /// `==` or `<` (both of which abandon the clock entirely and hand out
+    /// 1, 2, 3…) and `+ 1` could be `- 1` (which walks BACKWARD and
+    /// re-issues an already-used id on the third press). All three still
+    /// look unique across two calls, so they survive an uniqueness-only
+    /// test — and all three would put a value on the wire that no longer
+    /// matches the millisecond convention the `userOnline` handshake uses.
+    #[test]
+    fn press_sequence_is_the_millisecond_then_the_next_free_one() {
+        let now_ms = 1_700_000_000_123_i64;
+        let mut last = 0i64;
+
+        assert_eq!(
+            press_sequence(now_ms, &mut last),
+            "1700000000123",
+            "a press in a fresh millisecond must BE that millisecond — not \
+             a counter that ignores the clock"
+        );
+        assert_eq!(
+            press_sequence(now_ms, &mut last),
+            "1700000000124",
+            "a second press in the same millisecond takes the next free one"
+        );
+        assert_eq!(
+            press_sequence(now_ms, &mut last),
+            "1700000000125",
+            "and a third keeps walking FORWARD — stepping back would re-issue \
+             an id already in the pending map"
+        );
+
+        assert_eq!(
+            press_sequence(now_ms + 10, &mut last),
+            "1700000000133",
+            "once the clock overtakes the allocator, the value is the clock \
+             again"
+        );
+    }
+
     /// REGRESSION (#353): the `sequence` is an OPAQUE ECHO TOKEN — the cloud
     /// hands it straight back and `handle_text_frame` matches it by EXACT
     /// string equality. eWeLink's backend round-trips that field through a
