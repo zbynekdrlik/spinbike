@@ -323,11 +323,12 @@ async fn connect_loop_with_url_inner(
     // to the HTTP route.
     let mut pending: HashMap<String, oneshot::Sender<Result<(), EwelinkError>>> = HashMap::new();
     let (sweep_tx, mut sweep_rx) = mpsc::unbounded_channel::<String>();
-    // #323: disambiguates two presses generated within the same wall-clock
-    // millisecond — see `press_sequence`. Scoped to this connection's
-    // lifetime (resets on reconnect), which is fine: uniqueness is only
-    // ever needed among currently-pending presses on THIS `pending` map.
-    let mut seq_counter: u64 = 0;
+    // #323/#353: the last sequence value handed out, so two presses in the
+    // same wall-clock millisecond still get distinct `pending` keys — see
+    // `press_sequence`. Scoped to this connection's lifetime (resets on
+    // reconnect), which is fine: uniqueness is only ever needed among
+    // currently-pending presses on THIS `pending` map.
+    let mut last_seq_ms: i64 = 0;
 
     let mut ping_interval = tokio::time::interval(Duration::from_secs(60));
     // First tick fires immediately by default — skip it so we don't
@@ -344,7 +345,7 @@ async fn connect_loop_with_url_inner(
                     return ConnectOutcome::ChannelClosed;
                 };
                 let sequence =
-                    press_sequence(chrono::Utc::now().timestamp_millis(), &mut seq_counter);
+                    press_sequence(chrono::Utc::now().timestamp_millis(), &mut last_seq_ms);
                 // MINI-D is a multi-outlet SONOFF product and only acks the
                 // multi-outlet `switches` array form. The legacy single-channel
                 // `{"switch":"on"}` is silently dropped (no ack → door route
@@ -428,37 +429,33 @@ async fn connect_loop_with_url_inner(
 
 /// Builds the per-press `sequence` id sent to the cloud and used as the
 /// `pending` HashMap key (#323) that routes the device's ack back to this
-/// press's oneshot sender. `now_ms` alone is NOT enough — two presses
-/// queued back-to-back on the shared mpsc channel can be processed by the
-/// dispatch loop within the same wall-clock millisecond. `counter` is a
-/// per-connection monotonic counter (bumped on every call, never reset
-/// except on reconnect) that guarantees uniqueness regardless of clock
-/// resolution: two calls sharing the exact same `now_ms` still produce
-/// distinct keys.
+/// press's oneshot sender.
 ///
-/// Deliberately kept a PURE DIGIT STRING (zero-padded counter concatenated
-/// directly onto the millisecond, no separator) rather than e.g.
-/// `"{now_ms}-{n}"` — the real eWeLink cloud's exact validation of this
-/// field isn't documented beyond "opaque echo token" (`ewelink-door` skill),
-/// and the existing `userOnline` handshake (above) also sends a bare
-/// digit-string sequence. A 6-digit counter width leaves no realistic risk
-/// of ambiguity/collision within one connection's press volume while never
-/// introducing a character the cloud might reject as malformed.
+/// TWO constraints, and #323 satisfied only the first:
 ///
-/// Deliberately a COUNTER, not `auth::random_nonce()` (already used for the
-/// userOnline handshake's own `nonce` field): a random suffix only makes a
-/// collision *improbable*; a strictly-incrementing counter makes it
-/// *impossible* by construction. This mechanism guards a billing-affecting
-/// ack routing table — correctness here should not rest on "improbable
-/// enough" when a deterministic guarantee costs nothing extra.
-fn press_sequence(now_ms: i64, counter: &mut u64) -> String {
-    let n = *counter;
-    // wrapping_add: deliberately never panics on overflow. Unreachable in
-    // practice (a connection would need >2^64 presses without reconnecting,
-    // which resets the counter — see the doc comment at the call site), but
-    // "never panic on a monotonic counter" costs nothing to guarantee.
-    *counter = counter.wrapping_add(1);
-    format!("{now_ms}{n:06}")
+/// 1. **Unique.** `now_ms` alone is not enough — two presses queued
+///    back-to-back on the shared mpsc can be processed by the dispatch loop
+///    within the same wall-clock millisecond, and the second
+///    `pending.insert` would silently drop the first press's ack sender.
+/// 2. **Small enough to survive the round-trip (#353).** The value is an
+///    opaque echo token: the cloud hands it straight back and the ack is
+///    matched by EXACT string equality. eWeLink's backend passes it through
+///    a JSON number, and an IEEE-754 double is exact only to 2^53
+///    (~9.0e15). #323's `{now_ms}{counter:06}` was 19 digits (~1.7e18), so
+///    the cloud echoed a DIFFERENT value back (…000000 returned as
+///    …000064), nothing matched, and every door press timed out and rolled
+///    the customer's visit back for two days.
+///
+/// A monotonic MILLISECOND allocator satisfies both: normally the value is
+/// simply `now_ms` (13 digits, the format that worked for months); a press
+/// landing in an already-used millisecond takes the next unused one. The
+/// value only ever runs ahead of the real clock by as many milliseconds as
+/// there were same-millisecond presses, so it stays a plain 13-digit
+/// timestamp-shaped integer — far inside the exact-double range.
+fn press_sequence(now_ms: i64, last: &mut i64) -> String {
+    let seq = if now_ms > *last { now_ms } else { *last + 1 };
+    *last = seq;
+    seq.to_string()
 }
 
 /// Parse a text frame and route any ack to the matching pending oneshot.
@@ -578,15 +575,97 @@ mod tests {
     #[test]
     fn press_sequence_is_unique_even_within_the_same_millisecond() {
         let same_ms = 1_700_000_000_123_i64;
-        let mut counter = 0u64;
-        let first = press_sequence(same_ms, &mut counter);
-        let second = press_sequence(same_ms, &mut counter);
+        let mut last = 0i64;
+        let first = press_sequence(same_ms, &mut last);
+        let second = press_sequence(same_ms, &mut last);
         assert_ne!(
             first, second,
             "two presses processed within the same millisecond must get \
              distinct sequence ids — otherwise the second pending.insert \
              silently overwrites (and drops) the first press's ack sender"
         );
+    }
+
+    /// The allocator's exact contract, pinned value-by-value (#353).
+    ///
+    /// The two properties above (unique, small) are necessary but not
+    /// sufficient to describe it, and a test that only asserts them leaves
+    /// the comparison and the increment free to be anything: `>` could be
+    /// `==` or `<` (both of which abandon the clock entirely and hand out
+    /// 1, 2, 3…) and `+ 1` could be `- 1` (which walks BACKWARD and
+    /// re-issues an already-used id on the third press). All three still
+    /// look unique across two calls, so they survive an uniqueness-only
+    /// test — and all three would put a value on the wire that no longer
+    /// matches the millisecond convention the `userOnline` handshake uses.
+    #[test]
+    fn press_sequence_is_the_millisecond_then_the_next_free_one() {
+        let now_ms = 1_700_000_000_123_i64;
+        let mut last = 0i64;
+
+        assert_eq!(
+            press_sequence(now_ms, &mut last),
+            "1700000000123",
+            "a press in a fresh millisecond must BE that millisecond — not \
+             a counter that ignores the clock"
+        );
+        assert_eq!(
+            press_sequence(now_ms, &mut last),
+            "1700000000124",
+            "a second press in the same millisecond takes the next free one"
+        );
+        assert_eq!(
+            press_sequence(now_ms, &mut last),
+            "1700000000125",
+            "and a third keeps walking FORWARD — stepping back would re-issue \
+             an id already in the pending map"
+        );
+
+        assert_eq!(
+            press_sequence(now_ms + 10, &mut last),
+            "1700000000133",
+            "once the clock overtakes the allocator, the value is the clock \
+             again"
+        );
+    }
+
+    /// REGRESSION (#353): the `sequence` is an OPAQUE ECHO TOKEN — the cloud
+    /// hands it straight back and `handle_text_frame` matches it by EXACT
+    /// string equality. eWeLink's backend round-trips that field through a
+    /// JSON number, and an IEEE-754 double represents integers exactly only
+    /// up to 2^53 (~9.0e15).
+    ///
+    /// #323 grew the value to `{now_ms}{counter:06}` — 19 digits, ~1.7e18 —
+    /// which the cloud echoed back CHANGED (1700000000123000000 comes back
+    /// as 1700000000123000064). No `pending` entry matched, every press
+    /// timed out after 5 s, and `door.rs` rolled the customer's visit back
+    /// while the relay had already fired: the door opened, the screen showed
+    /// an error, and nothing was recorded. 100% of door presses failed from
+    /// the 2026-08-11 09:40 deploy until this fix.
+    ///
+    /// So uniqueness is not the only constraint on this value — it must also
+    /// stay inside the precision the receiving end can hold.
+    #[test]
+    fn press_sequence_survives_a_javascript_number_round_trip() {
+        const MAX_EXACT_DOUBLE: i64 = 9_007_199_254_740_992; // 2^53
+        let now_ms = 1_700_000_000_123_i64;
+        let mut last = 0i64;
+        for press in 0..5 {
+            let seq = press_sequence(now_ms, &mut last);
+            let n: i64 = seq
+                .parse()
+                .expect("sequence must stay a plain integer string");
+            assert!(
+                n.abs() <= MAX_EXACT_DOUBLE,
+                "press {press}: sequence {seq} exceeds 2^53, so a receiver \
+                 holding it in a double cannot echo it back unchanged"
+            );
+            assert_eq!(
+                n as f64 as i64, n,
+                "press {press}: sequence {seq} does not survive a double \
+                 round-trip — the cloud echoes a different value and the ack \
+                 never matches its pending entry"
+            );
+        }
     }
 
     /// `is_offline_code(503)` MUST be true; every other code MUST be false.
