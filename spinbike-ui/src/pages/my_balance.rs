@@ -46,6 +46,10 @@ struct RecentTx {
     is_door_press: bool,
     service_name_sk: Option<String>,
     service_name_en: Option<String>,
+    /// #357: who recorded this row at the desk. `None` for a movement the
+    /// customer caused themselves — see the server-side doc comment on
+    /// `RecentTx` (`routes/my_balance.rs`).
+    staff_name: Option<String>,
 }
 
 impl RecentTx {
@@ -208,12 +212,13 @@ pub fn MyBalancePage() -> impl IntoView {
                                     .unwrap_or_default();
 
                                 let sub_note = recent_tx_sub_note(t.note.as_deref(), t.is_door_press, lang_now);
+                                let source = recent_tx_source(t.is_door_press, t.staff_name.as_deref(), lang_now);
 
                                 view! {
                                     <li data-testid="recent-visit" class="list-row">
                                         <div class="list-row__main">
                                             <div class="list-row__title">{action_label}{until_suffix}</div>
-                                            <div class="list-row__sub">{date_label}{service_suffix}{sub_note}</div>
+                                            <div class="list-row__sub">{date_label}{service_suffix}{sub_note}{source}</div>
                                         </div>
                                         <div class=amount_class>{amount_label}</div>
                                     </li>
@@ -234,6 +239,27 @@ fn format_tx_date_label(created_at: &str, lang: Lang) -> String {
     dates::parse_server_date_local(created_at)
         .map(|d| fmt_date_short(d, lang))
         .unwrap_or_else(|| created_at.to_string())
+}
+
+/// Render where a movement came from, in the customer's own terms (#357):
+/// either they let themselves in, or a named person recorded it for them.
+///
+/// The two facts are independent and both are needed. `is_door_press` says
+/// HOW (it is the only self-service path), `staff_name` says WHO — a name on
+/// its own could not distinguish a desk entry from a door press, and a door
+/// flag on its own leaves every other movement unattributed, which is
+/// exactly the gap this closes.
+///
+/// Falls back to nothing when neither holds, rather than guessing: prod has
+/// one such legacy row and an invented label on it would be a lie.
+fn recent_tx_source(is_door_press: bool, staff_name: Option<&str>, lang: Lang) -> String {
+    if is_door_press {
+        return format!(" \u{b7} {}", i18n::t(lang, "entry_source_door"));
+    }
+    match staff_name {
+        Some(n) if !n.is_empty() => format!(" \u{b7} {}", tf(lang, "entry_source_staff", &[n])),
+        _ => String::new(),
+    }
 }
 
 /// Render a recent-transaction row's sub-note (the small text under the
@@ -291,6 +317,55 @@ mod tests {
         assert_eq!(
             format_tx_date_label("2026-07-20 12:00:00", Lang::Sk),
             "20.07."
+        );
+    }
+
+    /// #357: a door press is the customer's own doing — it says so, and
+    /// never names a recorder.
+    #[wasm_bindgen_test]
+    fn recent_tx_source_door_press_says_the_customer_opened_it() {
+        assert_eq!(
+            recent_tx_source(true, None, Lang::Sk),
+            " \u{b7} Otvoril si dvere"
+        );
+    }
+
+    /// A desk-recorded movement names the person. This is the whole point of
+    /// #357: before it, this row and a door press rendered identically.
+    #[wasm_bindgen_test]
+    fn recent_tx_source_names_the_staff_member() {
+        assert_eq!(
+            recent_tx_source(false, Some("Stefan"), Lang::Sk),
+            " \u{b7} Zapisal Stefan"
+        );
+        assert_eq!(
+            recent_tx_source(false, Some("Stefan"), Lang::En),
+            " \u{b7} Recorded by Stefan"
+        );
+    }
+
+    /// `is_door_press` WINS over a stray name. A door row carries no
+    /// `staff_id` in practice, but if one ever appeared the customer must
+    /// still be told they opened the door themselves — not that somebody
+    /// else recorded their own entry for them.
+    #[wasm_bindgen_test]
+    fn recent_tx_source_door_press_wins_over_a_staff_name() {
+        assert_eq!(
+            recent_tx_source(true, Some("Stefan"), Lang::Sk),
+            " \u{b7} Otvoril si dvere"
+        );
+    }
+
+    /// Neither flag nor name (prod has exactly one such legacy row): render
+    /// NOTHING. Inventing a source would be a lie about the customer's own
+    /// history.
+    #[wasm_bindgen_test]
+    fn recent_tx_source_is_empty_when_nothing_is_known() {
+        assert_eq!(recent_tx_source(false, None, Lang::Sk), "");
+        assert_eq!(
+            recent_tx_source(false, Some(""), Lang::Sk),
+            "",
+            "an empty name is not a recorder"
         );
     }
 

@@ -39,6 +39,14 @@ pub struct RecentTx {
     /// admin transactions list.
     pub service_name_sk: Option<String>,
     pub service_name_en: Option<String>,
+    /// #357: the name behind `transactions.staff_id` — who recorded this row
+    /// at the desk. `None` for anything the customer caused themselves,
+    /// which in practice means a door press (`is_door_press = 1`, `staff_id`
+    /// NULL). Together the two answer the question the customer actually
+    /// asks of their own history: did I let myself in, or did somebody log
+    /// this for me? Neither alone does: `is_door_press` says how, not who,
+    /// and a name with no origin cannot distinguish the two.
+    pub staff_name: Option<String>,
 }
 
 pub fn routes() -> Router<AppState> {
@@ -146,9 +154,11 @@ async fn my_balance(
     let recent: Vec<RecentTx> = sqlx::query_as::<_, RecentTx>(
         "SELECT t.id, t.created_at, t.action, t.amount, t.valid_until, t.note, \
                 t.is_door_press, \
-                s.name_sk AS service_name_sk, s.name_en AS service_name_en \
+                s.name_sk AS service_name_sk, s.name_en AS service_name_en, \
+                st.name AS staff_name \
            FROM transactions t \
            LEFT JOIN services s ON s.id = t.service_id \
+           LEFT JOIN users st ON st.id = t.staff_id \
           WHERE t.user_id = ? \
             AND t.deleted_at IS NULL \
           ORDER BY t.created_at DESC, t.id DESC \
