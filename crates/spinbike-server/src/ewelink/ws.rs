@@ -589,6 +589,46 @@ mod tests {
         );
     }
 
+    /// REGRESSION (#353): the `sequence` is an OPAQUE ECHO TOKEN — the cloud
+    /// hands it straight back and `handle_text_frame` matches it by EXACT
+    /// string equality. eWeLink's backend round-trips that field through a
+    /// JSON number, and an IEEE-754 double represents integers exactly only
+    /// up to 2^53 (~9.0e15).
+    ///
+    /// #323 grew the value to `{now_ms}{counter:06}` — 19 digits, ~1.7e18 —
+    /// which the cloud echoed back CHANGED (1700000000123000000 comes back
+    /// as 1700000000123000064). No `pending` entry matched, every press
+    /// timed out after 5 s, and `door.rs` rolled the customer's visit back
+    /// while the relay had already fired: the door opened, the screen showed
+    /// an error, and nothing was recorded. 100% of door presses failed from
+    /// the 2026-08-11 09:40 deploy until this fix.
+    ///
+    /// So uniqueness is not the only constraint on this value — it must also
+    /// stay inside the precision the receiving end can hold.
+    #[test]
+    fn press_sequence_survives_a_javascript_number_round_trip() {
+        const MAX_EXACT_DOUBLE: i64 = 9_007_199_254_740_992; // 2^53
+        let now_ms = 1_700_000_000_123_i64;
+        let mut counter = 0u64;
+        for press in 0..5 {
+            let seq = press_sequence(now_ms, &mut counter);
+            let n: i64 = seq
+                .parse()
+                .expect("sequence must stay a plain integer string");
+            assert!(
+                n.abs() <= MAX_EXACT_DOUBLE,
+                "press {press}: sequence {seq} exceeds 2^53, so a receiver \
+                 holding it in a double cannot echo it back unchanged"
+            );
+            assert_eq!(
+                n as f64 as i64, n,
+                "press {press}: sequence {seq} does not survive a double \
+                 round-trip — the cloud echoes a different value and the ack \
+                 never matches its pending entry"
+            );
+        }
+    }
+
     /// `is_offline_code(503)` MUST be true; every other code MUST be false.
     /// Catches:
     ///   * the L368 constant-return mutations (true / false)
