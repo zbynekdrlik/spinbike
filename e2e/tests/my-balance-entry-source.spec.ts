@@ -62,11 +62,24 @@ async function seedBothOrigins(adminToken: string): Promise<{
     if (!meResp.ok) throw new Error(`admin balance failed: ${meResp.status}`);
     const adminName: string = (await meResp.json()).name;
 
+    // The charge endpoint requires a service. Pick it by the stable `kind`
+    // column, never by name_en — staff can rename a service in the admin UI
+    // and a name-matched lookup would silently stop finding it (#329).
+    const svcResp = await fetch(`${BASE_URL}/api/admin/services`, {
+        headers: { Authorization: `Bearer ${adminToken}` },
+    });
+    if (!svcResp.ok) {
+        throw new Error(`/api/admin/services failed: ${svcResp.status} ${await svcResp.text()}`);
+    }
+    const services = (await svcResp.json()) as Array<{ id: number; kind: string }>;
+    const classService = services.find((s) => s.kind === 'group_class');
+    if (!classService) throw new Error('no group_class service found');
+
     // DESK: the real endpoint, so the server sets staff_id.
     const chargeResp = await fetch(`${BASE_URL}/api/payments/charge`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
-        body: JSON.stringify({ user_id, amount: 5.0 }),
+        body: JSON.stringify({ user_id, amount: 5.0, service_id: classService.id }),
     });
     if (!chargeResp.ok) {
         throw new Error(`charge failed: ${chargeResp.status} ${await chargeResp.text()}`);
