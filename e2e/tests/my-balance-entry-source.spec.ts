@@ -95,6 +95,7 @@ async function seedBothOrigins(adminToken: string): Promise<{
                 {
                     amount: 0.0,
                     action: 'visit',
+                    service_name_sk: 'Spinning',
                     note: 'door: 1st',
                     created_at: '2024-11-24 14:00:00',
                 },
