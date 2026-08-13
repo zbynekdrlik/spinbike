@@ -902,9 +902,8 @@ async fn my_balance_recent_names_the_staff_who_recorded_it() {
         "a desk-recorded movement must name who recorded it — without this \
          the customer cannot tell it apart from one they caused themselves"
     );
-    assert_eq!(
-        recent[0]["is_door_press"].as_bool().unwrap(),
-        false,
+    assert!(
+        !recent[0]["is_door_press"].as_bool().unwrap(),
         "a desk-recorded movement is not a door press"
     );
 }
@@ -934,7 +933,7 @@ async fn my_balance_recent_has_no_staff_name_for_a_door_press() {
         recent[0]["staff_name"].is_null(),
         "a door press has no recorder — staff_name must stay null"
     );
-    assert_eq!(recent[0]["is_door_press"].as_bool().unwrap(), true);
+    assert!(recent[0]["is_door_press"].as_bool().unwrap());
 }
 
 /// A top-up isn't tied to any service — the join must degrade to `null`,
