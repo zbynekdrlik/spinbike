@@ -35,6 +35,12 @@ pub enum EwelinkState {
     Disconnected,
 }
 
+/// Consecutive failed presses that mean the door is genuinely broken
+/// rather than momentarily unlucky. Two, not one: a single press can fail
+/// on a transient cloud hiccup and the customer just presses again, while
+/// #353 failed EVERY press for two days.
+pub const FAULT_THRESHOLD: u32 = 2;
+
 /// Cloneable handle. `press()` is `&self` so multiple route handlers
 /// share one handle through axum state.
 #[derive(Clone)]
@@ -42,6 +48,14 @@ pub struct EwelinkHandle {
     tx: Option<mpsc::Sender<PressRequest>>,
     state: std::sync::Arc<std::sync::atomic::AtomicU8>,
     last_ack_ms: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    /// Wall-clock ms of the last press ATTEMPT that actually reached the
+    /// task (the Disabled fast-path does not count). `i64::MIN` = never.
+    last_press_ms: std::sync::Arc<std::sync::atomic::AtomicI64>,
+    /// Presses that failed since the last successful one. Reset to 0 by
+    /// every success. This is the signal #353 lacked: on its own,
+    /// `last_ack_ms_ago: null` cannot tell "nobody has pressed since the
+    /// last restart" apart from "every press since the restart failed".
+    failed_presses: std::sync::Arc<std::sync::atomic::AtomicU32>,
 }
 
 impl EwelinkHandle {
@@ -60,6 +74,8 @@ impl EwelinkHandle {
             EwelinkState::Disabled as u8,
         ));
         let last_ack_ms = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(i64::MIN));
+        let press_ms = std::sync::Arc::new(std::sync::atomic::AtomicI64::new(i64::MIN));
+        let failed = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
 
         // Test seam: when EWELINK_TEST_MODE is set, hand off to an in-process
         // stub that returns the configured outcome after 100 ms. Used by E2E.
@@ -76,6 +92,8 @@ impl EwelinkHandle {
                 tx: Some(tx),
                 state,
                 last_ack_ms,
+                last_press_ms: press_ms,
+                failed_presses: failed,
             };
         }
 
@@ -91,6 +109,8 @@ impl EwelinkHandle {
                 tx: None,
                 state,
                 last_ack_ms,
+                last_press_ms: press_ms,
+                failed_presses: failed,
             };
         }
 
@@ -114,6 +134,8 @@ impl EwelinkHandle {
             tx: Some(tx),
             state,
             last_ack_ms,
+            last_press_ms: press_ms,
+            failed_presses: failed,
         }
     }
 
@@ -125,17 +147,42 @@ impl EwelinkHandle {
     /// awaiting.
     pub async fn press(&self) -> Result<(), EwelinkError> {
         let Some(tx) = &self.tx else {
+            // Disabled is a configuration state, not a fault: a dev box or a
+            // deliberate kill switch must never look like broken hardware.
             return Err(EwelinkError::Disabled);
         };
+        self.last_press_ms.store(
+            chrono::Utc::now().timestamp_millis(),
+            std::sync::atomic::Ordering::Relaxed,
+        );
         let (ack_tx, ack_rx) = oneshot::channel();
         if tx.send(PressRequest { ack: ack_tx }).await.is_err() {
-            return Err(EwelinkError::Network("ewelink task channel closed".into()));
+            return self.record(Err(EwelinkError::Network(
+                "ewelink task channel closed".into(),
+            )));
         }
-        match tokio::time::timeout(std::time::Duration::from_secs(5), ack_rx).await {
+        let outcome = match tokio::time::timeout(std::time::Duration::from_secs(5), ack_rx).await {
             Ok(Ok(res)) => res,
             Ok(Err(_recv)) => Err(EwelinkError::Network("ack oneshot dropped".into())),
             Err(_) => Err(EwelinkError::DeviceTimeout),
+        };
+        self.record(outcome)
+    }
+
+    /// Fold a press outcome into the failure counter and hand it back
+    /// untouched. Success clears the counter; anything else advances it.
+    fn record(&self, outcome: Result<(), EwelinkError>) -> Result<(), EwelinkError> {
+        use std::sync::atomic::Ordering::Relaxed;
+        if outcome.is_ok() {
+            self.failed_presses.store(0, Relaxed);
+        } else {
+            // Saturating: a door left broken for weeks must not wrap around
+            // to 0 and read as healthy.
+            let _ = self
+                .failed_presses
+                .fetch_update(Relaxed, Relaxed, |n| Some(n.saturating_add(1)));
         }
+        outcome
     }
 
     /// Snapshot for /api/door/health.
@@ -159,12 +206,27 @@ impl EwelinkHandle {
 
     /// Milliseconds since the last successful ack. `None` if never acked.
     pub fn last_ack_ms_ago(&self) -> Option<i64> {
-        let ts = self.last_ack_ms.load(std::sync::atomic::Ordering::Relaxed);
+        Self::ms_ago(&self.last_ack_ms)
+    }
+
+    /// Milliseconds since the last press attempt that reached the task.
+    /// `None` if nobody has pressed since this process started.
+    pub fn last_press_ms_ago(&self) -> Option<i64> {
+        Self::ms_ago(&self.last_press_ms)
+    }
+
+    /// Presses that have failed since the last successful one.
+    pub fn failed_presses(&self) -> u32 {
+        self.failed_presses
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    fn ms_ago(cell: &std::sync::atomic::AtomicI64) -> Option<i64> {
+        let ts = cell.load(std::sync::atomic::Ordering::Relaxed);
         if ts == i64::MIN {
             None
         } else {
-            let now = chrono::Utc::now().timestamp_millis();
-            Some(now - ts)
+            Some(chrono::Utc::now().timestamp_millis() - ts)
         }
     }
 }
@@ -247,6 +309,101 @@ mod tests {
             // Back to Disabled to confirm round-trip.
             h.set_state_for_test(EwelinkState::Disabled);
             assert_eq!(h.state(), EwelinkState::Disabled);
+        })
+        .await;
+    }
+
+    /// A Disabled handle is a CONFIGURATION state, not a fault. A dev box
+    /// or a deliberate kill switch must never accumulate failures and read
+    /// as broken hardware (#355).
+    #[tokio::test]
+    async fn a_disabled_handle_never_counts_a_failure() {
+        with_clean_env(|| async {
+            let h = EwelinkHandle::spawn();
+            for _ in 0..5 {
+                assert!(matches!(h.press().await, Err(EwelinkError::Disabled)));
+            }
+            assert_eq!(h.failed_presses(), 0);
+            assert_eq!(h.last_press_ms_ago(), None);
+        })
+        .await;
+    }
+
+    /// The signal #353 lacked: failures accumulate until a success clears
+    /// them, so "every press since the restart failed" is distinguishable
+    /// from "nobody has pressed".
+    #[tokio::test]
+    async fn failures_accumulate_and_a_success_clears_them() {
+        with_clean_env(|| async {
+            // SAFETY: under EWELINK_TEST_LOCK held inside with_clean_env.
+            unsafe { std::env::set_var("EWELINK_TEST_MODE", "offline") }
+            let h = EwelinkHandle::spawn();
+            assert_eq!(h.failed_presses(), 0, "fresh handle starts clean");
+
+            assert!(h.press().await.is_err());
+            assert_eq!(h.failed_presses(), 1);
+            assert!(
+                h.failed_presses() < FAULT_THRESHOLD,
+                "one failure is not yet a fault"
+            );
+
+            assert!(h.press().await.is_err());
+            assert_eq!(h.failed_presses(), 2);
+            assert!(
+                h.failed_presses() >= FAULT_THRESHOLD,
+                "two consecutive failures are a fault"
+            );
+
+            assert!(h.press().await.is_err());
+            assert_eq!(h.failed_presses(), 3, "counts past the threshold");
+        })
+        .await;
+    }
+
+    #[tokio::test]
+    async fn a_successful_press_clears_the_failure_count_and_stamps_both_clocks() {
+        with_clean_env(|| async {
+            // SAFETY: under EWELINK_TEST_LOCK held inside with_clean_env.
+            unsafe { std::env::set_var("EWELINK_TEST_MODE", "success") }
+            let h = EwelinkHandle::spawn();
+            assert_eq!(h.last_press_ms_ago(), None, "nothing pressed yet");
+
+            assert!(h.press().await.is_ok());
+            assert_eq!(h.failed_presses(), 0);
+            assert!(
+                h.last_press_ms_ago()
+                    .is_some_and(|ms| (0..5_000).contains(&ms)),
+                "press clock stamped: {:?}",
+                h.last_press_ms_ago()
+            );
+            assert!(
+                h.last_ack_ms_ago()
+                    .is_some_and(|ms| (0..5_000).contains(&ms)),
+                "ack clock stamped: {:?}",
+                h.last_ack_ms_ago()
+            );
+        })
+        .await;
+    }
+
+    /// A press that reaches the task and fails must still stamp the press
+    /// clock — otherwise the health endpoint keeps reporting "nobody has
+    /// pressed" while every press is in fact failing, which is the exact
+    /// blind spot that hid #353.
+    #[tokio::test]
+    async fn a_failed_press_still_stamps_the_press_clock() {
+        with_clean_env(|| async {
+            // SAFETY: under EWELINK_TEST_LOCK held inside with_clean_env.
+            unsafe { std::env::set_var("EWELINK_TEST_MODE", "offline") }
+            let h = EwelinkHandle::spawn();
+            assert!(h.press().await.is_err());
+            assert!(
+                h.last_press_ms_ago()
+                    .is_some_and(|ms| (0..5_000).contains(&ms)),
+                "press clock stamped even on failure: {:?}",
+                h.last_press_ms_ago()
+            );
+            assert_eq!(h.last_ack_ms_ago(), None, "no ack ever arrived");
         })
         .await;
     }

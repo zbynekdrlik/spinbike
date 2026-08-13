@@ -398,10 +398,21 @@ async fn health(
         EwelinkState::Disabled => "disabled",
     };
     let last_ack_ms_ago = state.ewelink.last_ack_ms_ago();
+    let failed_presses = state.ewelink.failed_presses();
+
+    // `last_ack_ms_ago: null` alone is ambiguous — it reads the same whether
+    // nobody has pressed since the last restart or every press since then
+    // has failed. That ambiguity is exactly why #353 sat visible on this
+    // endpoint for two days without anyone being able to act on it, so the
+    // verdict is published here rather than left to the reader.
+    let faulty = failed_presses >= crate::ewelink::FAULT_THRESHOLD;
 
     Ok(Json(serde_json::json!({
         "ewelink_ws": ws_state,
         "last_ack_ms_ago": last_ack_ms_ago,
+        "last_press_ms_ago": state.ewelink.last_press_ms_ago(),
+        "failed_presses": failed_presses,
+        "faulty": faulty,
     })))
 }
 
