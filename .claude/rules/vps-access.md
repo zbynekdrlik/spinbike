@@ -105,6 +105,18 @@ The claims struct is `crates/spinbike-core/src/auth.rs`. Two shapes bite:
 - **`sub` is `i64` — a bare JSON number, not a string.** Nearly every JWT
   helper defaults `sub` to a string, and `serde` then refuses the payload.
 - `role` must be exactly `"admin"` / `"staff"` / `"customer"` (lowercase).
+- **ALL FIVE claims are required — `sub`, `email`, `role`, `exp`, `iat`.**
+  None is `Option`, none has a serde default, so omitting `email` or `iat`
+  is a flat 401 that looks exactly like a wrong secret. Minting with only
+  the two "interesting" claims above cost a round trip on 2026-08-13; the
+  full struct is `crates/spinbike-core/src/auth.rs`. `email` is not checked
+  against the database for authorization (the lookup keys on `sub`), so any
+  syntactically-present string satisfies it.
+
+A ready-made minter lives on the VPS at `/root/door-health-check.py`
+(stdlib only — no PyJWT). It reads the secret at runtime, prints only the
+response, and calls `/api/door/health`; point it at another route by
+editing the one URL.
 
 `validate_token` collapses EVERY decode failure — bad signature, expired,
 wrong field type, missing field — into the single message
