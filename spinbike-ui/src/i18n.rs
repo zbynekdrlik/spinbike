@@ -1110,7 +1110,10 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     // #357: how the movement came about, from the customer's point of view.
     // A door press is the only thing they can cause themselves; everything
     // else was recorded for them by a person, who is named.
-    m.insert("entry_source_door", ("Otvoril si dvere", "You opened the door"));
+    m.insert(
+        "entry_source_door",
+        ("Otvoril si dvere", "You opened the door"),
+    );
     m.insert("entry_source_staff", ("Zapisal {}", "Recorded by {}"));
     m.insert(
         "version_footer_aria",
