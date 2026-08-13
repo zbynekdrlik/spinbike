@@ -87,3 +87,37 @@ raw frames — including the device's own `update` broadcast, which carries no
 Verify a fix with a real press as an **admin**: admin presses log a visit and
 charge nothing, so no customer is billed by the test. The door does physically
 open.
+
+## `last_ack_ms_ago` alone cannot tell "unused" from "broken" (#355)
+
+`GET /api/door/health` reported `{"ewelink_ws":"connected","last_ack_ms_ago":null}`
+for the whole two days of #353. That is not a missing signal — it is an
+**ambiguous** one: the ack clock is process-local and reset by every restart,
+so `null` reads identically whether nobody has pressed since the restart or
+every press since then has failed. A dashboard value nobody can act on is
+the same as no value at all.
+
+The missing half is the PRESS side. `EwelinkHandle` therefore also tracks
+`last_press_ms` and `failed_presses` (a run reset by any success), and the
+endpoint publishes the derived verdict `faulty` rather than leaving the
+inference to the reader. **Any new health/diagnostic field should follow the
+same rule: publish the verdict, not just the raw clocks.**
+
+Two conventions worth keeping:
+
+- **`FAULT_THRESHOLD` is 2, not 1.** One press can fail on a transient cloud
+  hiccup and the customer just presses again; #353 failed every press for two
+  days. One failure must not page anyone.
+- **The `Disabled` fast-path records nothing.** A dev box with no
+  `EWELINK_*` env vars, or a deliberate production kill switch, is a
+  CONFIGURATION state — it must never accumulate failures and read as broken
+  hardware.
+
+### Testing two presses needs TWO users
+
+`door_rate_limit` rejects a second press by the SAME user inside 10 s before
+it ever reaches the relay, so a same-user pair produces one failure, not two.
+Any test that needs consecutive presses must press as two different seeded
+users (`app.admin_token` then `app.staff_token`, both with
+`allow_self_entry = 1`). `TestApp::with_door_mode` cannot switch stub mode
+mid-test either, so a failure→success transition needs two separate tests.

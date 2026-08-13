@@ -1013,3 +1013,102 @@ async fn hardware_failure_rolls_back_no_tx_written() {
     .unwrap();
     assert_eq!(n, 0);
 }
+
+// ─── #355 — the health endpoint must publish a VERDICT, not raw clocks ─────
+//
+// `last_ack_ms_ago: null` alone reads identically whether nobody has pressed
+// since the last restart or every press since then has failed. That ambiguity
+// is why #353 sat visible on this endpoint for two days with nobody able to
+// act on it, so the endpoint now says outright whether the door is faulty.
+//
+// The two presses below come from DIFFERENT users on purpose: the door rate
+// limiter rejects a second press by the same user inside 10 s before it ever
+// reaches the relay, so a same-user pair would never produce two failures.
+
+/// Let both privileged seeds through the self-entry gate.
+async fn enable_self_entry_for_staff_and_admin(app: &TestApp) {
+    for id in [app.staff_id, app.admin_id] {
+        sqlx::query("UPDATE users SET allow_self_entry = 1 WHERE id = ?")
+            .bind(id)
+            .execute(&app.pool)
+            .await
+            .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn door_health_reports_not_faulty_before_anyone_presses() {
+    let app = TestApp::with_door_mode("offline").await;
+    let (status, body) = app.request(get("/api/door/health", &app.admin_token)).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["failed_presses"], 0);
+    assert_eq!(
+        body["faulty"], false,
+        "an untouched door is not a broken door, got {body:?}"
+    );
+    assert!(
+        body["last_press_ms_ago"].is_null(),
+        "nobody has pressed yet, got {body:?}"
+    );
+}
+
+#[tokio::test]
+async fn door_health_turns_faulty_only_after_the_second_failed_press() {
+    let app = TestApp::with_door_mode("offline").await;
+    enable_self_entry_for_staff_and_admin(&app).await;
+
+    let _ = app
+        .request(post_json(
+            "/api/door/open",
+            &app.admin_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    let (_, body) = app.request(get("/api/door/health", &app.admin_token)).await;
+    assert_eq!(body["failed_presses"], 1);
+    assert_eq!(
+        body["faulty"], false,
+        "one failure can be a transient cloud hiccup, got {body:?}"
+    );
+    assert!(
+        !body["last_press_ms_ago"].is_null(),
+        "a failed press must still stamp the press clock, got {body:?}"
+    );
+
+    let _ = app
+        .request(post_json(
+            "/api/door/open",
+            &app.staff_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    let (_, body) = app.request(get("/api/door/health", &app.admin_token)).await;
+    assert_eq!(body["failed_presses"], 2);
+    assert_eq!(
+        body["faulty"], true,
+        "two consecutive failures are the #353 signature, got {body:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_successful_press_clears_an_earlier_failure() {
+    // Same stub cannot switch mid-test, so this asserts the clearing path
+    // through the success stub: after a successful press the counter is 0
+    // and both clocks are stamped.
+    let app = TestApp::with_door_mode("success").await;
+    enable_self_entry_for_staff_and_admin(&app).await;
+    let _ = app
+        .request(post_json(
+            "/api/door/open",
+            &app.admin_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    let (_, body) = app.request(get("/api/door/health", &app.admin_token)).await;
+    assert_eq!(body["failed_presses"], 0);
+    assert_eq!(body["faulty"], false, "got {body:?}");
+    assert!(
+        !body["last_ack_ms_ago"].is_null(),
+        "a successful press must stamp the ack clock, got {body:?}"
+    );
+}
