@@ -1107,6 +1107,14 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("door_lock_icon_aria", ("Ikona zamku", "Lock icon"));
     // Customer movements: localized display of the stored English "door: Nth" note.
     m.insert("door_note_reentry", ("Vstup c. {}", "Entry #{}"));
+    // #357: how the movement came about, from the customer's point of view.
+    // A door press is the only thing they can cause themselves; everything
+    // else was recorded for them by a person, who is named.
+    m.insert(
+        "entry_source_door",
+        ("Otvoril si dvere", "You opened the door"),
+    );
+    m.insert("entry_source_staff", ("Zapisal {}", "Recorded by {}"));
     m.insert(
         "version_footer_aria",
         ("Verzia aplikacie", "Application version"),

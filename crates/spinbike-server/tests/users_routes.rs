@@ -863,6 +863,79 @@ async fn my_balance_recent_includes_service_name() {
     assert_eq!(recent[0]["service_name_en"].as_str().unwrap(), "Spinning");
 }
 
+// ─── /api/my/balance recent movements — who recorded it (#357) ───────────────
+//
+// The customer could see WHAT a movement was, never WHO caused it: an entry
+// they let themselves in for (door press) and one the owner logged at the
+// desk rendered identically. `transactions.staff_id` already held the
+// answer; these lock it onto the response.
+
+/// A movement a staff member recorded carries their name.
+#[tokio::test]
+async fn my_balance_recent_names_the_staff_who_recorded_it() {
+    let app = TestApp::new().await;
+    let spinning_id = app.spinning_service_id().await;
+
+    let charge_body = serde_json::json!({
+        "user_id": app.customer_id,
+        "amount": 5.0,
+        "service_id": spinning_id,
+    });
+    let (status, _) = app
+        .request(post_json(
+            "/api/payments/charge",
+            &app.staff_token,
+            &charge_body,
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+
+    let (status, body) = app
+        .request(get("/api/my/balance", &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let recent = body["recent"].as_array().unwrap();
+    assert_eq!(recent.len(), 1);
+    assert_eq!(
+        recent[0]["staff_name"].as_str().unwrap(),
+        "Staff",
+        "a desk-recorded movement must name who recorded it — without this \
+         the customer cannot tell it apart from one they caused themselves"
+    );
+    assert!(
+        !recent[0]["is_door_press"].as_bool().unwrap(),
+        "a desk-recorded movement is not a door press"
+    );
+}
+
+/// A door press is the customer's own action: nobody recorded it, so the
+/// name must be absent rather than fabricated or carried over from an
+/// unrelated join.
+#[tokio::test]
+async fn my_balance_recent_has_no_staff_name_for_a_door_press() {
+    let app = TestApp::new().await;
+    sqlx::query(
+        "INSERT INTO transactions (user_id, staff_id, amount, action, note, is_door_press) \
+         VALUES (?, NULL, 0.0, 'visit', 'door: 1st', 1)",
+    )
+    .bind(app.customer_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, body) = app
+        .request(get("/api/my/balance", &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let recent = body["recent"].as_array().unwrap();
+    assert_eq!(recent.len(), 1);
+    assert!(
+        recent[0]["staff_name"].is_null(),
+        "a door press has no recorder — staff_name must stay null"
+    );
+    assert!(recent[0]["is_door_press"].as_bool().unwrap());
+}
+
 /// A top-up isn't tied to any service — the join must degrade to `null`,
 /// not error or fabricate a name.
 #[tokio::test]
