@@ -178,3 +178,39 @@ restart ...`, health checks) are genuinely LOCAL to that runner — they
 execute ON the VPS already, so they need no ssh wrapper. Only a
 human/agent SESSION (which runs on dev1) needs the ssh recipe above; the
 CI runner's own steps never do.
+
+## Backups — two tiers: 7 daily (Hetzner) + 4 weekly (systemd) (#369)
+
+The owner's chosen scheme is **7 rolling daily backups + 4 weekly
+snapshots** (decision 2026-08-24).
+
+**Daily tier — Hetzner automatic backups (ENABLED 2026-08-24).** Turned on
+via `POST /servers/161810377/actions/enable_backup` (action
+651013969704556, success). Hetzner keeps **7 rolling daily backups** of the
+whole server; `backup_window` is `"10-14"` UTC. Cost ≈ +20 % of the server
+price (cx23 ⇒ ~0,8 €/mes). Nothing in the repo drives this tier — Hetzner
+runs it. Check it with `GET /servers/161810377` and look at
+`backups`/`backup_window`.
+
+**Weekly tier — own systemd timer on the VPS.** A `oneshot` service run by
+`spinbike-weekly-snapshot.timer` (**OnCalendar `Sun *-*-* 04:00:00`,
+`Persistent=true`** so a missed run catches up after downtime). It runs
+`/opt/spinbike/hetzner-weekly-snapshot.sh`, whose **repo source of truth is
+`scripts/hetzner-weekly-snapshot.sh`** (unit sources:
+`scripts/spinbike-weekly-snapshot.service` +
+`scripts/spinbike-weekly-snapshot.timer`). The script creates a Hetzner
+snapshot `spinbike-weekly-<date>` of the live server (no downtime; SQLite is
+crash-consistent thanks to WAL), waits for the create-image action to
+finish, then **prunes to the 4 newest** snapshots carrying the
+`spinbike-weekly-` prefix (`KEEP=4`). Pruning matches on that prefix ONLY —
+it never touches any other snapshot on the account. The API token is read at
+runtime from the mode-600 file **`/home/newlevel/.secrets/hetzner-spinbike`**
+(root-only run; the value is never logged, only placed in the
+`Authorization: Bearer` header).
+
+**Re-installing after a script change:** copy the updated
+`scripts/hetzner-weekly-snapshot.sh` to `/opt/spinbike/`, then
+`systemctl daemon-reload` (also re-copy the `.service`/`.timer` units if they
+changed, and `systemctl enable --now spinbike-weekly-snapshot.timer` on a
+first install). Verify with
+`systemctl list-timers spinbike-weekly-snapshot.timer`.

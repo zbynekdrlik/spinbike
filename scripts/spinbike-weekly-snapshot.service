@@ -1,0 +1,8 @@
+[Unit]
+Description=Weekly Hetzner snapshot of the SpinBike VPS (#369)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/spinbike/hetzner-weekly-snapshot.sh
