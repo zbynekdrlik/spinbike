@@ -241,3 +241,45 @@ async fn no_admin_recipient_yields_pending_not_a_false_delivery() {
     );
     assert!(mail.last_captured().is_none(), "nothing should be sent");
 }
+
+#[tokio::test]
+async fn a_failed_recovery_send_is_not_deduped_and_retries_next_tick() {
+    // Pins the recovery branch's `n > 0` delivery gate (door_health.rs #355):
+    // a failed recovery e-mail must report Pending and keep retrying — a
+    // `>` -> `>=` mutation would mark the episode recovered with 0 recipients
+    // and silently swallow the recovery notification.
+    let pool = empty_pool().await;
+    seed_admin(&pool, "owner@test.local").await;
+    let good_mail = MailHandle::capture();
+    let dead_mail = MailHandle::disabled();
+    let mut monitor = DoorHealthMonitor::new();
+
+    // Enter the fault episode with a working relay.
+    assert_eq!(
+        monitor.tick(true, &good_mail, &pool).await,
+        DoorHealthTick::FaultAlerted { recipients: 1 }
+    );
+
+    // Recovery while the relay is down -> Pending, retried, never Recovered{0}.
+    assert_eq!(
+        monitor.tick(false, &dead_mail, &pool).await,
+        DoorHealthTick::RecoveryPending,
+        "a failed recovery send must report Pending, not a delivered recovery"
+    );
+    assert_eq!(
+        monitor.tick(false, &dead_mail, &pool).await,
+        DoorHealthTick::RecoveryPending,
+        "a still-undelivered recovery must RETRY, not dedup to Steady"
+    );
+
+    // Relay back -> exactly one delivered recovery closes the episode.
+    assert_eq!(
+        monitor.tick(false, &good_mail, &pool).await,
+        DoorHealthTick::Recovered { recipients: 1 }
+    );
+    assert_eq!(
+        monitor.tick(false, &good_mail, &pool).await,
+        DoorHealthTick::Steady,
+        "after a delivered recovery the episode is closed"
+    );
+}
