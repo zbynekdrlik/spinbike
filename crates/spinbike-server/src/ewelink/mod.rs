@@ -221,6 +221,17 @@ impl EwelinkHandle {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
+    /// The published door-fault verdict: `failed_presses` has reached
+    /// `FAULT_THRESHOLD`. Shared by `GET /api/door/health` (which surfaces it
+    /// as the `faulty` field) and the `jobs::door_health` alert job (#355), so
+    /// both agree on exactly what "faulty" means. A `Disabled` handle never
+    /// records a failure (`press()` short-circuits before `record()`), so this
+    /// stays `false` on a dev box or a deliberate kill switch — a
+    /// configuration state must never read as broken hardware.
+    pub fn is_faulty(&self) -> bool {
+        self.failed_presses() >= FAULT_THRESHOLD
+    }
+
     fn ms_ago(cell: &std::sync::atomic::AtomicI64) -> Option<i64> {
         let ts = cell.load(std::sync::atomic::Ordering::Relaxed);
         if ts == i64::MIN {
@@ -356,6 +367,35 @@ mod tests {
 
             assert!(h.press().await.is_err());
             assert_eq!(h.failed_presses(), 3, "counts past the threshold");
+        })
+        .await;
+    }
+
+    /// `is_faulty()` is the verdict shared with `/api/door/health` and the
+    /// door-health alert job (#355): false below `FAULT_THRESHOLD`, true at or
+    /// above it. Pins the `>=` boundary so a `>=`→`>` mutation (which would
+    /// need THREE failures before alerting) is caught.
+    #[tokio::test]
+    async fn is_faulty_flips_exactly_at_the_fault_threshold() {
+        with_clean_env(|| async {
+            // SAFETY: under EWELINK_TEST_LOCK held inside with_clean_env.
+            unsafe { std::env::set_var("EWELINK_TEST_MODE", "offline") }
+            let h = EwelinkHandle::spawn();
+            assert!(!h.is_faulty(), "fresh handle is not faulty");
+
+            assert!(h.press().await.is_err());
+            assert_eq!(h.failed_presses(), 1);
+            assert!(
+                !h.is_faulty(),
+                "one failure (< FAULT_THRESHOLD) must NOT read as faulty"
+            );
+
+            assert!(h.press().await.is_err());
+            assert_eq!(h.failed_presses(), FAULT_THRESHOLD);
+            assert!(
+                h.is_faulty(),
+                "reaching FAULT_THRESHOLD failures must read as faulty"
+            );
         })
         .await;
     }
