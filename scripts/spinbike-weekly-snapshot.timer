@@ -1,0 +1,10 @@
+[Unit]
+Description=Run spinbike-weekly-snapshot weekly (Sun 04:00)
+
+[Timer]
+OnCalendar=Sun *-*-* 04:00:00
+Persistent=true
+RandomizedDelaySec=15m
+
+[Install]
+WantedBy=timers.target
