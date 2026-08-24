@@ -40,7 +40,9 @@ drift that might already be sitting in a pre-existing DB value (e.g. a
 (`charge`/`storno`/`sell_pass`), `db::users::update_credit`, `users.rs`'s
 `topup_user` (#325), `door.rs`'s no-pass single-entry charge (#326),
 `admin.rs`'s `create_service`/`update_service` `default_price` write
-boundary, `charger.rs`'s 4-hour Spinning auto-charge (#343). Any
+boundary, `charger.rs`'s 4-hour Spinning auto-charge (#343),
+`db::users::auto_renew_pass`'s expired-pass renewal debit + ledger row (#365,
+`.claude/rules/pass-auto-renewal.md`). Any
 NEW money-mutating write site should follow the same shape — round once,
 right after the value enters the function, reuse it everywhere.
 

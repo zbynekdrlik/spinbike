@@ -106,7 +106,19 @@ pub fn MyBalancePage() -> impl IntoView {
 
         // Credit + pass cards — re-render reactively on data changes (no
         // remount of children; just text updates).
-        <div class="card-credit" data-testid="my-balance-credit">
+        //
+        // #365: highlight a NEGATIVE summary balance so the customer can see at
+        // a glance they owe money (the "má pri mne svietiť, že som v mínuse"
+        // half of the auto-renewal feature). Mirrors the desk-side
+        // `card-balance--negative` (card_panel.rs, #49) — the modifier toggles
+        // reactively on the same container whose inner value already updates.
+        <div
+            class=move || data.with(|d| {
+                let negative = d.as_ref().map(|d| credit_is_negative(d.credit)).unwrap_or(false);
+                if negative { "card-credit card-credit--negative" } else { "card-credit" }
+            })
+            data-testid="my-balance-credit"
+        >
             <div class="card-credit__label">{move || i18n::t(lang.get(), "my_balance_credit")}</div>
             <div class="card-credit__value">
                 "\u{20ac} "
@@ -230,6 +242,15 @@ pub fn MyBalancePage() -> impl IntoView {
             })
         }}
     }
+}
+
+/// Whether the summary credit card should render the negative-balance
+/// highlight (#365). Mirrors the desk-side rule EXACTLY (`credit < 0.0`,
+/// card_panel.rs #49): a zero balance is NOT debt, so the boundary is strict
+/// `< 0`, not `<= 0` — a €0 customer must not see the "you owe money" colour.
+/// Extracted for a wasm unit test that pins that boundary.
+fn credit_is_negative(credit: f64) -> bool {
+    credit < 0.0
 }
 
 /// Render a recent-transaction row's display date from its raw server
@@ -413,5 +434,18 @@ mod tests {
     fn recent_tx_sub_note_is_empty_when_no_note() {
         assert_eq!(recent_tx_sub_note(None, false, Lang::Sk), "");
         assert_eq!(recent_tx_sub_note(Some(""), false, Lang::Sk), "");
+    }
+
+    /// #365: only a genuinely NEGATIVE balance lights the "you owe money"
+    /// highlight. A €0 balance is settled, not debt — the boundary is strict
+    /// `< 0`. Pins it against a `<` → `<=` mutation that would wrongly flag a
+    /// paid-up customer.
+    #[wasm_bindgen_test]
+    fn credit_is_negative_only_below_zero() {
+        assert!(credit_is_negative(-0.01), "a debt must light the highlight");
+        assert!(credit_is_negative(-15.0));
+        assert!(!credit_is_negative(0.0), "€0 is settled, not debt");
+        assert!(!credit_is_negative(0.01));
+        assert!(!credit_is_negative(42.0));
     }
 }

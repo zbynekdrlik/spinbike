@@ -95,7 +95,28 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
             Some(s) => s.as_str() >= date.as_str(),
             None => false,
         };
-        let amount = if has_pass { 0.0 } else { -price };
+
+        // #365: no active pass covering the booking day, but if the customer
+        // has EVER held a monthly pass, auto-renew it at the price of the last
+        // one (anchored to the booking day + 1 month) instead of charging the
+        // Spinning single-visit price. The fresh pass then covers THIS class (a
+        // €0 visit) and the customer's credit goes negative until they settle
+        // up. A customer who has NEVER held a pass keeps the Spinning charge
+        // (auto_renew_pass returns None). `renewed` gates the credit debit
+        // below: the auto-renew path already debited the pass price itself, so
+        // only the genuine single-visit charge (case 3) debits `price` here.
+        let (amount, renewed) = if has_pass {
+            (0.0, false)
+        } else {
+            // The booking `date` is already a gym-local YYYY-MM-DD calendar
+            // date (no tz conversion — bratislava-tz.md), so parsing it to a
+            // NaiveDate anchor is pure.
+            let anchor = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")?;
+            match crate::db::users::auto_renew_pass(&mut *tx, user_id, anchor).await? {
+                Some(_new_credit) => (0.0, true),
+                None => (-price, false),
+            }
+        };
 
         // Log the money-relevant decision for every charged booking so a
         // "free visit" dispute can be reconstructed from logs alone.
@@ -105,6 +126,7 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
             as_of_date = %date,
             pass_valid_until = ?pass_valid_until,
             has_pass,
+            renewed,
             credit,
             amount,
             "charger: pass decision"
@@ -120,7 +142,11 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
         .fetch_one(&mut *tx)
         .await?;
 
-        if !has_pass {
+        // Debit the Spinning price ONLY when we actually charged the single
+        // visit — i.e. no active pass AND no prior pass to auto-renew. The
+        // auto-renew path (`renewed`) already debited the pass price inside
+        // `auto_renew_pass`, so debiting `price` again here would double-charge.
+        if !has_pass && !renewed {
             sqlx::query("UPDATE users SET credit = ROUND(credit - ?, 2) WHERE id = ?")
                 .bind(price)
                 .bind(user_id)
@@ -578,5 +604,117 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(credit, 5.0);
+    }
+
+    /// #365: a booking whose customer's monthly pass has EXPIRED (no longer
+    /// covers the booking date) but who HAS held a pass before must AUTO-RENEW
+    /// the pass at the price of the last one, anchored to the booking day + 1
+    /// month, instead of charging the Spinning single-visit price. The class
+    /// visit then becomes a €0 pass-covered visit and the customer's credit
+    /// goes negative by the pass price (not the Spinning price). A customer who
+    /// never held a pass keeps the Spinning charge (covered by
+    /// `charger_debits_credit_without_pass`); a VOIDED pass does NOT renew
+    /// (covered by `charger_charges_when_pass_is_voided` — the view excludes
+    /// it, so auto_renew_pass returns None).
+    #[tokio::test]
+    async fn charger_auto_renews_expired_pass_instead_of_charging_spinning() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, credit) VALUES ('u@x','u',10.0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind='monthly_pass'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        // A prior pass sold for 35.0 that expired yesterday — it no longer
+        // covers the (future) booking date, so has_pass=false, but it is still
+        // the user's newest non-voided pass, so auto_renew reads its price.
+        sqlx::query(
+            "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until)
+             VALUES (?, NULL, ?, -35.0, 'charge', date('now','-1 day'))",
+        )
+        .bind(uid)
+        .bind(pass_svc)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Book the nearest Monday 18:00 (same as seed_booking).
+        let tid: i64 = sqlx::query_scalar(
+            "SELECT id FROM class_templates WHERE weekday=0 AND start_time='18:00'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let today = crate::util::today_bratislava();
+        let days_to_mon = (7 - today.weekday().num_days_from_monday() as i64) % 7;
+        let mon = today + Duration::days(days_to_mon);
+        let bid =
+            crate::db::classes::create_booking(&pool, tid, &mon.to_string(), uid, None, "manual")
+                .await
+                .unwrap();
+
+        let n = tick_as_of(&pool, &now_at_14()).await.unwrap();
+        assert_eq!(n, 1);
+
+        // The class visit is €0 (covered by the fresh pass), NOT a -5 charge.
+        let txn_id: i64 =
+            sqlx::query_scalar("SELECT charge_transaction_id FROM bookings WHERE id = ?")
+                .bind(bid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let amount: f64 = sqlx::query_scalar("SELECT amount FROM transactions WHERE id = ?")
+            .bind(txn_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(
+            amount, 0.0,
+            "the class visit must be €0 — covered by the auto-renewed pass, not a Spinning charge"
+        );
+
+        // Credit debited by the RENEWED PASS price (35), not Spinning (5): 10 -> -25.
+        let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(
+            (credit - (-25.0)).abs() < 0.01,
+            "expected credit -25.0 after auto-renewal at the pass price (10 - 35), got {credit}"
+        );
+
+        // A fresh auto-renewal pass row: staff_id NULL, note 'auto-obnova',
+        // valid_until anchored to the booking day + 1 month.
+        let expected_until = mon
+            .checked_add_months(chrono::Months::new(1))
+            .unwrap()
+            .to_string();
+        let renew: (f64, Option<i64>, Option<String>, Option<String>) = sqlx::query_as(
+            "SELECT amount, staff_id, note, date(valid_until) FROM transactions \
+             WHERE user_id = ? AND note = 'auto-obnova'",
+        )
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            (renew.0 - (-35.0)).abs() < 0.001,
+            "renewal amount {} != -35",
+            renew.0
+        );
+        assert_eq!(renew.1, None, "auto-renewal must have staff_id NULL");
+        assert_eq!(renew.2.as_deref(), Some("auto-obnova"));
+        assert_eq!(
+            renew.3.as_deref(),
+            Some(expected_until.as_str()),
+            "charger anchors the renewed pass to the booking day + 1 month"
+        );
     }
 }

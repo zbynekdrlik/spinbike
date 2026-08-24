@@ -1765,6 +1765,11 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
 .card-credit__value { font-size: 1.6rem; font-weight: 700; }
 .card-pass__value { font-size: 1.1rem; }
 
+/* #365: negative summary balance = the customer owes money. Mirrors the
+   desk-side `.card-balance--negative` (#49) so the customer sees their debt
+   at a glance. */
+.card-credit--negative .card-credit__value { color: var(--danger); }
+
 .recent-visits__heading {
     font-size: 1rem;
     font-weight: 600;
