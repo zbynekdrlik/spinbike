@@ -435,8 +435,10 @@ async fn health(
     // nobody has pressed since the last restart or every press since then
     // has failed. That ambiguity is exactly why #353 sat visible on this
     // endpoint for two days without anyone being able to act on it, so the
-    // verdict is published here rather than left to the reader.
-    let faulty = failed_presses >= crate::ewelink::FAULT_THRESHOLD;
+    // verdict is published here rather than left to the reader. The SAME
+    // `is_faulty()` verdict drives the `jobs::door_health` alert job (#355),
+    // so the endpoint and the alert can never disagree on "faulty".
+    let faulty = state.ewelink.is_faulty();
 
     Ok(Json(serde_json::json!({
         "ewelink_ws": ws_state,

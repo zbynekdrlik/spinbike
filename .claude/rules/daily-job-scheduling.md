@@ -2,6 +2,7 @@
 paths:
   - "crates/spinbike-server/src/bin/server.rs"
   - "crates/spinbike-server/src/jobs/**"
+  - "crates/spinbike-server/src/lib.rs"
 ---
 
 # Daily background jobs — wall-clock-aligned, never `tokio::time::interval(86400s)`
@@ -100,3 +101,30 @@ notifications::tick(&pool, &push).await } }`).
   least two different counts (one that should log, one that shouldn't). Any
   future `Ok(n) if n > <threshold>`-shaped log-gating branch in this codebase
   needs the same treatment, not just a "did the function run" test.
+
+## A job that reads route-owned in-memory state spawns in `start_server`, NOT `bin/server.rs` (#355)
+
+The background jobs in `bin/server.rs` (`charger`/`materialiser`/`notifications`/
+`token_purge`) build their OWN handles (`push`/`mail`) and a `pool.clone()`, deliberately
+NOT reaching into `AppState`. That is fine for those jobs because a `PushHandle`/`MailHandle`
+is env-derived and stateless — a second instance behaves identically to the one in
+`AppState`.
+
+**It is WRONG for a job that must read PER-INSTANCE in-memory state a route mutates.**
+`EwelinkHandle::failed_presses` (the door-fault signal behind `is_faulty()`) is an
+in-memory atomic that ONLY accumulates on the `AppState.ewelink` instance the door route
+calls `press()` on. A separately-spawned `EwelinkHandle` in `main()` would carry its own,
+always-zero counter and never see a fault. So the `door_health` alert loop (#355) is
+spawned INSIDE `start_server` — after the `AppState` is built, before `with_state(state)`
+moves it — cloning `state.ewelink` / `state.mail` / `state.pool`. Same rule applies to any
+future job that reads a route-owned in-memory handle (the rate-limiters, ewelink, or any
+new `AppState` field holding live state). It stays a plain `tokio::time::interval` there,
+same sub-daily convention as `charger` (60s) — the WHERE (start_server, for the shared
+instance) is the point, not the cadence.
+
+**Corollary — in-memory dedup state matches the lifetime of the in-memory signal it
+tracks.** The door-fault counter resets to 0 (healthy) on every restart, so the
+`door_health` alert's "already alerted" dedup lives in-memory (in `DoorHealthMonitor`),
+NOT a DB ledger. A DB row that outlived the process would, on the next post-restart tick,
+see the reset counter as healthy and fire a FALSE recovery e-mail. Persist alert/dedup
+state to the DB ONLY when the signal it tracks is itself durable.

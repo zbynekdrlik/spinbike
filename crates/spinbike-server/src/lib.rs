@@ -235,6 +235,32 @@ pub async fn start_server(pool: SqlitePool, port: u16, jwt_secret: String) -> Re
         )),
     };
 
+    // Door-health alert (#355): poll the SAME fault verdict the
+    // `/api/door/health` endpoint publishes every 60 s and e-mail the owner on
+    // the healthy→faulty and faulty→healthy edges. Spawned HERE, not in
+    // `bin/server.rs` alongside the other background jobs, because it must read
+    // the EXACT `state.ewelink` instance the door route accumulates failures on
+    // — a separately-spawned handle in `main()` would carry its own, always-zero
+    // failure counter and never see a fault. The `DoorHealthMonitor` holds the
+    // in-memory anti-spam state across ticks; a plain 60 s interval (not
+    // `spawn_daily_job`) because this is a sub-daily cadence where restart-
+    // pinning / DST drift don't matter (`.claude/rules/daily-job-scheduling.md`).
+    {
+        let ewelink = state.ewelink.clone();
+        let mail = state.mail.clone();
+        let pool = state.pool.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            interval.tick().await; // first tick fires immediately; ignore.
+            let mut monitor = crate::jobs::door_health::DoorHealthMonitor::new();
+            loop {
+                interval.tick().await;
+                monitor.tick(ewelink.is_faulty(), &mail, &pool).await;
+            }
+        });
+    }
+
     let test_mode = is_test_mode_from_env(std::env::var("SPINBIKE_TEST_MODE").ok().as_deref());
     let app = build_router(test_mode)
         .layer(build_cors_layer())
