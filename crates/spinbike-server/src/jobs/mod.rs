@@ -1,4 +1,5 @@
 pub mod charger;
+pub mod door_health;
 pub mod materialiser;
 pub mod notifications;
 pub mod token_purge;
