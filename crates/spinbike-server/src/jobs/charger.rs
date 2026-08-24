@@ -112,7 +112,7 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
             // date (no tz conversion — bratislava-tz.md), so parsing it to a
             // NaiveDate anchor is pure.
             let anchor = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")?;
-            match crate::db::users::auto_renew_pass(&mut *tx, user_id, anchor).await? {
+            match crate::db::users::auto_renew_pass(&mut tx, user_id, anchor).await? {
                 Some(_new_credit) => (0.0, true),
                 None => (-price, false),
             }

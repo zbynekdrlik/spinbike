@@ -1488,7 +1488,7 @@ mod tests {
             .unwrap();
 
         let mut conn = pool.acquire().await.unwrap();
-        let result = auto_renew_pass(&mut *conn, user_id, crate::util::today_bratislava())
+        let result = auto_renew_pass(&mut conn, user_id, crate::util::today_bratislava())
             .await
             .unwrap();
         assert_eq!(result, None, "no prior pass → nothing to renew");
@@ -1548,7 +1548,7 @@ mod tests {
 
         let anchor = chrono::NaiveDate::from_ymd_opt(2026, 1, 31).unwrap();
         let mut conn = pool.acquire().await.unwrap();
-        let new_credit = auto_renew_pass(&mut *conn, user_id, anchor)
+        let new_credit = auto_renew_pass(&mut conn, user_id, anchor)
             .await
             .unwrap()
             .expect("a prior pass exists → renewal happens");

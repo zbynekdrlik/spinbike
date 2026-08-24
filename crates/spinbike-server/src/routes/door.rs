@@ -312,7 +312,7 @@ async fn open(
             // settle up. A customer who has NEVER held a pass keeps today's
             // single-entry charge (auto_renew_pass returns None). Staff/admin
             // never reach here (short-circuited to pass_active above).
-            match users::auto_renew_pass(&mut *tx, user_id, today)
+            match users::auto_renew_pass(&mut tx, user_id, today)
                 .await
                 .map_err(internal_error)?
             {
