@@ -213,6 +213,28 @@ pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserRow>> {
     Ok(users)
 }
 
+/// E-mail addresses to alert about an operational problem (the door-health
+/// fault alert, #355). Every live (non-deleted, non-blocked) admin-role user
+/// with a non-empty e-mail — the owner is a solo operator with the `admin`
+/// role, so this reaches them without any separate config knob that could be
+/// silently left unset. A placeholder admin address that never accepts mail
+/// (e.g. a `.local` seed account) simply fails its own send at the caller and
+/// is logged; it never blocks a deliverable recipient.
+pub async fn admin_alert_recipients(pool: &SqlitePool) -> Result<Vec<String>> {
+    let emails = sqlx::query_scalar::<_, String>(
+        "SELECT email FROM users \
+         WHERE role = 'admin' \
+           AND deleted_at IS NULL \
+           AND blocked = 0 \
+           AND email IS NOT NULL \
+           AND TRIM(email) != '' \
+         ORDER BY id",
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(emails)
+}
+
 pub async fn update_user_role(pool: &SqlitePool, user_id: i64, role: &str) -> Result<()> {
     sqlx::query("UPDATE users SET role = ? WHERE id = ?")
         .bind(role)

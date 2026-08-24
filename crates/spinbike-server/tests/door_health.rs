@@ -217,8 +217,17 @@ async fn no_admin_recipient_yields_pending_not_a_false_delivery() {
     // deliverable admin → the alert has nowhere to go, so it stays Pending.
     let pool = empty_pool().await;
     users::create_user(
-        &pool, None, // no e-mail
-        None, "No-mail admin", None, None, None, "admin", None, None, None,
+        &pool,
+        None, // no e-mail
+        None,
+        "No-mail admin",
+        None,
+        None,
+        None,
+        "admin",
+        None,
+        None,
+        None,
     )
     .await
     .unwrap();
