@@ -536,6 +536,124 @@ pub async fn get_user_pass_tx(
     Ok(row)
 }
 
+/// The `transactions.note` stamped on an auto-renewed monthly pass (#365).
+/// A human label only — the machine distinguisher from a manual sale is
+/// `staff_id IS NULL` (`sell-pass` always records the selling staff's id),
+/// NOT this string (per #328, note text is never read for classification).
+/// The client app (#357) renders it verbatim, so it must read sensibly in
+/// Slovak; kept unaccented like the rest of the DB's Slovak labels.
+pub const AUTO_RENEW_NOTE: &str = "auto-obnova";
+
+/// Auto-renew a customer's monthly pass at the price of their most recent
+/// (non-voided) pass, anchored to `anchor_day` + 1 calendar month (#365).
+///
+/// This is the shared money-write called from BOTH visit-charge sites that
+/// today bill a single entry when a customer's pass has lapsed — the door
+/// route (`routes/door.rs`) and the T-4h class charger (`jobs/charger.rs`).
+/// Instead of a one-off single-entry charge, the lapsed customer gets a fresh
+/// monthly pass and their credit goes negative until they settle up (owner
+/// decision #365, variant b: renew on the next real visit, not via a daily
+/// job — so a customer who stops coming never accrues debt).
+///
+/// Contract:
+/// * Returns `Ok(Some(new_credit))` when the user HAS held a monthly pass
+///   before: a new pass row is issued (credit debited by the pass price) and
+///   the caller should treat the triggering visit as pass-covered (a €0
+///   visit, no single-entry charge). `new_credit` is the rounded balance
+///   after the debit.
+/// * Returns `Ok(None)` when the user has NEVER held a monthly pass — there is
+///   no "last price" to renew at, so the caller keeps its existing
+///   single-entry / class charge unchanged.
+///
+/// MUST be called inside the caller's open transaction (`&mut *tx`) so the
+/// pass issue + the caller's own visit row commit or roll back atomically.
+///
+/// The most recent non-voided pass (regardless of whether it is still valid)
+/// is resolved through the canonical `user_active_pass` view (V18) joined back
+/// to `transactions.amount` for the price — never hand-rolled pass-status SQL
+/// (the same rule door.rs/charger.rs already follow). The price is rounded to
+/// cents exactly once and reused for both the ledger `amount` and the credit
+/// debit (money-rounding.md / #325/#326). A pass last sold for 0 € renews at
+/// 0 € — a deliberate barter flow (#342), not a bug.
+pub async fn auto_renew_pass(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: i64,
+    anchor_day: chrono::NaiveDate,
+) -> Result<Option<f64>> {
+    // Latest non-voided monthly pass + its own price, via the canonical view.
+    // `user_active_pass` already picks the newest non-voided pass per user
+    // (rn=1, valid_until DESC, id DESC) and filters deleted_at IS NULL, so a
+    // voided pass never resolves here — the join hands back that pass's
+    // ABS(amount) as "the price of the last one sold".
+    let last_pass: Option<(f64,)> = sqlx::query_as(
+        "SELECT t.amount \
+         FROM user_active_pass ap \
+         JOIN transactions t ON t.id = ap.pass_tx_id \
+         WHERE ap.user_id = ?",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some((last_amount,)) = last_pass else {
+        // Never held a monthly pass — nothing to renew at.
+        return Ok(None);
+    };
+
+    // Round ONCE, reuse for both the ledger row and the credit debit.
+    let price = round_cents(last_amount.abs());
+
+    // +1 calendar month from the visit day (chrono clamps 31 Jan → 28/29 Feb).
+    let valid_until = anchor_day
+        .checked_add_months(chrono::Months::new(1))
+        .expect("a Bratislava calendar date + 1 month is always representable");
+
+    // Same monthly-pass service the manual sell-pass path uses, resolved by
+    // its stable `kind` (never the admin-editable name — service-kind.md).
+    let service_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+        .fetch_one(&mut *conn)
+        .await?;
+
+    // Debit the pass price. ROUND(...) in SQL is defense-in-depth against any
+    // float drift already sitting in the stored credit; the Rust `price` is
+    // already rounded above.
+    sqlx::query("UPDATE users SET credit = ROUND(credit - ?, 2) WHERE id = ?")
+        .bind(price)
+        .bind(user_id)
+        .execute(&mut *conn)
+        .await?;
+
+    let new_credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(&mut *conn)
+        .await?;
+
+    // The new pass row: identical shape to a manual sell-pass EXCEPT
+    // staff_id = NULL and the distinguishing note, so history + the client
+    // app can tell an automatic renewal from a desk sale (#357).
+    sqlx::query(
+        "INSERT INTO transactions \
+           (user_id, staff_id, service_id, amount, action, valid_until, note) \
+         VALUES (?, NULL, ?, ?, 'charge', ?, ?)",
+    )
+    .bind(user_id)
+    .bind(service_id)
+    .bind(-price)
+    .bind(valid_until)
+    .bind(AUTO_RENEW_NOTE)
+    .execute(&mut *conn)
+    .await?;
+
+    let new_credit = round_cents(new_credit);
+    tracing::info!(
+        user_id,
+        price,
+        %valid_until,
+        new_credit,
+        "pass: auto-renewed expired monthly pass at last price (#365)"
+    );
+    Ok(Some(new_credit))
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct NegativeBalanceUserRow {
     pub id: i64,
@@ -1353,6 +1471,106 @@ mod tests {
             None,
             "soft-deleted pass sale must not count as active pass"
         );
+    }
+
+    /// #365: a customer who has NEVER held a monthly pass has no "last price" to
+    /// renew at, so `auto_renew_pass` returns None and writes nothing — the
+    /// caller keeps its single-entry charge. This is the boundary that keeps
+    /// today's behavior for a brand-new customer.
+    #[tokio::test]
+    async fn auto_renew_pass_returns_none_when_never_held_a_pass() {
+        let pool = setup().await;
+        let user_id = make_user(&pool, None, "Never Passed").await;
+        sqlx::query("UPDATE users SET credit = 12.0 WHERE id = ?")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut conn = pool.acquire().await.unwrap();
+        let result = auto_renew_pass(&mut conn, user_id, crate::util::today_bratislava())
+            .await
+            .unwrap();
+        assert_eq!(result, None, "no prior pass → nothing to renew");
+        drop(conn);
+
+        let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+            .bind(user_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(credit, 12.0, "a no-op renewal must not touch credit");
+        let tx_count: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM transactions WHERE user_id = ?")
+                .bind(user_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            tx_count, 0,
+            "no transaction row written when nothing renewed"
+        );
+    }
+
+    /// #365: an expired prior pass renews at ABS(its amount), anchored to
+    /// `anchor_day` + 1 month, debiting credit and writing a distinguishable
+    /// (`staff_id NULL`, `note='auto-obnova'`) pass row. Direct helper contract
+    /// test complementing the door/charger integration coverage.
+    #[tokio::test]
+    async fn auto_renew_pass_issues_pass_at_last_price_and_debits() {
+        use crate::db::transactions::create_transaction_with_valid_until;
+        let pool = setup().await;
+        let user_id = make_user(&pool, None, "Renewer").await;
+        sqlx::query("UPDATE users SET credit = 10.0 WHERE id = ?")
+            .bind(user_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let pass_svc: i64 =
+            sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        // A pass that already expired (10 days ago) — still the last one sold.
+        let expired = crate::util::today_bratislava() - chrono::Duration::days(10);
+        create_transaction_with_valid_until(
+            &pool,
+            Some(user_id),
+            None,
+            Some(pass_svc),
+            -42.0,
+            "charge",
+            Some(expired),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let anchor = chrono::NaiveDate::from_ymd_opt(2026, 1, 31).unwrap();
+        let mut conn = pool.acquire().await.unwrap();
+        let new_credit = auto_renew_pass(&mut conn, user_id, anchor)
+            .await
+            .unwrap()
+            .expect("a prior pass exists → renewal happens");
+        drop(conn);
+        assert!(
+            (new_credit - (-32.0)).abs() < 1e-9,
+            "10 - 42 = -32, got {new_credit}"
+        );
+
+        // valid_until = 31 Jan + 1 month, clamped to 28 Feb 2026 (non-leap).
+        let renewed: (f64, Option<i64>, Option<String>, String) = sqlx::query_as(
+            "SELECT amount, staff_id, note, date(valid_until) FROM transactions \
+             WHERE user_id = ? AND note = 'auto-obnova'",
+        )
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!((renewed.0 - (-42.0)).abs() < 1e-9);
+        assert_eq!(renewed.1, None);
+        assert_eq!(renewed.2.as_deref(), Some(AUTO_RENEW_NOTE));
+        assert_eq!(renewed.3, "2026-02-28", "31 Jan + 1 month clamps to 28 Feb");
     }
 
     #[tokio::test]
