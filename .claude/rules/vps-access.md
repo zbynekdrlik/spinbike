@@ -9,12 +9,21 @@ paths:
 
 # Prod + dev now live on the SpinBike VPS — access recipe (#350, 2026-08-12)
 
-**Prod and dev are NOT on this machine (dev1).** Both moved to a dedicated
-Hetzner VPS on 2026-08-12 (issue #350). Any command that touches the live
-databases, the running services, their env files, or their logs needs to run
-**on the VPS**, not in a local session on dev1.
+**Since 2026-08-24 the Claude session itself ALSO runs on the VPS** — the
+whole development moved there and dev1 is being decommissioned (#360). First
+check `hostname`: on `spinbike` you ARE the VPS — every path in the table
+below is LOCAL (plain `sqlite3`/`systemctl`/`curl 127.0.0.1:808x` works
+directly, `sudo -n` is passwordless), and the ssh recipe below is NOT for
+you — `~/.ssh/spinbike_vps` exists only on dev1, so ssh-wrapping a command
+to your own box FAILS with a missing identity file. The recipe stays for a
+session on any OTHER machine.
 
-## The ssh recipe
+**Prod and dev moved OFF dev1** to the dedicated Hetzner VPS on 2026-08-12
+(issue #350). Any command that touches the live databases, the running
+services, their env files, or their logs needs to run **on the VPS** — from
+a foreign box via the recipe below, on the VPS itself directly.
+
+## The ssh recipe (foreign-machine sessions only)
 
 ```bash
 ssh -i ~/.ssh/spinbike_vps root@167.233.245.147 '<cmd>'
