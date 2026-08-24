@@ -24,7 +24,11 @@ echo "created snapshot $desc (image $image_id, action $action_id)"
 # A snapshot can take minutes; wait up to 30 min for the action to finish.
 status=running
 for _ in $(seq 1 180); do
-  status=$(curl -fsS "$API/actions/$action_id" "${auth[@]}" | jq -r '.action.status')
+  # Tolerate a transient poll failure (network blip / 5xx): keep polling
+  # within the 30-min bound instead of aborting after the snapshot exists.
+  if ! status=$(curl -fsS "$API/actions/$action_id" "${auth[@]}" | jq -r '.action.status'); then
+    status=polling
+  fi
   [ "$status" = success ] && break
   if [ "$status" = error ]; then
     echo "snapshot action $action_id failed" >&2
@@ -39,12 +43,16 @@ fi
 echo "snapshot $image_id ready"
 
 # Prune: keep the newest $KEEP snapshots carrying our prefix; never touch others.
-curl -fsS "$API/images?type=snapshot&per_page=50" "${auth[@]}" \
+# sort=created:desc keeps the just-created snapshot on page 1 even past 50 images;
+# (.description // "") guards a foreign snapshot with a null description (which
+# would otherwise crash jq and skip pruning entirely).
+curl -fsS "$API/images?type=snapshot&sort=created:desc&per_page=50" "${auth[@]}" \
   | jq -r --arg p "$PREFIX" --argjson keep "$KEEP" \
-      '.images | map(select(.description | startswith($p))) | sort_by(.created) | reverse | .[$keep:] | .[].id' \
+      '.images | map(select((.description // "") | startswith($p))) | sort_by(.created) | reverse | .[$keep:] | .[].id' \
   | while read -r old; do
       [ -n "$old" ] || continue
-      curl -fsS -X DELETE "$API/images/$old" "${auth[@]}"
+      curl -fsS -X DELETE "$API/images/$old" "${auth[@]}" \
+        || { echo "warn: could not delete snapshot $old, continuing" >&2; continue; }
       echo "pruned old snapshot $old"
     done
 echo "done: retention is $KEEP weekly snapshots"
