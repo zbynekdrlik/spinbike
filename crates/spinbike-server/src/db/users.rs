@@ -589,8 +589,11 @@ pub const AUTO_RENEW_NOTE: &str = "auto-obnova";
 ///   - the last pass expired MORE than 31 days before `anchor_day` (gate 1,
 ///     recency: only a continuing monthly customer renews, not a years-lapsed
 ///     one — the prod incident that revived a 2020 pass in 2026);
-///   - a paid class-visit charge exists AFTER that pass's expiry (gate 2: the
-///     customer switched from pass-mode to per-visit-mode).
+///   - a paid class-visit exists AFTER that pass's expiry (gate 2: the customer
+///     switched from pass-mode to per-visit-mode) — a class-visit `amount<0`,
+///     `valid_until IS NULL`, non-voided row recorded as either a door
+///     single-entry (`action='charge'`) or a charger Spinning single-visit
+///     (`action='visit'`).
 ///
 /// MUST be called inside the caller's open transaction (`&mut *tx`) so the
 /// pass issue + the caller's own visit row commit or roll back atomically. Both
@@ -643,17 +646,21 @@ pub async fn auto_renew_pass(
 
     // #372 gate 2 — NO PAID VISIT SINCE EXPIRY: if the customer paid for even one
     // class visit AFTER the pass expired, they moved from pass-mode to
-    // per-visit-mode and must not be auto-renewed. A "paid visit" is a
-    // class-visit CHARGE: `action='charge'`, `amount<0`, `valid_until IS NULL`,
-    // `deleted_at IS NULL` (a voided charge never counts), on a service with a
-    // class-visit `kind` (service-kind.md — never the admin-editable name).
-    // Bar/other charges and EUR0 door `visit` rows do NOT count. "After expiry"
-    // is a gym-local day comparison done via the UTC instant of gym-local
-    // midnight of the day AFTER `valid_until` (`bratislava_day_range_utc`), never
-    // `date(created_at)` (UTC, up to ~2h off near midnight — the recurring #205
-    // bug class). The currently-processed visit is not yet written at either
-    // call site (door: INSERT after this; charger: INSERT after this), so it
-    // cannot count against itself.
+    // per-visit-mode and must not be auto-renewed. A "paid class-visit" is the
+    // codebase-canonical shape (reports.rs / payments.rs): `amount < 0` AND
+    // `valid_until IS NULL` on a service with a class-visit `kind` (service-kind.md
+    // — never the admin-editable name), recorded EITHER as a door single-entry
+    // `action='charge'` (routes/door.rs) OR a charger Spinning single-visit
+    // `action='visit'` (jobs/charger.rs) — so BOTH actions must match. `amount<0`
+    // excludes EUR0 door/pass-covered `visit` rows; `valid_until IS NULL` excludes
+    // pass rows; `deleted_at IS NULL` excludes voided rows; the kind filter
+    // excludes bar/generic charges. "After expiry" is a gym-local day comparison
+    // done via the UTC instant of gym-local midnight of the day AFTER
+    // `valid_until` (`bratislava_day_range_utc`), never `date(created_at)` (UTC, up
+    // to ~2h off near midnight — the recurring #205 bug class). The
+    // currently-processed visit is not yet written at either call site (door:
+    // INSERT after this; charger: INSERT after this), so it cannot count against
+    // itself.
     let day_after_expiry = last_valid_until
         .checked_add_days(chrono::Days::new(1))
         .expect("a gym-local calendar date + 1 day is always representable");
@@ -662,7 +669,7 @@ pub async fn auto_renew_pass(
     let paid_visit_sql = format!(
         "SELECT 1 FROM transactions t \
          WHERE t.user_id = ? \
-           AND t.action = 'charge' \
+           AND t.action IN ('charge', 'visit') \
            AND t.amount < 0 \
            AND t.valid_until IS NULL \
            AND t.deleted_at IS NULL \

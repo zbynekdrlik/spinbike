@@ -62,17 +62,24 @@ covers door.rs AND charger.rs; both run BEFORE any write.
    `chrono::Local` (bratislava-tz.md).
 2. **No paid class-visit since expiry.** If even one **paid class-visit** exists
    AFTER the pass expired, the customer switched to per-visit mode → no renewal.
-   A **paid class-visit** = a transaction with `action='charge'` AND
-   `amount < 0` AND `valid_until IS NULL` AND `deleted_at IS NULL` AND a service
-   whose `kind ∈ CLASS_VISIT_KINDS` (Fitness/Spinning, via
-   `class_visit_filter_sql` — never `name_en`/`name_sk`, service-kind.md). What
-   does NOT count / does NOT block: a VOIDED charge (`deleted_at` set), a
-   non-class (bar/generic) charge, a €0 door `visit` row, and any class-visit
-   BEFORE `valid_until`. "After expiry" is compared via the UTC instant of
-   gym-local midnight of the day AFTER `valid_until`
-   (`bratislava_day_range_utc(valid_until + 1).0`, formatted `%Y-%m-%d %H:%M:%S`
-   like every other `created_at` bind) — never `date(created_at)` (UTC, ~2h off
-   near midnight, the #205 bug class).
+   A **paid class-visit** uses the codebase-canonical shape (the same one
+   `db/reports.rs` / `routes/payments.rs` count): `amount < 0` AND
+   `valid_until IS NULL` AND `deleted_at IS NULL` AND a service whose
+   `kind ∈ CLASS_VISIT_KINDS` (Fitness/Spinning, via `class_visit_filter_sql` —
+   never `name_en`/`name_sk`, service-kind.md), recorded as EITHER a door
+   single-entry `action='charge'` (`routes/door.rs`) OR a charger Spinning
+   single-visit `action='visit'` (`jobs/charger.rs`) — so gate 2 matches
+   `action IN ('charge','visit')`, NOT `action='charge'` alone. The owner's #372
+   note said "action='charge'"; that misses the charger's `action='visit'` paid
+   Spinning row, which is exactly a per-visit payment and MUST block — widened to
+   the two-action form to match the owner's intent ("čo i len jeden platený
+   vstup"). What does NOT count / does NOT block: a VOIDED row (`deleted_at`
+   set), a non-class (bar/generic) charge, a €0 door/pass-covered `visit` row
+   (`amount = 0`), and any class-visit BEFORE `valid_until`. "After expiry" is
+   compared via the UTC instant of gym-local midnight of the day AFTER
+   `valid_until` (`bratislava_day_range_utc(valid_until + 1).0`, formatted
+   `%Y-%m-%d %H:%M:%S` like every other `created_at` bind) — never
+   `date(created_at)` (UTC, ~2h off near midnight, the #205 bug class).
 
 **The current entry never counts against itself**: both call sites insert the
 triggering visit/charge only AFTER `auto_renew_pass` returns (door.rs: the
