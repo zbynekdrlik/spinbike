@@ -1764,6 +1764,38 @@ mod tests {
         );
     }
 
+    /// #372(b'): the charger records a PAID Spinning single-visit as
+    /// `action='visit'` with `amount<0` (jobs/charger.rs), NOT `action='charge'`
+    /// — it must ALSO block renewal (the customer paid per-visit). This matches
+    /// the codebase-canonical paid-class-visit shape (reports.rs/payments.rs use
+    /// `action='visit' OR (action='charge' AND amount<0 AND valid_until NULL)`).
+    /// RED against a gate-2 that only matched `action='charge'`.
+    #[tokio::test]
+    async fn auto_renew_skips_when_paid_charger_visit_since_expiry() {
+        let pool = setup().await;
+        let user_id = make_user(&pool, None, "Paid Charger Spinning").await;
+        let anchor = chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        seed_last_pass(&pool, user_id, -30.0, anchor - chrono::Duration::days(10)).await;
+        let spinning: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = ?")
+            .bind(CLASS_VISIT_KINDS[1])
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until, created_at) \
+             VALUES (?, ?, -5.0, 'visit', NULL, '2026-02-25 12:00:00')",
+        )
+        .bind(user_id)
+        .bind(spinning)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !did_renew(&pool, user_id, anchor).await,
+            "a paid charger Spinning visit (action='visit', amount<0) must block renewal"
+        );
+    }
+
     /// #372(c): expired <= 31 days ago, no paid visit in between → renews (the
     /// continuing monthly customer — existing behavior preserved).
     #[tokio::test]
