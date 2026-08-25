@@ -557,6 +557,94 @@ async fn first_of_day_expired_pass_renewal_rounds_credit_and_ledger() {
     );
 }
 
+/// #372: a monthly pass that expired MORE than 31 days ago must NOT auto-renew
+/// on a door press — the long-lapsed customer gets a single-entry charge, not a
+/// fresh pass. This is the prod bug that renewed 6-years-dead passes; proves the
+/// recency gate reaches the DOOR call site (shared helper). RED against
+/// pre-#372.
+#[tokio::test]
+async fn first_of_day_pass_expired_over_31_days_ago_does_not_auto_renew() {
+    let app = TestApp::with_door_mode("success").await;
+    enable_self_entry(&app).await;
+    sqlx::query("UPDATE users SET credit = 20.0 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let svc_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    // Last pass sold for 35.0 but expired 60 days ago — outside the 31-day window.
+    sqlx::query(
+        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until) \
+         VALUES (?, 2, ?, -35.0, 'charge', date('now', '-60 days'))",
+    )
+    .bind(app.customer_id)
+    .bind(svc_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, body) = app
+        .request(post_json(
+            "/api/door/open",
+            &app.customer_token,
+            &serde_json::json!({}),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(body["status"], "opened");
+    assert_eq!(body["charged"], true);
+
+    // No auto-renewal row was written.
+    let renew_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND note = 'auto-obnova'",
+    )
+    .bind(app.customer_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(renew_count, 0, "a >31-day-expired pass must NOT auto-renew");
+
+    // Credit dropped by the single-entry price (read from the seed), not the 35
+    // pass price (which would leave -15).
+    let se_price: f64 =
+        sqlx::query_scalar("SELECT default_price FROM services WHERE kind = 'single_entry'")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+        .bind(app.customer_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert!(
+        (credit - (20.0 - se_price)).abs() < 0.01,
+        "expected single-entry charge (20 - {se_price}), got {credit}"
+    );
+
+    // The door row is a single-entry CHARGE (amount<0), not a EUR0 pass-covered
+    // visit.
+    let door_row: (String, f64) = sqlx::query_as(
+        "SELECT action, amount FROM transactions \
+         WHERE user_id = ? AND is_door_press = 1 AND note = 'door: 1st'",
+    )
+    .bind(app.customer_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        door_row.0, "charge",
+        "must be a single-entry charge, not a visit"
+    );
+    assert!(
+        door_row.1 < 0.0,
+        "single-entry door charge must be negative, got {}",
+        door_row.1
+    );
+}
+
 /// #365: an auto-renewed pass carries `valid_until`, so it must count in the
 /// `passes_sold` KPI exactly like a manual sale (reports.rs). Trigger a
 /// door-driven renewal, then read today's day report and assert it counts.

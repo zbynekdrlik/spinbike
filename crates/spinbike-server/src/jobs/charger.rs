@@ -717,4 +717,100 @@ mod tests {
             "charger anchors the renewed pass to the booking day + 1 month"
         );
     }
+
+    /// #372: a monthly pass that expired MORE than 31 days ago must NOT
+    /// auto-renew on a class charge either — the charger falls back to the
+    /// Spinning single-visit charge, same recency gate as the door path (shared
+    /// helper). RED against pre-#372.
+    #[tokio::test]
+    async fn charger_does_not_auto_renew_pass_expired_over_31_days_ago() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, credit) VALUES ('u@x','u',10.0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind='monthly_pass'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        // A prior pass expired 60 days ago — outside the 31-day recency window.
+        sqlx::query(
+            "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until)
+             VALUES (?, NULL, ?, -35.0, 'charge', date('now','-60 days'))",
+        )
+        .bind(uid)
+        .bind(pass_svc)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // Book the nearest Monday 18:00 (same as seed_booking).
+        let tid: i64 = sqlx::query_scalar(
+            "SELECT id FROM class_templates WHERE weekday=0 AND start_time='18:00'",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let today = crate::util::today_bratislava();
+        let days_to_mon = (7 - today.weekday().num_days_from_monday() as i64) % 7;
+        let mon = today + Duration::days(days_to_mon);
+        let bid =
+            crate::db::classes::create_booking(&pool, tid, &mon.to_string(), uid, None, "manual")
+                .await
+                .unwrap();
+
+        let n = tick_as_of(&pool, &now_at_14()).await.unwrap();
+        assert_eq!(n, 1);
+
+        // No auto-renewal row.
+        let renew_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND note = 'auto-obnova'",
+        )
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            renew_count, 0,
+            "a >31-day-expired pass must NOT auto-renew in the charger"
+        );
+
+        // The class visit is the Spinning single charge, not a EUR0 renewed visit.
+        let txn_id: i64 =
+            sqlx::query_scalar("SELECT charge_transaction_id FROM bookings WHERE id = ?")
+                .bind(bid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let amount: f64 = sqlx::query_scalar("SELECT amount FROM transactions WHERE id = ?")
+            .bind(txn_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(
+            amount < 0.0,
+            "must charge the Spinning single-visit price, got {amount}"
+        );
+
+        // Credit dropped by the Spinning price (read from seed), not 35 (which
+        // would leave -25).
+        let sp_price: f64 =
+            sqlx::query_scalar("SELECT default_price FROM services WHERE kind='group_class'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert!(
+            (credit - (10.0 - sp_price)).abs() < 0.01,
+            "expected Spinning charge (10 - {sp_price}), got {credit}"
+        );
+    }
 }
