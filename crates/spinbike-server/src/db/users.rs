@@ -583,12 +583,22 @@ pub const AUTO_RENEW_NOTE: &str = "auto-obnova";
 ///   the caller should treat the triggering visit as pass-covered (a €0
 ///   visit, no single-entry charge). `new_credit` is the rounded balance
 ///   after the debit.
-/// * Returns `Ok(None)` when the user has NEVER held a monthly pass — there is
-///   no "last price" to renew at, so the caller keeps its existing
-///   single-entry / class charge unchanged.
+/// * Returns `Ok(None)` — the caller keeps its existing single-entry / class
+///   charge unchanged — when ANY of these hold (#372):
+///   - the user has NEVER held a monthly pass (no "last price" to renew at);
+///   - the last pass expired MORE than 31 days before `anchor_day` (gate 1,
+///     recency: only a continuing monthly customer renews, not a years-lapsed
+///     one — the prod incident that revived a 2020 pass in 2026);
+///   - a paid class-visit exists AFTER that pass's expiry (gate 2: the customer
+///     switched from pass-mode to per-visit-mode) — a class-visit `amount<0`,
+///     `valid_until IS NULL`, non-voided row recorded as either a door
+///     single-entry (`action='charge'`) or a charger Spinning single-visit
+///     (`action='visit'`).
 ///
 /// MUST be called inside the caller's open transaction (`&mut *tx`) so the
-/// pass issue + the caller's own visit row commit or roll back atomically.
+/// pass issue + the caller's own visit row commit or roll back atomically. Both
+/// gates run BEFORE any write, and both call sites insert the triggering visit
+/// only AFTER this returns, so the current entry never counts against itself.
 ///
 /// The most recent non-voided pass (regardless of whether it is still valid)
 /// is resolved through the canonical `user_active_pass` view (V18) joined back
@@ -607,8 +617,8 @@ pub async fn auto_renew_pass(
     // (rn=1, valid_until DESC, id DESC) and filters deleted_at IS NULL, so a
     // voided pass never resolves here — the join hands back that pass's
     // ABS(amount) as "the price of the last one sold".
-    let last_pass: Option<(f64,)> = sqlx::query_as(
-        "SELECT t.amount \
+    let last_pass: Option<(f64, chrono::NaiveDate)> = sqlx::query_as(
+        "SELECT t.amount, date(ap.valid_until) \
          FROM user_active_pass ap \
          JOIN transactions t ON t.id = ap.pass_tx_id \
          WHERE ap.user_id = ?",
@@ -616,10 +626,68 @@ pub async fn auto_renew_pass(
     .bind(user_id)
     .fetch_optional(&mut *conn)
     .await?;
-    let Some((last_amount,)) = last_pass else {
+    let Some((last_amount, last_valid_until)) = last_pass else {
         // Never held a monthly pass — nothing to renew at.
         return Ok(None);
     };
+
+    // #372 gate 1 — RECENCY: only auto-renew for a CONTINUING monthly customer,
+    // whose last pass expired at most 31 days before this visit (INCLUSIVE). A
+    // pass that lapsed longer ago means the customer stopped coming on a pass;
+    // reviving a years-dead pass on a door press / class charge was the prod bug
+    // this fixes (a 2020 pass renewed in 2026). `anchor_day` is already gym-local
+    // (today at the door, the booking date in the charger — bratislava-tz.md)
+    // and `valid_until` is a bare gym-local calendar date, so the difference is
+    // an apples-to-apples day count with no `chrono::Local` involved.
+    const MAX_LAPSE_DAYS: i64 = 31;
+    if (anchor_day - last_valid_until).num_days() > MAX_LAPSE_DAYS {
+        return Ok(None);
+    }
+
+    // #372 gate 2 — NO PAID VISIT SINCE EXPIRY: if the customer paid for even one
+    // class visit AFTER the pass expired, they moved from pass-mode to
+    // per-visit-mode and must not be auto-renewed. A "paid class-visit" is the
+    // codebase-canonical shape (reports.rs / payments.rs): `amount < 0` AND
+    // `valid_until IS NULL` on a service with a class-visit `kind` (service-kind.md
+    // — never the admin-editable name), recorded EITHER as a door single-entry
+    // `action='charge'` (routes/door.rs) OR a charger Spinning single-visit
+    // `action='visit'` (jobs/charger.rs) — so BOTH actions must match. `amount<0`
+    // excludes EUR0 door/pass-covered `visit` rows; `valid_until IS NULL` excludes
+    // pass rows; `deleted_at IS NULL` excludes voided rows; the kind filter
+    // excludes bar/generic charges. "After expiry" is a gym-local day comparison
+    // done via the UTC instant of gym-local midnight of the day AFTER
+    // `valid_until` (`bratislava_day_range_utc`), never `date(created_at)` (UTC, up
+    // to ~2h off near midnight — the recurring #205 bug class). The
+    // currently-processed visit is not yet written at either call site (door:
+    // INSERT after this; charger: INSERT after this), so it cannot count against
+    // itself.
+    let day_after_expiry = last_valid_until
+        .checked_add_days(chrono::Days::new(1))
+        .expect("a gym-local calendar date + 1 day is always representable");
+    let (cutoff_utc, _) = crate::util::bratislava_day_range_utc(day_after_expiry);
+    let cutoff = cutoff_utc.format("%Y-%m-%d %H:%M:%S").to_string();
+    let paid_visit_sql = format!(
+        "SELECT 1 FROM transactions t \
+         WHERE t.user_id = ? \
+           AND t.action IN ('charge', 'visit') \
+           AND t.amount < 0 \
+           AND t.valid_until IS NULL \
+           AND t.deleted_at IS NULL \
+           AND t.created_at >= ? \
+           AND {visit_filter} \
+         LIMIT 1",
+        visit_filter = class_visit_filter_sql("t.service_id"),
+    );
+    let mut paid_visit_q = sqlx::query_scalar::<_, i64>(&paid_visit_sql)
+        .bind(user_id)
+        .bind(&cutoff);
+    for k in CLASS_VISIT_KINDS {
+        paid_visit_q = paid_visit_q.bind(*k);
+    }
+    if paid_visit_q.fetch_optional(&mut *conn).await?.is_some() {
+        // Switched to per-visit mode — keep the caller's single-entry / class charge.
+        return Ok(None);
+    }
 
     // Round ONCE, reuse for both the ledger row and the credit debit.
     let price = round_cents(last_amount.abs());
@@ -1593,6 +1661,274 @@ mod tests {
         assert_eq!(renewed.1, None);
         assert_eq!(renewed.2.as_deref(), Some(AUTO_RENEW_NOTE));
         assert_eq!(renewed.3, "2026-02-28", "31 Jan + 1 month clamps to 28 Feb");
+    }
+
+    // ---- #372: auto-renewal recency + no-paid-visit-since gates ----
+
+    /// Seed the user's most-recent monthly pass at `amount`, expiring on
+    /// `valid_until` (a gym-local calendar date). Resolves through
+    /// `user_active_pass` exactly like production (uses the shared helper).
+    async fn seed_last_pass(
+        pool: &SqlitePool,
+        user_id: i64,
+        amount: f64,
+        valid_until: chrono::NaiveDate,
+    ) {
+        let pass_svc: i64 =
+            sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+                .fetch_one(pool)
+                .await
+                .unwrap();
+        crate::db::transactions::create_transaction_with_valid_until(
+            pool,
+            Some(user_id),
+            None,
+            Some(pass_svc),
+            amount,
+            "charge",
+            Some(valid_until),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    /// Seed a class-visit (Fitness) CHARGE at an explicit `created_at`
+    /// (UTC `YYYY-MM-DD HH:MM:SS`), `amount<0`, `valid_until IS NULL`. When
+    /// `voided`, stamps `deleted_at` so it must NOT block renewal.
+    async fn seed_class_charge(pool: &SqlitePool, user_id: i64, created_at: &str, voided: bool) {
+        let fitness: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = ?")
+            .bind(CLASS_VISIT_KINDS[0])
+            .fetch_one(pool)
+            .await
+            .unwrap();
+        let deleted: Option<&str> = if voided { Some(created_at) } else { None };
+        sqlx::query(
+            "INSERT INTO transactions \
+               (user_id, service_id, amount, action, valid_until, created_at, deleted_at) \
+             VALUES (?, ?, -3.0, 'charge', NULL, ?, ?)",
+        )
+        .bind(user_id)
+        .bind(fitness)
+        .bind(created_at)
+        .bind(deleted)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    /// Run `auto_renew_pass` and return whether it renewed. Asserts the return
+    /// value and the written ledger row agree (Some(_) iff exactly one
+    /// `auto-obnova` row exists).
+    async fn did_renew(pool: &SqlitePool, user_id: i64, anchor: chrono::NaiveDate) -> bool {
+        let mut conn = pool.acquire().await.unwrap();
+        let result = auto_renew_pass(&mut conn, user_id, anchor).await.unwrap();
+        drop(conn);
+        let rows: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND note = 'auto-obnova'",
+        )
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            result.is_some(),
+            rows == 1,
+            "return value and written renewal row must agree"
+        );
+        result.is_some()
+    }
+
+    /// #372(a): a pass that expired > 31 days ago must NOT auto-renew — the
+    /// customer is long past the monthly window (the prod bug renewed a
+    /// 6-years-dead pass). RED against the pre-#372 helper, which renewed any
+    /// prior pass regardless of age.
+    #[tokio::test]
+    async fn auto_renew_skips_pass_expired_more_than_31_days_ago() {
+        let pool = setup().await;
+        let user_id = make_user(&pool, None, "Long Lapsed").await;
+        let anchor = chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        seed_last_pass(&pool, user_id, -30.0, anchor - chrono::Duration::days(40)).await;
+        assert!(
+            !did_renew(&pool, user_id, anchor).await,
+            "a pass expired 40 days ago must NOT renew"
+        );
+    }
+
+    /// #372(b): expired <= 31 days ago BUT a paid class-visit charge happened
+    /// after expiry — the customer switched to per-visit mode, so NO renewal.
+    /// RED against the pre-#372 helper.
+    #[tokio::test]
+    async fn auto_renew_skips_when_paid_class_visit_since_expiry() {
+        let pool = setup().await;
+        let user_id = make_user(&pool, None, "Switched To Per-Visit").await;
+        let anchor = chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        seed_last_pass(&pool, user_id, -30.0, anchor - chrono::Duration::days(10)).await; // vu 2026-02-19
+        seed_class_charge(&pool, user_id, "2026-02-25 12:00:00", false).await; // after expiry
+        assert!(
+            !did_renew(&pool, user_id, anchor).await,
+            "a paid class-visit after expiry must block renewal"
+        );
+    }
+
+    /// #372(b'): the charger records a PAID Spinning single-visit as
+    /// `action='visit'` with `amount<0` (jobs/charger.rs), NOT `action='charge'`
+    /// — it must ALSO block renewal (the customer paid per-visit). This matches
+    /// the codebase-canonical paid-class-visit shape (reports.rs/payments.rs use
+    /// `action='visit' OR (action='charge' AND amount<0 AND valid_until NULL)`).
+    /// RED against a gate-2 that only matched `action='charge'`.
+    #[tokio::test]
+    async fn auto_renew_skips_when_paid_charger_visit_since_expiry() {
+        let pool = setup().await;
+        let user_id = make_user(&pool, None, "Paid Charger Spinning").await;
+        let anchor = chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        seed_last_pass(&pool, user_id, -30.0, anchor - chrono::Duration::days(10)).await;
+        let spinning: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = ?")
+            .bind(CLASS_VISIT_KINDS[1])
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until, created_at) \
+             VALUES (?, ?, -5.0, 'visit', NULL, '2026-02-25 12:00:00')",
+        )
+        .bind(user_id)
+        .bind(spinning)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            !did_renew(&pool, user_id, anchor).await,
+            "a paid charger Spinning visit (action='visit', amount<0) must block renewal"
+        );
+    }
+
+    /// #372(c): expired <= 31 days ago, no paid visit in between → renews (the
+    /// continuing monthly customer — existing behavior preserved).
+    #[tokio::test]
+    async fn auto_renew_renews_recent_pass_with_no_paid_visit_since() {
+        let pool = setup().await;
+        let user_id = make_user(&pool, None, "Continuing Monthly").await;
+        let anchor = chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        seed_last_pass(&pool, user_id, -30.0, anchor - chrono::Duration::days(10)).await;
+        assert!(
+            did_renew(&pool, user_id, anchor).await,
+            "a recent pass with no paid visit since must renew"
+        );
+    }
+
+    /// #372(d): the recency boundary is INCLUSIVE — a pass that expired EXACTLY
+    /// 31 days ago still renews; 32 days does not. The 32-day arm is RED against
+    /// the pre-#372 helper.
+    #[tokio::test]
+    async fn auto_renew_recency_boundary_is_inclusive_at_31_days() {
+        let anchor = chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        let pool = setup().await;
+
+        let u31 = make_user(&pool, None, "Exactly 31").await;
+        seed_last_pass(&pool, u31, -30.0, anchor - chrono::Duration::days(31)).await;
+        assert!(
+            did_renew(&pool, u31, anchor).await,
+            "expired exactly 31 days ago must still renew (inclusive boundary)"
+        );
+
+        let u32 = make_user(&pool, None, "Exactly 32").await;
+        seed_last_pass(&pool, u32, -30.0, anchor - chrono::Duration::days(32)).await;
+        assert!(
+            !did_renew(&pool, u32, anchor).await,
+            "expired 32 days ago must NOT renew"
+        );
+    }
+
+    /// #372(e): a VOIDED (deleted_at) paid class-visit after expiry does NOT
+    /// block renewal — only LIVE paid visits count (matches the view's own
+    /// deleted_at discipline).
+    #[tokio::test]
+    async fn auto_renew_ignores_voided_paid_visit_when_deciding() {
+        let pool = setup().await;
+        let user_id = make_user(&pool, None, "Voided Visit").await;
+        let anchor = chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        seed_last_pass(&pool, user_id, -30.0, anchor - chrono::Duration::days(10)).await;
+        seed_class_charge(&pool, user_id, "2026-02-25 12:00:00", true).await; // voided
+        assert!(
+            did_renew(&pool, user_id, anchor).await,
+            "a voided paid visit must not block renewal"
+        );
+    }
+
+    /// #372: a class-visit charge BEFORE the pass expiry does not block renewal
+    /// — only visits strictly AFTER valid_until count ("medzi vyprsanim a teraz").
+    #[tokio::test]
+    async fn auto_renew_ignores_paid_visit_before_expiry() {
+        let pool = setup().await;
+        let user_id = make_user(&pool, None, "Paid Before Expiry").await;
+        let anchor = chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        seed_last_pass(&pool, user_id, -30.0, anchor - chrono::Duration::days(10)).await; // vu 2026-02-19
+        seed_class_charge(&pool, user_id, "2026-02-10 12:00:00", false).await; // before expiry
+        assert!(
+            did_renew(&pool, user_id, anchor).await,
+            "a paid visit while the pass was still valid must not block renewal"
+        );
+    }
+
+    /// #372: a EUR0 door `visit` row after expiry does not block renewal — a
+    /// "paid visit" is a class-visit CHARGE with amount<0, not a zero-amount
+    /// door visit.
+    #[tokio::test]
+    async fn auto_renew_ignores_zero_amount_visit_after_expiry() {
+        let pool = setup().await;
+        let user_id = make_user(&pool, None, "Zero Visit").await;
+        let anchor = chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        seed_last_pass(&pool, user_id, -30.0, anchor - chrono::Duration::days(10)).await;
+        let fitness: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = ?")
+            .bind(CLASS_VISIT_KINDS[0])
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, created_at) \
+             VALUES (?, ?, 0.0, 'visit', '2026-02-25 12:00:00')",
+        )
+        .bind(user_id)
+        .bind(fitness)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            did_renew(&pool, user_id, anchor).await,
+            "a EUR0 door visit must not block renewal"
+        );
+    }
+
+    /// #372: a non-class (generic) paid charge after expiry does not block
+    /// renewal — only class-visit kinds (Fitness/Spinning) mean "switched to
+    /// per-visit mode"; bar/other items do not.
+    #[tokio::test]
+    async fn auto_renew_ignores_non_class_charge_after_expiry() {
+        let pool = setup().await;
+        let user_id = make_user(&pool, None, "Bar Charge").await;
+        let anchor = chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap();
+        seed_last_pass(&pool, user_id, -30.0, anchor - chrono::Duration::days(10)).await;
+        let generic: i64 = sqlx::query_scalar(
+            "INSERT INTO services (kind, name_sk, name_en, default_price) \
+             VALUES ('generic', 'Bar', 'Bar', 2.0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO transactions (user_id, service_id, amount, action, valid_until, created_at) \
+             VALUES (?, ?, -2.0, 'charge', NULL, '2026-02-25 12:00:00')",
+        )
+        .bind(user_id)
+        .bind(generic)
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(
+            did_renew(&pool, user_id, anchor).await,
+            "a non-class charge must not block renewal"
+        );
     }
 
     #[tokio::test]
