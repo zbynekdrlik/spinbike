@@ -583,12 +583,19 @@ pub const AUTO_RENEW_NOTE: &str = "auto-obnova";
 ///   the caller should treat the triggering visit as pass-covered (a €0
 ///   visit, no single-entry charge). `new_credit` is the rounded balance
 ///   after the debit.
-/// * Returns `Ok(None)` when the user has NEVER held a monthly pass — there is
-///   no "last price" to renew at, so the caller keeps its existing
-///   single-entry / class charge unchanged.
+/// * Returns `Ok(None)` — the caller keeps its existing single-entry / class
+///   charge unchanged — when ANY of these hold (#372):
+///   - the user has NEVER held a monthly pass (no "last price" to renew at);
+///   - the last pass expired MORE than 31 days before `anchor_day` (gate 1,
+///     recency: only a continuing monthly customer renews, not a years-lapsed
+///     one — the prod incident that revived a 2020 pass in 2026);
+///   - a paid class-visit charge exists AFTER that pass's expiry (gate 2: the
+///     customer switched from pass-mode to per-visit-mode).
 ///
 /// MUST be called inside the caller's open transaction (`&mut *tx`) so the
-/// pass issue + the caller's own visit row commit or roll back atomically.
+/// pass issue + the caller's own visit row commit or roll back atomically. Both
+/// gates run BEFORE any write, and both call sites insert the triggering visit
+/// only AFTER this returns, so the current entry never counts against itself.
 ///
 /// The most recent non-voided pass (regardless of whether it is still valid)
 /// is resolved through the canonical `user_active_pass` view (V18) joined back
@@ -607,8 +614,8 @@ pub async fn auto_renew_pass(
     // (rn=1, valid_until DESC, id DESC) and filters deleted_at IS NULL, so a
     // voided pass never resolves here — the join hands back that pass's
     // ABS(amount) as "the price of the last one sold".
-    let last_pass: Option<(f64,)> = sqlx::query_as(
-        "SELECT t.amount \
+    let last_pass: Option<(f64, chrono::NaiveDate)> = sqlx::query_as(
+        "SELECT t.amount, date(ap.valid_until) \
          FROM user_active_pass ap \
          JOIN transactions t ON t.id = ap.pass_tx_id \
          WHERE ap.user_id = ?",
@@ -616,10 +623,64 @@ pub async fn auto_renew_pass(
     .bind(user_id)
     .fetch_optional(&mut *conn)
     .await?;
-    let Some((last_amount,)) = last_pass else {
+    let Some((last_amount, last_valid_until)) = last_pass else {
         // Never held a monthly pass — nothing to renew at.
         return Ok(None);
     };
+
+    // #372 gate 1 — RECENCY: only auto-renew for a CONTINUING monthly customer,
+    // whose last pass expired at most 31 days before this visit (INCLUSIVE). A
+    // pass that lapsed longer ago means the customer stopped coming on a pass;
+    // reviving a years-dead pass on a door press / class charge was the prod bug
+    // this fixes (a 2020 pass renewed in 2026). `anchor_day` is already gym-local
+    // (today at the door, the booking date in the charger — bratislava-tz.md)
+    // and `valid_until` is a bare gym-local calendar date, so the difference is
+    // an apples-to-apples day count with no `chrono::Local` involved.
+    const MAX_LAPSE_DAYS: i64 = 31;
+    if (anchor_day - last_valid_until).num_days() > MAX_LAPSE_DAYS {
+        return Ok(None);
+    }
+
+    // #372 gate 2 — NO PAID VISIT SINCE EXPIRY: if the customer paid for even one
+    // class visit AFTER the pass expired, they moved from pass-mode to
+    // per-visit-mode and must not be auto-renewed. A "paid visit" is a
+    // class-visit CHARGE: `action='charge'`, `amount<0`, `valid_until IS NULL`,
+    // `deleted_at IS NULL` (a voided charge never counts), on a service with a
+    // class-visit `kind` (service-kind.md — never the admin-editable name).
+    // Bar/other charges and EUR0 door `visit` rows do NOT count. "After expiry"
+    // is a gym-local day comparison done via the UTC instant of gym-local
+    // midnight of the day AFTER `valid_until` (`bratislava_day_range_utc`), never
+    // `date(created_at)` (UTC, up to ~2h off near midnight — the recurring #205
+    // bug class). The currently-processed visit is not yet written at either
+    // call site (door: INSERT after this; charger: INSERT after this), so it
+    // cannot count against itself.
+    let day_after_expiry = last_valid_until
+        .checked_add_days(chrono::Days::new(1))
+        .expect("a gym-local calendar date + 1 day is always representable");
+    let (cutoff_utc, _) = crate::util::bratislava_day_range_utc(day_after_expiry);
+    let cutoff = cutoff_utc.format("%Y-%m-%d %H:%M:%S").to_string();
+    let paid_visit_sql = format!(
+        "SELECT 1 FROM transactions t \
+         WHERE t.user_id = ? \
+           AND t.action = 'charge' \
+           AND t.amount < 0 \
+           AND t.valid_until IS NULL \
+           AND t.deleted_at IS NULL \
+           AND t.created_at >= ? \
+           AND {visit_filter} \
+         LIMIT 1",
+        visit_filter = class_visit_filter_sql("t.service_id"),
+    );
+    let mut paid_visit_q = sqlx::query_scalar::<_, i64>(&paid_visit_sql)
+        .bind(user_id)
+        .bind(&cutoff);
+    for k in CLASS_VISIT_KINDS {
+        paid_visit_q = paid_visit_q.bind(*k);
+    }
+    if paid_visit_q.fetch_optional(&mut *conn).await?.is_some() {
+        // Switched to per-visit mode — keep the caller's single-entry / class charge.
+        return Ok(None);
+    }
 
     // Round ONCE, reuse for both the ledger row and the credit debit.
     let price = round_cents(last_amount.abs());
