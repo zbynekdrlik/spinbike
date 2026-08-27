@@ -607,17 +607,16 @@ mod tests {
     }
 
     /// #365: a booking whose customer's monthly pass has EXPIRED (no longer
-    /// covers the booking date) but who HAS held a pass before must AUTO-RENEW
-    /// the pass at the price of the last one, anchored to the booking day + 1
-    /// month, instead of charging the Spinning single-visit price. The class
-    /// visit then becomes a €0 pass-covered visit and the customer's credit
-    /// goes negative by the pass price (not the Spinning price). A customer who
-    /// never held a pass keeps the Spinning charge (covered by
-    /// `charger_debits_credit_without_pass`); a VOIDED pass does NOT renew
-    /// (covered by `charger_charges_when_pass_is_voided` — the view excludes
-    /// it, so auto_renew_pass returns None).
+    /// #374 (behavior change from #365): visit-triggered auto-renewal is REMOVED
+    /// from the charger too. A customer whose pass expired (yesterday here) — so
+    /// it no longer covers the booking date — gets the plain Spinning
+    /// single-visit charge, and NO fresh pass row is written. Continuous renewal
+    /// is the daily `jobs::pass_renewal` job's job now, gated on the per-user
+    /// `auto_renew_pass` flag — never a class charge. A never-held-pass customer
+    /// keeps the Spinning charge (covered by `charger_debits_credit_without_pass`).
+    /// RED against pre-#374 (which auto-renewed here).
     #[tokio::test]
-    async fn charger_auto_renews_expired_pass_instead_of_charging_spinning() {
+    async fn charger_charges_spinning_for_expired_pass_no_renewal() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
 
@@ -631,9 +630,8 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        // A prior pass sold for 35.0 that expired yesterday — it no longer
-        // covers the (future) booking date, so has_pass=false, but it is still
-        // the user's newest non-voided pass, so auto_renew reads its price.
+        // A prior pass sold for 35.0 that expired yesterday — still the newest
+        // non-voided pass, but the charger no longer renews it (#374).
         sqlx::query(
             "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until)
              VALUES (?, NULL, ?, -35.0, 'charge', date('now','-1 day'))",
@@ -662,7 +660,21 @@ mod tests {
         let n = tick_as_of(&pool, &now_at_14()).await.unwrap();
         assert_eq!(n, 1);
 
-        // The class visit is €0 (covered by the fresh pass), NOT a -5 charge.
+        // No auto-renewal row.
+        let renew_count: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND note = 'auto-obnova'",
+        )
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            renew_count, 0,
+            "a class charge must NOT auto-renew any pass (#374)"
+        );
+
+        // The class visit is the Spinning single charge (amount<0), not a €0
+        // renewed visit.
         let txn_id: i64 =
             sqlx::query_scalar("SELECT charge_transaction_id FROM bookings WHERE id = ?")
                 .bind(bid)
@@ -674,47 +686,26 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-        assert_eq!(
-            amount, 0.0,
-            "the class visit must be €0 — covered by the auto-renewed pass, not a Spinning charge"
+        assert!(
+            amount < 0.0,
+            "must charge the Spinning single-visit price, got {amount}"
         );
 
-        // Credit debited by the RENEWED PASS price (35), not Spinning (5): 10 -> -25.
+        // Credit dropped by the Spinning price (read from seed), not 35 (which
+        // would leave -25).
+        let sp_price: f64 =
+            sqlx::query_scalar("SELECT default_price FROM services WHERE kind='group_class'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
         let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
             .bind(uid)
             .fetch_one(&pool)
             .await
             .unwrap();
         assert!(
-            (credit - (-25.0)).abs() < 0.01,
-            "expected credit -25.0 after auto-renewal at the pass price (10 - 35), got {credit}"
-        );
-
-        // A fresh auto-renewal pass row: staff_id NULL, note 'auto-obnova',
-        // valid_until anchored to the booking day + 1 month.
-        let expected_until = mon
-            .checked_add_months(chrono::Months::new(1))
-            .unwrap()
-            .to_string();
-        let renew: (f64, Option<i64>, Option<String>, Option<String>) = sqlx::query_as(
-            "SELECT amount, staff_id, note, date(valid_until) FROM transactions \
-             WHERE user_id = ? AND note = 'auto-obnova'",
-        )
-        .bind(uid)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert!(
-            (renew.0 - (-35.0)).abs() < 0.001,
-            "renewal amount {} != -35",
-            renew.0
-        );
-        assert_eq!(renew.1, None, "auto-renewal must have staff_id NULL");
-        assert_eq!(renew.2.as_deref(), Some("auto-obnova"));
-        assert_eq!(
-            renew.3.as_deref(),
-            Some(expected_until.as_str()),
-            "charger anchors the renewed pass to the booking day + 1 month"
+            (credit - (10.0 - sp_price)).abs() < 0.01,
+            "expected Spinning charge (10 - {sp_price}), got {credit}"
         );
     }
 

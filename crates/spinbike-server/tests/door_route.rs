@@ -268,19 +268,18 @@ async fn first_of_day_pass_expiring_today_grants_entry_without_charge() {
     );
 }
 
-/// #365 (behavior change from #179's `first_of_day_pass_expired_yesterday_is_charged`):
-/// a customer whose monthly pass expired YESTERDAY now AUTO-RENEWS on their
-/// next door entry — instead of the old single-entry charge, they get a fresh
-/// monthly pass at the price of their LAST one (35.0 here), their credit goes
-/// negative, and the door entry itself becomes a €0 pass-covered visit. This
-/// deliberately replaces the pre-#365 assertion (single-entry charge, credit
-/// 20 → 15) — the whole point of #365 is that an expired-pass regular no longer
-/// accrues manually-deleted single entries. The still-inclusive-last-day
-/// boundary that #179 pinned is unaffected: a pass valid THROUGH today still
-/// covers today for free (see `first_of_day_pass_expiring_today_...` above),
-/// only a genuinely EXPIRED pass now triggers renewal instead of a charge.
+/// #374 (behavior change from #365): visit-triggered auto-renewal is REMOVED.
+/// A customer whose monthly pass expired YESTERDAY no longer auto-renews on a
+/// door entry — they get a plain single-entry charge (credit 20 → 20 - the
+/// single-entry price) and NO fresh pass row is written. Continuous renewal is
+/// now the daily `jobs::pass_renewal` job's job, gated on the per-user
+/// `auto_renew_pass` flag (#374) — never a door press. The inclusive-last-day
+/// pass boundary (#179) is unaffected: a pass valid THROUGH today still covers
+/// today for free (see `first_of_day_pass_expiring_today_...` above); only a
+/// genuinely EXPIRED pass now falls back to the single-entry charge again.
+/// RED against pre-#374 (which auto-renewed here).
 #[tokio::test]
-async fn first_of_day_expired_pass_auto_renews_at_last_price() {
+async fn first_of_day_expired_pass_charges_single_entry_no_renewal() {
     let app = TestApp::with_door_mode("success").await;
     enable_self_entry(&app).await;
     sqlx::query("UPDATE users SET credit = 20.0 WHERE id = ?")
@@ -293,7 +292,8 @@ async fn first_of_day_expired_pass_auto_renews_at_last_price() {
         .fetch_one(&app.pool)
         .await
         .unwrap();
-    // Last pass sold for 35.0, expired yesterday.
+    // Last pass sold for 35.0, expired yesterday — recent, but no longer
+    // relevant to the door path (only the daily job renews now).
     sqlx::query(
         "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until) \
          VALUES (?, 2, ?, -35.0, 'charge', date('now', '-1 day'))",
@@ -313,54 +313,40 @@ async fn first_of_day_expired_pass_auto_renews_at_last_price() {
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
     assert_eq!(body["status"], "opened");
-    // Credit did decrease (by the renewed pass price) → charged=true.
     assert_eq!(body["charged"], true);
 
-    // Credit: 20 - 35 = -15 (goes negative, the whole point of the feature).
+    // NO auto-renewal row was written — the door never renews now (#374).
+    let renew_count: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND note = 'auto-obnova'",
+    )
+    .bind(app.customer_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        renew_count, 0,
+        "a door press must NOT auto-renew any pass (#374)"
+    );
+
+    // Credit dropped by the SINGLE-ENTRY price (read from the seed), not the 35
+    // pass price (which would leave -15).
+    let se_price: f64 =
+        sqlx::query_scalar("SELECT default_price FROM services WHERE kind = 'single_entry'")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
     let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
         .bind(app.customer_id)
         .fetch_one(&app.pool)
         .await
         .unwrap();
     assert!(
-        (credit - (-15.0)).abs() < 0.01,
-        "expected credit ~= -15.0 after auto-renewal at the last pass price, got {credit}"
+        (credit - (20.0 - se_price)).abs() < 0.01,
+        "expected single-entry charge (20 - {se_price}), got {credit}"
     );
 
-    // A fresh monthly-pass row was issued: staff_id NULL (distinguishes it from
-    // a desk sale, #357), note 'auto-obnova', amount -35.0, valid_until = today
-    // + 1 month.
-    let today = spinbike_server::util::today_bratislava();
-    let expected_until = today
-        .checked_add_months(chrono::Months::new(1))
-        .unwrap()
-        .to_string();
-    let renewed: (f64, Option<i64>, Option<String>, Option<String>) = sqlx::query_as(
-        "SELECT amount, staff_id, note, date(valid_until) \
-         FROM transactions \
-         WHERE user_id = ? AND action = 'charge' \
-           AND service_id = ? AND note = 'auto-obnova' AND deleted_at IS NULL",
-    )
-    .bind(app.customer_id)
-    .bind(svc_id)
-    .fetch_one(&app.pool)
-    .await
-    .unwrap();
-    assert!(
-        (renewed.0 - (-35.0)).abs() < 0.001,
-        "amount {} != -35.0",
-        renewed.0
-    );
-    assert_eq!(renewed.1, None, "auto-renewal must have staff_id NULL");
-    assert_eq!(renewed.2.as_deref(), Some("auto-obnova"));
-    assert_eq!(
-        renewed.3.as_deref(),
-        Some(expected_until.as_str()),
-        "valid_until must be anchored to today + 1 month"
-    );
-
-    // The door entry itself is now a €0 pass-covered visit (not a single-entry
-    // charge) — the new pass covers it.
+    // The door row is a single-entry CHARGE (amount<0), not a €0 pass-covered
+    // visit.
     let door_row: (String, f64, i64) = sqlx::query_as(
         "SELECT action, amount, is_door_press FROM transactions \
          WHERE user_id = ? AND is_door_press = 1 AND note = 'door: 1st'",
@@ -369,10 +355,13 @@ async fn first_of_day_expired_pass_auto_renews_at_last_price() {
     .fetch_one(&app.pool)
     .await
     .unwrap();
-    assert_eq!(door_row.0, "visit");
+    assert_eq!(
+        door_row.0, "charge",
+        "must be a single-entry charge, not a pass-covered visit"
+    );
     assert!(
-        door_row.1.abs() < 0.001,
-        "door row must be €0, got {}",
+        door_row.1 < 0.0,
+        "single-entry door charge must be negative, got {}",
         door_row.1
     );
     assert_eq!(door_row.2, 1);
