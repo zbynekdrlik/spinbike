@@ -36,7 +36,18 @@ auto_renew_pass`), guarded **staff-or-admin** (reuses `ErrorCode::StaffRequired`
 — unlike `allow_self_entry`, which is admin-only). A customer may NEVER set it
 on their own row (the gym auto-bills them). DB helper:
 `db::users::update_user_auto_renew_pass`. Threaded through `UserRow`/
-`UserRowWithPass` → `UserResponse` → UI `CardInfo`; the checkbox
+`UserRowWithPass` → `UserResponse` → UI `CardInfo`.
+
+**Gotcha when adding ANY new per-user `users` column that must reach the UI:**
+it has to be added to the struct AND to EVERY `sqlx` `query_as::<_, UserRow>`
+/ `UserRowWithPass` SELECT column list (currently ~13: 8 in `db/users.rs`, 2
+join SELECTs, 3 in `routes/payments.rs`) — sqlx `FromRow` maps by name, so a
+missed SELECT is a RUNTIME `ColumnNotFound`, not a compile error, and Tier-0
+(`cargo fmt` only) can't catch it locally — it only fails in CI. Grep the
+existing `allow_self_entry`/`auto_renew_pass` sites and add the new column
+alongside each. `UserByMovementRow` and `my_balance`'s named tuple have their
+OWN explicit column lists (NOT `UserRow`) — leave them unless the UI there
+needs it. The checkbox
 ("Automaticke predlzovanie permanentky") lives in `edit_info_form.rs`, visible
 to staff AND admin for a CUSTOMER target only (mirrors `allow_self_entry`'s
 customer-only + only-when-changed payload pattern).
