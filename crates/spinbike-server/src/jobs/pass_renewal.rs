@@ -205,11 +205,28 @@ mod tests {
         let n = tick_as_of(&pool, &disabled_push(), today()).await.unwrap();
         assert_eq!(n, 1);
 
+        // Credit BEFORE was 100.0 (seeded); AFTER must be exactly 100 - 35.
         assert!(
             (credit_of(&pool, uid).await - 65.0).abs() < 1e-9,
-            "100 - 35"
+            "credit must drop by exactly the price: 100 - 35 = 65"
         );
         assert_eq!(renewal_rows(&pool, uid).await, 1);
+
+        // The renewal LEDGER amount is the NEGATIVE pass price (a charge), never
+        // +price — pins the sign on the `-price` bind in `renew_expired_pass`
+        // (a mutant flipping it to +price leaves credit correct via the separate
+        // UPDATE but writes a positive ledger row; this assertion catches it).
+        let amount: f64 = sqlx::query_scalar(
+            "SELECT amount FROM transactions WHERE user_id = ? AND note = 'auto-obnova'",
+        )
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert!(
+            (amount - (-35.0)).abs() < 1e-9,
+            "renewal ledger amount must be -35.0 (a negative charge), got {amount}"
+        );
 
         // Contiguous: valid_until = (last_vu + 1 day) + 1 month = 2026-09-26.
         let vu: String = sqlx::query_scalar(
@@ -220,6 +237,40 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(vu, "2026-09-26", "contiguous: 2026-08-25 +1d +1month");
+    }
+
+    /// Kills the `tick -> Ok(0)` and `tick -> Ok(1)` mutants: the PUBLIC `tick`
+    /// entry point (which the other tests bypass by calling `tick_as_of`
+    /// directly) must return the EXACT number of renewals. Two flagged
+    /// renewable users → `tick` returns 2 (≠ 0 and ≠ 1); a second run the same
+    /// day renews nobody → 0. Seeds relative to `crate::util::today_bratislava()`
+    /// — the SAME helper `tick` itself uses (`bratislava-tz.md` #336), never
+    /// `chrono::Local`.
+    #[tokio::test]
+    async fn tick_returns_the_exact_renewal_count() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let today = crate::util::today_bratislava();
+        // Two DISTINCT flagged users (distinct credits → distinct seeded
+        // emails), each with a pass that expired yesterday (renewable).
+        let u1 = seed_user(&pool, 100.0, true).await;
+        seed_pass(&pool, u1, -35.0, today - chrono::Duration::days(1)).await;
+        let u2 = seed_user(&pool, 60.0, true).await;
+        seed_pass(&pool, u2, -20.0, today - chrono::Duration::days(1)).await;
+
+        // tick() must renew BOTH → 2 (kills tick->Ok(0) AND tick->Ok(1)).
+        assert_eq!(
+            tick(&pool, &disabled_push()).await.unwrap(),
+            2,
+            "tick must return the exact number of renewals (2)"
+        );
+        // Idempotent at the tick level: a second run the same day renews
+        // nobody → 0 (also kills tick->Ok(1)).
+        assert_eq!(
+            tick(&pool, &disabled_push()).await.unwrap(),
+            0,
+            "a second tick the same day renews nobody"
+        );
     }
 
     /// (c) A user WITHOUT the flag is never renewed, even with an expired pass.
