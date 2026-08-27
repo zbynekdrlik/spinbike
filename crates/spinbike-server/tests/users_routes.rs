@@ -451,6 +451,55 @@ async fn update_user_info_persists_and_staff_only() {
     assert_eq!(resp["company"].as_str().unwrap(), "Acme");
 }
 
+// #374: staff (not just admin) can toggle a customer's auto_renew_pass flag via
+// PUT /api/users/{id}; a CUSTOMER may never set it on their own row (it is a
+// staff/business decision — the gym auto-bills them each month).
+#[tokio::test]
+async fn update_user_auto_renew_pass_staff_can_set_customer_self_cannot() {
+    let app = TestApp::new().await;
+    let user_id = app.seed_card("ARP", 0.0, None, None, None, None).await;
+
+    // Staff turns it ON — persisted, and reflected in the response.
+    let (status, resp) = app
+        .request(put_json(
+            &format!("/api/users/{user_id}"),
+            &app.staff_token,
+            &serde_json::json!({ "auto_renew_pass": true }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(
+        resp["auto_renew_pass"].as_bool(),
+        Some(true),
+        "staff must be able to enable auto_renew_pass"
+    );
+
+    // Staff turns it back OFF — round-trips through the endpoint.
+    let (status, resp) = app
+        .request(put_json(
+            &format!("/api/users/{user_id}"),
+            &app.staff_token,
+            &serde_json::json!({ "auto_renew_pass": false }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    assert_eq!(resp["auto_renew_pass"].as_bool(), Some(false));
+
+    // A customer self-editing their OWN row is forbidden from setting it.
+    let (status, _) = app
+        .request(put_json(
+            &format!("/api/users/{}", app.customer_id),
+            &app.customer_token,
+            &serde_json::json!({ "auto_renew_pass": true }),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::FORBIDDEN,
+        "a customer must NOT be able to toggle their own auto_renew_pass"
+    );
+}
+
 // ─── user transactions ────────────────────────────────────────────────────────
 
 #[tokio::test]

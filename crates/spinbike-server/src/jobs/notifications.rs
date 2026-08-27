@@ -415,6 +415,51 @@ async fn evaluate_reason(
         };
     }
 
+    let any_sent = send_to_subscriptions(pool, push, user_id, subs, title, body).await?;
+
+    if any_sent {
+        db::push::record_notified(pool, user_id, reason).await?;
+    }
+
+    Ok(any_sent)
+}
+
+/// Deliver one (already-localized) push `title`/`body` to every stored
+/// subscription of `user_id`, pruning gone (404/410) and repeatedly-failing
+/// subscriptions along the way. Returns whether at least one send succeeded.
+/// A user with NO subscriptions gets nothing (Ok(false)) — no error.
+///
+/// This is the pure push-delivery core, WITHOUT the anti-spam per-reason
+/// ledger and WITHOUT the e-mail fallback that `evaluate_reason` layers on top
+/// of it. `jobs::pass_renewal` (#374) reuses it directly: a pass-renewal push
+/// fires at most once per renewal event (the daily job renews each user at most
+/// once and is idempotent), so the event itself is the throttle — no ledger,
+/// and the owner's decision is "no push subscription → nothing, silently".
+pub(crate) async fn send_to_subscriptions_for_user(
+    pool: &SqlitePool,
+    push: &PushHandle,
+    user_id: i64,
+    title: &str,
+    body: &str,
+) -> Result<bool> {
+    let subs = db::push::list_subscriptions_for_user(pool, user_id).await?;
+    send_to_subscriptions(pool, push, user_id, subs, title, body).await
+}
+
+/// Send `title`/`body` to a PRE-FETCHED subscription list (so `evaluate_reason`
+/// can make its `subs.is_empty()` e-mail-fallback decision without a second
+/// query). `user_id` is used only for the pruning warn! log line. Pruning
+/// policy is unchanged from #264: Gone → prune immediately; a run of
+/// `MAX_CONSECUTIVE_FAILURES` non-Sent/non-Gone outcomes → prune the
+/// permanently-broken subscription.
+pub(crate) async fn send_to_subscriptions(
+    pool: &SqlitePool,
+    push: &PushHandle,
+    user_id: i64,
+    subs: Vec<db::push::PushSubscriptionRow>,
+    title: &str,
+    body: &str,
+) -> Result<bool> {
     let mut any_sent = false;
     for sub in subs {
         match push
@@ -446,11 +491,6 @@ async fn evaluate_reason(
             }
         }
     }
-
-    if any_sent {
-        db::push::record_notified(pool, user_id, reason).await?;
-    }
-
     Ok(any_sent)
 }
 

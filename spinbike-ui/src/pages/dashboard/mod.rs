@@ -61,6 +61,10 @@ pub struct CardInfo {
     pub allow_debit: bool,
     #[serde(default)]
     pub allow_self_entry: bool,
+    /// Per-user opt-in for the daily contiguous pass auto-renewal (#374).
+    /// `false` from an older server → checkbox renders unchecked.
+    #[serde(default)]
+    pub auto_renew_pass: bool,
     /// Target user's role. Used by the edit form to hide controls that
     /// have no effect for admin/staff (e.g. `allow_self_entry`, which
     /// admin/staff bypass per 0dfe85b). `None` from an older server →
