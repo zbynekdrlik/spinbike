@@ -1,117 +1,117 @@
 ---
 paths:
+  - "crates/spinbike-server/src/jobs/pass_renewal.rs"
+  - "crates/spinbike-server/src/db/users.rs"
   - "crates/spinbike-server/src/routes/door.rs"
   - "crates/spinbike-server/src/jobs/charger.rs"
-  - "crates/spinbike-server/src/db/users.rs"
+  - "crates/spinbike-server/src/routes/users.rs"
   - "crates/spinbike-server/tests/door_route.rs"
+  - "spinbike-ui/src/pages/dashboard/edit_info_form.rs"
 ---
 
-# Expired monthly pass auto-renews on the next visit (#365)
+# Monthly-pass auto-renewal: per-user flag + daily contiguous job (#374)
 
-**An expired-pass customer's next visit no longer bills a single entry — it
-auto-renews the pass.** Owner decision #365 (variant b): when a customer whose
-monthly pass has lapsed makes their NEXT real visit, instead of a one-off
-single-entry charge they get a fresh monthly pass at the price of their LAST
-one and their credit goes negative. This deliberately removed the old
-single-entry charge the owner used to delete by hand after re-selling a pass.
-There is NO daily job and NO per-user switch (a customer who stops coming never
-accrues debt) — the logic lives at the two visit-charge sites.
+**Owner decision #374 (2026-08-27) REPLACED the visit-triggered mechanism
+(#365/#372) entirely.** Auto-renewal is now governed by ONE explicit rule — a
+per-user opt-in flag — and is driven by the END of the previous month via a
+daily job, never by the customer's next visit. The old `db::users::auto_renew_pass`
+helper, its two #372 gates (recency ≤31 days + no-paid-visit-since), and its
+calls in `routes/door.rs` + `jobs/charger.rs` are all GONE.
 
-## The shared helper — `db::users::auto_renew_pass`
+## The visit sites no longer renew — they charge again
 
-Both charge sites call **one** helper (never duplicate the money-write):
+`routes/door.rs` (a door press with no active pass) and `jobs/charger.rs` (a
+class charge with no covering pass) fall back to the plain **single-entry /
+Spinning charge** for an expired-pass customer — exactly as they did before
+#365. Do NOT re-introduce any renewal at these sites: continuous renewal is the
+daily job's job. The regression tests `first_of_day_expired_pass_charges_single_entry_no_renewal`
+(`tests/door_route.rs`) and `charger_charges_spinning_for_expired_pass_no_renewal`
+(`jobs/charger.rs`) pin this.
 
-```rust
-db::users::auto_renew_pass(conn: &mut SqliteConnection, user_id, anchor_day: NaiveDate)
-    -> Result<Option<f64>>
+## The flag — `users.auto_renew_pass` (migration V28)
+
+`INTEGER NOT NULL DEFAULT 0`. OFF for everyone by default; staff enables it per
+customer. Toggled via the EXISTING `PUT /api/users/{id}` (`UpdateUserRequest.
+auto_renew_pass`), guarded **staff-or-admin** (reuses `ErrorCode::StaffRequired`
+— unlike `allow_self_entry`, which is admin-only). A customer may NEVER set it
+on their own row (the gym auto-bills them). DB helper:
+`db::users::update_user_auto_renew_pass`. Threaded through `UserRow`/
+`UserRowWithPass` → `UserResponse` → UI `CardInfo`; the checkbox
+("Automaticke predlzovanie permanentky") lives in `edit_info_form.rs`, visible
+to staff AND admin for a CUSTOMER target only (mirrors `allow_self_entry`'s
+customer-only + only-when-changed payload pattern).
+
+## The daily job — `jobs::pass_renewal`
+
+Scheduled at `DAILY_RUN_HOUR = 5` (Europe/Bratislava) via `jobs::spawn_daily_job`
++ a startup tick in `bin/server.rs` (`daily-job-scheduling.md`; before the 09:00
+`notifications` job so a renewal suppresses that user's redundant "pass expiring"
+push the same morning). `tick_as_of(pool, push, today)` selects candidates via
+the canonical `user_active_pass` view (V18):
+
+```
+auto_renew_pass = 1  AND  deleted_at IS NULL  AND  blocked = 0
+AND date(newest non-voided pass.valid_until) < today
 ```
 
-- Runs inside the CALLER's open transaction (`&mut *tx`) so pass-issue + the
-  caller's visit row commit/roll back atomically.
-- Resolves the last non-voided pass via the canonical `user_active_pass` view
-  (V18) joined to `transactions.amount` for its own price — NEVER hand-rolled
-  pass SQL. A VOIDED pass is excluded by the view → no renewal falls out for
-  free. Price = `round_cents(ABS(amount))`, rounded ONCE (money-rounding.md).
-- Issues a row identical to `sell_pass` EXCEPT **`staff_id = NULL`** +
-  `note = 'auto-obnova'` (the constant `AUTO_RENEW_NOTE`). `staff_id NULL` is the
-  MACHINE distinguisher from a desk sale (sell_pass always records the selling
-  staff's id); the note is a human label only (#328). This is what stops the
-  client app (#357) claiming staff recorded it.
-- `valid_until = anchor_day + 1 month` (chrono `Months`, clamps 31 Jan → 28/29
-  Feb). Anchor is the VISIT day: `today_bratislava()` at the door,
-  the booking `date` in the charger (both gym-local — never `chrono::Local`).
-- Returns `Ok(None)` when the customer NEVER held a pass → the caller keeps its
-  existing single-entry / Spinning charge (the boundary implied by "za cenu
-  poslednej predanej" — no previous price, nothing to renew at).
-- A last pass of 0 € renews at 0 € — deliberate barter (#342), asserted in a
-  named test, never "fixed".
+The JOIN excludes users who never held a pass; the `< today` filter excludes
+users whose pass still covers today (idempotency). Per candidate it calls the
+money-write and fires a best-effort push.
 
-## The two auto-renewal GATES — both must hold, both inside the helper (#372)
+## The money-write — `db::users::renew_expired_pass(pool, user_id, today)`
 
-Owner decision (#372, prod incident 2026-08-25: a 2020 pass auto-renewed on a
-door press). Auto-renewal is for a CONTINUING monthly customer only, so the
-helper renews ONLY when BOTH gates pass (else `Ok(None)` → the caller's normal
-single-entry / Spinning charge). Both live in `auto_renew_pass` so ONE place
-covers door.rs AND charger.rs; both run BEFORE any write.
+Returns `Some(Renewal)` or `None` (no pass history, or newest pass still covers
+today — a defensive idempotency re-guard). Issues a pass row identical to a
+manual `sell_pass` EXCEPT `staff_id = NULL` + `note = AUTO_RENEW_NOTE`
+("auto-obnova") — the SAME machine distinguisher from a desk sale (#357, #328:
+never classify by note text). Price = `round_cents(ABS(last pass amount))`,
+rounded ONCE and reused for the credit debit + ledger row (`money-rounding.md`).
+Debit runs even into NEGATIVE credit — NO credit gate (owner decision #374). A
+0 € barter pass renews at 0 € (#342 — asserted in a named test, never "fixed").
+Debit + insert run in ONE transaction.
 
-1. **Recency ≤ 31 days (INCLUSIVE).** Renew only if the last pass expired at
-   most 31 days before the visit: `(anchor_day - valid_until).num_days() <= 31`.
-   Exactly 31 → renews; 32 → does not. `anchor_day` is gym-local
-   (`today_bratislava()` at the door, the booking date in the charger) and
-   `valid_until` is a bare gym-local date, so it's a pure day-count — never
-   `chrono::Local` (bratislava-tz.md).
-2. **No paid class-visit since expiry.** If even one **paid class-visit** exists
-   AFTER the pass expired, the customer switched to per-visit mode → no renewal.
-   A **paid class-visit** uses the codebase-canonical shape (the same one
-   `db/reports.rs` / `routes/payments.rs` count): `amount < 0` AND
-   `valid_until IS NULL` AND `deleted_at IS NULL` AND a service whose
-   `kind ∈ CLASS_VISIT_KINDS` (Fitness/Spinning, via `class_visit_filter_sql` —
-   never `name_en`/`name_sk`, service-kind.md), recorded as EITHER a door
-   single-entry `action='charge'` (`routes/door.rs`) OR a charger Spinning
-   single-visit `action='visit'` (`jobs/charger.rs`) — so gate 2 matches
-   `action IN ('charge','visit')`, NOT `action='charge'` alone. The owner's #372
-   note said "action='charge'"; that misses the charger's `action='visit'` paid
-   Spinning row, which is exactly a per-visit payment and MUST block — widened to
-   the two-action form to match the owner's intent ("čo i len jeden platený
-   vstup"). What does NOT count / does NOT block: a VOIDED row (`deleted_at`
-   set), a non-class (bar/generic) charge, a €0 door/pass-covered `visit` row
-   (`amount = 0`), and any class-visit BEFORE `valid_until`. "After expiry" is
-   compared via the UTC instant of gym-local midnight of the day AFTER
-   `valid_until` (`bratislava_day_range_utc(valid_until + 1).0`, formatted
-   `%Y-%m-%d %H:%M:%S` like every other `created_at` bind) — never
-   `date(created_at)` (UTC, ~2h off near midnight, the #205 bug class).
+### Continuity — `renewal_valid_until(last_valid_until, today)` (pure)
 
-**The current entry never counts against itself**: both call sites insert the
-triggering visit/charge only AFTER `auto_renew_pass` returns (door.rs: the
-`match` precedes the INSERT; charger.rs: the INSERT follows the helper call).
-0 € barter passes still auto-renew under the SAME two gates. Manual desk sale is
-unaffected — the gates constrain only the AUTOMATIC renewal. Tests: helper-level
-unit tests in `db/users.rs` (`auto_renew_skips_*` / `auto_renew_renews_*` /
-`auto_renew_recency_boundary_is_inclusive_at_31_days` / `auto_renew_ignores_*`),
-plus integration coverage at both call sites
-(`first_of_day_pass_expired_over_31_days_ago_does_not_auto_renew` in
-`tests/door_route.rs`, `charger_does_not_auto_renew_pass_expired_over_31_days_ago`
-in `jobs/charger.rs`).
+The schema stores only `valid_until`, and coverage everywhere (door, charger,
+my_balance, view V18) is decided by `valid_until` alone — so continuity is
+expressed purely through the new END date, never a `valid_from` column:
 
-## Wiring at the two sites — don't double-debit
+- **Lapse ≤ `CONTIGUITY_TOLERANCE_DAYS` (3):** CONTIGUOUS — the new pass starts
+  the day AFTER the old one ended (`last_valid_until + 1 day`), `+ 1 month`. The
+  customer keeps unbroken coverage bridging a small gap (weekend, short outage).
+- **Bigger gap** (long lapse, or the flag flipped on a long-dead pass): starts
+  FRESH from `today`, `+ 1 month`. NO back-dated months, NO retro debit — "a
+  pass from now", not an invoice for the past.
 
-- **door.rs** (`n==0`, no active pass): `Some(new_credit)` → the door row becomes
-  a €0 pass-covered `visit` (NOT a single-entry charge), `credit = new_credit`,
-  `charged = true` (credit did drop by the pass price). `None` → single-entry
-  charge unchanged.
-- **charger.rs** (`has_pass == false`): a `(amount, renewed)` tuple. `renewed`
-  gates the Spinning debit — `if !has_pass && !renewed` — so a renewed visit is
-  €0 and the pass price (already debited inside the helper) is never charged
-  twice. Three cases: active pass → €0 no debit; renewed → €0 no Spinning debit;
-  never-held → Spinning charge unchanged.
+`+ 1 month` is chrono `Months::new(1)` (clamps 31 Jan → 28/29 Feb). Anchor dates
+are gym-local (`today_bratislava()` in prod) — never `chrono::Local`
+(`bratislava-tz.md`; a source-invariant test pins it in `pass_renewal.rs`).
 
-## Consequences to remember when touching these files
+### Idempotency invariants (against the #372 bug class — 17 years of real data)
+
+- Only expired-pass users are selected; a renewal moves `valid_until` to
+  `>= today`, so a second run the same day (or a restart startup tick) renews
+  that user again NEVER — **max one renewal per user per run**, never a chain of
+  months, never a double debit.
+- Deleted / blocked users skipped (no debit to a dead/blocked account). A
+  flagged user with no pass history is skipped (no price, no continuity — the
+  first sale is a manual desk sale).
+
+## The push notification
+
+After each renewal the job calls `notifications::send_to_subscriptions_for_user`
+(extracted from `evaluate_reason`, behavior-preserving) — push-only, NO anti-spam
+ledger and NO e-mail fallback (a renewal fires at most ~once/month per user, so
+the event itself is the throttle). A user with no subscription simply gets
+nothing, without error; a delivery failure NEVER rolls back the committed
+renewal. Text (Slovak, UNACCENTED, `render_renewal_notification`):
+`"Vasa permanentka bola predlzena do <DD.MM.RRRR>. Aktualny kredit: <X> EUR"`.
+
+## Consequences to remember
 
 - The auto-issued pass carries `valid_until`, so it already counts in the
-  `passes_sold` KPI (`db/reports.rs`) with no extra work — there is a test
-  pinning this (`auto_renewed_pass_counts_in_passes_sold_kpi`).
-- The client `/my/balance` summary card lights `.card-credit--negative` when
-  `credit < 0` (strict `<`, a €0 balance is settled) — mirrors the desk-side
-  `.card-balance--negative` (#49). Don't re-implement the desk one.
-- Door tests for consecutive presses still need DISTINCT users (ewelink-ack.md
-  10s limit) — the auto-renewal tests each use a fresh `TestApp` + one press.
+  `passes_sold` KPI (`db/reports.rs`) with no extra work — same INSERT shape as
+  a manual sale.
+- The client `/my/balance` summary lights `.card-credit--negative` when
+  `credit < 0` (E2E: `client-negative-balance-highlight.spec.ts`) — a renewal
+  debit into negative surfaces there just like any other charge.
