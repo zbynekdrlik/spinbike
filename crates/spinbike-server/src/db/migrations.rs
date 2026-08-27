@@ -119,6 +119,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "services: widen kind CHECK to include 'group_class' + retag Spinning (#329)",
         V27_SPINNING_GROUP_CLASS_KIND,
     ),
+    (
+        28,
+        "users: auto_renew_pass flag (per-user opt-in for the daily contiguous pass renewal job, #374)",
+        V28_USERS_AUTO_RENEW_PASS,
+    ),
 ];
 
 /// Post-condition checks `db::run_migrations` runs at the end of a
@@ -1220,6 +1225,17 @@ END;
 UPDATE services
    SET kind = 'group_class'
  WHERE name_sk = 'Spinning';
+"#;
+
+// V28: per-user opt-in flag for the daily contiguous monthly-pass
+// auto-renewal (#374). Replaces the removed visit-triggered mechanism
+// (#365/#372). Default 0 (OFF) for everyone; staff toggles it per customer.
+// The daily `jobs::pass_renewal` job renews ONLY users with this flag set
+// whose latest (non-voided) pass has expired. Additive column with a NOT NULL
+// DEFAULT — safe on the live prod DB (no backfill, no existing data touched),
+// same shape as V16's `allow_self_entry`.
+const V28_USERS_AUTO_RENEW_PASS: &str = r#"
+ALTER TABLE users ADD COLUMN auto_renew_pass INTEGER NOT NULL DEFAULT 0;
 "#;
 
 #[cfg(test)]

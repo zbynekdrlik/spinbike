@@ -23,6 +23,7 @@ pub struct UserRow {
     pub created_at: String,
     pub deleted_at: Option<String>, // added in migration #15
     pub allow_self_entry: bool,     // added in migration #16
+    pub auto_renew_pass: bool,      // added in migration #28 (#374)
 }
 
 /// Fold a string to a diacritic-free, lowercase representation used for
@@ -63,7 +64,7 @@ pub async fn backfill_search_text(pool: &SqlitePool) -> Result<usize> {
     let rows: Vec<UserRow> = sqlx::query_as::<_, UserRow>(
         "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
                 oauth_id, credit, card_code, blocked, allow_debit, search_text,
-                created_at, deleted_at, allow_self_entry
+                created_at, deleted_at, allow_self_entry, auto_renew_pass
          FROM users WHERE search_text IS NULL OR search_text = ''",
     )
     .fetch_all(pool)
@@ -137,7 +138,7 @@ pub async fn get_user_by_email(pool: &SqlitePool, email: &str) -> Result<Option<
     let user = sqlx::query_as::<_, UserRow>(
         "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
                 oauth_id, credit, card_code, blocked, allow_debit, search_text,
-                created_at, deleted_at, allow_self_entry
+                created_at, deleted_at, allow_self_entry, auto_renew_pass
          FROM users WHERE email = ? AND deleted_at IS NULL",
     )
     .bind(email)
@@ -161,7 +162,7 @@ pub async fn get_user_by_email_including_deleted(
     let user = sqlx::query_as::<_, UserRow>(
         "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
                 oauth_id, credit, card_code, blocked, allow_debit, search_text,
-                created_at, deleted_at, allow_self_entry
+                created_at, deleted_at, allow_self_entry, auto_renew_pass
          FROM users WHERE email = ?",
     )
     .bind(email)
@@ -174,7 +175,7 @@ pub async fn get_user_by_id(pool: &SqlitePool, id: i64) -> Result<Option<UserRow
     let user = sqlx::query_as::<_, UserRow>(
         "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
                 oauth_id, credit, card_code, blocked, allow_debit, search_text,
-                created_at, deleted_at, allow_self_entry
+                created_at, deleted_at, allow_self_entry, auto_renew_pass
          FROM users WHERE id = ?",
     )
     .bind(id)
@@ -191,7 +192,7 @@ pub async fn get_user_by_oauth(
     let user = sqlx::query_as::<_, UserRow>(
         "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
                 oauth_id, credit, card_code, blocked, allow_debit, search_text,
-                created_at, deleted_at, allow_self_entry
+                created_at, deleted_at, allow_self_entry, auto_renew_pass
          FROM users WHERE oauth_provider = ? AND oauth_id = ? AND deleted_at IS NULL",
     )
     .bind(provider)
@@ -205,7 +206,7 @@ pub async fn list_users(pool: &SqlitePool) -> Result<Vec<UserRow>> {
     let users = sqlx::query_as::<_, UserRow>(
         "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
                 oauth_id, credit, card_code, blocked, allow_debit, search_text,
-                created_at, deleted_at, allow_self_entry
+                created_at, deleted_at, allow_self_entry, auto_renew_pass
          FROM users WHERE deleted_at IS NULL ORDER BY id",
     )
     .fetch_all(pool)
@@ -266,6 +267,7 @@ pub struct UserRowWithPass {
     pub created_at: String,
     pub deleted_at: Option<String>,
     pub allow_self_entry: bool,
+    pub auto_renew_pass: bool,
     pub pass_valid_until: Option<chrono::NaiveDate>,
     pub pass_tx_id: Option<i64>,
     pub last_visit_at: Option<String>,
@@ -298,6 +300,7 @@ impl UserRowWithPass {
                 created_at: self.created_at,
                 deleted_at: self.deleted_at,
                 allow_self_entry: self.allow_self_entry,
+                auto_renew_pass: self.auto_renew_pass,
             },
             pass,
             last_visit_at,
@@ -316,7 +319,7 @@ pub async fn list_all_users_with_pass(
     let sql = format!(
         "SELECT u.id, u.email, u.name, u.password_hash, u.phone, u.company,
                 u.role, u.oauth_provider, u.oauth_id, u.credit, u.card_code,
-                u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at, u.allow_self_entry,
+                u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at, u.allow_self_entry, u.auto_renew_pass,
                 ap.valid_until AS pass_valid_until,
                 ap.pass_tx_id AS pass_tx_id,
                 (SELECT MAX(created_at) FROM transactions
@@ -364,7 +367,7 @@ pub async fn search_users_with_pass(
     let sql = format!(
         "SELECT u.id, u.email, u.name, u.password_hash, u.phone, u.company,
                 u.role, u.oauth_provider, u.oauth_id, u.credit, u.card_code,
-                u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at, u.allow_self_entry,
+                u.blocked, u.allow_debit, u.search_text, u.created_at, u.deleted_at, u.allow_self_entry, u.auto_renew_pass,
                 ap.valid_until AS pass_valid_until,
                 ap.pass_tx_id AS pass_tx_id,
                 (SELECT MAX(created_at) FROM transactions
@@ -424,7 +427,7 @@ pub async fn search_users(pool: &SqlitePool, query: &str, limit: i64) -> Result<
     let users = sqlx::query_as::<_, UserRow>(
         "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
                 oauth_id, credit, card_code, blocked, allow_debit, search_text,
-                created_at, deleted_at, allow_self_entry
+                created_at, deleted_at, allow_self_entry, auto_renew_pass
          FROM users
          WHERE deleted_at IS NULL AND search_text LIKE ?
          ORDER BY
@@ -451,7 +454,7 @@ pub async fn get_user_by_card_code(pool: &SqlitePool, code: &str) -> Result<Opti
     let user = sqlx::query_as::<_, UserRow>(
         "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
                 oauth_id, credit, card_code, blocked, allow_debit, search_text,
-                created_at, deleted_at, allow_self_entry
+                created_at, deleted_at, allow_self_entry, auto_renew_pass
          FROM users WHERE card_code = ? AND deleted_at IS NULL",
     )
     .bind(code)
@@ -497,6 +500,22 @@ pub async fn update_user_allow_self_entry(
 ) -> Result<()> {
     sqlx::query("UPDATE users SET allow_self_entry = ? WHERE id = ?")
         .bind(if allow { 1 } else { 0 })
+        .bind(user_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Set the per-user opt-in flag for the daily contiguous monthly-pass
+/// auto-renewal (#374). Staff-or-admin — caller must enforce role at the route
+/// layer. When set, `jobs::pass_renewal` renews this user's expired pass.
+pub async fn update_user_auto_renew_pass(
+    pool: &SqlitePool,
+    user_id: i64,
+    enabled: bool,
+) -> Result<()> {
+    sqlx::query("UPDATE users SET auto_renew_pass = ? WHERE id = ?")
+        .bind(if enabled { 1 } else { 0 })
         .bind(user_id)
         .execute(pool)
         .await?;
@@ -1727,6 +1746,40 @@ mod tests {
         assert!(
             !u.allow_self_entry,
             "update_user_allow_self_entry(false) must persist"
+        );
+    }
+
+    // ── #374: auto_renew_pass default (migration V28) and toggle round-trip ──
+    #[tokio::test]
+    async fn auto_renew_pass_defaults_to_false_after_migration() {
+        let pool = setup().await;
+        let id = make_user(&pool, Some("arp@x.com"), "ARP").await;
+        let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert!(
+            !u.auto_renew_pass,
+            "auto_renew_pass must default to false after migration V28"
+        );
+    }
+
+    // mutant kill: replace update_user_auto_renew_pass → Ok(()) would leave the
+    // flag unchanged and both assertions would fail.
+    #[tokio::test]
+    async fn update_user_auto_renew_pass_round_trips() {
+        let pool = setup().await;
+        let id = make_user(&pool, Some("arp2@x.com"), "ARP2").await;
+
+        update_user_auto_renew_pass(&pool, id, true).await.unwrap();
+        let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert!(
+            u.auto_renew_pass,
+            "update_user_auto_renew_pass(true) must persist"
+        );
+
+        update_user_auto_renew_pass(&pool, id, false).await.unwrap();
+        let u = get_user_by_id(&pool, id).await.unwrap().unwrap();
+        assert!(
+            !u.auto_renew_pass,
+            "update_user_auto_renew_pass(false) must persist"
         );
     }
 
