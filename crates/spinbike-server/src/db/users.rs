@@ -585,6 +585,136 @@ pub async fn get_user_pass_tx(
 /// Slovak; kept unaccented like the rest of the DB's Slovak labels.
 pub const AUTO_RENEW_NOTE: &str = "auto-obnova";
 
+/// Continuity tolerance for the daily pass-renewal job (#374): when the last
+/// pass expired within this many days of "today", the renewal is CONTIGUOUS —
+/// it starts the day AFTER the old pass ended, so the customer keeps unbroken
+/// monthly coverage bridging a small gap (a weekend, a short server outage). A
+/// LARGER gap (a long lapse, or the flag flipped on a long-dead pass) starts
+/// fresh FROM TODAY instead — no back-dated months, no retro debit.
+pub const CONTIGUITY_TOLERANCE_DAYS: i64 = 3;
+
+/// The outcome of one successful daily auto-renewal (#374).
+#[derive(Debug, Clone, Copy)]
+pub struct Renewal {
+    /// The pass price debited (last pass price, rounded once), `>= 0`.
+    pub price: f64,
+    /// The user's credit AFTER the debit (may be negative — deliberate, #374).
+    pub new_credit: f64,
+    /// The renewed pass's `valid_until` (gym-local calendar date).
+    pub new_valid_until: chrono::NaiveDate,
+}
+
+/// Compute the renewed pass's `valid_until` for a pass that has expired (#374).
+/// CONTIGUOUS when the lapse is within `CONTIGUITY_TOLERANCE_DAYS`: the new pass
+/// conceptually starts the day AFTER the old one ended (the schema stores only
+/// `valid_until`, and coverage everywhere is decided by `valid_until` alone, so
+/// continuity is expressed purely through the new end date). A larger gap
+/// starts fresh from `today`. Either way the pass runs one calendar month from
+/// that start (chrono `Months` clamps 31 Jan → 28/29 Feb). Pure — no DB.
+pub fn renewal_valid_until(
+    last_valid_until: chrono::NaiveDate,
+    today: chrono::NaiveDate,
+) -> chrono::NaiveDate {
+    let lapse_days = (today - last_valid_until).num_days();
+    let start = if lapse_days <= CONTIGUITY_TOLERANCE_DAYS {
+        last_valid_until
+            .checked_add_days(chrono::Days::new(1))
+            .expect("a gym-local calendar date + 1 day is always representable")
+    } else {
+        today
+    };
+    start
+        .checked_add_months(chrono::Months::new(1))
+        .expect("a Bratislava calendar date + 1 month is always representable")
+}
+
+/// Auto-renew a user's EXPIRED monthly pass for the daily `jobs::pass_renewal`
+/// job (#374). Replaces the removed visit-triggered `auto_renew_pass` helper.
+///
+/// Returns `Ok(Some(Renewal))` when a renewal was issued; `Ok(None)` (writes
+/// nothing) when the user has no prior pass, or their newest (non-voided) pass
+/// still covers `today` — an idempotency guard: the daily job's query already
+/// pre-filters to expired passes, but this keeps the helper safe to call and
+/// self-testable in isolation.
+///
+/// The pass is issued exactly like `sell_pass` EXCEPT `staff_id = NULL` +
+/// `note = AUTO_RENEW_NOTE` (the machine distinguisher from a desk sale, #357).
+/// Price is `round_cents(ABS(last pass amount))` — rounded ONCE and reused for
+/// both the credit debit and the ledger row (money-rounding.md). Credit is
+/// debited even into negative (no credit gate — owner decision #374). A 0 €
+/// barter pass renews at 0 € (#342). The debit + insert run in ONE transaction.
+pub async fn renew_expired_pass(
+    pool: &SqlitePool,
+    user_id: i64,
+    today: chrono::NaiveDate,
+) -> Result<Option<Renewal>> {
+    // Latest non-voided pass + its price, via the canonical `user_active_pass`
+    // view (V18) — never hand-rolled pass SQL. The view already picks the
+    // newest non-voided pass per user and filters deleted_at IS NULL.
+    let last_pass: Option<(f64, chrono::NaiveDate)> = sqlx::query_as(
+        "SELECT t.amount, date(ap.valid_until) \
+         FROM user_active_pass ap \
+         JOIN transactions t ON t.id = ap.pass_tx_id \
+         WHERE ap.user_id = ?",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    let Some((last_amount, last_valid_until)) = last_pass else {
+        return Ok(None); // no pass history → nothing to renew at
+    };
+    if last_valid_until >= today {
+        return Ok(None); // a live pass already covers today → idempotent no-op
+    }
+
+    let new_valid_until = renewal_valid_until(last_valid_until, today);
+    let price = round_cents(last_amount.abs());
+
+    let service_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+        .fetch_one(pool)
+        .await?;
+
+    let mut tx = pool.begin().await?;
+    // ROUND(...) in SQL is defense-in-depth against float drift already sitting
+    // in the stored credit; `price` is already rounded above.
+    sqlx::query("UPDATE users SET credit = ROUND(credit - ?, 2) WHERE id = ?")
+        .bind(price)
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    let new_credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+        .bind(user_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    sqlx::query(
+        "INSERT INTO transactions \
+           (user_id, staff_id, service_id, amount, action, valid_until, note) \
+         VALUES (?, NULL, ?, ?, 'charge', ?, ?)",
+    )
+    .bind(user_id)
+    .bind(service_id)
+    .bind(-price)
+    .bind(new_valid_until)
+    .bind(AUTO_RENEW_NOTE)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+
+    let new_credit = round_cents(new_credit);
+    tracing::info!(
+        user_id,
+        price,
+        %new_valid_until,
+        new_credit,
+        "pass: daily auto-renewal issued a contiguous monthly pass (#374)"
+    );
+    Ok(Some(Renewal {
+        price,
+        new_credit,
+        new_valid_until,
+    }))
+}
+
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct NegativeBalanceUserRow {
     pub id: i64,
@@ -1780,6 +1910,61 @@ mod tests {
         assert!(
             !u.auto_renew_pass,
             "update_user_auto_renew_pass(false) must persist"
+        );
+    }
+
+    // ── #374: renewal_valid_until continuity (pure — tolerance + month clamp) ──
+    #[test]
+    fn renewal_valid_until_is_contiguous_within_tolerance() {
+        // Expired 2 days ago (<= 3): start the day AFTER the old end (08-26),
+        // then +1 month.
+        let last_vu = chrono::NaiveDate::from_ymd_opt(2026, 8, 25).unwrap();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 27).unwrap();
+        assert_eq!(
+            renewal_valid_until(last_vu, today),
+            chrono::NaiveDate::from_ymd_opt(2026, 9, 26).unwrap()
+        );
+    }
+
+    #[test]
+    fn renewal_valid_until_tolerance_boundary_is_inclusive_at_3_days() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 27).unwrap();
+        // Exactly 3 days lapse → still contiguous (start = old + 1 day).
+        let three = chrono::NaiveDate::from_ymd_opt(2026, 8, 24).unwrap();
+        assert_eq!(
+            renewal_valid_until(three, today),
+            chrono::NaiveDate::from_ymd_opt(2026, 9, 25).unwrap(),
+            "3-day lapse is contiguous (08-25 + 1 month)"
+        );
+        // 4 days lapse → big gap, fresh from today.
+        let four = chrono::NaiveDate::from_ymd_opt(2026, 8, 23).unwrap();
+        assert_eq!(
+            renewal_valid_until(four, today),
+            chrono::NaiveDate::from_ymd_opt(2026, 9, 27).unwrap(),
+            "4-day lapse starts fresh from today (08-27 + 1 month)"
+        );
+    }
+
+    #[test]
+    fn renewal_valid_until_big_gap_starts_from_today() {
+        let last_vu = chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(); // long ago
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 27).unwrap();
+        assert_eq!(
+            renewal_valid_until(last_vu, today),
+            chrono::NaiveDate::from_ymd_opt(2026, 9, 27).unwrap(),
+            "a big gap must not back-date — from today + 1 month"
+        );
+    }
+
+    #[test]
+    fn renewal_valid_until_clamps_end_of_month() {
+        // Contiguous start = 31 Jan → +1 month clamps to 28 Feb (non-leap 2026).
+        let last_vu = chrono::NaiveDate::from_ymd_opt(2026, 1, 30).unwrap();
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(); // lapse 1
+        assert_eq!(
+            renewal_valid_until(last_vu, today),
+            chrono::NaiveDate::from_ymd_opt(2026, 2, 28).unwrap(),
+            "31 Jan + 1 month clamps to 28 Feb"
         );
     }
 

@@ -2,6 +2,7 @@ pub mod charger;
 pub mod door_health;
 pub mod materialiser;
 pub mod notifications;
+pub mod pass_renewal;
 pub mod token_purge;
 
 use sqlx::SqlitePool;
