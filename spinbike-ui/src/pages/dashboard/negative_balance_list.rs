@@ -168,10 +168,13 @@ fn neg_to_card_info(c: &NegativeBalanceUser) -> CardInfo {
         pass: c.pass.clone(),
         last_visit_at: c.last_visit_at.clone(),
         // Fields not returned by the negative-balance endpoint — neutral defaults.
-        // `allow_debit` and `phone` aren't read by the action panel's
-        // monthly-pass header or the visit-log button, so defaults are safe.
+        // `allow_debit`/`phone`/`auto_renew_pass` aren't read by the action
+        // panel's monthly-pass header or the visit-log button (the edit form
+        // re-fetches the real values from the server on open), so defaults are
+        // safe.
         allow_debit: false,
         allow_self_entry: false,
+        auto_renew_pass: false,
         role: None,
         phone: None,
         email: None,
