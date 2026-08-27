@@ -1190,6 +1190,20 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
             "(open door from PWA without staff present)",
         ),
     );
+    m.insert(
+        "admin_auto_renew_pass",
+        (
+            "Automaticke predlzovanie permanentky",
+            "Auto-renew monthly pass",
+        ),
+    );
+    m.insert(
+        "admin_auto_renew_pass_help",
+        (
+            "(po skonceni sa permanentka sama predlzi za poslednu cenu; kredit moze ist do minusu)",
+            "(when it expires the pass renews itself at the last price; credit may go negative)",
+        ),
+    );
     m.insert("door_page_title", ("Otvorenie dveri", "Open door"));
     m.insert("user_edit_new_password", ("Nove heslo", "New password"));
     m.insert(
