@@ -58,12 +58,14 @@ async fn main() -> Result<()> {
         charger_result,
         token_purge_result,
         notifications_result,
+        pass_renewal_result,
     ) = tokio::join!(
         db::users::backfill_search_text(&pool),
         spinbike_server::jobs::materialiser::sweep(&pool),
         spinbike_server::jobs::charger::tick(&pool),
         spinbike_server::jobs::token_purge::tick(&pool),
         spinbike_server::jobs::notifications::tick(&pool, &push, &mail),
+        spinbike_server::jobs::pass_renewal::tick(&pool, &push),
     );
 
     let backfilled = backfill_result?;
@@ -95,6 +97,12 @@ async fn main() -> Result<()> {
         Ok(n) if n > 0 => tracing::info!("push: sent {n} notifications at startup"),
         Ok(_) => {}
         Err(e) => tracing::error!("startup push notifications tick failed: {e}"),
+    }
+
+    match pass_renewal_result {
+        Ok(n) if n > 0 => tracing::info!("pass_renewal: renewed {n} passes at startup"),
+        Ok(_) => {}
+        Err(e) => tracing::error!("startup pass_renewal tick failed: {e}"),
     }
 
     // Charger: every 60s. `Delay` skips back-to-back catch-up ticks if a tick
@@ -172,6 +180,27 @@ async fn main() -> Result<()> {
                 let push = push.clone();
                 let mail = mail.clone();
                 async move { spinbike_server::jobs::notifications::tick(&pool, &push, &mail).await }
+            },
+        );
+    }
+
+    // Pass auto-renewal: daily, aligned to a fixed Bratislava-local wall-clock
+    // hour (#374, replaces the removed visit-triggered mechanism). Startup
+    // already ran the job once above, so this loop's first sleep waits for the
+    // NEXT occurrence of the aligned hour. `pass_renewal::tick` takes an extra
+    // `&PushHandle` (the post-renewal notification) that `spawn_daily_job`'s
+    // signature doesn't carry, so it is captured by the closure — same pattern
+    // as the notifications job above (#299).
+    {
+        let push = push.clone();
+        spinbike_server::jobs::spawn_daily_job(
+            pool.clone(),
+            spinbike_server::jobs::pass_renewal::DAILY_RUN_HOUR,
+            "pass renewal",
+            "renewed",
+            move |pool| {
+                let push = push.clone();
+                async move { spinbike_server::jobs::pass_renewal::tick(&pool, &push).await }
             },
         );
     }

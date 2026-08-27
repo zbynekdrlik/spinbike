@@ -31,6 +31,8 @@ pub struct UserResponse {
     pub blocked: bool,
     pub allow_debit: bool,
     pub allow_self_entry: bool,
+    /// Per-user opt-in for the daily contiguous pass auto-renewal (#374).
+    pub auto_renew_pass: bool,
     /// Typed role. Serializes to the SAME lowercase string the raw DB role
     /// produced (`Role`'s `#[serde(rename_all = "lowercase")]`), so the JSON
     /// wire format is byte-identical; deserialization gains the `Unknown`
@@ -122,6 +124,10 @@ pub struct UpdateUserRequest {
     pub card_code: Option<String>,
     #[serde(default)]
     pub allow_self_entry: Option<bool>,
+    /// Per-user opt-in for the daily contiguous pass auto-renewal (#374).
+    /// Staff-or-admin only (enforced in the handler).
+    #[serde(default)]
+    pub auto_renew_pass: Option<bool>,
     /// Plain-text password. Hashed server-side via argon2 before storage.
     /// Admin can set any user's password; customer can set OWN password
     /// (caller.sub == path id); staff is forbidden from resetting passwords
@@ -183,6 +189,7 @@ fn user_response_from_row_with_pass(
         blocked: u.blocked,
         allow_debit: u.allow_debit,
         allow_self_entry: u.allow_self_entry,
+        auto_renew_pass: u.auto_renew_pass,
         role: Role::from(u.role.as_str()),
         last_visit_at,
         pass,
@@ -597,6 +604,7 @@ async fn update_user(
         has_company = body.company.is_some(),
         has_card_code = body.card_code.is_some(),
         has_allow_self_entry = body.allow_self_entry.is_some(),
+        has_auto_renew_pass = body.auto_renew_pass.is_some(),
         has_password = body.password.is_some(),
         "PUT /api/users/{id}: update request"
     );
@@ -623,6 +631,13 @@ async fn update_user(
     // claim a freshly-typed code).
     if body.card_code.is_some() && !is_staff_or_admin {
         return Err(ApiError::Forbidden(ErrorCode::CardCodeStaffOnly));
+    }
+
+    // auto_renew_pass is a staff/business decision (the gym auto-bills the
+    // customer each month), never a customer self-toggle. Staff OR admin may
+    // set it (#374 — unlike allow_self_entry, which is admin-only).
+    if body.auto_renew_pass.is_some() && !is_staff_or_admin {
+        return Err(ApiError::Forbidden(ErrorCode::StaffRequired));
     }
 
     // Soft-deleted users are invariant-frozen (#56) — reject mutation upfront.
@@ -724,6 +739,13 @@ async fn update_user(
             return Err(ApiError::Forbidden(ErrorCode::AllowSelfEntryAdminOnly));
         }
         db::update_user_allow_self_entry(&state.pool, id, allow)
+            .await
+            .map_err(internal_error)?;
+    }
+
+    if let Some(enabled) = body.auto_renew_pass {
+        // Staff-or-admin already enforced above (before any mutation).
+        db::update_user_auto_renew_pass(&state.pool, id, enabled)
             .await
             .map_err(internal_error)?;
     }
@@ -1201,6 +1223,7 @@ mod tests {
                 blocked: false,
                 allow_debit: false,
                 allow_self_entry: false,
+                auto_renew_pass: false,
                 role,
                 last_visit_at: None,
                 pass: None,

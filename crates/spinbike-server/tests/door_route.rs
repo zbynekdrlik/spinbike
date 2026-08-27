@@ -268,19 +268,18 @@ async fn first_of_day_pass_expiring_today_grants_entry_without_charge() {
     );
 }
 
-/// #365 (behavior change from #179's `first_of_day_pass_expired_yesterday_is_charged`):
-/// a customer whose monthly pass expired YESTERDAY now AUTO-RENEWS on their
-/// next door entry — instead of the old single-entry charge, they get a fresh
-/// monthly pass at the price of their LAST one (35.0 here), their credit goes
-/// negative, and the door entry itself becomes a €0 pass-covered visit. This
-/// deliberately replaces the pre-#365 assertion (single-entry charge, credit
-/// 20 → 15) — the whole point of #365 is that an expired-pass regular no longer
-/// accrues manually-deleted single entries. The still-inclusive-last-day
-/// boundary that #179 pinned is unaffected: a pass valid THROUGH today still
-/// covers today for free (see `first_of_day_pass_expiring_today_...` above),
-/// only a genuinely EXPIRED pass now triggers renewal instead of a charge.
+/// #374 (behavior change from #365): visit-triggered auto-renewal is REMOVED.
+/// A customer whose monthly pass expired YESTERDAY no longer auto-renews on a
+/// door entry — they get a plain single-entry charge (credit 20 → 20 - the
+/// single-entry price) and NO fresh pass row is written. Continuous renewal is
+/// now the daily `jobs::pass_renewal` job's job, gated on the per-user
+/// `auto_renew_pass` flag (#374) — never a door press. The inclusive-last-day
+/// pass boundary (#179) is unaffected: a pass valid THROUGH today still covers
+/// today for free (see `first_of_day_pass_expiring_today_...` above); only a
+/// genuinely EXPIRED pass now falls back to the single-entry charge again.
+/// RED against pre-#374 (which auto-renewed here).
 #[tokio::test]
-async fn first_of_day_expired_pass_auto_renews_at_last_price() {
+async fn first_of_day_expired_pass_charges_single_entry_no_renewal() {
     let app = TestApp::with_door_mode("success").await;
     enable_self_entry(&app).await;
     sqlx::query("UPDATE users SET credit = 20.0 WHERE id = ?")
@@ -293,7 +292,8 @@ async fn first_of_day_expired_pass_auto_renews_at_last_price() {
         .fetch_one(&app.pool)
         .await
         .unwrap();
-    // Last pass sold for 35.0, expired yesterday.
+    // Last pass sold for 35.0, expired yesterday — recent, but no longer
+    // relevant to the door path (only the daily job renews now).
     sqlx::query(
         "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until) \
          VALUES (?, 2, ?, -35.0, 'charge', date('now', '-1 day'))",
@@ -313,291 +313,9 @@ async fn first_of_day_expired_pass_auto_renews_at_last_price() {
         .await;
     assert_eq!(status, axum::http::StatusCode::OK);
     assert_eq!(body["status"], "opened");
-    // Credit did decrease (by the renewed pass price) → charged=true.
     assert_eq!(body["charged"], true);
 
-    // Credit: 20 - 35 = -15 (goes negative, the whole point of the feature).
-    let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
-        .bind(app.customer_id)
-        .fetch_one(&app.pool)
-        .await
-        .unwrap();
-    assert!(
-        (credit - (-15.0)).abs() < 0.01,
-        "expected credit ~= -15.0 after auto-renewal at the last pass price, got {credit}"
-    );
-
-    // A fresh monthly-pass row was issued: staff_id NULL (distinguishes it from
-    // a desk sale, #357), note 'auto-obnova', amount -35.0, valid_until = today
-    // + 1 month.
-    let today = spinbike_server::util::today_bratislava();
-    let expected_until = today
-        .checked_add_months(chrono::Months::new(1))
-        .unwrap()
-        .to_string();
-    let renewed: (f64, Option<i64>, Option<String>, Option<String>) = sqlx::query_as(
-        "SELECT amount, staff_id, note, date(valid_until) \
-         FROM transactions \
-         WHERE user_id = ? AND action = 'charge' \
-           AND service_id = ? AND note = 'auto-obnova' AND deleted_at IS NULL",
-    )
-    .bind(app.customer_id)
-    .bind(svc_id)
-    .fetch_one(&app.pool)
-    .await
-    .unwrap();
-    assert!(
-        (renewed.0 - (-35.0)).abs() < 0.001,
-        "amount {} != -35.0",
-        renewed.0
-    );
-    assert_eq!(renewed.1, None, "auto-renewal must have staff_id NULL");
-    assert_eq!(renewed.2.as_deref(), Some("auto-obnova"));
-    assert_eq!(
-        renewed.3.as_deref(),
-        Some(expected_until.as_str()),
-        "valid_until must be anchored to today + 1 month"
-    );
-
-    // The door entry itself is now a €0 pass-covered visit (not a single-entry
-    // charge) — the new pass covers it.
-    let door_row: (String, f64, i64) = sqlx::query_as(
-        "SELECT action, amount, is_door_press FROM transactions \
-         WHERE user_id = ? AND is_door_press = 1 AND note = 'door: 1st'",
-    )
-    .bind(app.customer_id)
-    .fetch_one(&app.pool)
-    .await
-    .unwrap();
-    assert_eq!(door_row.0, "visit");
-    assert!(
-        door_row.1.abs() < 0.001,
-        "door row must be €0, got {}",
-        door_row.1
-    );
-    assert_eq!(door_row.2, 1);
-}
-
-/// #365: the renewal price is the ABS of the customer's LAST pass amount, not a
-/// fixed/default value. A customer whose last pass was 50.0 renews at exactly
-/// 50.0, proving the price is read from history (money-rounding.md / the
-/// `user_active_pass` join) rather than hard-coded.
-#[tokio::test]
-async fn first_of_day_expired_pass_renews_at_the_actual_last_price() {
-    let app = TestApp::with_door_mode("success").await;
-    enable_self_entry(&app).await;
-    sqlx::query("UPDATE users SET credit = 0.0 WHERE id = ?")
-        .bind(app.customer_id)
-        .execute(&app.pool)
-        .await
-        .unwrap();
-    let svc_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
-        .fetch_one(&app.pool)
-        .await
-        .unwrap();
-    // An OLDER cheap pass and a NEWER expensive one — the newest non-voided
-    // pass (50.0) is the "last price", proving user_active_pass picks it.
-    sqlx::query(
-        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until) \
-         VALUES (?, 2, ?, -30.0, 'charge', date('now', '-40 days'))",
-    )
-    .bind(app.customer_id)
-    .bind(svc_id)
-    .execute(&app.pool)
-    .await
-    .unwrap();
-    sqlx::query(
-        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until) \
-         VALUES (?, 2, ?, -50.0, 'charge', date('now', '-2 days'))",
-    )
-    .bind(app.customer_id)
-    .bind(svc_id)
-    .execute(&app.pool)
-    .await
-    .unwrap();
-
-    let (status, body) = app
-        .request(post_json(
-            "/api/door/open",
-            &app.customer_token,
-            &serde_json::json!({}),
-        ))
-        .await;
-    assert_eq!(status, axum::http::StatusCode::OK);
-    assert_eq!(body["status"], "opened");
-
-    let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
-        .bind(app.customer_id)
-        .fetch_one(&app.pool)
-        .await
-        .unwrap();
-    assert!(
-        (credit - (-50.0)).abs() < 0.01,
-        "must renew at the NEWEST pass price (50.0), not the older 30.0 — got credit {credit}"
-    );
-}
-
-/// #365 barter (#342): a customer whose LAST pass was sold for 0 € renews again
-/// at 0 € — deliberate, not a bug. Credit is untouched, the entry is still a €0
-/// pass-covered visit, and a 0 € auto-renewal row is written.
-#[tokio::test]
-async fn first_of_day_expired_zero_price_pass_renews_at_zero() {
-    let app = TestApp::with_door_mode("success").await;
-    enable_self_entry(&app).await;
-    sqlx::query("UPDATE users SET credit = 7.5 WHERE id = ?")
-        .bind(app.customer_id)
-        .execute(&app.pool)
-        .await
-        .unwrap();
-    let svc_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
-        .fetch_one(&app.pool)
-        .await
-        .unwrap();
-    // Last pass was a 0 € barter pass, now expired.
-    sqlx::query(
-        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until, note) \
-         VALUES (?, 2, ?, 0.0, 'charge', date('now', '-1 day'), 'barter')",
-    )
-    .bind(app.customer_id)
-    .bind(svc_id)
-    .execute(&app.pool)
-    .await
-    .unwrap();
-
-    let (status, _body) = app
-        .request(post_json(
-            "/api/door/open",
-            &app.customer_token,
-            &serde_json::json!({}),
-        ))
-        .await;
-    assert_eq!(status, axum::http::StatusCode::OK);
-
-    // Credit unchanged (0 € debit).
-    let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
-        .bind(app.customer_id)
-        .fetch_one(&app.pool)
-        .await
-        .unwrap();
-    assert!(
-        (credit - 7.5).abs() < 0.001,
-        "a 0 € renewal must not change credit (deliberate barter, #342), got {credit}"
-    );
-
-    // A 0 € auto-renewal pass row was still written.
-    let renew_count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM transactions \
-         WHERE user_id = ? AND note = 'auto-obnova' AND amount = 0.0 AND valid_until IS NOT NULL",
-    )
-    .bind(app.customer_id)
-    .fetch_one(&app.pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        renew_count, 1,
-        "a 0 € pass renewal row must still be issued"
-    );
-}
-
-/// #365 rounding (money-rounding.md / #325/#326): the auto-renewal debit and
-/// its ledger amount must both be the last pass price rounded to cents exactly
-/// once. Seed a last pass carrying sub-cent drift (35.017) and prove the
-/// renewal debits 35.02 and writes -35.02, not the raw value.
-#[tokio::test]
-async fn first_of_day_expired_pass_renewal_rounds_credit_and_ledger() {
-    let app = TestApp::with_door_mode("success").await;
-    enable_self_entry(&app).await;
-    sqlx::query("UPDATE users SET credit = 0.0 WHERE id = ?")
-        .bind(app.customer_id)
-        .execute(&app.pool)
-        .await
-        .unwrap();
-    let svc_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
-        .fetch_one(&app.pool)
-        .await
-        .unwrap();
-    sqlx::query(
-        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until) \
-         VALUES (?, 2, ?, -35.017, 'charge', date('now', '-1 day'))",
-    )
-    .bind(app.customer_id)
-    .bind(svc_id)
-    .execute(&app.pool)
-    .await
-    .unwrap();
-
-    let (status, _body) = app
-        .request(post_json(
-            "/api/door/open",
-            &app.customer_token,
-            &serde_json::json!({}),
-        ))
-        .await;
-    assert_eq!(status, axum::http::StatusCode::OK);
-
-    let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
-        .bind(app.customer_id)
-        .fetch_one(&app.pool)
-        .await
-        .unwrap();
-    assert!(
-        (credit - (-35.02)).abs() < 1e-9,
-        "credit must debit the rounded price 35.02, got {credit}"
-    );
-    let ledger: f64 = sqlx::query_scalar(
-        "SELECT amount FROM transactions WHERE user_id = ? AND note = 'auto-obnova'",
-    )
-    .bind(app.customer_id)
-    .fetch_one(&app.pool)
-    .await
-    .unwrap();
-    assert!(
-        (ledger - (-35.02)).abs() < 1e-9,
-        "ledger amount must be the rounded -35.02, not the raw -35.017, got {ledger}"
-    );
-}
-
-/// #372: a monthly pass that expired MORE than 31 days ago must NOT auto-renew
-/// on a door press — the long-lapsed customer gets a single-entry charge, not a
-/// fresh pass. This is the prod bug that renewed 6-years-dead passes; proves the
-/// recency gate reaches the DOOR call site (shared helper). RED against
-/// pre-#372.
-#[tokio::test]
-async fn first_of_day_pass_expired_over_31_days_ago_does_not_auto_renew() {
-    let app = TestApp::with_door_mode("success").await;
-    enable_self_entry(&app).await;
-    sqlx::query("UPDATE users SET credit = 20.0 WHERE id = ?")
-        .bind(app.customer_id)
-        .execute(&app.pool)
-        .await
-        .unwrap();
-    let svc_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
-        .fetch_one(&app.pool)
-        .await
-        .unwrap();
-    // Last pass sold for 35.0 but expired 60 days ago — outside the 31-day window.
-    sqlx::query(
-        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until) \
-         VALUES (?, 2, ?, -35.0, 'charge', date('now', '-60 days'))",
-    )
-    .bind(app.customer_id)
-    .bind(svc_id)
-    .execute(&app.pool)
-    .await
-    .unwrap();
-
-    let (status, body) = app
-        .request(post_json(
-            "/api/door/open",
-            &app.customer_token,
-            &serde_json::json!({}),
-        ))
-        .await;
-    assert_eq!(status, axum::http::StatusCode::OK);
-    assert_eq!(body["status"], "opened");
-    assert_eq!(body["charged"], true);
-
-    // No auto-renewal row was written.
+    // NO auto-renewal row was written — the door never renews now (#374).
     let renew_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND note = 'auto-obnova'",
     )
@@ -605,9 +323,12 @@ async fn first_of_day_pass_expired_over_31_days_ago_does_not_auto_renew() {
     .fetch_one(&app.pool)
     .await
     .unwrap();
-    assert_eq!(renew_count, 0, "a >31-day-expired pass must NOT auto-renew");
+    assert_eq!(
+        renew_count, 0,
+        "a door press must NOT auto-renew any pass (#374)"
+    );
 
-    // Credit dropped by the single-entry price (read from the seed), not the 35
+    // Credit dropped by the SINGLE-ENTRY price (read from the seed), not the 35
     // pass price (which would leave -15).
     let se_price: f64 =
         sqlx::query_scalar("SELECT default_price FROM services WHERE kind = 'single_entry'")
@@ -624,10 +345,10 @@ async fn first_of_day_pass_expired_over_31_days_ago_does_not_auto_renew() {
         "expected single-entry charge (20 - {se_price}), got {credit}"
     );
 
-    // The door row is a single-entry CHARGE (amount<0), not a EUR0 pass-covered
+    // The door row is a single-entry CHARGE (amount<0), not a €0 pass-covered
     // visit.
-    let door_row: (String, f64) = sqlx::query_as(
-        "SELECT action, amount FROM transactions \
+    let door_row: (String, f64, i64) = sqlx::query_as(
+        "SELECT action, amount, is_door_press FROM transactions \
          WHERE user_id = ? AND is_door_press = 1 AND note = 'door: 1st'",
     )
     .bind(app.customer_id)
@@ -636,56 +357,14 @@ async fn first_of_day_pass_expired_over_31_days_ago_does_not_auto_renew() {
     .unwrap();
     assert_eq!(
         door_row.0, "charge",
-        "must be a single-entry charge, not a visit"
+        "must be a single-entry charge, not a pass-covered visit"
     );
     assert!(
         door_row.1 < 0.0,
         "single-entry door charge must be negative, got {}",
         door_row.1
     );
-}
-
-/// #365: an auto-renewed pass carries `valid_until`, so it must count in the
-/// `passes_sold` KPI exactly like a manual sale (reports.rs). Trigger a
-/// door-driven renewal, then read today's day report and assert it counts.
-#[tokio::test]
-async fn auto_renewed_pass_counts_in_passes_sold_kpi() {
-    let app = TestApp::with_door_mode("success").await;
-    enable_self_entry(&app).await;
-    let svc_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
-        .fetch_one(&app.pool)
-        .await
-        .unwrap();
-    // The prior pass was SOLD 40 days ago (outside today's KPI window) and has
-    // expired, so only the auto-renewal falls in today's `passes_sold`.
-    sqlx::query(
-        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until, created_at) \
-         VALUES (?, 2, ?, -35.0, 'charge', date('now', '-10 days'), datetime('now', '-40 days'))",
-    )
-    .bind(app.customer_id)
-    .bind(svc_id)
-    .execute(&app.pool)
-    .await
-    .unwrap();
-
-    let (status, _body) = app
-        .request(post_json(
-            "/api/door/open",
-            &app.customer_token,
-            &serde_json::json!({}),
-        ))
-        .await;
-    assert_eq!(status, axum::http::StatusCode::OK);
-
-    let today = spinbike_server::util::today_bratislava();
-    let (kpi, _cat, _events, _more) =
-        spinbike_server::db::reports::day_report(&app.pool, today, 50, None)
-            .await
-            .unwrap();
-    assert_eq!(
-        kpi.passes_sold, 1,
-        "the auto-renewed pass must count in today's passes_sold KPI"
-    );
+    assert_eq!(door_row.2, 1);
 }
 
 #[tokio::test]

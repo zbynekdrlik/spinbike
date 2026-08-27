@@ -48,7 +48,9 @@ notifications::tick(&pool, &push).await } }`).
   constant, and not owned by the helper) — pick an hour that doesn't collide with the
   OTHER daily jobs, so they never compete for the DB pool at the same instant.
   Currently: `notifications` = 9 (customer-visible reminders, mid-morning),
-  `token_purge` = 4 (pure housekeeping, off-peak).
+  `token_purge` = 4 (pure housekeeping, off-peak), `pass_renewal` = 5 (#374 —
+  contiguous monthly-pass auto-renewal; off-peak, and BEFORE `notifications`=9
+  so a renewal suppresses that user's redundant "pass expiring" push).
 - `duration_until_next_bratislava_hour` (in `util.rs`) is the shared, already-tested
   helper `spawn_daily_job` itself calls — don't reinvent DST-safe scheduling per job.
 - The DELAY arithmetic is pinned per-hour in `token_purge.rs`'s `daily_run_hour_*`

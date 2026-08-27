@@ -128,7 +128,7 @@ async fn charge(
     let user = sqlx::query_as::<_, users::UserRow>(
         "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
                 oauth_id, credit, card_code, blocked, allow_debit, search_text,
-                created_at, deleted_at, allow_self_entry
+                created_at, deleted_at, allow_self_entry, auto_renew_pass
          FROM users WHERE id = ?",
     )
     .bind(body.user_id)
@@ -193,7 +193,7 @@ async fn storno(
     let user = sqlx::query_as::<_, users::UserRow>(
         "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
                 oauth_id, credit, card_code, blocked, allow_debit, search_text,
-                created_at, deleted_at, allow_self_entry
+                created_at, deleted_at, allow_self_entry, auto_renew_pass
          FROM users WHERE id = ?",
     )
     .bind(body.user_id)
@@ -262,7 +262,7 @@ async fn sell_pass(
     let user = sqlx::query_as::<_, users::UserRow>(
         "SELECT id, email, name, password_hash, phone, company, role, oauth_provider,
                 oauth_id, credit, card_code, blocked, allow_debit, search_text,
-                created_at, deleted_at, allow_self_entry
+                created_at, deleted_at, allow_self_entry, auto_renew_pass
          FROM users WHERE id = ?",
     )
     .bind(body.user_id)

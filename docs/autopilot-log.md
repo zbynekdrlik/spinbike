@@ -1641,3 +1641,37 @@ Three parallel worktree workers, one serial integration, one PR.
 Prod check before touching money: `users.credit` and `transactions.amount` both had 0 rows with more than 2 decimals (581 users, 93160 transactions) — forward-fix only, no backfill.
 
 Gotcha for future rounds: parallel worktree workers each branch off `main` and each bump `VERSION` independently, so every merge after the first conflicts on `VERSION` and on the `## Playbook router` block. Both are keep-both / pick-one resolutions, not a sign anything went wrong.
+
+## 2026-08-27 — #374: per-user flag + daily contiguous pass auto-renewal, replacing the visit-triggered mechanism (solo, v0.15.0-dev.171)
+
+Owner decision (verbatim in the ticket): scrap the #365/#372 visit-triggered
+auto-renewal (and its two heuristic gates), replace with ONE explicit per-user
+flag driven by a daily job at the END of the previous month (contiguous
+extension), debit even into negative, and a push notification per renewal.
+
+- **Removed** `db::users::auto_renew_pass` (+ #372 gates) and its calls in
+  `routes/door.rs` + `jobs/charger.rs`. Both sites now fall back to the plain
+  single-entry / Spinning charge for an expired-pass customer (RED-first:
+  `first_of_day_expired_pass_charges_single_entry_no_renewal`,
+  `charger_charges_spinning_for_expired_pass_no_renewal`). `AUTO_RENEW_NOTE` +
+  the `staff_id NULL` distinguisher kept (the new job reuses them).
+- **Migration V28** `users.auto_renew_pass INTEGER NOT NULL DEFAULT 0` (additive,
+  same shape as V16 allow_self_entry). Threaded through `UserRow`/
+  `UserRowWithPass` + every UserRow SELECT (8 in db/users.rs + 3 in payments.rs)
+  + `UserResponse` + UI `CardInfo`. NOT added to `UserByMovementRow`/my_balance
+  (own explicit column lists, don't need it).
+- **Toggle** on the existing `PUT /api/users/{id}` — staff-or-admin (reused
+  `ErrorCode::StaffRequired`, no new endpoint/ErrorCode). Checkbox in
+  `edit_info_form.rs`, staff-visible (customer-target only).
+- **New job** `jobs::pass_renewal` (05:00 via spawn_daily_job + startup tick).
+  Money-write `db::users::renew_expired_pass` + pure `renewal_valid_until`
+  (3-day contiguity tolerance, else fresh-from-today; chrono month-clamp).
+  Idempotent: expired-only query + `valid_until >= today` after renewal → max
+  1/user/run, no double debit, no month chain.
+- **Push** reuses an extracted (behavior-preserving) `notifications::
+  send_to_subscriptions` — no ledger, no email fallback; text
+  "Vasa permanentka bola predlzena do <DD.MM.RRRR>. Aktualny kredit: <X> EUR".
+- E2E: added a staff auto-renew checkbox toggle+persist test; rewrote the old
+  door-renewal negative-balance spec to a direct-seed client-minus-highlight
+  test (`client-negative-balance-highlight.spec.ts`).
+- Playbook `pass-auto-renewal.md` rewritten for the new mechanism.

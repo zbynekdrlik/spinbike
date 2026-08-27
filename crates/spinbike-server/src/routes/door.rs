@@ -305,50 +305,30 @@ async fn open(
             // with single_entry service_id so attendance reports count it.
             ("visit", Some(single_entry_id), 0.0, "door: 1st".to_string())
         } else {
-            // No ACTIVE pass. #365: if this customer has EVER held a monthly
-            // pass, auto-renew it at the price of the last one instead of
-            // charging a single entry — the fresh pass then covers THIS entry
-            // (a €0 visit) and the customer's credit goes negative until they
-            // settle up. A customer who has NEVER held a pass keeps today's
-            // single-entry charge (auto_renew_pass returns None). Staff/admin
-            // never reach here (short-circuited to pass_active above).
-            match users::auto_renew_pass(&mut tx, user_id, today)
+            // No ACTIVE pass → plain single-entry charge. #374 REMOVED
+            // visit-triggered auto-renewal (was #365): a door press never
+            // renews a pass anymore. Continuous renewal is now the daily
+            // `jobs::pass_renewal` job's responsibility, gated on the per-user
+            // `auto_renew_pass` flag — driven by the END of the previous month,
+            // not the next visit. Staff/admin never reach here (short-circuited
+            // to pass_active above). ROUND(...,2) in SQL is defense-in-depth
+            // against float drift already sitting in a pre-existing
+            // services.default_price value (mirrors payments.rs's charge/storno
+            // UPDATE statements) — the Rust-side price is already rounded above.
+            sqlx::query("UPDATE users SET credit = ROUND(credit - ?, 2) WHERE id = ?")
+                .bind(single_entry_price)
+                .bind(user_id)
+                .execute(&mut *tx)
                 .await
-                .map_err(internal_error)?
-            {
-                Some(new_credit) => {
-                    // Fresh pass issued; credit already debited by its price.
-                    // The door entry itself is now pass-covered → €0 visit row,
-                    // identical to any other pass-covered first press of the day.
-                    // `charged=true` because the customer's credit did decrease
-                    // (by the pass price), even though the door row is €0.
-                    credit = new_credit;
-                    charged = true;
-                    ("visit", Some(single_entry_id), 0.0, "door: 1st".to_string())
-                }
-                None => {
-                    // Never held a pass — charge single_entry price and deduct
-                    // from user.credit. ROUND(...,2) in SQL is defense-in-depth
-                    // against float drift already sitting in a pre-existing
-                    // services.default_price value (mirrors payments.rs's
-                    // charge/storno UPDATE statements) — the Rust-side price is
-                    // already rounded above.
-                    sqlx::query("UPDATE users SET credit = ROUND(credit - ?, 2) WHERE id = ?")
-                        .bind(single_entry_price)
-                        .bind(user_id)
-                        .execute(&mut *tx)
-                        .await
-                        .map_err(internal_error)?;
-                    credit = users::round_cents(credit - single_entry_price);
-                    charged = true;
-                    (
-                        "charge",
-                        Some(single_entry_id),
-                        -single_entry_price,
-                        "door: 1st".to_string(),
-                    )
-                }
-            }
+                .map_err(internal_error)?;
+            credit = users::round_cents(credit - single_entry_price);
+            charged = true;
+            (
+                "charge",
+                Some(single_entry_id),
+                -single_entry_price,
+                "door: 1st".to_string(),
+            )
         }
     } else {
         // N-th press today (N >= 2) — zero-amount audit row. Still tagged

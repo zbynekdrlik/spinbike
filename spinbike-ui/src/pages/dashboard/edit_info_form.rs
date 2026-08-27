@@ -25,18 +25,27 @@ fn nz(s: String) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
+/// The editable user fields collected from the sheet. Grouped into ONE struct
+/// (rather than passed as individual args to `save_user_fields`) so adding a
+/// field — like `auto_renew_pass` (#374) — never pushes the function past
+/// clippy's 7-argument limit (`too_many_arguments`, `-D warnings` on wasm32).
+struct EditedUserFields {
+    name: String,
+    email: String,
+    company: String,
+    phone: String,
+    allow_self_entry: Option<bool>,
+    auto_renew_pass: Option<bool>,
+    password: String,
+}
+
 /// PUT the edit-form fields to `/api/users/{id}`. Shared by Save AND by the
 /// save-then-invite path so both persist IDENTICAL field semantics — the invite
 /// endpoint reads the committed DB row, so the email must be saved before it can
 /// be invited against.
 async fn save_user_fields(
     card_id: i64,
-    name: String,
-    email: String,
-    company: String,
-    phone: String,
-    allow_self_entry: Option<bool>,
-    password: String,
+    fields: EditedUserFields,
 ) -> Result<CardInfo, api::ApiError> {
     #[derive(serde::Serialize)]
     struct Req {
@@ -51,15 +60,18 @@ async fn save_user_fields(
         #[serde(skip_serializing_if = "Option::is_none")]
         allow_self_entry: Option<bool>,
         #[serde(skip_serializing_if = "Option::is_none")]
+        auto_renew_pass: Option<bool>,
+        #[serde(skip_serializing_if = "Option::is_none")]
         password: Option<String>,
     }
     let req = Req {
-        name: nz_trim(name),
-        email: nz_trim(email),
-        company: nz(company),
-        phone: nz(phone),
-        allow_self_entry,
-        password: nz(password),
+        name: nz_trim(fields.name),
+        email: nz_trim(fields.email),
+        company: nz(fields.company),
+        phone: nz(fields.phone),
+        allow_self_entry: fields.allow_self_entry,
+        auto_renew_pass: fields.auto_renew_pass,
+        password: nz(fields.password),
     };
     api::put_json::<Req, CardInfo>(&format!("/api/users/{card_id}"), &req).await
 }
@@ -121,9 +133,11 @@ pub fn EditInfoForm(
     // FnOnce. The Effect runs on the first show=true with prev=None and
     // populates inputs from the latest server state.
     let initial_allow_se = card.allow_self_entry;
+    let initial_auto_renew = card.auto_renew_pass;
     // Target user's role — used to hide `allow_self_entry` when editing
     // an admin/staff row (those roles bypass the flag, so an "off"
-    // checkbox confuses the operator — #94).
+    // checkbox confuses the operator — #94). `auto_renew_pass` uses the same
+    // customer-only gate (a pass-renewal flag is meaningless for staff/admin).
     let target_is_customer = !matches!(card.role, Some(Role::Admin | Role::Staff));
     // Initial values from the card prop, exposed as ReadSignals so the
     // outer `move ||` closure stays Fn (signals are Copy). Inputs use
@@ -152,6 +166,7 @@ pub fn EditInfoForm(
     let phone_ref = NodeRef::<leptos::html::Input>::new();
     let password_ref = NodeRef::<leptos::html::Input>::new();
     let (allow_self_entry, set_allow_self_entry) = signal(initial_allow_se);
+    let (auto_renew_pass, set_auto_renew_pass) = signal(initial_auto_renew);
 
     // Read the caller's role to gate the admin-only fields client-side.
     let is_admin = auth::get_user().map(|u| u.role.is_admin()).unwrap_or(false);
@@ -266,6 +281,7 @@ pub fn EditInfoForm(
                     // control (#94 review item #4).
                     if target_is_customer {
                         set_allow_self_entry.set(c.allow_self_entry);
+                        set_auto_renew_pass.set(c.auto_renew_pass);
                     }
                     // (The invite button's gating value — `email_sig` — is
                     // re-synced in the email smart-overwrite block above.)
@@ -333,6 +349,7 @@ pub fn EditInfoForm(
             // #143: closing the sheet after the operator restores the old account.
             let on_close_restored = on_close;
             let initial_allow_se_at_open = allow_self_entry.get_untracked();
+            let initial_auto_renew_at_open = auto_renew_pass.get_untracked();
 
             // Read a NodeRef input's current DOM value — shared by Save and by
             // the save-then-invite click so both collect identical field values.
@@ -355,18 +372,28 @@ pub fn EditInfoForm(
                     None
                 }
             };
+            // The `auto_renew_pass` payload: only sent when changed AND the
+            // target is a customer. Unlike `allow_self_entry` this is NOT
+            // gated on `is_admin` — staff may set it too (#374); the server
+            // enforces staff-or-admin regardless.
+            let auto_renew_req = move || {
+                let v = auto_renew_pass.get_untracked();
+                if target_is_customer && v != initial_auto_renew_at_open {
+                    Some(v)
+                } else {
+                    None
+                }
+            };
             // Collect the whole form in one place so Save and save-then-invite
-            // can never drift as fields are added/removed. Returns
-            // (name, email, company, phone, password, allow_self_entry).
-            let collect = move || {
-                (
-                    read(&name_ref),
-                    read(&email_ref),
-                    read(&company_ref),
-                    read(&phone_ref),
-                    read(&password_ref),
-                    allow_se_req(),
-                )
+            // can never drift as fields are added/removed.
+            let collect = move || EditedUserFields {
+                name: read(&name_ref),
+                email: read(&email_ref),
+                company: read(&company_ref),
+                phone: read(&phone_ref),
+                password: read(&password_ref),
+                allow_self_entry: allow_se_req(),
+                auto_renew_pass: auto_renew_req(),
             };
 
             let (invite_loading, set_invite_loading) = signal(false);
@@ -391,7 +418,7 @@ pub fn EditInfoForm(
                 if loading.get_untracked() || invite_loading.get_untracked() {
                     return;
                 }
-                let (name, email, company, phone, password, allow_self_entry) = collect();
+                let fields = collect();
 
                 // Clear any stale alert from a previous action before this one
                 // resolves — otherwise a stale red error (or green success) from
@@ -416,10 +443,7 @@ pub fn EditInfoForm(
                 spawn_local(async move {
                     // Step 1 — persist. A save failure keeps the sheet OPEN to
                     // fix inline (never invites on a failed save).
-                    let saved = match save_user_fields(
-                        card_id, name, email, company, phone, allow_self_entry, password,
-                    )
-                    .await
+                    let saved = match save_user_fields(card_id, fields).await
                     {
                         Ok(c) => c,
                         Err(e) => {
@@ -670,6 +694,34 @@ pub fn EditInfoForm(
                             view! {
                                 {password_field}
                                 {allow_se_row}
+                            }.into_any()
+                        } else {
+                            ().into_any()
+                        }}
+                        // #374: auto-renew-pass toggle. Rendered OUTSIDE the
+                        // is_admin block above — staff AND admin may set it
+                        // (the server enforces staff-or-admin) — but only for a
+                        // CUSTOMER target (a pass-renewal flag is meaningless
+                        // for staff/admin rows, same customer-only gate as
+                        // allow_self_entry).
+                        {if target_is_customer {
+                            view! {
+                                <label class="form-row" data-testid="user-edit-auto-renew-pass-row">
+                                    <input
+                                        type="checkbox"
+                                        data-testid="user-edit-auto-renew-pass"
+                                        prop:checked=move || auto_renew_pass.get()
+                                        on:change=move |ev| {
+                                            let el: HtmlInputElement =
+                                                ev.target().unwrap().unchecked_into();
+                                            set_auto_renew_pass.set(el.checked());
+                                        }
+                                    />
+                                    <span>{move || i18n::t(lang.get(), "admin_auto_renew_pass")}</span>
+                                    <small class="form-help">
+                                        {move || i18n::t(lang.get(), "admin_auto_renew_pass_help")}
+                                    </small>
+                                </label>
                             }.into_any()
                         } else {
                             ().into_any()
