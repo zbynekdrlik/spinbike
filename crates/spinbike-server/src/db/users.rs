@@ -593,11 +593,10 @@ pub const AUTO_RENEW_NOTE: &str = "auto-obnova";
 /// fresh FROM TODAY instead — no back-dated months, no retro debit.
 pub const CONTIGUITY_TOLERANCE_DAYS: i64 = 3;
 
-/// The outcome of one successful daily auto-renewal (#374).
+/// The outcome of one successful daily auto-renewal (#374) — what the caller
+/// needs to build the customer notification.
 #[derive(Debug, Clone, Copy)]
 pub struct Renewal {
-    /// The pass price debited (last pass price, rounded once), `>= 0`.
-    pub price: f64,
     /// The user's credit AFTER the debit (may be negative — deliberate, #374).
     pub new_credit: f64,
     /// The renewed pass's `valid_until` (gym-local calendar date).
@@ -642,15 +641,27 @@ pub fn renewal_valid_until(
 /// Price is `round_cents(ABS(last pass amount))` — rounded ONCE and reused for
 /// both the credit debit and the ledger row (money-rounding.md). Credit is
 /// debited even into negative (no credit gate — owner decision #374). A 0 €
-/// barter pass renews at 0 € (#342). The debit + insert run in ONE transaction.
+/// barter pass renews at 0 € (#342).
+///
+/// The last-pass READ, the idempotency GUARD, and the debit+insert WRITE all
+/// run inside ONE transaction. That closes a milliseconds-wide double-debit
+/// window: the startup tick (`bin/server.rs`'s `tokio::join!`) can still be
+/// mid-run when the 05:00 aligned tick fires on a restart just before 05:00, so
+/// two ticks could otherwise both pass a pool-level guard for the same user and
+/// each commit a renewal. With the read inside the transaction, SQLite's
+/// snapshot isolation makes the losing committer fail (a stale-snapshot / busy
+/// write) into the job's per-user error arm instead of writing a second pass.
 pub async fn renew_expired_pass(
     pool: &SqlitePool,
     user_id: i64,
     today: chrono::NaiveDate,
 ) -> Result<Option<Renewal>> {
+    let mut tx = pool.begin().await?;
+
     // Latest non-voided pass + its price, via the canonical `user_active_pass`
     // view (V18) — never hand-rolled pass SQL. The view already picks the
-    // newest non-voided pass per user and filters deleted_at IS NULL.
+    // newest non-voided pass per user and filters deleted_at IS NULL. Read
+    // INSIDE the transaction (see the fn doc — the double-debit race guard).
     let last_pass: Option<(f64, chrono::NaiveDate)> = sqlx::query_as(
         "SELECT t.amount, date(ap.valid_until) \
          FROM user_active_pass ap \
@@ -658,10 +669,10 @@ pub async fn renew_expired_pass(
          WHERE ap.user_id = ?",
     )
     .bind(user_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?;
     let Some((last_amount, last_valid_until)) = last_pass else {
-        return Ok(None); // no pass history → nothing to renew at
+        return Ok(None); // no pass history → nothing to renew at (tx rolls back)
     };
     if last_valid_until >= today {
         return Ok(None); // a live pass already covers today → idempotent no-op
@@ -671,10 +682,9 @@ pub async fn renew_expired_pass(
     let price = round_cents(last_amount.abs());
 
     let service_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
 
-    let mut tx = pool.begin().await?;
     // ROUND(...) in SQL is defense-in-depth against float drift already sitting
     // in the stored credit; `price` is already rounded above.
     sqlx::query("UPDATE users SET credit = ROUND(credit - ?, 2) WHERE id = ?")
@@ -709,7 +719,6 @@ pub async fn renew_expired_pass(
         "pass: daily auto-renewal issued a contiguous monthly pass (#374)"
     );
     Ok(Some(Renewal {
-        price,
         new_credit,
         new_valid_until,
     }))

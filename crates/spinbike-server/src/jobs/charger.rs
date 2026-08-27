@@ -588,7 +588,6 @@ mod tests {
         assert_eq!(credit, 5.0);
     }
 
-    /// #365: a booking whose customer's monthly pass has EXPIRED (no longer
     /// #374 (behavior change from #365): visit-triggered auto-renewal is REMOVED
     /// from the charger too. A customer whose pass expired (yesterday here) — so
     /// it no longer covers the booking date — gets the plain Spinning
