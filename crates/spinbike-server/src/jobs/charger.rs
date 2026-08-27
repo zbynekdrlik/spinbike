@@ -96,27 +96,13 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
             None => false,
         };
 
-        // #365: no active pass covering the booking day, but if the customer
-        // has EVER held a monthly pass, auto-renew it at the price of the last
-        // one (anchored to the booking day + 1 month) instead of charging the
-        // Spinning single-visit price. The fresh pass then covers THIS class (a
-        // €0 visit) and the customer's credit goes negative until they settle
-        // up. A customer who has NEVER held a pass keeps the Spinning charge
-        // (auto_renew_pass returns None). `renewed` gates the credit debit
-        // below: the auto-renew path already debited the pass price itself, so
-        // only the genuine single-visit charge (case 3) debits `price` here.
-        let (amount, renewed) = if has_pass {
-            (0.0, false)
-        } else {
-            // The booking `date` is already a gym-local YYYY-MM-DD calendar
-            // date (no tz conversion — bratislava-tz.md), so parsing it to a
-            // NaiveDate anchor is pure.
-            let anchor = chrono::NaiveDate::parse_from_str(&date, "%Y-%m-%d")?;
-            match crate::db::users::auto_renew_pass(&mut tx, user_id, anchor).await? {
-                Some(_new_credit) => (0.0, true),
-                None => (-price, false),
-            }
-        };
+        // An active pass covering the booking day → €0 visit; otherwise the
+        // Spinning single-visit charge. #374 REMOVED visit-triggered
+        // auto-renewal (was #365): a class charge never renews a pass anymore.
+        // Continuous renewal is now the daily `jobs::pass_renewal` job's
+        // responsibility, gated on the per-user `auto_renew_pass` flag — driven
+        // by the END of the previous month, not the next class visit.
+        let amount = if has_pass { 0.0 } else { -price };
 
         // Log the money-relevant decision for every charged booking so a
         // "free visit" dispute can be reconstructed from logs alone.
@@ -126,7 +112,6 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
             as_of_date = %date,
             pass_valid_until = ?pass_valid_until,
             has_pass,
-            renewed,
             credit,
             amount,
             "charger: pass decision"
@@ -142,11 +127,8 @@ pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
         .fetch_one(&mut *tx)
         .await?;
 
-        // Debit the Spinning price ONLY when we actually charged the single
-        // visit — i.e. no active pass AND no prior pass to auto-renew. The
-        // auto-renew path (`renewed`) already debited the pass price inside
-        // `auto_renew_pass`, so debiting `price` again here would double-charge.
-        if !has_pass && !renewed {
+        // Debit the Spinning price only when no active pass covered the booking.
+        if !has_pass {
             sqlx::query("UPDATE users SET credit = ROUND(credit - ?, 2) WHERE id = ?")
                 .bind(price)
                 .bind(user_id)
@@ -675,102 +657,6 @@ mod tests {
 
         // The class visit is the Spinning single charge (amount<0), not a €0
         // renewed visit.
-        let txn_id: i64 =
-            sqlx::query_scalar("SELECT charge_transaction_id FROM bookings WHERE id = ?")
-                .bind(bid)
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        let amount: f64 = sqlx::query_scalar("SELECT amount FROM transactions WHERE id = ?")
-            .bind(txn_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert!(
-            amount < 0.0,
-            "must charge the Spinning single-visit price, got {amount}"
-        );
-
-        // Credit dropped by the Spinning price (read from seed), not 35 (which
-        // would leave -25).
-        let sp_price: f64 =
-            sqlx::query_scalar("SELECT default_price FROM services WHERE kind='group_class'")
-                .fetch_one(&pool)
-                .await
-                .unwrap();
-        let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
-            .bind(uid)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        assert!(
-            (credit - (10.0 - sp_price)).abs() < 0.01,
-            "expected Spinning charge (10 - {sp_price}), got {credit}"
-        );
-    }
-
-    /// #372: a monthly pass that expired MORE than 31 days ago must NOT
-    /// auto-renew on a class charge either — the charger falls back to the
-    /// Spinning single-visit charge, same recency gate as the door path (shared
-    /// helper). RED against pre-#372.
-    #[tokio::test]
-    async fn charger_does_not_auto_renew_pass_expired_over_31_days_ago() {
-        let pool = create_memory_pool().await.unwrap();
-        run_migrations(&pool).await.unwrap();
-
-        let uid: i64 = sqlx::query_scalar(
-            "INSERT INTO users (email, name, credit) VALUES ('u@x','u',10.0) RETURNING id",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        let pass_svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind='monthly_pass'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-        // A prior pass expired 60 days ago — outside the 31-day recency window.
-        sqlx::query(
-            "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until)
-             VALUES (?, NULL, ?, -35.0, 'charge', date('now','-60 days'))",
-        )
-        .bind(uid)
-        .bind(pass_svc)
-        .execute(&pool)
-        .await
-        .unwrap();
-
-        // Book the nearest Monday 18:00 (same as seed_booking).
-        let tid: i64 = sqlx::query_scalar(
-            "SELECT id FROM class_templates WHERE weekday=0 AND start_time='18:00'",
-        )
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        let today = crate::util::today_bratislava();
-        let days_to_mon = (7 - today.weekday().num_days_from_monday() as i64) % 7;
-        let mon = today + Duration::days(days_to_mon);
-        let bid =
-            crate::db::classes::create_booking(&pool, tid, &mon.to_string(), uid, None, "manual")
-                .await
-                .unwrap();
-
-        let n = tick_as_of(&pool, &now_at_14()).await.unwrap();
-        assert_eq!(n, 1);
-
-        // No auto-renewal row.
-        let renew_count: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND note = 'auto-obnova'",
-        )
-        .bind(uid)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        assert_eq!(
-            renew_count, 0,
-            "a >31-day-expired pass must NOT auto-renew in the charger"
-        );
-
-        // The class visit is the Spinning single charge, not a EUR0 renewed visit.
         let txn_id: i64 =
             sqlx::query_scalar("SELECT charge_transaction_id FROM bookings WHERE id = ?")
                 .bind(bid)
