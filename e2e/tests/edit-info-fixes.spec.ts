@@ -113,6 +113,48 @@ test.describe('Edit-info form field fixes', () => {
         expect(consoleMessages).toEqual([]);
     });
 
+    // #374: STAFF (not just admin) can turn on a customer's auto-renew-pass
+    // flag via the edit sheet, and it round-trips through the server (reopening
+    // shows it still checked). Logged in as STAFF to prove the control is NOT
+    // admin-gated like allow_self_entry.
+    test('staff can toggle a customer auto-renew-pass and it persists', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+
+        const staffToken = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const user = await createUniqueUser(staffToken, 0, 'AR');
+
+        await page.goto('/staff');
+        await page.waitForSelector('input[type="search"]');
+        await page.fill('input[type="search"]', user.card_code);
+        const result = page.locator('[data-testid="search-result"]').first();
+        await expect(result).toBeVisible({ timeout: 3000 });
+        await result.click();
+        await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+
+        await page.locator('[data-testid="edit-info-button"]').click();
+        const sheet = page.locator('[data-testid="sheet-edit-info"]');
+        await expect(sheet).toBeVisible();
+
+        // The checkbox is visible to STAFF (not admin-only) and starts off.
+        const checkbox = sheet.locator('[data-testid="user-edit-auto-renew-pass"]');
+        await expect(checkbox).toBeVisible();
+        await expect(checkbox).not.toBeChecked();
+
+        // Turn it on and save — the sheet closes on success.
+        await checkbox.check();
+        await sheet.locator('button[type="submit"]').click();
+        await expect(sheet).not.toBeVisible({ timeout: 5000 });
+
+        // Reopen: the flag persisted (server round-trip via the lookup refresh).
+        await page.locator('[data-testid="edit-info-button"]').click();
+        await expect(sheet).toBeVisible();
+        await expect(sheet.locator('[data-testid="user-edit-auto-renew-pass"]')).toBeChecked({
+            timeout: 5000,
+        });
+
+        expect(consoleMessages).toEqual([]);
+    });
+
     test('the edit sheet cannot be dismissed by Escape while a save is in flight', async ({
         page,
     }) => {
