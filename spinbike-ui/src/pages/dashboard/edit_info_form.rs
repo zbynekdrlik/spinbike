@@ -25,12 +25,11 @@ fn nz(s: String) -> Option<String> {
     if s.is_empty() { None } else { Some(s) }
 }
 
-/// PUT the edit-form fields to `/api/users/{id}`. Shared by Save AND by the
-/// save-then-invite path so both persist IDENTICAL field semantics — the invite
-/// endpoint reads the committed DB row, so the email must be saved before it can
-/// be invited against.
-async fn save_user_fields(
-    card_id: i64,
+/// The editable user fields collected from the sheet. Grouped into ONE struct
+/// (rather than passed as individual args to `save_user_fields`) so adding a
+/// field — like `auto_renew_pass` (#374) — never pushes the function past
+/// clippy's 7-argument limit (`too_many_arguments`, `-D warnings` on wasm32).
+struct EditedUserFields {
     name: String,
     email: String,
     company: String,
@@ -38,6 +37,15 @@ async fn save_user_fields(
     allow_self_entry: Option<bool>,
     auto_renew_pass: Option<bool>,
     password: String,
+}
+
+/// PUT the edit-form fields to `/api/users/{id}`. Shared by Save AND by the
+/// save-then-invite path so both persist IDENTICAL field semantics — the invite
+/// endpoint reads the committed DB row, so the email must be saved before it can
+/// be invited against.
+async fn save_user_fields(
+    card_id: i64,
+    fields: EditedUserFields,
 ) -> Result<CardInfo, api::ApiError> {
     #[derive(serde::Serialize)]
     struct Req {
@@ -57,13 +65,13 @@ async fn save_user_fields(
         password: Option<String>,
     }
     let req = Req {
-        name: nz_trim(name),
-        email: nz_trim(email),
-        company: nz(company),
-        phone: nz(phone),
-        allow_self_entry,
-        auto_renew_pass,
-        password: nz(password),
+        name: nz_trim(fields.name),
+        email: nz_trim(fields.email),
+        company: nz(fields.company),
+        phone: nz(fields.phone),
+        allow_self_entry: fields.allow_self_entry,
+        auto_renew_pass: fields.auto_renew_pass,
+        password: nz(fields.password),
     };
     api::put_json::<Req, CardInfo>(&format!("/api/users/{card_id}"), &req).await
 }
@@ -377,19 +385,15 @@ pub fn EditInfoForm(
                 }
             };
             // Collect the whole form in one place so Save and save-then-invite
-            // can never drift as fields are added/removed. Returns
-            // (name, email, company, phone, password, allow_self_entry,
-            // auto_renew_pass).
-            let collect = move || {
-                (
-                    read(&name_ref),
-                    read(&email_ref),
-                    read(&company_ref),
-                    read(&phone_ref),
-                    read(&password_ref),
-                    allow_se_req(),
-                    auto_renew_req(),
-                )
+            // can never drift as fields are added/removed.
+            let collect = move || EditedUserFields {
+                name: read(&name_ref),
+                email: read(&email_ref),
+                company: read(&company_ref),
+                phone: read(&phone_ref),
+                password: read(&password_ref),
+                allow_self_entry: allow_se_req(),
+                auto_renew_pass: auto_renew_req(),
             };
 
             let (invite_loading, set_invite_loading) = signal(false);
@@ -414,8 +418,7 @@ pub fn EditInfoForm(
                 if loading.get_untracked() || invite_loading.get_untracked() {
                     return;
                 }
-                let (name, email, company, phone, password, allow_self_entry, auto_renew_pass) =
-                    collect();
+                let fields = collect();
 
                 // Clear any stale alert from a previous action before this one
                 // resolves — otherwise a stale red error (or green success) from
@@ -440,17 +443,7 @@ pub fn EditInfoForm(
                 spawn_local(async move {
                     // Step 1 — persist. A save failure keeps the sheet OPEN to
                     // fix inline (never invites on a failed save).
-                    let saved = match save_user_fields(
-                        card_id,
-                        name,
-                        email,
-                        company,
-                        phone,
-                        allow_self_entry,
-                        auto_renew_pass,
-                        password,
-                    )
-                    .await
+                    let saved = match save_user_fields(card_id, fields).await
                     {
                         Ok(c) => c,
                         Err(e) => {
