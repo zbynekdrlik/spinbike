@@ -312,10 +312,11 @@ mod tests {
         );
     }
 
-    /// (e) A big gap (well past the tolerance) renews FROM TODAY — no back-dated
-    /// months, so valid_until = today + 1 month, not old_vu + months.
+    /// (e) #376: A big gap (well past the tolerance) must be SKIPPED — the job
+    /// renews ONLY contiguously. A bigger gap means the customer needs a manual
+    /// desk sale. No renewal row, no credit change.
     #[tokio::test]
-    async fn big_gap_renews_from_today() {
+    async fn big_gap_is_skipped() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
         let uid = seed_user(&pool, 100.0, true).await;
@@ -323,17 +324,56 @@ mod tests {
         seed_pass(&pool, uid, -35.0, today() - chrono::Duration::days(90)).await;
 
         let n = tick_as_of(&pool, &disabled_push(), today()).await.unwrap();
-        assert_eq!(n, 1);
+        assert_eq!(n, 0, "a big-gap user must NOT be renewed");
+        assert_eq!(
+            renewal_rows(&pool, uid).await,
+            0,
+            "no renewal row for a big gap"
+        );
+        assert!(
+            (credit_of(&pool, uid).await - 100.0).abs() < 1e-9,
+            "credit must be unchanged when the renewal is skipped"
+        );
+    }
 
-        let vu: String = sqlx::query_scalar(
-            "SELECT date(valid_until) FROM transactions WHERE user_id = ? AND note = 'auto-obnova'",
-        )
-        .bind(uid)
-        .fetch_one(&pool)
-        .await
-        .unwrap();
-        // today (2026-08-27) + 1 month = 2026-09-27.
-        assert_eq!(vu, "2026-09-27", "big gap: fresh from today + 1 month");
+    /// #376 regression: the LIVE incident — Robo Merkury. A flagged user whose
+    /// ONLY pass is from 2009 (17 years ago) must NOT be renewed. The job must
+    /// skip them entirely: tick() == 0, no `auto-obnova` row, credit unchanged.
+    #[tokio::test]
+    async fn legacy_2009_pass_is_skipped() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_user(&pool, 50.0, true).await;
+        // A pass that ended on 2009-12-31 — 17 years ago.
+        let legacy_end = NaiveDate::from_ymd_opt(2009, 12, 31).unwrap();
+        seed_pass(&pool, uid, -16.60, legacy_end).await;
+
+        let n = tick_as_of(&pool, &disabled_push(), today()).await.unwrap();
+        assert_eq!(n, 0, "a 17-year-old pass must NOT trigger a renewal");
+        assert_eq!(renewal_rows(&pool, uid).await, 0);
+        assert!(
+            (credit_of(&pool, uid).await - 50.0).abs() < 1e-9,
+            "credit must be unchanged — no debit for a legacy pass"
+        );
+    }
+
+    /// #376 boundary: exactly 4-day lapse is OUTSIDE the 3-day tolerance →
+    /// skip. Kills mutants that would change the boundary comparison.
+    #[tokio::test]
+    async fn boundary_4_day_gap_is_skipped() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid = seed_user(&pool, 100.0, true).await;
+        // Expired exactly 4 days ago → just outside the ≤3 tolerance.
+        seed_pass(&pool, uid, -35.0, today() - chrono::Duration::days(4)).await;
+
+        let n = tick_as_of(&pool, &disabled_push(), today()).await.unwrap();
+        assert_eq!(n, 0, "4-day gap must be skipped (outside ≤3 tolerance)");
+        assert_eq!(renewal_rows(&pool, uid).await, 0);
+        assert!(
+            (credit_of(&pool, uid).await - 100.0).abs() < 1e-9,
+            "credit must be unchanged for a 4-day gap"
+        );
     }
 
     /// (f) The debit goes into the negative — no credit gate (owner decision).
