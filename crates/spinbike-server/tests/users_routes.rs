@@ -451,13 +451,32 @@ async fn update_user_info_persists_and_staff_only() {
     assert_eq!(resp["company"].as_str().unwrap(), "Acme");
 }
 
-// #374: staff (not just admin) can toggle a customer's auto_renew_pass flag via
-// PUT /api/users/{id}; a CUSTOMER may never set it on their own row (it is a
-// staff/business decision — the gym auto-bills them each month).
+// #374/#376: staff (not just admin) can toggle a customer's auto_renew_pass flag
+// via PUT /api/users/{id}; a CUSTOMER may never set it on their own row (it is
+// a staff/business decision — the gym auto-bills them each month).
+// #376: enabling requires a valid/recently-expired pass — seed one first.
 #[tokio::test]
 async fn update_user_auto_renew_pass_staff_can_set_customer_self_cannot() {
     let app = TestApp::new().await;
     let user_id = app.seed_card("ARP", 0.0, None, None, None, None).await;
+
+    // #376: seed a live pass so the enable guard passes.
+    let today = spinbike_server::util::today_bratislava();
+    let future = today + chrono::Duration::days(15);
+    let svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until) \
+         VALUES (?, NULL, ?, -35.0, 'charge', ?)",
+    )
+    .bind(user_id)
+    .bind(svc)
+    .bind(future)
+    .execute(&app.pool)
+    .await
+    .unwrap();
 
     // Staff turns it ON — persisted, and reflected in the response.
     let (status, resp) = app
