@@ -78,6 +78,10 @@ pub enum ErrorCode {
     ValidUntilOnVoidedTransaction,
     NoActiveMonthlyPass,
     MonthlyPassExists,
+    /// Enabling `auto_renew_pass` requires the customer to hold a pass that is
+    /// either currently valid or expired within the contiguity tolerance (≤ 3
+    /// days). A bigger gap means a manual desk sale first (#376).
+    AutoRenewNeedsActivePass,
     UserAlreadyDeleted,
     /// Staff logged a visit for a user who already has a same-day
     /// visit/entry — from EITHER source: a prior manual log-visit, or a
@@ -146,6 +150,9 @@ impl ErrorCode {
                 "User has no active monthly pass; use /api/payments/charge"
             }
             ErrorCode::MonthlyPassExists => "a monthly_pass service already exists",
+            ErrorCode::AutoRenewNeedsActivePass => {
+                "Auto-obnovu mozno zapnut len zakaznikovi s platnou permanentkou — najprv ju predaj"
+            }
             ErrorCode::UserAlreadyDeleted => "User already deleted",
             ErrorCode::AlreadyVisitedToday => {
                 "User already has a recorded visit/entry today; pass force=true to log anyway"
@@ -296,6 +303,11 @@ mod tests {
             ErrorCode::MonthlyPassExists,
             "monthly_pass_exists",
             "a monthly_pass service already exists",
+        ),
+        (
+            ErrorCode::AutoRenewNeedsActivePass,
+            "auto_renew_needs_active_pass",
+            "Auto-obnovu mozno zapnut len zakaznikovi s platnou permanentkou \u{2014} najprv ju predaj",
         ),
         (
             ErrorCode::UserAlreadyDeleted,

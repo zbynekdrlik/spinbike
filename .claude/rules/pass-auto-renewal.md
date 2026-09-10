@@ -81,7 +81,7 @@ Debit runs even into NEGATIVE credit — NO credit gate (owner decision #374). A
 0 € barter pass renews at 0 € (#342 — asserted in a named test, never "fixed").
 Debit + insert run in ONE transaction.
 
-### Continuity — `renewal_valid_until(last_valid_until, today)` (pure)
+### Continuity — contiguous-only (#376 removed the "fresh from today" branch)
 
 The schema stores only `valid_until`, and coverage everywhere (door, charger,
 my_balance, view V18) is decided by `valid_until` alone — so continuity is
@@ -90,13 +90,35 @@ expressed purely through the new END date, never a `valid_from` column:
 - **Lapse ≤ `CONTIGUITY_TOLERANCE_DAYS` (3):** CONTIGUOUS — the new pass starts
   the day AFTER the old one ended (`last_valid_until + 1 day`), `+ 1 month`. The
   customer keeps unbroken coverage bridging a small gap (weekend, short outage).
-- **Bigger gap** (long lapse, or the flag flipped on a long-dead pass): starts
-  FRESH from `today`, `+ 1 month`. NO back-dated months, NO retro debit — "a
-  pass from now", not an invoice for the past.
+- **Bigger gap → SKIP + `tracing::warn!`** (#376 fix — the old "fresh from today"
+  branch renewed a user whose only pass was from 2009 at a 2009 price, the Robo
+  Merkury incident). A long-lapsed customer needs a manual desk sale. The job
+  logs `pass_renewal: skipping user — pass expired outside the N-day contiguity
+  window` and moves on. `renewal_valid_until` returns `Option<NaiveDate>` —
+  `Some` for contiguous, `None` for skip.
+
+The shared predicate `is_within_renewal_window(last_valid_until, today) -> bool`
+is used by both the job (`renewal_valid_until`) and the route guard below.
 
 `+ 1 month` is chrono `Months::new(1)` (clamps 31 Jan → 28/29 Feb). Anchor dates
 are gym-local (`today_bratislava()` in prod) — never `chrono::Local`
 (`bratislava-tz.md`; a source-invariant test pins it in `pass_renewal.rs`).
+
+### Enable guard — `PUT /api/users/{id}` (#376)
+
+Enabling `auto_renew_pass: true` requires the customer to hold a pass that is
+either currently valid OR expired within `CONTIGUITY_TOLERANCE_DAYS` (3 days).
+Otherwise → 409 `AutoRenewNeedsActivePass` with the Slovak message
+"Auto-obnovu mozno zapnut len zakaznikovi s platnou permanentkou — najprv ju
+predaj". Disabling the flag needs no guard. The check uses
+`db::users::user_has_renewable_pass`, which calls `is_within_renewal_window`.
+
+### Gotcha: a legacy 2009 pass IS history to the JOIN but must never be a price/continuity anchor
+
+The `user_active_pass` view (V18) joins on the newest non-voided pass regardless
+of age. A user whose only pass is from 2009 IS matched by the candidate query
+(`date(valid_until) < today`), but `renewal_valid_until` returns `None` for
+them and the job skips them. This is the exact live incident that motivated #376.
 
 ### Idempotency invariants (against the #372 bug class — 17 years of real data)
 
