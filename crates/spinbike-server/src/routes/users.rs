@@ -712,6 +712,20 @@ async fn update_user(
         return Err(ApiError::conflict(ErrorCode::CardCodeConflict));
     }
 
+    // #376: validate auto_renew_pass enable guard BEFORE any writes, so a
+    // combined payload (phone + auto_renew on a no-pass customer) doesn't
+    // persist the phone then 409 — same validate-then-write shape as the
+    // email/card_code pre-checks above.
+    if let Some(true) = body.auto_renew_pass {
+        let today = crate::util::today_bratislava();
+        let renewable = db::user_has_renewable_pass(&state.pool, id, today)
+            .await
+            .map_err(internal_error)?;
+        if !renewable {
+            return Err(ApiError::conflict(ErrorCode::AutoRenewNeedsActivePass));
+        }
+    }
+
     db::update_user_info(
         &state.pool,
         id,
@@ -745,6 +759,7 @@ async fn update_user(
 
     if let Some(enabled) = body.auto_renew_pass {
         // Staff-or-admin already enforced above (before any mutation).
+        // #376 enable guard already validated above (before any write).
         db::update_user_auto_renew_pass(&state.pool, id, enabled)
             .await
             .map_err(internal_error)?;
