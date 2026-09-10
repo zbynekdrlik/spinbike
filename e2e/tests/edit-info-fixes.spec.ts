@@ -113,15 +113,25 @@ test.describe('Edit-info form field fixes', () => {
         expect(consoleMessages).toEqual([]);
     });
 
-    // #374: STAFF (not just admin) can turn on a customer's auto-renew-pass
+    // #374/#376: STAFF (not just admin) can turn on a customer's auto-renew-pass
     // flag via the edit sheet, and it round-trips through the server (reopening
     // shows it still checked). Logged in as STAFF to prove the control is NOT
     // admin-gated like allow_self_entry.
+    // #376: the customer must hold a valid pass for the enable to succeed.
     test('staff can toggle a customer auto-renew-pass and it persists', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
 
         const staffToken = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const user = await createUniqueUser(staffToken, 0, 'AR');
+        const user = await createUniqueUser(staffToken, 100, 'AR');
+
+        // #376: sell a pass first — the enable guard requires a valid/recent pass.
+        const validUntil = new Date(Date.now() + 30 * 86400e3).toISOString().slice(0, 10);
+        const sellResp = await fetch(`${BASE_URL}/api/payments/sell-pass`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${staffToken}` },
+            body: JSON.stringify({ user_id: user.user_id, price: 35.0, valid_until: validUntil }),
+        });
+        if (!sellResp.ok) throw new Error(`sell-pass failed: ${sellResp.status}`);
 
         await page.goto('/staff');
         await page.waitForSelector('input[type="search"]');
@@ -151,6 +161,46 @@ test.describe('Edit-info form field fixes', () => {
         await expect(sheet.locator('[data-testid="user-edit-auto-renew-pass"]')).toBeChecked({
             timeout: 5000,
         });
+
+        expect(consoleMessages).toEqual([]);
+    });
+
+    // #376: enabling auto-renew on a user with NO valid pass shows the 409
+    // error inside the sheet (the guard returns AutoRenewNeedsActivePass).
+    test('enabling auto-renew without a valid pass shows a 409 error in-sheet', async ({
+        page,
+    }) => {
+        const consoleMessages = setupConsoleCheck(page, { allow4xxFor: ['/api/users'] });
+
+        const staffToken = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        // User with NO pass — the enable guard will reject.
+        const user = await createUniqueUser(staffToken, 0, 'ARNP');
+
+        await page.goto('/staff');
+        await page.waitForSelector('input[type="search"]');
+        await page.fill('input[type="search"]', user.card_code);
+        const result = page.locator('[data-testid="search-result"]').first();
+        await expect(result).toBeVisible({ timeout: 3000 });
+        await result.click();
+        await expect(page.locator('[data-testid="action-panel"]')).toBeVisible();
+
+        await page.locator('[data-testid="edit-info-button"]').click();
+        const sheet = page.locator('[data-testid="sheet-edit-info"]');
+        await expect(sheet).toBeVisible();
+
+        const checkbox = sheet.locator('[data-testid="user-edit-auto-renew-pass"]');
+        await expect(checkbox).toBeVisible();
+        await expect(checkbox).not.toBeChecked();
+
+        // Check the box and save — the server rejects with 409.
+        await checkbox.check();
+        await sheet.locator('button[type="submit"]').click();
+
+        // The error must appear INSIDE the still-open sheet.
+        const inSheetError = sheet.locator('[data-testid="edit-info-error"]');
+        await expect(inSheetError).toBeVisible({ timeout: 5000 });
+        await expect(inSheetError).toContainText('permanentkou');
+        await expect(sheet).toBeVisible();
 
         expect(consoleMessages).toEqual([]);
     });

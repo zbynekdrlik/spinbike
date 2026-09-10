@@ -745,6 +745,17 @@ async fn update_user(
 
     if let Some(enabled) = body.auto_renew_pass {
         // Staff-or-admin already enforced above (before any mutation).
+        // #376: enabling requires the customer to hold a pass valid today or
+        // expired within the contiguity tolerance. Disabling needs no guard.
+        if enabled {
+            let today = crate::util::today_bratislava();
+            let renewable = db::user_has_renewable_pass(&state.pool, id, today)
+                .await
+                .map_err(internal_error)?;
+            if !renewable {
+                return Err(ApiError::conflict(ErrorCode::AutoRenewNeedsActivePass));
+            }
+        }
         db::update_user_auto_renew_pass(&state.pool, id, enabled)
             .await
             .map_err(internal_error)?;

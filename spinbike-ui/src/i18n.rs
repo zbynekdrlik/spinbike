@@ -249,6 +249,10 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
         | ErrorCode::ValidUntilOnVoidedTransaction
         | ErrorCode::NoActiveMonthlyPass
         | ErrorCode::MonthlyPassExists
+        // #376: staff-only error — the server's unaccented Slovak message is
+        // already suitable for the in-sheet error banner; no dedicated i18n
+        // key needed (falls back to the raw `error` field).
+        | ErrorCode::AutoRenewNeedsActivePass
         | ErrorCode::UserAlreadyDeleted
         // #234: the staff duplicate-visit confirm dialog builds its own copy
         // from the conflict's `last_entry_at`/`source` fields (not a plain

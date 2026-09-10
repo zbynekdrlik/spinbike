@@ -6,7 +6,8 @@
 //! monthly pass at the price of their last one — driven by the END of the
 //! previous month (this daily run), never by their next visit. The renewal is
 //! CONTIGUOUS (the new pass continues from where the old one ended) within a
-//! small tolerance; a bigger gap starts fresh from today. See
+//! small tolerance; a bigger gap is SKIPPED (#376 — the old "fresh from today"
+//! branch renewed 17-year-old legacy passes at legacy prices). See
 //! `.claude/rules/pass-auto-renewal.md` and `db::users::renew_expired_pass` /
 //! `renewal_valid_until` for the money-write + continuity semantics.
 //!

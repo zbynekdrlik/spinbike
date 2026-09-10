@@ -500,6 +500,166 @@ async fn update_user_auto_renew_pass_staff_can_set_customer_self_cannot() {
     );
 }
 
+// ─── #376: auto_renew_pass enable guard (needs a renewable pass) ──────────────
+
+/// Enabling auto_renew_pass on a user with NO pass history → 409.
+#[tokio::test]
+async fn auto_renew_enable_guard_rejects_without_any_pass() {
+    let app = TestApp::new().await;
+    let uid = app.seed_card("ARNP", 0.0, None, None, None, None).await;
+
+    let (status, body) = app
+        .request(put_json(
+            &format!("/api/users/{uid}"),
+            &app.staff_token,
+            &serde_json::json!({ "auto_renew_pass": true }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT, "no pass → 409");
+    assert_eq!(
+        body["error_code"].as_str(),
+        Some("auto_renew_needs_active_pass"),
+        "error_code must be auto_renew_needs_active_pass"
+    );
+}
+
+/// Enabling auto_renew_pass on a user with a LIVE pass → 200.
+#[tokio::test]
+async fn auto_renew_enable_guard_accepts_with_live_pass() {
+    let app = TestApp::new().await;
+    let uid = app.seed_card("ARLP", 100.0, None, None, None, None).await;
+    // Seed a pass valid until well in the future.
+    let today = spinbike_server::util::today_bratislava();
+    let future = today + chrono::Duration::days(15);
+    let svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until) \
+         VALUES (?, NULL, ?, -35.0, 'charge', ?)",
+    )
+    .bind(uid)
+    .bind(svc)
+    .bind(future)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, resp) = app
+        .request(put_json(
+            &format!("/api/users/{uid}"),
+            &app.staff_token,
+            &serde_json::json!({ "auto_renew_pass": true }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "live pass → 200");
+    assert_eq!(resp["auto_renew_pass"].as_bool(), Some(true));
+}
+
+/// Enabling auto_renew_pass on a user whose pass expired 2 days ago → 200
+/// (within the 3-day tolerance).
+#[tokio::test]
+async fn auto_renew_enable_guard_accepts_recently_expired() {
+    let app = TestApp::new().await;
+    let uid = app.seed_card("ARRE", 100.0, None, None, None, None).await;
+    let today = spinbike_server::util::today_bratislava();
+    let expired = today - chrono::Duration::days(2);
+    let svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until) \
+         VALUES (?, NULL, ?, -35.0, 'charge', ?)",
+    )
+    .bind(uid)
+    .bind(svc)
+    .bind(expired)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, resp) = app
+        .request(put_json(
+            &format!("/api/users/{uid}"),
+            &app.staff_token,
+            &serde_json::json!({ "auto_renew_pass": true }),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::OK,
+        "recently expired (2d) → 200"
+    );
+    assert_eq!(resp["auto_renew_pass"].as_bool(), Some(true));
+}
+
+/// Enabling auto_renew_pass on a user whose pass expired 4 days ago → 409
+/// (outside the ≤3-day tolerance).
+#[tokio::test]
+async fn auto_renew_enable_guard_rejects_old_pass() {
+    let app = TestApp::new().await;
+    let uid = app.seed_card("AROP", 100.0, None, None, None, None).await;
+    let today = spinbike_server::util::today_bratislava();
+    let expired = today - chrono::Duration::days(4);
+    let svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until) \
+         VALUES (?, NULL, ?, -35.0, 'charge', ?)",
+    )
+    .bind(uid)
+    .bind(svc)
+    .bind(expired)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+
+    let (status, body) = app
+        .request(put_json(
+            &format!("/api/users/{uid}"),
+            &app.staff_token,
+            &serde_json::json!({ "auto_renew_pass": true }),
+        ))
+        .await;
+    assert_eq!(
+        status,
+        axum::http::StatusCode::CONFLICT,
+        "4-day-old pass → 409"
+    );
+    assert_eq!(
+        body["error_code"].as_str(),
+        Some("auto_renew_needs_active_pass")
+    );
+}
+
+/// DISABLING auto_renew_pass needs NO guard — always 200 regardless of pass
+/// state. Start with the flag ON (bypass: set directly in DB).
+#[tokio::test]
+async fn auto_renew_disable_always_succeeds() {
+    let app = TestApp::new().await;
+    let uid = app.seed_card("ARDIS", 0.0, None, None, None, None).await;
+    // Force the flag ON (no guard on the DB write itself).
+    sqlx::query("UPDATE users SET auto_renew_pass = 1 WHERE id = ?")
+        .bind(uid)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+
+    let (status, resp) = app
+        .request(put_json(
+            &format!("/api/users/{uid}"),
+            &app.staff_token,
+            &serde_json::json!({ "auto_renew_pass": false }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "disable → always 200");
+    assert_eq!(resp["auto_renew_pass"].as_bool(), Some(false));
+}
+
 // ─── user transactions ────────────────────────────────────────────────────────
 
 #[tokio::test]

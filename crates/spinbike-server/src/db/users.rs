@@ -589,9 +589,21 @@ pub const AUTO_RENEW_NOTE: &str = "auto-obnova";
 /// pass expired within this many days of "today", the renewal is CONTIGUOUS —
 /// it starts the day AFTER the old pass ended, so the customer keeps unbroken
 /// monthly coverage bridging a small gap (a weekend, a short server outage). A
-/// LARGER gap (a long lapse, or the flag flipped on a long-dead pass) starts
-/// fresh FROM TODAY instead — no back-dated months, no retro debit.
+/// LARGER gap is SKIPPED (#376) — the customer needs a manual desk sale.
 pub const CONTIGUITY_TOLERANCE_DAYS: i64 = 3;
+
+/// Whether `last_valid_until` is within the renewal window as of `today`: the
+/// pass either still covers today (`valid_until >= today`) or expired within
+/// `CONTIGUITY_TOLERANCE_DAYS`. Used by both the daily renewal job (to decide
+/// whether to renew) and the route guard (to decide whether the auto-renew
+/// flag may be enabled). Pure — no DB.
+pub fn is_within_renewal_window(
+    last_valid_until: chrono::NaiveDate,
+    today: chrono::NaiveDate,
+) -> bool {
+    let lapse_days = (today - last_valid_until).num_days();
+    lapse_days <= CONTIGUITY_TOLERANCE_DAYS
+}
 
 /// The outcome of one successful daily auto-renewal (#374) — what the caller
 /// needs to build the customer notification.
@@ -603,28 +615,49 @@ pub struct Renewal {
     pub new_valid_until: chrono::NaiveDate,
 }
 
-/// Compute the renewed pass's `valid_until` for a pass that has expired (#374).
-/// CONTIGUOUS when the lapse is within `CONTIGUITY_TOLERANCE_DAYS`: the new pass
-/// conceptually starts the day AFTER the old one ended (the schema stores only
-/// `valid_until`, and coverage everywhere is decided by `valid_until` alone, so
-/// continuity is expressed purely through the new end date). A larger gap
-/// starts fresh from `today`. Either way the pass runs one calendar month from
-/// that start (chrono `Months` clamps 31 Jan → 28/29 Feb). Pure — no DB.
+/// Compute the renewed pass's `valid_until` for a pass that has expired (#374,
+/// #376). Returns `Some(date)` when the lapse is within
+/// `CONTIGUITY_TOLERANCE_DAYS` (contiguous renewal: the new pass conceptually
+/// starts the day AFTER the old one ended, + 1 calendar month). Returns `None`
+/// when the gap is larger — the job SKIPS the user (#376: the old "fresh from
+/// today" branch was removed because it renewed 17-year-old legacy passes at
+/// legacy prices). Pure — no DB.
 pub fn renewal_valid_until(
     last_valid_until: chrono::NaiveDate,
     today: chrono::NaiveDate,
-) -> chrono::NaiveDate {
-    let lapse_days = (today - last_valid_until).num_days();
-    let start = if lapse_days <= CONTIGUITY_TOLERANCE_DAYS {
-        last_valid_until
-            .checked_add_days(chrono::Days::new(1))
-            .expect("a gym-local calendar date + 1 day is always representable")
-    } else {
-        today
-    };
-    start
-        .checked_add_months(chrono::Months::new(1))
-        .expect("a Bratislava calendar date + 1 month is always representable")
+) -> Option<chrono::NaiveDate> {
+    if !is_within_renewal_window(last_valid_until, today) {
+        return None;
+    }
+    let start = last_valid_until
+        .checked_add_days(chrono::Days::new(1))
+        .expect("a gym-local calendar date + 1 day is always representable");
+    Some(
+        start
+            .checked_add_months(chrono::Months::new(1))
+            .expect("a Bratislava calendar date + 1 month is always representable"),
+    )
+}
+
+/// Check whether a user has a pass that qualifies for auto-renewal right now:
+/// a non-voided pass that either still covers `today` or expired within
+/// `CONTIGUITY_TOLERANCE_DAYS`. Used by the route guard on enabling
+/// `auto_renew_pass` (#376). Returns `false` when the user has no pass history
+/// at all.
+pub async fn user_has_renewable_pass(
+    pool: &SqlitePool,
+    user_id: i64,
+    today: chrono::NaiveDate,
+) -> Result<bool> {
+    let last_vu: Option<chrono::NaiveDate> = sqlx::query_scalar(
+        "SELECT date(ap.valid_until) \
+         FROM user_active_pass ap \
+         WHERE ap.user_id = ?",
+    )
+    .bind(user_id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(last_vu.is_some_and(|vu| is_within_renewal_window(vu, today)))
 }
 
 /// Auto-renew a user's EXPIRED monthly pass for the daily `jobs::pass_renewal`
@@ -678,7 +711,18 @@ pub async fn renew_expired_pass(
         return Ok(None); // a live pass already covers today → idempotent no-op
     }
 
-    let new_valid_until = renewal_valid_until(last_valid_until, today);
+    // #376: only renew contiguously (≤ CONTIGUITY_TOLERANCE_DAYS gap). A larger
+    // gap means the customer needs a manual desk sale — skip + warn.
+    let Some(new_valid_until) = renewal_valid_until(last_valid_until, today) else {
+        tracing::warn!(
+            user_id,
+            %last_valid_until,
+            %today,
+            "pass_renewal: skipping user — pass expired outside the {}-day contiguity window, needs manual sale",
+            CONTIGUITY_TOLERANCE_DAYS,
+        );
+        return Ok(None);
+    };
     let price = round_cents(last_amount.abs());
 
     let service_id: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
@@ -1922,7 +1966,7 @@ mod tests {
         );
     }
 
-    // ── #374: renewal_valid_until continuity (pure — tolerance + month clamp) ──
+    // ── #374/#376: renewal_valid_until continuity (pure — tolerance + month clamp) ──
     #[test]
     fn renewal_valid_until_is_contiguous_within_tolerance() {
         // Expired 2 days ago (<= 3): start the day AFTER the old end (08-26),
@@ -1931,7 +1975,7 @@ mod tests {
         let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 27).unwrap();
         assert_eq!(
             renewal_valid_until(last_vu, today),
-            chrono::NaiveDate::from_ymd_opt(2026, 9, 26).unwrap()
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 9, 26).unwrap())
         );
     }
 
@@ -1942,26 +1986,27 @@ mod tests {
         let three = chrono::NaiveDate::from_ymd_opt(2026, 8, 24).unwrap();
         assert_eq!(
             renewal_valid_until(three, today),
-            chrono::NaiveDate::from_ymd_opt(2026, 9, 25).unwrap(),
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 9, 25).unwrap()),
             "3-day lapse is contiguous (08-25 + 1 month)"
         );
-        // 4 days lapse → big gap, fresh from today.
+        // 4 days lapse → big gap → None (skip, #376).
         let four = chrono::NaiveDate::from_ymd_opt(2026, 8, 23).unwrap();
         assert_eq!(
             renewal_valid_until(four, today),
-            chrono::NaiveDate::from_ymd_opt(2026, 9, 27).unwrap(),
-            "4-day lapse starts fresh from today (08-27 + 1 month)"
+            None,
+            "4-day lapse must return None (skip, not renew)"
         );
     }
 
+    /// #376: a big gap returns None — the old "fresh from today" branch is gone.
     #[test]
-    fn renewal_valid_until_big_gap_starts_from_today() {
+    fn renewal_valid_until_big_gap_returns_none() {
         let last_vu = chrono::NaiveDate::from_ymd_opt(2026, 3, 1).unwrap(); // long ago
         let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 27).unwrap();
         assert_eq!(
             renewal_valid_until(last_vu, today),
-            chrono::NaiveDate::from_ymd_opt(2026, 9, 27).unwrap(),
-            "a big gap must not back-date — from today + 1 month"
+            None,
+            "a big gap must return None — the user needs a manual desk sale"
         );
     }
 
@@ -1972,9 +2017,116 @@ mod tests {
         let today = chrono::NaiveDate::from_ymd_opt(2026, 1, 31).unwrap(); // lapse 1
         assert_eq!(
             renewal_valid_until(last_vu, today),
-            chrono::NaiveDate::from_ymd_opt(2026, 2, 28).unwrap(),
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 2, 28).unwrap()),
             "31 Jan + 1 month clamps to 28 Feb"
         );
+    }
+
+    // ── #376: is_within_renewal_window (pure predicate) ──
+    #[test]
+    fn is_within_renewal_window_covers_live_pass() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 27).unwrap();
+        // Pass still valid (5 days in the future) — lapse is negative → within window.
+        let live = chrono::NaiveDate::from_ymd_opt(2026, 9, 1).unwrap();
+        assert!(
+            is_within_renewal_window(live, today),
+            "a live pass is within the window"
+        );
+    }
+
+    #[test]
+    fn is_within_renewal_window_boundary() {
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 27).unwrap();
+        // 3 days ago = within
+        let three = chrono::NaiveDate::from_ymd_opt(2026, 8, 24).unwrap();
+        assert!(
+            is_within_renewal_window(three, today),
+            "3-day lapse is within"
+        );
+        // 4 days ago = outside
+        let four = chrono::NaiveDate::from_ymd_opt(2026, 8, 23).unwrap();
+        assert!(
+            !is_within_renewal_window(four, today),
+            "4-day lapse is outside"
+        );
+    }
+
+    // ── #376: user_has_renewable_pass (DB-level) ──
+    #[tokio::test]
+    async fn user_has_renewable_pass_with_live_pass() {
+        let pool = setup().await;
+        let id = make_user(&pool, Some("renew-live@x.com"), "RL").await;
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 27).unwrap();
+        // Seed a pass valid until tomorrow.
+        let svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        sqlx::query(
+            "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until) \
+             VALUES (?, NULL, ?, -35.0, 'charge', ?)",
+        )
+        .bind(id)
+        .bind(svc)
+        .bind(today + chrono::Duration::days(1))
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(user_has_renewable_pass(&pool, id, today).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn user_has_renewable_pass_recently_expired() {
+        let pool = setup().await;
+        let id = make_user(&pool, Some("renew-recent@x.com"), "RR").await;
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 27).unwrap();
+        let svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        // Expired 2 days ago — within tolerance.
+        sqlx::query(
+            "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until) \
+             VALUES (?, NULL, ?, -35.0, 'charge', ?)",
+        )
+        .bind(id)
+        .bind(svc)
+        .bind(today - chrono::Duration::days(2))
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(user_has_renewable_pass(&pool, id, today).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn user_has_renewable_pass_legacy_pass() {
+        let pool = setup().await;
+        let id = make_user(&pool, Some("renew-legacy@x.com"), "RLEG").await;
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 27).unwrap();
+        let svc: i64 = sqlx::query_scalar("SELECT id FROM services WHERE kind = 'monthly_pass'")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        // Expired years ago — outside tolerance.
+        sqlx::query(
+            "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, valid_until) \
+             VALUES (?, NULL, ?, -16.60, 'charge', ?)",
+        )
+        .bind(id)
+        .bind(svc)
+        .bind(chrono::NaiveDate::from_ymd_opt(2009, 12, 31).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+        assert!(!user_has_renewable_pass(&pool, id, today).await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn user_has_renewable_pass_no_pass_history() {
+        let pool = setup().await;
+        let id = make_user(&pool, Some("renew-none@x.com"), "RN").await;
+        let today = chrono::NaiveDate::from_ymd_opt(2026, 8, 27).unwrap();
+        assert!(!user_has_renewable_pass(&pool, id, today).await.unwrap());
     }
 
     // ─── #143: soft-deleted email conflict resolution ──────────────────────
