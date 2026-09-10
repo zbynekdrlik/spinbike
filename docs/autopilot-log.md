@@ -3,6 +3,19 @@
 Terse per-issue log of autonomous work cycles: issue #, commit SHAs, RED→GREEN
 test names, decisions, and the shared PR #. Newest entries at the top.
 
+## 2026-09-10 — #376 auto-renewal from legacy 2009 pass (dev.172)
+
+- **Root cause:** `renewal_valid_until` big-gap branch had no age limit — a
+  pass from 2009 was renewed at 2009 price (Robo Merkury, 16.60 EUR).
+- **Fix (owner option 1):** removed big-gap branch; contiguous-only (≤3 days).
+  `renewal_valid_until` → `Option<NaiveDate>`, `is_within_renewal_window` shared
+  predicate, `user_has_renewable_pass` DB helper. Enable guard on PUT route
+  (409 `AutoRenewNeedsActivePass`).
+- RED: `6d79fae` — `big_gap_is_skipped`, `legacy_2009_pass_is_skipped`,
+  `boundary_4_day_gap_is_skipped`.
+- GREEN: `9fde210` — fix + route guard tests + e2e (toggle with pass, 409
+  without).
+
 ## 2026-08-08 — #297 token_purge daily interval: wall-clock-aligned, not uptime-relative (PR #298, dev.134)
 
 - **Root cause:** `bin/server.rs`'s `login_tokens purge: daily` spawn block used
