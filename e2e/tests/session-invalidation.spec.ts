@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { loginViaAPI, setupConsoleCheck, assertCleanConsole } from './helpers';
+import { cancellableSlotWithinTwoWeeks, mondayFirstIndex } from './spinning-fixtures';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -114,50 +115,36 @@ test.describe('Blocked user booking attempt → clean logout (#277)', () => {
         }
         const { user_id } = await seedResp.json();
 
-        // Find a real, currently-bookable occurrence in THIS week — the
-        // SchedulePage's day-picker only shows the current Mon-Sun week
-        // (mirrors schedule.rs's own current_week_dates(), which computes
-        // from the BROWSER's local time via js_sys::Date). Format from the
-        // same LOCAL date components throughout — never round-trip through
-        // toISOString() (UTC), which disagrees with local time overnight
-        // (see helpers.ts's own #251 warning against exactly this).
-        const fmt = (d: Date) =>
-            `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-        const now = new Date();
-        const dow = now.getDay(); // 0=Sun..6=Sat
-        const daysSinceMonday = dow === 0 ? 6 : dow - 1;
-        const monday = new Date(now);
-        monday.setDate(now.getDate() - daysSinceMonday);
-        const weekDates: string[] = [];
-        for (let i = 0; i < 7; i++) {
-            const d = new Date(monday);
-            d.setDate(monday.getDate() + i);
-            weekDates.push(fmt(d));
-        }
-        const occResp = await fetch(
-            `${BASE_URL}/api/classes?from=${weekDates[0]}&to=${weekDates[6]}`,
-        );
-        if (!occResp.ok) {
-            throw new Error(`list classes failed: ${occResp.status} ${await occResp.text()}`);
-        }
-        const occurrences: Array<{
-            template_id: number;
-            date: string;
-            cancelled: boolean;
-            booked: number;
-            capacity: number;
-        }> = await occResp.json();
-        const slot = occurrences.find((o) => !o.cancelled && o.booked < o.capacity);
-        if (!slot) {
-            throw new Error(`no bookable occurrence this week: ${JSON.stringify(occurrences)}`);
-        }
-        const dayIdx = weekDates.indexOf(slot.date);
+        // Find a real, still-bookable occurrence in this or next week (#382:
+        // a class that already started has no Book button any more — the
+        // server's own `started` flag decides, and on Friday-Sunday only
+        // next week has one). The schedule page shows a Mon-Sun week with a
+        // this-week / next-week switch.
+        const { slot, week } = await cancellableSlotWithinTwoWeeks();
+        const dayIdx = mondayFirstIndex(slot.date);
 
         await loginViaAPI(page, baseURL!, email, password);
 
-        // Block the customer via the admin API — a separate raw fetch (NOT
-        // loginViaAPI on this page, which would overwrite the customer
-        // session we just stored with the admin's own session).
+        // Open the schedule with the still-LIVE session first (#382: the page
+        // now also loads the customer's own weekly slots, a session-checked
+        // call — blocking first would log the customer out on page load, not
+        // on the Book click this test is about), and get the Book button up.
+        await page.goto('/schedule');
+        await expect(page.locator('[data-testid="my-slots"] [data-testid^="slot-toggle-"]').first())
+            .toBeVisible({ timeout: 10000 });
+        if (week === 1) {
+            await page.locator('[data-testid="week-next"]').click();
+        }
+        await page.locator('.day-btn').nth(dayIdx).click();
+        const bookBtn = page.locator(
+            `[data-testid="book-${slot.template_id}-${slot.date}"]`,
+        );
+        await expect(bookBtn).toBeVisible({ timeout: 5000 });
+
+        // NOW block the customer via the admin API — a separate raw fetch
+        // (NOT loginViaAPI on this page, which would overwrite the customer
+        // session we just stored with the admin's own session). The browser
+        // keeps the now-blocked customer's session.
         const adminLoginResp = await fetch(`${BASE_URL}/api/auth/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -174,14 +161,6 @@ test.describe('Blocked user booking attempt → clean logout (#277)', () => {
         });
         expect(blockResp.ok).toBeTruthy();
 
-        // The browser still holds the now-blocked customer's session.
-        // Navigate to the schedule and attempt to book the found slot.
-        await page.goto('/schedule');
-        await page.locator('.day-btn').nth(dayIdx).click();
-        const bookBtn = page.locator(
-            `[data-testid="book-${slot.template_id}-${slot.date}"]`,
-        );
-        await expect(bookBtn).toBeVisible({ timeout: 5000 });
         await bookBtn.click();
 
         await page.waitForURL('**/login', { timeout: 10000 });
