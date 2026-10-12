@@ -38,7 +38,8 @@ test.describe('Customer bookings on /my/bookings (#146)', () => {
         });
         if (!seedResp.ok) throw new Error(`seed-account failed: ${seedResp.status} ${await seedResp.text()}`);
 
-        // V6 migration seeds a Monday 18:00 template taught by "Stevo" — find
+        // V6 migration seeds a Monday 18:00 template taught by instructor 1
+        // (renamed "Stopa" by V30, #381) — find
         // it via the public schedule endpoint rather than hardcoding a
         // template_id.
         const date = futureMonday();
@@ -67,7 +68,7 @@ test.describe('Customer bookings on /my/bookings (#146)', () => {
 
         // New: the class start time + the instructor's name are shown.
         expect(text).toContain('18:00');
-        expect(text).toContain('Stevo');
+        expect(text).toContain('Stopa');
 
         assertCleanConsole(messages);
     });

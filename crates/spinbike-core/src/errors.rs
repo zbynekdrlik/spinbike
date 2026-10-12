@@ -61,12 +61,22 @@ pub enum ErrorCode {
     TransactionAlreadyVoided,
     ServiceNotFound,
     BookingNotFound,
+    /// `DELETE /api/admin/instructors/{id}` for an id that does not exist (#381).
+    InstructorNotFound,
     // --- 409 Conflict ---
     EmailConflict,
     CardCodeConflict,
     EmailOrCardConflict,
     ClassFull,
     ClassCancelled,
+    /// The customer already holds an ACTIVE booking for this exact class
+    /// occurrence (`template_id` + `date`) — the partial unique index
+    /// `idx_bookings_active` rejected a second one (#378; was a 500).
+    AlreadyBooked,
+    /// `DELETE /api/admin/instructors/{id}` refused: the instructor still
+    /// teaches at least one ACTIVE class template (#381). Reassign or
+    /// deactivate the template first.
+    InstructorInUse,
     NoteOnVoidedTransaction,
     DateOnVoidedTransaction,
     /// `patch_valid_until` (`routes/transactions.rs`) rejecting an edit of
@@ -136,11 +146,14 @@ impl ErrorCode {
             ErrorCode::TransactionAlreadyVoided => "Transaction already voided",
             ErrorCode::ServiceNotFound => "Service not found",
             ErrorCode::BookingNotFound => "Booking not found",
+            ErrorCode::InstructorNotFound => "Instructor not found",
             ErrorCode::EmailConflict => "A user with this email already exists",
             ErrorCode::CardCodeConflict => "A user with this card code already exists",
             ErrorCode::EmailOrCardConflict => "A user with this email or card code already exists",
             ErrorCode::ClassFull => "Class is full",
             ErrorCode::ClassCancelled => "Class is cancelled",
+            ErrorCode::AlreadyBooked => "User is already booked into this class",
+            ErrorCode::InstructorInUse => "Instructor still teaches an active class",
             ErrorCode::NoteOnVoidedTransaction => "Cannot edit note on a voided transaction",
             ErrorCode::DateOnVoidedTransaction => "Cannot edit date on a voided transaction",
             ErrorCode::ValidUntilOnVoidedTransaction => {
@@ -259,6 +272,11 @@ mod tests {
             "Booking not found",
         ),
         (
+            ErrorCode::InstructorNotFound,
+            "instructor_not_found",
+            "Instructor not found",
+        ),
+        (
             ErrorCode::EmailConflict,
             "email_conflict",
             "A user with this email already exists",
@@ -278,6 +296,16 @@ mod tests {
             ErrorCode::ClassCancelled,
             "class_cancelled",
             "Class is cancelled",
+        ),
+        (
+            ErrorCode::AlreadyBooked,
+            "already_booked",
+            "User is already booked into this class",
+        ),
+        (
+            ErrorCode::InstructorInUse,
+            "instructor_in_use",
+            "Instructor still teaches an active class",
         ),
         (
             ErrorCode::NoteOnVoidedTransaction,

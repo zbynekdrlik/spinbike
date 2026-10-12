@@ -1,5 +1,6 @@
 pub mod classes;
 pub mod error;
+pub mod instructors;
 pub mod login_tokens;
 pub mod migrations;
 pub mod persistent_bookings;

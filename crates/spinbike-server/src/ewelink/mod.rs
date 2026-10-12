@@ -180,7 +180,7 @@ impl EwelinkHandle {
             // to 0 and read as healthy.
             let _ = self
                 .failed_presses
-                .fetch_update(Relaxed, Relaxed, |n| Some(n.saturating_add(1)));
+                .try_update(Relaxed, Relaxed, |n| Some(n.saturating_add(1)));
         }
         outcome
     }

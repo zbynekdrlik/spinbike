@@ -124,6 +124,16 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "users: auto_renew_pass flag (per-user opt-in for the daily contiguous pass renewal job, #374)",
         V28_USERS_AUTO_RENEW_PASS,
     ),
+    (
+        29,
+        "settings: drop the dead center_name row (#380)",
+        V29_DROP_CENTER_NAME_SETTING,
+    ),
+    (
+        30,
+        "instructors: Stopa/Vlada cleanup + Tue/Thu classes at 18:30 (#381)",
+        V30_INSTRUCTORS_CLEANUP_TUE_THU_1830,
+    ),
 ];
 
 /// Post-condition checks `db::run_migrations` runs at the end of a
@@ -177,6 +187,16 @@ pub(crate) static MIGRATION_POSTCONDITIONS: &[(i64, &str, &str)] = &[
          row existing, and will error on every 4-hour auto-charge tick until this is fixed. Fix: \
          rename the service back to name_sk='Spinning' (or set kind='group_class' directly) via \
          sqlite3/admin on the affected database, then retry. See issue #339.",
+    ),
+    (
+        30,
+        "SELECT COUNT(*) = 2 FROM class_templates \
+         WHERE (id = 2 AND weekday = 1 AND start_time = '18:30') \
+            OR (id = 4 AND weekday = 3 AND start_time = '18:30')",
+        "migration 30 (instructors cleanup, #381) post-condition failed: templates 2 (Tue) and \
+         4 (Thu) are not both at 18:30 afterwards — this database's class_templates ids do not \
+         match the V6 seed layout (id 2 = Tuesday, id 4 = Thursday). Inspect class_templates, \
+         set the Tue/Thu start_time to '18:30' by hand, then retry.",
     ),
 ];
 
@@ -1238,6 +1258,44 @@ const V28_USERS_AUTO_RENEW_PASS: &str = r#"
 ALTER TABLE users ADD COLUMN auto_renew_pass INTEGER NOT NULL DEFAULT 0;
 "#;
 
+// V29: remove the dead `center_name` settings row (#380). Seeded by V1
+// ("Squash Centrum Smizany") but never read by any production code — the
+// generic admin Settings tab lists every `settings` row, so the stale value
+// showed up there as if it configured something. `bike_count` stays (still
+// read by `get_bike_count`). Pure row DELETE, no schema change; a no-op on a
+// DB where the row is already gone.
+const V29_DROP_CENTER_NAME_SETTING: &str = r#"
+DELETE FROM settings WHERE key = 'center_name';
+"#;
+
+// V30: instructor cleanup + Tue/Thu start time (#381, owner ROZHODNUTE
+// 2026-10-12, including the PERMANENT deletion of the extra instructors).
+//
+// Prod before this migration (read 2026-10-12): instructors 1 Stevo,
+// 2 Vlada, 3 Stopa, 4 Mesacna, 5 Kredit, 6 Hotovost, 7 Marosh (inactive),
+// 8 Vlada-with-accent — legacy/duplicate rows; class_templates 1 Mon / 3 Wed
+// -> instructor 1, 2 Tue / 4 Thu -> instructor 2, all at 18:00 (V6 seed).
+//
+// 1. id 1 is the instructor the owner calls "Stopa" (Mon/Wed) -> rename.
+//    id 2 "Vlada" (Tue/Thu) is kept as is.
+// 2. Delete every instructor NO class_template references (active or not):
+//    on prod exactly ids 3-8; on a fresh DB nothing (V6 only seeds 1 + 2,
+//    both referenced). Referenced rows are never touched, so the
+//    `class_templates.instructor_id` FK can never be violated.
+// 3. Tue/Thu (templates 2 + 4, matched by id as decided on the ticket, with
+//    the weekday as a guard so a DB whose ids differ is left alone and the
+//    post-condition below fails loudly instead) move to 18:30. Bookings key
+//    on (template_id, date), so existing bookings stay valid.
+const V30_INSTRUCTORS_CLEANUP_TUE_THU_1830: &str = r#"
+UPDATE instructors SET name = 'Stopa' WHERE id = 1;
+
+DELETE FROM instructors
+ WHERE id NOT IN (SELECT instructor_id FROM class_templates WHERE instructor_id IS NOT NULL);
+
+UPDATE class_templates SET start_time = '18:30'
+ WHERE (id = 2 AND weekday = 1) OR (id = 4 AND weekday = 3);
+"#;
+
 #[cfg(test)]
 mod tests {
     use super::MIGRATIONS;
@@ -1557,8 +1615,10 @@ mod tests {
 
     #[tokio::test]
     async fn v6_seeds_instructors_and_templates() {
-        let pool = create_memory_pool().await.unwrap();
-        run_migrations(&pool).await.unwrap();
+        // V6's OWN seed, checked right after V6 — V30 (#381) later renames
+        // instructor 1 and moves Tue/Thu to 18:30 by design, so the full
+        // migration chain no longer ends in V6's shape.
+        let pool = pool_migrated_to(6).await;
 
         let stevo_id: Option<i64> =
             sqlx::query_scalar("SELECT id FROM instructors WHERE name='Stevo' AND active=1")
@@ -1601,9 +1661,13 @@ mod tests {
 
     #[tokio::test]
     async fn v6_is_idempotent_and_does_not_duplicate() {
-        let pool = create_memory_pool().await.unwrap();
-        run_migrations(&pool).await.unwrap();
-        run_migrations(&pool).await.unwrap();
+        // Re-run V6's own SQL on a DB that already went through V6: its
+        // `WHERE NOT EXISTS` guards must keep it from duplicating rows.
+        // (Checked at V6, not after the full chain — V30 (#381) renames
+        // instructor 1 and moves Tue/Thu to 18:30 on purpose.)
+        let pool = pool_migrated_to(6).await;
+        let v6_sql = MIGRATIONS.iter().find(|(v, _, _)| *v == 6).unwrap().2;
+        sqlx::raw_sql(v6_sql).execute(&pool).await.unwrap();
 
         let count: i64 = sqlx::query_scalar(
             "SELECT COUNT(*) FROM class_templates WHERE start_time='18:00' AND active=1",
@@ -4314,5 +4378,200 @@ mod tests {
             bad.is_err(),
             "enforce_active_pass_invariant trigger must survive the V27 rebuild"
         );
+    }
+
+    // V29 — dead center_name setting (#380) ---------------------------------
+
+    /// Genuine upgrade from V28: the V1-seeded `center_name` row is present
+    /// (as on prod), V29 removes it and leaves `bike_count` untouched.
+    #[tokio::test]
+    async fn v29_removes_center_name_and_keeps_bike_count() {
+        let pool = pool_migrated_to(28).await;
+        let before: Option<String> =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'center_name'")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            before.as_deref(),
+            Some("Squash Centrum Smizany"),
+            "test setup: V1 seeds center_name"
+        );
+
+        run_migrations(&pool).await.unwrap();
+
+        let after: Option<String> =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'center_name'")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert_eq!(after, None, "V29 must delete the center_name row");
+        let bike_count: String =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'bike_count'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(bike_count, "10", "V29 must not touch bike_count");
+    }
+
+    // V30 — instructors cleanup + Tue/Thu 18:30 (#381) ----------------------
+
+    /// Genuine upgrade from V29 with PROD's instructor table (read
+    /// 2026-10-12): 1 Stevo, 2 Vlada, 3-8 legacy/duplicate rows (7 inactive)
+    /// and a live booking on the Tuesday class. After V30: only 1 "Stopa" and
+    /// 2 "Vlada" remain, Tue/Thu run at 18:30, Mon/Wed stay at 18:00, every
+    /// template keeps its instructor, and the booking is untouched.
+    #[tokio::test]
+    async fn v30_prod_shape_upgrade_keeps_stopa_and_vlada_and_moves_tue_thu() {
+        let pool = pool_migrated_to(29).await;
+        for (name, active) in [
+            ("Stopa", 1),
+            ("Mesacna", 1),
+            ("Kredit", 1),
+            ("Hotovost", 1),
+            ("Marosh", 0),
+            ("Vla\u{010f}a", 1),
+        ] {
+            sqlx::query("INSERT INTO instructors (name, active) VALUES (?, ?)")
+                .bind(name)
+                .bind(active)
+                .execute(&pool)
+                .await
+                .unwrap();
+        }
+        let uid: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, role) VALUES ('v30@x', 'U', 'customer') RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let booking_id: i64 = sqlx::query_scalar(
+            "INSERT INTO bookings (template_id, date, user_id) VALUES (2, '2026-10-13', ?) RETURNING id",
+        )
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+
+        run_migrations(&pool).await.unwrap();
+
+        let instructors: Vec<(i64, String)> =
+            sqlx::query_as("SELECT id, name FROM instructors ORDER BY id")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            instructors,
+            vec![(1, "Stopa".to_string()), (2, "Vlada".to_string())],
+            "only the two instructors teaching a class survive, id 1 renamed"
+        );
+
+        let templates: Vec<(i64, i64, String, Option<i64>)> = sqlx::query_as(
+            "SELECT id, weekday, start_time, instructor_id FROM class_templates ORDER BY id",
+        )
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(
+            templates,
+            vec![
+                (1, 0, "18:00".to_string(), Some(1)),
+                (2, 1, "18:30".to_string(), Some(2)),
+                (3, 2, "18:00".to_string(), Some(1)),
+                (4, 3, "18:30".to_string(), Some(2)),
+            ]
+        );
+
+        let booking: (i64, String) =
+            sqlx::query_as("SELECT template_id, date FROM bookings WHERE id = ?")
+                .bind(booking_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(booking, (2, "2026-10-13".to_string()));
+    }
+
+    /// Robustness on a dev/test DB: an instructor still referenced by ANY
+    /// class template (even an inactive one) is never deleted — the FK on
+    /// `class_templates.instructor_id` must stay satisfiable.
+    #[tokio::test]
+    async fn v30_keeps_instructors_referenced_by_inactive_templates() {
+        let pool = pool_migrated_to(29).await;
+        let iid: i64 =
+            sqlx::query_scalar("INSERT INTO instructors (name) VALUES ('Old') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        sqlx::query(
+            "INSERT INTO class_templates (weekday, start_time, instructor_id, capacity, active)
+             VALUES (5, '09:00', ?, 10, 0)",
+        )
+        .bind(iid)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let orphan: i64 =
+            sqlx::query_scalar("INSERT INTO instructors (name) VALUES ('Orphan') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        run_migrations(&pool).await.unwrap();
+
+        let ids: Vec<i64> = sqlx::query_scalar("SELECT id FROM instructors ORDER BY id")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+        assert!(
+            ids.contains(&iid),
+            "referenced (inactive class) instructor kept"
+        );
+        assert!(!ids.contains(&orphan), "unreferenced instructor deleted");
+    }
+
+    /// The V30 post-condition (#381) fails loudly — and V30 is NOT recorded
+    /// — on a DB whose template ids do not follow the V6 layout (here:
+    /// templates 2 and 4 are not Tuesday/Thursday), instead of silently
+    /// leaving the Tue/Thu classes at 18:00. The whole V30 transaction rolls
+    /// back, instructor rename + deletes included.
+    #[tokio::test]
+    async fn v30_postcondition_fails_loudly_when_tue_thu_ids_differ() {
+        let pool = pool_migrated_to(29).await;
+        sqlx::query("UPDATE class_templates SET weekday = 5 WHERE id IN (2, 4)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let orphan: i64 =
+            sqlx::query_scalar("INSERT INTO instructors (name) VALUES ('Orphan') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        let err = run_migrations(&pool)
+            .await
+            .expect_err("V30 must refuse when templates 2/4 are not Tue/Thu");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("migration 30") && msg.contains("18:30"),
+            "error should explain the V30 post-condition failure, got: {msg}"
+        );
+
+        let applied_max: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM schema_version")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(applied_max, 29, "schema_version must not record V30");
+        let name_1: String = sqlx::query_scalar("SELECT name FROM instructors WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(name_1, "Stevo", "V30's rename must have rolled back");
+        let orphan_left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM instructors WHERE id = ?")
+            .bind(orphan)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(orphan_left, 1, "V30's deletes must have rolled back");
     }
 }

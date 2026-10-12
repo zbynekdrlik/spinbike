@@ -29,6 +29,10 @@ pub struct ClassOccurrenceResponse {
     pub start_time: String,
     pub duration_minutes: i64,
     pub instructor_id: Option<i64>,
+    /// The instructor's display name (#381) — the schedule used to render
+    /// only `instructor_id` ("Instruktor #2"). `None` when the template has
+    /// no instructor.
+    pub instructor_name: Option<String>,
     pub capacity: i64,
     pub booked: i64,
     pub cancelled: bool,
@@ -73,6 +77,10 @@ pub struct MyBookingResponse {
 #[derive(Serialize)]
 pub struct ParticipantResponse {
     pub booking_id: i64,
+    /// The booked customer's id — lets the staff walk-in picker mark
+    /// customers already in the class instead of offering a booking that
+    /// would 409 `already_booked` (#378).
+    pub user_id: i64,
     pub user_name: String,
     pub user_email: String,
 }
@@ -100,6 +108,9 @@ async fn list_classes(
         .map_err(|_| super::bad_request("Invalid 'to' date format, expected YYYY-MM-DD"))?;
 
     let templates = db::list_active_templates(&state.pool)
+        .await
+        .map_err(internal_error)?;
+    let instructor_names = crate::db::instructors::names_by_id(&state.pool)
         .await
         .map_err(internal_error)?;
 
@@ -147,6 +158,9 @@ async fn list_classes(
                 start_time: tmpl.start_time.clone(),
                 duration_minutes: tmpl.duration_minutes,
                 instructor_id: tmpl.instructor_id,
+                instructor_name: tmpl
+                    .instructor_id
+                    .and_then(|iid| instructor_names.get(&iid).cloned()),
                 capacity: tmpl.capacity,
                 booked,
                 cancelled,
@@ -175,12 +189,13 @@ async fn list_participants(
     #[derive(sqlx::FromRow)]
     struct Row {
         booking_id: i64,
+        user_id: i64,
         user_name: String,
         user_email: String,
     }
 
     let rows = sqlx::query_as::<_, Row>(
-        "SELECT b.id AS booking_id, u.name AS user_name, u.email AS user_email
+        "SELECT b.id AS booking_id, b.user_id AS user_id, u.name AS user_name, u.email AS user_email
          FROM bookings b
          JOIN users u ON u.id = b.user_id  -- no deleted_at filter: booking history for soft-deleted users remains part of class records
          WHERE b.template_id = ? AND b.date = ? AND b.cancelled_at IS NULL
@@ -196,6 +211,7 @@ async fn list_participants(
         rows.into_iter()
             .map(|r| ParticipantResponse {
                 booking_id: r.booking_id,
+                user_id: r.user_id,
                 user_name: r.user_name,
                 user_email: r.user_email,
             })
@@ -259,6 +275,22 @@ async fn create_booking(
     .map_err(|e| {
         if matches!(e, crate::db::DbError::ClassFull) {
             ApiError::conflict_message(ErrorCode::ClassFull, e.to_string())
+        } else if matches!(e, crate::db::DbError::UniqueViolation) {
+            // (A FULL class reports `class_full` even for a user already in
+            // it: the capacity guard in the INSERT ... SELECT runs before
+            // the index can fire. The walk-in picker already disables
+            // booked customers, so that path is not reachable from staff.)
+            // #378: the partial unique index `idx_bookings_active
+            // (template_id, date, user_id) WHERE cancelled_at IS NULL` is the
+            // source of truth for "already booked" — no racy pre-check
+            // SELECT. Its violation is an expected business outcome, not a 500.
+            tracing::info!(
+                template_id = body.template_id,
+                date = %body.date,
+                user_id = booking_user_id,
+                "booking rejected: user already holds an active booking for this class"
+            );
+            ApiError::conflict(ErrorCode::AlreadyBooked)
         } else {
             internal_error(e)
         }

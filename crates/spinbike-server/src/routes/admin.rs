@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::auth::{AdminUser, StaffUser};
+use crate::db::instructors::{self, DeleteInstructorOutcome};
 use crate::db::{classes, settings, users};
 use crate::error::ApiError;
 use crate::routes::internal_error;
@@ -164,7 +165,10 @@ pub fn routes() -> Router<AppState> {
             "/api/admin/instructors",
             get(list_instructors).post(create_instructor),
         )
-        .route("/api/admin/instructors/{id}", put(update_instructor))
+        .route(
+            "/api/admin/instructors/{id}",
+            put(update_instructor).delete(delete_instructor),
+        )
         .route(
             "/api/admin/services",
             get(list_services).post(create_service),
@@ -210,11 +214,33 @@ async fn list_templates(
     ))
 }
 
+/// A template may only point at an existing instructor. The FK is enforced,
+/// so an unknown id (e.g. one V30 or an admin delete removed, #381) used to
+/// surface as a 500; now it is a 404 `instructor_not_found`.
+async fn ensure_instructor_exists(
+    pool: &sqlx::SqlitePool,
+    instructor_id: Option<i64>,
+) -> Result<(), ApiError> {
+    if let Some(iid) = instructor_id
+        && !instructors::exists(pool, iid)
+            .await
+            .map_err(internal_error)?
+    {
+        tracing::info!(
+            instructor_id = iid,
+            "template write refused: unknown instructor"
+        );
+        return Err(ApiError::NotFound(ErrorCode::InstructorNotFound));
+    }
+    Ok(())
+}
+
 async fn create_template(
     State(state): State<AppState>,
     _: AdminUser,
     Json(body): Json<CreateTemplateRequest>,
 ) -> Result<(StatusCode, Json<TemplateResponse>), ApiError> {
+    ensure_instructor_exists(&state.pool, body.instructor_id).await?;
     let id = classes::create_template(
         &state.pool,
         body.weekday,
@@ -273,6 +299,12 @@ async fn update_template(
     let weekday = body.weekday.unwrap_or(existing.weekday);
     let start_time = body.start_time.unwrap_or(existing.start_time);
     let duration_minutes = body.duration_minutes.unwrap_or(existing.duration_minutes);
+    // Validate only an instructor the caller is actually SETTING — an
+    // unrelated edit must not start failing on an untouched value
+    // (admin-ui-error-handling.md rule 4).
+    if let Some(new_instructor) = body.instructor_id {
+        ensure_instructor_exists(&state.pool, new_instructor).await?;
+    }
     let instructor_id = body.instructor_id.unwrap_or(existing.instructor_id);
     let capacity = body.capacity.unwrap_or(existing.capacity);
     if capacity <= 0 {
@@ -398,6 +430,34 @@ async fn update_instructor(
         .map_err(internal_error)?;
 
     Ok(Json(InstructorRow { id, name, active }))
+}
+
+/// Permanently delete an instructor (#381). Admin-only. 409
+/// `instructor_in_use` while an ACTIVE class template still references it;
+/// inactive templates are detached by the db layer.
+async fn delete_instructor(
+    State(state): State<AppState>,
+    _: AdminUser,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    match instructors::delete_instructor(&state.pool, id)
+        .await
+        .map_err(internal_error)?
+    {
+        DeleteInstructorOutcome::Deleted => Ok(StatusCode::NO_CONTENT),
+        DeleteInstructorOutcome::NotFound => {
+            tracing::info!(instructor_id = id, "instructor delete: not found");
+            Err(ApiError::NotFound(ErrorCode::InstructorNotFound))
+        }
+        DeleteInstructorOutcome::InUse { active_templates } => {
+            tracing::info!(
+                instructor_id = id,
+                active_templates,
+                "instructor delete refused: still teaches active class templates"
+            );
+            Err(ApiError::conflict(ErrorCode::InstructorInUse))
+        }
+    }
 }
 
 // ---------- Service handlers ----------

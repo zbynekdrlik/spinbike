@@ -355,6 +355,88 @@ async fn instructors_crud_smoke() {
     assert_eq!(resp["name"].as_str().unwrap(), "Renamed");
 }
 
+/// #381: `DELETE /api/admin/instructors/{id}` — admin-only, 204 for an
+/// instructor no active class uses (row really gone), 409
+/// `instructor_in_use` while an active template references it, 404 for an
+/// unknown id.
+#[tokio::test]
+async fn delete_instructor_route() {
+    let app = TestApp::new().await;
+    let (status, resp) = app
+        .request(post_json(
+            "/api/admin/instructors",
+            &app.admin_token,
+            &serde_json::json!({ "name": "Docasny" }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+    let iid = resp["id"].as_i64().unwrap();
+    let uri = format!("/api/admin/instructors/{iid}");
+
+    // Staff (and customers) cannot delete.
+    let (status, resp) = app.request(delete(&uri, &app.staff_token)).await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN, "{resp}");
+    let (status, _) = app.request(delete(&uri, &app.customer_token)).await;
+    assert_eq!(status, axum::http::StatusCode::FORBIDDEN);
+
+    // Instructor 1 (Stopa) teaches the active Mon/Wed classes -> refused, kept.
+    let (status, resp) = app
+        .request(delete("/api/admin/instructors/1", &app.admin_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CONFLICT, "{resp}");
+    assert_eq!(resp["error_code"].as_str(), Some("instructor_in_use"));
+    let still: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM instructors WHERE id = 1")
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(still, 1);
+
+    // Unreferenced instructor -> 204 and the row is gone.
+    let (status, _) = app.request(delete(&uri, &app.admin_token)).await;
+    assert_eq!(status, axum::http::StatusCode::NO_CONTENT);
+    let gone: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM instructors WHERE id = ?")
+        .bind(iid)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(gone, 0);
+
+    // A template can no longer be created/moved onto the deleted id: clean
+    // 404 instead of the FK-violation 500.
+    let tmpl = serde_json::json!({
+        "weekday": 4, "start_time": "07:00", "duration_minutes": 60,
+        "instructor_id": iid, "capacity": 10,
+    });
+    let (status, resp) = app
+        .request(post_json("/api/admin/templates", &app.admin_token, &tmpl))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{resp}");
+    assert_eq!(resp["error_code"].as_str(), Some("instructor_not_found"));
+    let (status, resp) = app
+        .request(put_json(
+            "/api/admin/templates/1",
+            &app.admin_token,
+            &serde_json::json!({ "instructor_id": iid }),
+        ))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{resp}");
+    let still_stopa: Option<i64> =
+        sqlx::query_scalar("SELECT instructor_id FROM class_templates WHERE id = 1")
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        still_stopa,
+        Some(1),
+        "a refused update must not change the row"
+    );
+
+    // Deleting it again -> 404.
+    let (status, resp) = app.request(delete(&uri, &app.admin_token)).await;
+    assert_eq!(status, axum::http::StatusCode::NOT_FOUND, "{resp}");
+    assert_eq!(resp["error_code"].as_str(), Some("instructor_not_found"));
+}
+
 // ---------- Services ----------
 
 #[tokio::test]

@@ -1688,3 +1688,11 @@ extension), debit even into negative, and a push notification per renewal.
   door-renewal negative-balance spec to a direct-seed client-minus-highlight
   test (`client-negative-balance-highlight.spec.ts`).
 - Playbook `pass-auto-renewal.md` rewritten for the new mechanism.
+
+## 2026-10-12 — batch #378 + #379 + #380 + #381 (spinning fixes, v0.15.0-dev.173)
+
+- #378 (500 -> 409 on duplicate booking): RED f65b60f `second_active_booking_same_user_class_date_returns_409_already_booked` (tests/classes_routes.rs) -> GREEN 81111ad (UniqueViolation -> 409 `already_booked`, i18n "Zakaznik uz je na tento spinning prihlaseny", participants carry user_id, walk-in picker disables booked customers). Extra tests 9312ab6, Playwright 69f33f1. Rejected: racy pre-check SELECT.
+- #379 (participant chip contrast): RED d06c793 `staff-participant-chip.spec.ts` (contrast >= 4.5 dark+light, >= 15px) -> GREEN b510fd5 (token-only `.participant-chip`; un-book error no longer swallowed).
+- #380: V29 deletes the dead `center_name` setting (f3dd367).
+- #381: V30 Stopa/Vlada + delete unreferenced instructors + Tue/Thu 18:30 (dry-run on prod copy OK), `db::instructors`, admin DELETE 204/404/409, schedule shows instructor name (9e8b13e); review fixes 64b87d1 (V30 post-condition failure test, template writes 404 on unknown instructor).
+- Integrated by the supervisor as one PR (worker branch worktree-agent-a3215e280ef9bb0d4).

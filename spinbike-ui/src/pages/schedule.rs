@@ -15,6 +15,9 @@ pub struct ClassSlot {
     pub start_time: String,
     pub duration_minutes: i64,
     pub instructor_id: Option<i64>,
+    /// #381: the instructor's name, resolved server-side.
+    #[serde(default)]
+    pub instructor_name: Option<String>,
     pub capacity: i64,
     pub booked: i64,
     pub cancelled: bool,

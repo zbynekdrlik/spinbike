@@ -39,6 +39,8 @@ fn walkin_urlencode(s: &str) -> String {
 #[allow(dead_code)]
 struct Participant {
     booking_id: i64,
+    /// #378: lets the walk-in picker mark customers already in this class.
+    user_id: i64,
     user_name: String,
     user_email: String,
 }
@@ -190,7 +192,7 @@ pub fn StaffDashboardPage() -> impl IntoView {
                 let actions = if !cancelled {
                     view! {
                         <div class="flex gap-1">
-                            <button class="btn btn--ghost btn--compact" on:click=move |_| set_walkin_open.update(|v| *v = !*v)>
+                            <button class="btn btn--ghost btn--compact" data-testid="add-walkin" on:click=move |_| set_walkin_open.update(|v| *v = !*v)>
                                 {move || i18n::t(lang.get(), "add_walk_in")}
                             </button>
                             <button class="btn btn--danger btn--compact" on:click=on_cancel_class disabled=move || cancel_loading.get()>
@@ -218,8 +220,9 @@ pub fn StaffDashboardPage() -> impl IntoView {
                     });
                 }
 
+                let class_testid = format!("roster-class-{template_id}-{}", slot.date);
                 view! {
-                    <div>
+                    <div data-testid=class_testid>
                         <div class=card_class>
                             <div class="list-row__main">
                                 <div class="list-row__title">{time_label}</div>
@@ -250,20 +253,33 @@ pub fn StaffDashboardPage() -> impl IntoView {
                                     let set_v = set_ver;
                                     let on_cancel = move |_| {
                                         spawn_local(async move {
-                                            if api::delete(&format!("/api/bookings/{bid}")).await.is_ok() {
-                                                set_p.update(|list| list.retain(|pp| pp.booking_id != bid));
-                                                set_v.update(|v| *v += 1);
+                                            // Never swallow a failed write (admin-ui-error-handling.md):
+                                            // a failed un-book must surface, not look like success.
+                                            match api::delete(&format!("/api/bookings/{bid}")).await {
+                                                Ok(_) => {
+                                                    set_cancel_err.set(String::new());
+                                                    set_p.update(|list| list.retain(|pp| pp.booking_id != bid));
+                                                    set_v.update(|v| *v += 1);
+                                                }
+                                                Err(e) => set_cancel_err.set(i18n::tf(
+                                                    lang.get_untracked(),
+                                                    "error_format",
+                                                    &[&e],
+                                                )),
                                             }
                                         });
                                     };
+                                    // #379: token-based chip (style.css `.participant-chip`),
+                                    // never inline colours — they bypass the theme.
                                     view! {
-                                        <span class="badge" style="display:inline-flex;align-items:center;gap:4px;margin:2px 4px;padding:2px 8px;background:#e0e7ff;border-radius:12px;font-size:0.8rem">
+                                        <span class="participant-chip" data-testid=format!("participant-chip-{bid}")>
                                             {name}
                                             <button
-                                                class="btn btn--compact btn--ghost"
-                                                style="background:none;border:none;cursor:pointer;font-size:0.8rem;color:#dc2626;padding:0 2px"
+                                                type="button"
+                                                class="participant-chip__remove"
                                                 on:click=on_cancel
                                                 title=move || i18n::t(lang.get(), "cancel_booking")
+                                                aria-label=move || i18n::t(lang.get(), "cancel_booking")
                                             >
                                                 "\u{2715}"
                                             </button>
@@ -279,6 +295,9 @@ pub fn StaffDashboardPage() -> impl IntoView {
                                 WalkinForm(WalkinFormProps {
                                     template_id,
                                     date,
+                                    booked_user_ids: Signal::derive(move || {
+                                        participants.get().iter().map(|p| p.user_id).collect()
+                                    }),
                                     on_done: Callback::new(move |_| {
                                         set_walkin_open.set(false);
                                         set_v.update(|v| *v += 1);
@@ -301,6 +320,11 @@ pub fn StaffDashboardPage() -> impl IntoView {
 fn WalkinForm(
     template_id: i64,
     date: String,
+    /// #378: users already holding an active booking for this occurrence —
+    /// rendered as disabled "already booked" rows instead of offering a
+    /// booking that the server would reject with 409 `already_booked`.
+    #[prop(into)]
+    booked_user_ids: Signal<Vec<i64>>,
     #[prop(into)] on_done: Callback<()>,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
@@ -350,6 +374,10 @@ fn WalkinForm(
     let date_for_pick = date.clone();
     let pick = move |user: WalkinUserHit| {
         let user_id = user.id;
+        if booked_user_ids.get_untracked().contains(&user_id) {
+            set_err.set(i18n::t(lang.get_untracked(), "err_already_booked").to_string());
+            return;
+        }
         let date = date_for_pick.clone();
         set_loading.set(true);
         set_err.set(String::new());
@@ -365,7 +393,10 @@ fn WalkinForm(
                 #[allow(dead_code)]
                 id: i64,
             }
-            match api::post::<Req, Resp>(
+            // post_json (not post): the coded error lets a 409
+            // `already_booked` (e.g. a stale participant list) render the
+            // localized Slovak banner instead of the raw English text (#378).
+            match api::post_json::<Req, Resp>(
                 "/api/bookings",
                 &Req {
                     template_id,
@@ -376,7 +407,11 @@ fn WalkinForm(
             .await
             {
                 Ok(_) => on_done.run(()),
-                Err(e) => set_err.set(e),
+                Err(e) => set_err.set(i18n::localize_api_error(
+                    lang.get_untracked(),
+                    e.code,
+                    &e.message,
+                )),
             }
             set_loading.set(false);
         });
@@ -401,16 +436,33 @@ fn WalkinForm(
                 {move || {
                     let list = results.get();
                     let is_loading = loading.get();
+                    let booked = booked_user_ids.get();
                     list.into_iter().map(|user| {
-                        let label = walkin_display(&user);
                         let pick = pick.clone();
                         let user_id = user.id;
+                        let already = booked.contains(&user_id);
+                        let label = if already {
+                            format!(
+                                "{} \u{00b7} {}",
+                                walkin_display(&user),
+                                i18n::t(lang.get(), "walkin_already_in_class")
+                            )
+                        } else {
+                            walkin_display(&user)
+                        };
+                        let btn_class = if already {
+                            "btn btn--ghost btn--compact"
+                        } else {
+                            "btn btn--primary btn--compact"
+                        };
+                        let btn_disabled = is_loading || already;
+                        let already_attr = if already { "true" } else { "false" };
                         view! {
-                            <li class="walkin-row" data-testid=format!("walkin-pick-{user_id}")>
+                            <li class="walkin-row" data-testid=format!("walkin-pick-{user_id}") data-already-booked=already_attr>
                                 <button
                                     type="button"
-                                    class="btn btn--primary btn--compact"
-                                    disabled=is_loading
+                                    class=btn_class
+                                    disabled=btn_disabled
                                     on:click=move |_| pick(user.clone())
                                 >
                                     {label}

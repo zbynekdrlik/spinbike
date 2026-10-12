@@ -46,8 +46,8 @@ mod tests {
         let bike_count = get_bike_count(&pool).await.unwrap();
         assert_eq!(bike_count, 10);
 
-        let name = get_setting(&pool, "center_name").await.unwrap().unwrap();
-        assert_eq!(name, "Squash Centrum Smizany");
+        // #380: the dead V1 `center_name` row is removed by V29.
+        assert_eq!(get_setting(&pool, "center_name").await.unwrap(), None);
     }
 
     #[tokio::test]
