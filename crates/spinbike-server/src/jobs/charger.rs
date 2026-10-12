@@ -5,7 +5,7 @@
 //! charge is a transaction row (amount 0 if the customer's active monthly
 //! pass covers the class day; else the Spinning price debited from credit —
 //! negative credit is allowed) and the booking is stamped with `charged_at`
-//! + `charge_transaction_id`. Bookings on a class occurrence the staff
+//! and `charge_transaction_id`. Bookings on a class occurrence the staff
 //! cancelled (`class_cancellations`) are never charged — the class did not
 //! happen.
 
