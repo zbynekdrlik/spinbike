@@ -209,6 +209,7 @@ test.describe('Staff cancel with refund (#382 R3/R8)', () => {
             const refund = txs.filter((t) => t.action === 'storno');
             expect(refund, 'exactly one separate refund row').toHaveLength(1);
             expect(refund[0].amount).toBeCloseTo(10 - charged, 2);
+            expect(refund[0].service_kind, 'a refund is never counted as a visit').toBeNull();
 
             assertCleanConsole(messages);
         } finally {

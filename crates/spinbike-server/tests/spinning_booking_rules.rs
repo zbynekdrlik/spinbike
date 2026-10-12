@@ -550,3 +550,71 @@ async fn my_slot_routes_reject_a_dead_session_with_401() {
         assert_eq!(subs, 0, "{state}: a dead session must not subscribe");
     }
 }
+
+// ── Test-only fixtures used by the E2E specs ───────────────────────────────
+
+/// `/api/test/seed-booking` stores the requested source (default `manual`),
+/// rejects an unknown one, and books a PAST date the real route refuses;
+/// `/api/test/charge-booking` charges once, then reports `charged: false`.
+#[tokio::test]
+async fn seed_and_charge_booking_fixtures() {
+    let app = TestApp::new().await;
+    let yesterday = today() - Duration::days(1);
+    let tid = template_on(&app, yesterday, "18:00").await;
+    let other = app.seed_user("Fixture", None, Some(10.0), None).await;
+
+    let seed = |user_id: i64, source: Option<&str>| {
+        let mut body = serde_json::json!({
+            "template_id": tid,
+            "date": yesterday.to_string(),
+            "user_id": user_id,
+        });
+        if let Some(s) = source {
+            body["source"] = serde_json::json!(s);
+        }
+        post_json("/api/test/seed-booking", &app.staff_token, &body)
+    };
+
+    let (status, resp) = app.request(seed(app.customer_id, None)).await;
+    assert_eq!(status, StatusCode::CREATED, "got {resp}");
+    let default_id = resp["id"].as_i64().unwrap();
+    let (status, resp) = app.request(seed(other, Some("persistent"))).await;
+    assert_eq!(status, StatusCode::CREATED, "got {resp}");
+    let persistent_id = resp["id"].as_i64().unwrap();
+    let (status, _) = app.request(seed(app.staff_id, Some("robot"))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let source_of = |id: i64| {
+        let pool = app.pool.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("SELECT source FROM bookings WHERE id = ?")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(source_of(default_id).await, "manual");
+    assert_eq!(source_of(persistent_id).await, "persistent");
+    let staff_rows: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM bookings WHERE user_id = ?")
+        .bind(app.staff_id)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(staff_rows, 0, "an unknown source books nothing");
+
+    let charge = || {
+        post_json(
+            "/api/test/charge-booking",
+            &app.staff_token,
+            &serde_json::json!({ "booking_id": persistent_id }),
+        )
+    };
+    let (status, resp) = app.request(charge()).await;
+    assert_eq!(status, StatusCode::OK, "got {resp}");
+    assert_eq!(resp["charged"], true);
+    assert_eq!(credit_of(&app, other).await, 5.0);
+    let (_, resp) = app.request(charge()).await;
+    assert_eq!(resp["charged"], false, "already charged -> nothing written");
+    assert_eq!(credit_of(&app, other).await, 5.0);
+}

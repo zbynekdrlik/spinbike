@@ -238,9 +238,8 @@ pub async fn sweep_as_of(pool: &SqlitePool, now: NaiveDateTime) -> Result<SweepS
             .unwrap_or(0);
         if booked >= capacity {
             skipped_full += 1;
-            // Per-item at debug (it repeats every hourly sweep for up to 14
-            // days ahead); the run summary below warns once with the count.
-            tracing::debug!(
+            // #382 R5: the subscriber gets NO booking for this date — warn.
+            tracing::warn!(
                 persistent_id = c.persistent_id,
                 user_id = c.user_id,
                 template_id = c.template_id,
@@ -302,14 +301,6 @@ pub async fn sweep_as_of(pool: &SqlitePool, now: NaiveDateTime) -> Result<SweepS
         "materialiser sweep: candidates={total} created={created} \
          skipped_full={skipped_full} errored={errored}"
     );
-    if skipped_full > 0 {
-        // #382 R5: a full class means a subscriber got NO booking for that
-        // date — worth a warning (once per sweep, the dates are in debug).
-        tracing::warn!(
-            skipped_full,
-            "materialiser: recurring bookings not created because the class was full"
-        );
-    }
 
     Ok(SweepSummary {
         created,
