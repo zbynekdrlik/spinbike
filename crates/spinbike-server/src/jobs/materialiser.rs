@@ -1,11 +1,21 @@
 //! Persistent-booking materialiser: ensures a concrete booking row exists for
 //! every future occurrence of an active persistent subscription within the
-//! next 14 days. Skips occurrences where the class is full. Idempotent.
+//! next 14 days. Idempotent. Skips (#382 R5):
+//!
+//! - occurrences the staff cancelled (`class_cancellations`);
+//! - a (user, template, date) that already has a booking row — active, OR
+//!   cancelled by the customer/staff (never resurrect a date someone opted
+//!   out of; only a system `unsubscribe` cancellation may be re-created when
+//!   the customer subscribes again);
+//! - occurrences whose 09:00 binding cutoff already passed (`booking_rules`)
+//!   — auto-booking those would bind and charge the customer for a class
+//!   they never chose;
+//! - full classes (counted in `skipped_full` and warned about).
 
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
-use chrono::{Datelike, Duration};
+use chrono::{Datelike, Duration, NaiveDateTime};
 use sqlx::SqlitePool;
 
 use crate::db::error::DbError;
@@ -32,8 +42,10 @@ struct Candidate {
 pub struct SweepSummary {
     /// Bookings actually materialised this tick.
     pub created: usize,
-    /// Candidates skipped because the class filled up before the INSERT
-    /// (an expected, per-item outcome — see the `ClassFull` arm below).
+    /// Candidates skipped because the class was full — either already in
+    /// the up-front snapshot (#382: now counted + warned, not silent) or
+    /// filled up before the INSERT (the `ClassFull` race arm below). An
+    /// expected, per-item outcome.
     pub skipped_full: usize,
     /// Candidates that failed for any other reason (DB/IO/constraint
     /// error) — also per-item, never aborts the rest of the sweep.
@@ -45,7 +57,16 @@ fn placeholders(n: usize) -> String {
     std::iter::repeat_n("?", n).collect::<Vec<_>>().join(", ")
 }
 
+/// Run one sweep against the real gym-local wall clock.
 pub async fn sweep(pool: &SqlitePool) -> Result<SweepSummary> {
+    sweep_as_of(pool, crate::util::now_bratislava()).await
+}
+
+/// [`sweep`] with an injected gym-local (Europe/Bratislava) `now`, so tests
+/// can pin the time of day deterministically. Production derives `now` via
+/// `crate::util::now_bratislava()` — never `chrono::Local`
+/// (`.claude/rules/bratislava-tz.md`, #327).
+pub async fn sweep_as_of(pool: &SqlitePool, now: NaiveDateTime) -> Result<SweepSummary> {
     let persistents = crate::db::persistent_bookings::list_active_all(pool).await?;
     let templates = sqlx::query_as::<_, crate::db::classes::ClassTemplateRow>(
         "SELECT id, weekday, start_time, duration_minutes, instructor_id, capacity, active
@@ -54,7 +75,7 @@ pub async fn sweep(pool: &SqlitePool) -> Result<SweepSummary> {
     .fetch_all(pool)
     .await?;
 
-    let today = crate::util::today_bratislava();
+    let today = now.date();
 
     // Build every (template, date, user) candidate this sweep might need to
     // materialise. Unchanged filter logic from before #341 — only the
@@ -125,10 +146,16 @@ pub async fn sweep(pool: &SqlitePool) -> Result<SweepSummary> {
         q.fetch_all(pool).await?.into_iter().collect()
     };
 
+    // Every (template, date, user) that must NOT be (re-)materialised: an
+    // active booking, or one the customer/staff cancelled (`cancel_kind`
+    // 'customer'/'staff', or NULL for a pre-V31 cancellation — treated as a
+    // deliberate opt-out). Only a system 'unsubscribe' cancellation is left
+    // out, so re-subscribing restores those dates (#382 R5).
     let existing: HashSet<(i64, String, i64)> = {
         let sql = format!(
             "SELECT template_id, date, user_id FROM bookings
-             WHERE template_id IN ({tpl_ph}) AND date IN ({date_ph}) AND cancelled_at IS NULL"
+             WHERE template_id IN ({tpl_ph}) AND date IN ({date_ph})
+               AND (cancelled_at IS NULL OR COALESCE(cancel_kind, '') <> 'unsubscribe')"
         );
         let mut q = sqlx::query_as::<_, (i64, String, i64)>(&sql);
         for t in &template_ids {
@@ -170,9 +197,31 @@ pub async fn sweep(pool: &SqlitePool) -> Result<SweepSummary> {
     for c in candidates {
         let key = (c.template_id, c.date.clone());
         if cancelled.contains(&key) {
+            tracing::debug!(
+                persistent_id = c.persistent_id,
+                user_id = c.user_id,
+                template_id = c.template_id,
+                date = %c.date,
+                "materialiser: skip — class occurrence cancelled"
+            );
             continue;
         }
         if existing.contains(&(c.template_id, c.date.clone(), c.user_id)) {
+            continue;
+        }
+        // #382 R1/R5: past the class day's 09:00 cutoff a booking is binding
+        // and charged at once — never create one on the customer's behalf.
+        let past_cutoff = chrono::NaiveDate::parse_from_str(&c.date, "%Y-%m-%d")
+            .map(|d| crate::booking_rules::is_charge_due(d, now))
+            .unwrap_or(true);
+        if past_cutoff {
+            tracing::debug!(
+                persistent_id = c.persistent_id,
+                user_id = c.user_id,
+                template_id = c.template_id,
+                date = %c.date,
+                "materialiser: skip — the 09:00 binding cutoff already passed"
+            );
             continue;
         }
         // Snapshot-based pre-check: avoids attempting an INSERT we already
@@ -188,6 +237,17 @@ pub async fn sweep(pool: &SqlitePool) -> Result<SweepSummary> {
             .copied()
             .unwrap_or(0);
         if booked >= capacity {
+            skipped_full += 1;
+            // #382 R5: the subscriber gets NO booking for this date — warn.
+            tracing::warn!(
+                persistent_id = c.persistent_id,
+                user_id = c.user_id,
+                template_id = c.template_id,
+                date = %c.date,
+                booked,
+                capacity,
+                "materialiser: skip — class is full, recurring booking not created for this date"
+            );
             continue;
         }
 
@@ -254,6 +314,15 @@ mod tests {
     use super::*;
     use crate::db::{create_memory_pool, run_migrations};
 
+    /// Gym-local midnight of today — before the 09:00 binding cutoff, so a
+    /// test's "today" occurrences are still eligible regardless of the real
+    /// time of day the suite runs at (#382).
+    fn start_of_today() -> NaiveDateTime {
+        crate::util::today_bratislava()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+    }
+
     async fn seed(pool: &SqlitePool, weekday: i64) -> (i64, i64) {
         let uid: i64 =
             sqlx::query_scalar("INSERT INTO users (email, name) VALUES ('u@x','u') RETURNING id")
@@ -297,8 +366,9 @@ mod tests {
             "sweep() must not call chrono::Local::now() directly (OS-TZ dependent — #327)"
         );
         assert!(
-            production_src.contains("crate::util::today_bratislava()"),
-            "sweep() must derive today via the shared crate::util::today_bratislava() helper (#327)"
+            production_src.contains("crate::util::now_bratislava()"),
+            "sweep() must derive its clock via the shared crate::util::now_bratislava() helper \
+             (#327; since #382 the injected `now` also drives the 09:00 cutoff)"
         );
     }
 
@@ -311,7 +381,7 @@ mod tests {
             .await
             .unwrap();
 
-        let summary = sweep(&pool).await.unwrap();
+        let summary = sweep_as_of(&pool, start_of_today()).await.unwrap();
         assert!(summary.created >= 1, "at least one Monday in next 14 days");
 
         let sources: Vec<(String,)> =
@@ -332,8 +402,8 @@ mod tests {
             .await
             .unwrap();
 
-        let first = sweep(&pool).await.unwrap();
-        let second = sweep(&pool).await.unwrap();
+        let first = sweep_as_of(&pool, start_of_today()).await.unwrap();
+        let second = sweep_as_of(&pool, start_of_today()).await.unwrap();
         assert_eq!(second.created, 0, "second sweep should create nothing");
         assert!(first.created > 0);
     }
@@ -374,7 +444,7 @@ mod tests {
             .await
             .unwrap();
 
-        let _ = sweep(&pool).await.unwrap();
+        let _ = sweep_as_of(&pool, start_of_today()).await.unwrap();
         let got: Option<i64> =
             sqlx::query_scalar("SELECT id FROM bookings WHERE user_id=? AND date=?")
                 .bind(uid)
@@ -383,6 +453,133 @@ mod tests {
                 .await
                 .unwrap();
         assert!(got.is_none(), "must skip full class");
+    }
+
+    /// #382 R5 RED: a date the customer (or staff) cancelled must NEVER be
+    /// re-created by a later sweep. Before the fix the "already booked" set
+    /// only held ACTIVE rows (`cancelled_at IS NULL`), so the very next
+    /// hourly sweep resurrected every cancelled date of a subscription.
+    #[tokio::test]
+    async fn sweep_never_resurrects_a_cancelled_date() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (uid, tid) = seed(&pool, 0).await;
+        crate::db::persistent_bookings::create(&pool, uid, tid)
+            .await
+            .unwrap();
+        let first = sweep_as_of(&pool, start_of_today()).await.unwrap();
+        assert!(first.created >= 2, "two or three Mondays in the window");
+
+        // The customer skips the LAST materialised Monday.
+        let (bid, date): (i64, String) = sqlx::query_as(
+            "SELECT id, date FROM bookings WHERE user_id = ? ORDER BY date DESC LIMIT 1",
+        )
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query("UPDATE bookings SET cancelled_at = datetime('now') WHERE id = ?")
+            .bind(bid)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let second = sweep_as_of(&pool, start_of_today()).await.unwrap();
+        assert_eq!(second.created, 0, "nothing may be re-created");
+        let active: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM bookings \
+             WHERE user_id = ? AND template_id = ? AND date = ? AND cancelled_at IS NULL",
+        )
+        .bind(uid)
+        .bind(tid)
+        .bind(&date)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(active, 0, "the cancelled date {date} was resurrected");
+    }
+
+    /// #382 R5: a full class is skipped for that user on that date, COUNTED
+    /// and warned about — not silently dropped. Before the fix the snapshot
+    /// pre-check `continue`d without touching `skipped_full`.
+    #[tokio::test]
+    async fn sweep_counts_a_full_class_as_skipped_full() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let tid = crate::db::classes::create_template(&pool, 0, "18:15", 60, None, 1)
+            .await
+            .unwrap();
+        let today = crate::util::today_bratislava();
+        let m = (7 - today.weekday().num_days_from_monday() as i64) % 7;
+        let next_mon = today + Duration::days(if m == 0 { 7 } else { m });
+        let other: i64 =
+            sqlx::query_scalar("INSERT INTO users (email, name) VALUES ('o@x','o') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        crate::db::classes::create_booking(
+            &pool,
+            tid,
+            &next_mon.to_string(),
+            other,
+            None,
+            "manual",
+        )
+        .await
+        .unwrap();
+        let (uid, _) = seed(&pool, 0).await;
+        crate::db::persistent_bookings::create(&pool, uid, tid)
+            .await
+            .unwrap();
+
+        let summary = sweep_as_of(&pool, start_of_today()).await.unwrap();
+        assert_eq!(
+            summary.skipped_full, 1,
+            "exactly the one full Monday is skipped (and counted) for this user"
+        );
+        let got: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM bookings WHERE user_id = ? AND date = ?")
+                .bind(uid)
+                .bind(next_mon.to_string())
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert!(got.is_none());
+    }
+
+    /// #382 R1/R5: an occurrence whose 09:00 binding cutoff already passed
+    /// (a subscription created on the class day after 09:00) is NOT booked —
+    /// the customer would otherwise be bound and charged for a class they
+    /// never chose. Before the fix today's occurrence was always booked.
+    #[tokio::test]
+    async fn sweep_does_not_book_an_occurrence_past_its_0900_cutoff() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let today = crate::util::today_bratislava();
+        let weekday = today.weekday().num_days_from_monday() as i64;
+        let tid = crate::db::classes::create_template(&pool, weekday, "18:45", 60, None, 5)
+            .await
+            .unwrap();
+        let uid: i64 =
+            sqlx::query_scalar("INSERT INTO users (email, name) VALUES ('c@x','c') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        crate::db::persistent_bookings::create(&pool, uid, tid)
+            .await
+            .unwrap();
+
+        let ten_am = today.and_hms_opt(10, 0, 0).unwrap();
+        let summary = sweep_as_of(&pool, ten_am).await.unwrap();
+        assert_eq!(summary.created, 2, "only the two FUTURE weekly occurrences");
+        let today_booking: Option<i64> =
+            sqlx::query_scalar("SELECT id FROM bookings WHERE user_id = ? AND date = ?")
+                .bind(uid)
+                .bind(today.to_string())
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert!(today_booking.is_none(), "today's cutoff already passed");
     }
 
     /// #341: `sweep()`'s cancellation check is now one batched query over
@@ -431,7 +628,7 @@ mod tests {
             .await
             .unwrap();
 
-        let _ = sweep(&pool).await.unwrap();
+        let _ = sweep_as_of(&pool, start_of_today()).await.unwrap();
 
         let a_today: Option<i64> = sqlx::query_scalar(
             "SELECT id FROM bookings WHERE template_id=? AND date=? AND user_id=?",
@@ -501,7 +698,7 @@ mod tests {
             .await
             .unwrap();
 
-        let _ = sweep(&pool).await.unwrap();
+        let _ = sweep_as_of(&pool, start_of_today()).await.unwrap();
 
         let tid2_booking: Option<i64> = sqlx::query_scalar(
             "SELECT id FROM bookings WHERE template_id=? AND date=? AND user_id=?",
@@ -594,7 +791,7 @@ mod tests {
         // (0..=WINDOW_DAYS) window — 3 distinct matching dates. Per date on
         // tid_full: exactly one of {A, B} wins the atomic INSERT, the other
         // gets ClassFull. tid_other has no capacity contention at all.
-        let summary = sweep(&pool)
+        let summary = sweep_as_of(&pool, start_of_today())
             .await
             .expect("a ClassFull race must not abort the whole sweep (#345)");
         assert_eq!(
@@ -714,7 +911,7 @@ mod tests {
             .await
             .unwrap();
 
-        let summary = sweep(&pool)
+        let summary = sweep_as_of(&pool, start_of_today())
             .await
             .expect("a non-ClassFull DB error must not abort the whole sweep");
 

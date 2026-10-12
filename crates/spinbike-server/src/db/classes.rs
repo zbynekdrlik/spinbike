@@ -155,14 +155,6 @@ pub async fn create_booking(
     }
 }
 
-pub async fn cancel_booking(pool: &SqlitePool, booking_id: i64) -> Result<()> {
-    sqlx::query("UPDATE bookings SET cancelled_at = datetime('now') WHERE id = ?")
-        .bind(booking_id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 pub async fn list_bookings_for_class(
     pool: &SqlitePool,
     template_id: i64,
@@ -195,6 +187,10 @@ pub struct BookingWithClassRow {
     pub user_id: i64,
     pub start_time: String,
     pub instructor_name: Option<String>,
+    /// `'manual'` | `'persistent'` (#382: the recurring mark on the card).
+    pub source: String,
+    /// Set once the binding 09:00 charge ran (#382: no customer cancel).
+    pub charged_at: Option<String>,
 }
 
 pub async fn list_user_bookings(
@@ -210,12 +206,12 @@ pub async fn list_user_bookings(
     let today = crate::util::today_bratislava();
     let bookings = sqlx::query_as::<_, BookingWithClassRow>(
         "SELECT b.id, b.template_id, b.date, b.user_id, \
-                ct.start_time, i.name AS instructor_name \
+                ct.start_time, i.name AS instructor_name, b.source, b.charged_at \
            FROM bookings b \
            JOIN class_templates ct ON ct.id = b.template_id \
            LEFT JOIN instructors i ON i.id = ct.instructor_id \
           WHERE b.user_id = ? AND b.cancelled_at IS NULL AND b.date >= ? \
-          ORDER BY b.date, b.created_at",
+          ORDER BY b.date, ct.start_time, b.created_at",
     )
     .bind(user_id)
     .bind(today)
@@ -477,7 +473,18 @@ mod tests {
         );
 
         // Cancel u1's booking.
-        cancel_booking(&pool, b1).await.unwrap();
+        let res = crate::db::booking_cancel::cancel_booking(
+            &pool,
+            b1,
+            Some(u1),
+            crate::db::booking_cancel::CancelKind::Customer,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            res,
+            crate::db::booking_cancel::CancelResult::Cancelled(_)
+        ));
 
         // Now u2 can book.
         create_booking(&pool, tmpl_id, "2026-04-14", u2, None, "manual")

@@ -1,3 +1,4 @@
+pub mod booking_cancel;
 pub mod classes;
 pub mod error;
 pub mod instructors;
@@ -7,6 +8,7 @@ pub mod persistent_bookings;
 pub mod push;
 pub mod reports;
 pub mod settings;
+pub mod spinner;
 pub mod transactions;
 pub mod users;
 

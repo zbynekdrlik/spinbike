@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod booking_rules;
 pub mod db;
 pub mod error;
 pub mod ewelink;
