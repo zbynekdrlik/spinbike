@@ -31,7 +31,8 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
     let date_book = date.clone();
 
     let time_str = slot.start_time.clone();
-    let instructor_id = slot.instructor_id.unwrap_or(0);
+    // #381: show the instructor's NAME (was the raw id: "Instruktor #2").
+    let instructor_name = slot.instructor_name.clone();
     let booked = slot.booked;
     let capacity = slot.capacity;
 
@@ -126,7 +127,11 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
             <span class=format!("list-row__accent list-row__accent--{state}")></span>
             <div class="list-row__main">
                 <div class="list-row__title">{time_str}</div>
-                <div class="list-row__sub">{move || i18n::tf(lang.get(), "instructor_format", &[&instructor_id.to_string()])}</div>
+                {instructor_name.map(|name| view! {
+                    <div class="list-row__sub" data-testid="class-instructor">
+                        {move || i18n::tf(lang.get(), "instructor_format", &[&name])}
+                    </div>
+                })}
                 <div class="list-row__sub">{move || i18n::tf(lang.get(), "spots_format", &[&booked.to_string(), &capacity.to_string()])}</div>
                 {move || {
                     let e = error.get();

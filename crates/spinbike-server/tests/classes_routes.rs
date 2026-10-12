@@ -94,7 +94,8 @@ async fn my_bookings_returns_user_bookings() {
 
 /// #146: when the booked class HAS an instructor, `/api/my/bookings` returns
 /// its name (joined via class_templates.instructor_id) — the V6 migration
-/// seeds a Monday 18:00 template taught by "Stevo".
+/// seeds a Monday 18:00 template taught by instructor 1, which V30 (#381)
+/// renamed to "Stopa".
 #[tokio::test]
 async fn my_bookings_includes_instructor_name() {
     let app = TestApp::new().await;
@@ -122,7 +123,7 @@ async fn my_bookings_includes_instructor_name() {
     let arr = resp.as_array().unwrap();
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["start_time"].as_str().unwrap(), "18:00");
-    assert_eq!(arr[0]["instructor_name"].as_str().unwrap(), "Stevo");
+    assert_eq!(arr[0]["instructor_name"].as_str().unwrap(), "Stopa");
 }
 
 #[tokio::test]
@@ -671,4 +672,35 @@ async fn second_active_booking_same_user_class_date_returns_409_already_booked()
     .await
     .unwrap();
     assert_eq!(active, 1, "the duplicate attempts must not add a booking");
+}
+
+/// #381: `/api/classes` carries the instructor's NAME (the schedule used to
+/// show only "Instruktor #<id>"), and after V30 the Tuesday + Thursday
+/// classes run at 18:30 with Vlada while Monday stays at 18:00 with Stopa.
+#[tokio::test]
+async fn list_classes_includes_instructor_name_and_tue_thu_1830() {
+    use chrono::{Datelike, Days, Weekday};
+    let app = TestApp::new().await;
+    let monday = chrono::NaiveDate::parse_from_str(&future_monday(), "%Y-%m-%d").unwrap();
+    assert_eq!(monday.weekday(), Weekday::Mon);
+    let thursday = monday + Days::new(3);
+    let uri = format!("/api/classes?from={monday}&to={thursday}");
+    let (status, resp) = app.request(get(&uri, "")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let arr = resp.as_array().unwrap();
+
+    let at = |weekday: i64| -> (String, Option<String>) {
+        let c = arr
+            .iter()
+            .find(|c| c["weekday"].as_i64() == Some(weekday))
+            .unwrap_or_else(|| panic!("no class on weekday {weekday}: {arr:?}"));
+        (
+            c["start_time"].as_str().unwrap().to_string(),
+            c["instructor_name"].as_str().map(str::to_string),
+        )
+    };
+    assert_eq!(at(0), ("18:00".to_string(), Some("Stopa".to_string())));
+    assert_eq!(at(1), ("18:30".to_string(), Some("Vlada".to_string())));
+    assert_eq!(at(2), ("18:00".to_string(), Some("Stopa".to_string())));
+    assert_eq!(at(3), ("18:30".to_string(), Some("Vlada".to_string())));
 }

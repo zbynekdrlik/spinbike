@@ -402,6 +402,26 @@ fn InstructorsTab() -> impl IntoView {
                         }
                     });
                 };
+                // #381: permanent delete (owner decision — not deactivation).
+                // Confirm first; a 409 `instructor_in_use` (still teaches an
+                // active class) is shown localized in the tab's banner, never
+                // swallowed (admin-ui-error-handling.md).
+                let name_for_delete = i.name.clone();
+                let on_delete = move |_| {
+                    let confirm_msg = i18n::tf(lang.get_untracked(), "confirm_delete_instructor", &[&name_for_delete]);
+                    if !leptos::prelude::window().confirm_with_message(&confirm_msg).unwrap_or(false) {
+                        return;
+                    }
+                    spawn_local(async move {
+                        match api::delete_coded(&format!("/api/admin/instructors/{iid}")).await {
+                            Ok(_) => {
+                                set_m.set(String::new());
+                                set_v.update(|v| *v += 1);
+                            }
+                            Err(e) => set_m.set(i18n::localize_api_error(lang.get_untracked(), e.code, &e.message)),
+                        }
+                    });
+                };
                 let on_save = move |_| {
                     let new_name = edit_name_ref.get().map(|el| { let el: &HtmlInputElement = &el; el.value() }).unwrap_or_default();
                     spawn_local(async move {
@@ -414,13 +434,14 @@ fn InstructorsTab() -> impl IntoView {
                     });
                 };
                 view! {
-                    <tr>
+                    <tr data-testid=format!("instructor-row-{iid}")>
                         <td>{iid}</td>
                         <td>{name}</td>
                         <td>{move || if is_active { i18n::t(lang.get(), "active") } else { i18n::t(lang.get(), "inactive") }}</td>
                         <td>
                             <button class="btn btn--ghost btn--compact" on:click=on_toggle>{move || if is_active { i18n::t(lang.get(), "deactivate") } else { i18n::t(lang.get(), "activate") }}</button>
                             <button class="btn btn--ghost btn--compact" style="margin-left:4px" on:click=move |_| set_editing.update(|v| *v = !*v)>{move || i18n::t(lang.get(), "edit")}</button>
+                            <button class="btn btn--danger btn--compact" style="margin-left:4px" data-testid=format!("instructor-delete-{iid}") on:click=on_delete>{move || i18n::t(lang.get(), "delete")}</button>
                         </td>
                     </tr>
                     {move || {

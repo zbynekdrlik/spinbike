@@ -227,6 +227,10 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
         // #378: shown both to staff (walk-in picker) and to a customer whose
         // own double-tap self-booking races the first one.
         ErrorCode::AlreadyBooked => Some("err_already_booked"),
+        // #381: admin Instructors tab delete — localized so the admin reads
+        // WHY the delete was refused, not the raw English text.
+        ErrorCode::InstructorInUse => Some("err_instructor_in_use"),
+        ErrorCode::InstructorNotFound => Some("err_instructor_not_found"),
         ErrorCode::Internal => Some("err_internal"),
         // Staff/admin-only or not customer-facing in the 5 render sites this
         // ticket scopes to (#145) — left unmapped on purpose, NOT an
@@ -585,7 +589,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("cancel_booking", ("Zrusit rezervaciu", "Cancel booking"));
     m.insert("cancel_class", ("Zrusit hodinu", "Cancel Class"));
     m.insert("spots_format", ("{}/{} miest", "{}/{} spots"));
-    m.insert("instructor_format", ("Instruktor #{}", "Instructor #{}"));
+    m.insert("instructor_format", ("Instruktor: {}", "Instructor: {}"));
     m.insert(
         "login_to_book",
         ("Pre rezervaciu sa prihlaste", "Login to book"),
@@ -1364,6 +1368,24 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         (
             "Zakaznik uz je na tento spinning prihlaseny",
             "This customer is already booked into this class",
+        ),
+    );
+    m.insert(
+        "err_instructor_in_use",
+        (
+            "Instruktor uci aktivny spinning v rozvrhu — najprv mu ho zmen alebo vypni",
+            "This instructor still teaches an active class — reassign or deactivate it first",
+        ),
+    );
+    m.insert(
+        "err_instructor_not_found",
+        ("Instruktor sa nenasiel", "Instructor not found"),
+    );
+    m.insert(
+        "confirm_delete_instructor",
+        (
+            "Natrvalo vymazat instruktora {}?",
+            "Permanently delete instructor {}?",
         ),
     );
     m.insert(

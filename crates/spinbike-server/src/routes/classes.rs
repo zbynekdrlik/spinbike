@@ -29,6 +29,10 @@ pub struct ClassOccurrenceResponse {
     pub start_time: String,
     pub duration_minutes: i64,
     pub instructor_id: Option<i64>,
+    /// The instructor's display name (#381) — the schedule used to render
+    /// only `instructor_id` ("Instruktor #2"). `None` when the template has
+    /// no instructor.
+    pub instructor_name: Option<String>,
     pub capacity: i64,
     pub booked: i64,
     pub cancelled: bool,
@@ -106,6 +110,9 @@ async fn list_classes(
     let templates = db::list_active_templates(&state.pool)
         .await
         .map_err(internal_error)?;
+    let instructor_names = crate::db::instructors::names_by_id(&state.pool)
+        .await
+        .map_err(internal_error)?;
 
     let mut occurrences = Vec::new();
     let mut current = from;
@@ -151,6 +158,9 @@ async fn list_classes(
                 start_time: tmpl.start_time.clone(),
                 duration_minutes: tmpl.duration_minutes,
                 instructor_id: tmpl.instructor_id,
+                instructor_name: tmpl
+                    .instructor_id
+                    .and_then(|iid| instructor_names.get(&iid).cloned()),
                 capacity: tmpl.capacity,
                 booked,
                 cancelled,

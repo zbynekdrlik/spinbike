@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::auth::{AdminUser, StaffUser};
+use crate::db::instructors::{self, DeleteInstructorOutcome};
 use crate::db::{classes, settings, users};
 use crate::error::ApiError;
 use crate::routes::internal_error;
@@ -164,7 +165,10 @@ pub fn routes() -> Router<AppState> {
             "/api/admin/instructors",
             get(list_instructors).post(create_instructor),
         )
-        .route("/api/admin/instructors/{id}", put(update_instructor))
+        .route(
+            "/api/admin/instructors/{id}",
+            put(update_instructor).delete(delete_instructor),
+        )
         .route(
             "/api/admin/services",
             get(list_services).post(create_service),
@@ -398,6 +402,34 @@ async fn update_instructor(
         .map_err(internal_error)?;
 
     Ok(Json(InstructorRow { id, name, active }))
+}
+
+/// Permanently delete an instructor (#381). Admin-only. 409
+/// `instructor_in_use` while an ACTIVE class template still references it;
+/// inactive templates are detached by the db layer.
+async fn delete_instructor(
+    State(state): State<AppState>,
+    _: AdminUser,
+    Path(id): Path<i64>,
+) -> Result<StatusCode, ApiError> {
+    match instructors::delete_instructor(&state.pool, id)
+        .await
+        .map_err(internal_error)?
+    {
+        DeleteInstructorOutcome::Deleted => Ok(StatusCode::NO_CONTENT),
+        DeleteInstructorOutcome::NotFound => {
+            tracing::info!(instructor_id = id, "instructor delete: not found");
+            Err(ApiError::NotFound(ErrorCode::InstructorNotFound))
+        }
+        DeleteInstructorOutcome::InUse { active_templates } => {
+            tracing::info!(
+                instructor_id = id,
+                active_templates,
+                "instructor delete refused: still teaches active class templates"
+            );
+            Err(ApiError::conflict(ErrorCode::InstructorInUse))
+        }
+    }
 }
 
 // ---------- Service handlers ----------
