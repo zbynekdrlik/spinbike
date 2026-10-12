@@ -200,7 +200,15 @@ mod tests {
         (uid, bid)
     }
 
-    /// Fake "now" of Monday 14:00 (= class_start - 4h, boundary inclusive).
+    /// The Monday `seed_booking` books (today when today is a Monday).
+    fn next_monday() -> chrono::NaiveDate {
+        let today = crate::util::today_bratislava();
+        let days_to_mon = (7 - today.weekday().num_days_from_monday() as i64) % 7;
+        today + Duration::days(days_to_mon)
+    }
+
+    /// Fake "now" of Monday 14:00 (after the class day's 09:00 binding
+    /// cutoff, #382 — previously the 4h-before boundary).
     fn now_at_14() -> String {
         let today = crate::util::today_bratislava();
         let days_to_mon = (7 - today.weekday().num_days_from_monday() as i64) % 7;
@@ -335,25 +343,21 @@ mod tests {
         assert_eq!(n, 0);
     }
 
-    /// Exercises the real-time `tick()` wrapper (not `tick_as_of`). Creates a
-    /// short-lead-time template scheduled 30 minutes from now; two bookings on
-    /// it must both get charged in a single call, proving `tick` actually
-    /// delegates to `tick_as_of(now)` and returns the real count.
+    /// Exercises the real-time `tick()` wrapper (not `tick_as_of`). Two
+    /// bookings on YESTERDAY's occurrence of a fresh template are past the
+    /// class day's 09:00 binding cutoff whatever the real time of day is
+    /// (#382 — the old "class in 30 minutes" setup depended on the 4h rule
+    /// and would be time-of-day dependent under the 09:00 rule), so a single
+    /// `tick()` must charge both, proving it delegates to `tick_as_of(now)`
+    /// and returns the real count.
     #[tokio::test]
     async fn tick_uses_real_now_and_returns_count() {
         let pool = create_memory_pool().await.unwrap();
         run_migrations(&pool).await.unwrap();
 
-        let now = crate::util::now_bratislava();
-        let today = now.date();
-        let weekday = today.weekday().num_days_from_monday() as i64;
-        // 30 minutes from now — always inside the 4h window but unlikely to
-        // collide with V6's 18:00 seed (which, if matched, just yields a
-        // distinct template id with no bookings of its own).
-        let soon = (now + chrono::Duration::minutes(30))
-            .format("%H:%M")
-            .to_string();
-        let tid = crate::db::classes::create_template(&pool, weekday, &soon, 60, None, 10)
+        let yesterday = crate::util::today_bratislava() - Duration::days(1);
+        let weekday = yesterday.weekday().num_days_from_monday() as i64;
+        let tid = crate::db::classes::create_template(&pool, weekday, "07:15", 60, None, 10)
             .await
             .unwrap();
 
@@ -365,13 +369,20 @@ mod tests {
             .fetch_one(&pool)
             .await
             .unwrap();
-            crate::db::classes::create_booking(&pool, tid, &today.to_string(), uid, None, "manual")
-                .await
-                .unwrap();
+            crate::db::classes::create_booking(
+                &pool,
+                tid,
+                &yesterday.to_string(),
+                uid,
+                None,
+                "manual",
+            )
+            .await
+            .unwrap();
         }
 
         let n = tick(&pool).await.unwrap();
-        assert_eq!(n, 2, "tick() must charge all imminent bookings");
+        assert_eq!(n, 2, "tick() must charge every booking past its cutoff");
     }
 
     #[tokio::test]
@@ -382,9 +393,115 @@ mod tests {
         let today = crate::util::today_bratislava();
         let days_to_mon = (7 - today.weekday().num_days_from_monday() as i64) % 7;
         let mon = today + Duration::days(days_to_mon);
-        // 10:00 is 8 hours before 18:00, outside the 4h window.
-        let n = tick_as_of(&pool, &format!("{mon} 10:00:00")).await.unwrap();
+        // #382: the binding charge happens at 09:00 ON the class day, so the
+        // day before (outside the old 4h window too) is never charged.
+        let day_before = mon - Duration::days(1);
+        let n = tick_as_of(&pool, &format!("{day_before} 10:00:00"))
+            .await
+            .unwrap();
         assert_eq!(n, 0);
+    }
+
+    /// #382 R1 RED: the binding charge fires at 09:00 Europe/Bratislava on
+    /// the class day — not 4 hours before the start. Before the fix a Monday
+    /// 18:00 booking was only charged from 14:00, so 09:00 charged nothing.
+    #[tokio::test]
+    async fn charger_charges_at_0900_on_the_class_day() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (uid, bid) = seed_booking(&pool, false, 10.0).await;
+        let n = tick_as_of(&pool, &format!("{} 09:00:00", next_monday()))
+            .await
+            .unwrap();
+        assert_eq!(n, 1, "09:00 on the class day is the binding charge moment");
+        let charged_at: Option<String> =
+            sqlx::query_scalar("SELECT charged_at FROM bookings WHERE id = ?")
+                .bind(bid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(charged_at.is_some());
+        let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(credit, 5.0);
+    }
+
+    /// #382 R1: one second before 09:00 on the class day the customer may
+    /// still cancel, so nothing is charged yet.
+    #[tokio::test]
+    async fn charger_does_not_charge_before_0900_on_the_class_day() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (_uid, _bid) = seed_booking(&pool, false, 10.0).await;
+        let n = tick_as_of(&pool, &format!("{} 08:59:59", next_monday()))
+            .await
+            .unwrap();
+        assert_eq!(n, 0);
+    }
+
+    /// #382 R1: a booking created on the class day AFTER 09:00 is charged on
+    /// the very next tick (the cutoff already passed when it was created).
+    #[tokio::test]
+    async fn charger_charges_a_booking_created_after_0900_on_the_next_tick() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let mon = next_monday();
+        // First tick at 10:00 with nothing booked yet.
+        assert_eq!(
+            tick_as_of(&pool, &format!("{mon} 10:00:00")).await.unwrap(),
+            0
+        );
+        // The customer books at 10:00:30; the next tick (one minute later)
+        // must charge it immediately.
+        let (_uid, bid) = seed_booking(&pool, false, 10.0).await;
+        assert_eq!(
+            tick_as_of(&pool, &format!("{mon} 10:01:00")).await.unwrap(),
+            1
+        );
+        let charged_at: Option<String> =
+            sqlx::query_scalar("SELECT charged_at FROM bookings WHERE id = ?")
+                .bind(bid)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert!(charged_at.is_some());
+    }
+
+    /// #382 RED: a booking on a class occurrence the staff CANCELLED
+    /// (`class_cancellations`) must never be charged — the class did not
+    /// happen. Before the fix the charger ignored `class_cancellations`
+    /// entirely and billed every booked customer of a cancelled class.
+    #[tokio::test]
+    async fn charger_skips_a_cancelled_class_occurrence() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (uid, bid) = seed_booking(&pool, false, 10.0).await;
+        let tid: i64 = sqlx::query_scalar("SELECT template_id FROM bookings WHERE id = ?")
+            .bind(bid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        crate::db::classes::cancel_occurrence(
+            &pool,
+            tid,
+            &next_monday().to_string(),
+            Some("instructor ill"),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let n = tick_as_of(&pool, &now_at_14()).await.unwrap();
+        assert_eq!(n, 0, "a cancelled class occurrence must not be charged");
+        let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(credit, 10.0);
     }
 
     /// Regression test for #159 (real money defect): the charger's OLD
