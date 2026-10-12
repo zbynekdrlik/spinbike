@@ -56,6 +56,10 @@ test.describe('Schedule instructors + Tue/Thu 18:30 (#381)', () => {
 test.describe('Admin instructor delete (#381)', () => {
     test('admin deletes an unused instructor; an instructor teaching an active class is refused', async ({ page }) => {
         // The refused delete is a deliberate 409 on exactly this endpoint.
+        // (`allow4xxFor` substring-matches, so ids 10-19 would match too; the
+        // fresh instructor's own DELETE is still guarded functionally — its
+        // row must disappear and the API list must drop it, so a 4xx there
+        // fails the test regardless of the console filter.)
         const messages = setupConsoleCheck(page, { allow4xxFor: ['/api/admin/instructors/1'] });
         const token = await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
 

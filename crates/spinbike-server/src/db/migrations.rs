@@ -4528,4 +4528,50 @@ mod tests {
         );
         assert!(!ids.contains(&orphan), "unreferenced instructor deleted");
     }
+
+    /// The V30 post-condition (#381) fails loudly — and V30 is NOT recorded
+    /// — on a DB whose template ids do not follow the V6 layout (here:
+    /// templates 2 and 4 are not Tuesday/Thursday), instead of silently
+    /// leaving the Tue/Thu classes at 18:00. The whole V30 transaction rolls
+    /// back, instructor rename + deletes included.
+    #[tokio::test]
+    async fn v30_postcondition_fails_loudly_when_tue_thu_ids_differ() {
+        let pool = pool_migrated_to(29).await;
+        sqlx::query("UPDATE class_templates SET weekday = 5 WHERE id IN (2, 4)")
+            .execute(&pool)
+            .await
+            .unwrap();
+        let orphan: i64 =
+            sqlx::query_scalar("INSERT INTO instructors (name) VALUES ('Orphan') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+
+        let err = run_migrations(&pool)
+            .await
+            .expect_err("V30 must refuse when templates 2/4 are not Tue/Thu");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("migration 30") && msg.contains("18:30"),
+            "error should explain the V30 post-condition failure, got: {msg}"
+        );
+
+        let applied_max: i64 =
+            sqlx::query_scalar("SELECT COALESCE(MAX(version), 0) FROM schema_version")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(applied_max, 29, "schema_version must not record V30");
+        let name_1: String = sqlx::query_scalar("SELECT name FROM instructors WHERE id = 1")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(name_1, "Stevo", "V30's rename must have rolled back");
+        let orphan_left: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM instructors WHERE id = ?")
+            .bind(orphan)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(orphan_left, 1, "V30's deletes must have rolled back");
+    }
 }

@@ -201,13 +201,17 @@ pub fn fmt_time_str(s: &str) -> String {
     }
 }
 
-/// The i18n key for a customer-facing API `error_code` (#145), when one
-/// exists. Only CUSTOMER-facing codes get a translation — staff/admin-only
-/// codes (`staff_required`, conflict codes, etc.) return `None` so the
-/// caller falls back to the server's raw English `error` message, exactly
-/// as before this ticket. Exhaustive match (like `tx_label_key` above) so a
-/// new `ErrorCode` variant is a compile error here until someone decides
-/// whether it needs a customer-facing translation.
+/// The i18n key for an API `error_code` (#145), when one exists. A code gets
+/// a translation when some render site shows it through
+/// [`localize_api_error`] — every customer-facing code, plus the
+/// staff/admin codes whose site was deliberately localized (#378
+/// `already_booked` in the walk-in picker, #381 `instructor_in_use` /
+/// `instructor_not_found` in the admin Instructors tab). Every other
+/// staff/admin-only code (`staff_required`, most conflict codes, etc.)
+/// returns `None` so the caller falls back to the server's raw English
+/// `error` message. Exhaustive match (like `tx_label_key` above) so a new
+/// `ErrorCode` variant is a compile error here until someone decides whether
+/// its render site needs a translation.
 pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static str> {
     use spinbike_core::errors::ErrorCode;
     match code {

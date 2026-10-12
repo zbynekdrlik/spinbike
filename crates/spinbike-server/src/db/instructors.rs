@@ -21,6 +21,18 @@ pub async fn names_by_id(pool: &SqlitePool) -> Result<HashMap<i64, String>> {
     Ok(rows.into_iter().collect())
 }
 
+/// Whether an instructor with this id exists — lets the template
+/// create/update routes reject a stale/unknown `instructor_id` (e.g. one V30
+/// or an admin delete removed) with a clean 404 instead of the FK-violation
+/// 500 the INSERT/UPDATE would otherwise hit.
+pub async fn exists(pool: &SqlitePool, id: i64) -> Result<bool> {
+    let found: Option<i64> = sqlx::query_scalar("SELECT id FROM instructors WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(found.is_some())
+}
+
 /// Outcome of [`delete_instructor`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeleteInstructorOutcome {
@@ -177,6 +189,13 @@ mod tests {
             detached, None,
             "the inactive template must survive, detached"
         );
+    }
+
+    #[tokio::test]
+    async fn exists_reflects_the_table() {
+        let pool = setup().await;
+        assert!(exists(&pool, 1).await.unwrap());
+        assert!(!exists(&pool, 999_999).await.unwrap());
     }
 
     #[tokio::test]

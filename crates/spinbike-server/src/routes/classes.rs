@@ -276,6 +276,10 @@ async fn create_booking(
         if matches!(e, crate::db::DbError::ClassFull) {
             ApiError::conflict_message(ErrorCode::ClassFull, e.to_string())
         } else if matches!(e, crate::db::DbError::UniqueViolation) {
+            // (A FULL class reports `class_full` even for a user already in
+            // it: the capacity guard in the INSERT ... SELECT runs before
+            // the index can fire. The walk-in picker already disables
+            // booked customers, so that path is not reachable from staff.)
             // #378: the partial unique index `idx_bookings_active
             // (template_id, date, user_id) WHERE cancelled_at IS NULL` is the
             // source of truth for "already booked" — no racy pre-check
