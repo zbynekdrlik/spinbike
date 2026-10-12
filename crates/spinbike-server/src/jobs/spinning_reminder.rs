@@ -13,8 +13,10 @@
 //! **Dedupe is per BOOKING**, via `bookings.reminded_at` (V31), stamped only
 //! after a successful send — NOT the per-(user, reason) `push_notify_log`
 //! cooldown, which would swallow the following week's reminder. So a startup
-//! tick, a restart, or a second run never double-sends, and a failed send is
-//! retried by the next run.
+//! tick, a restart, or a second run never double-sends. A failed send stays
+//! un-stamped: it is retried only by another run for the SAME class day — in
+//! practice a restart after 18:00 that evening (the next scheduled run already
+//! targets the following day).
 //!
 //! **Startup tick:** [`startup_tick`] runs at boot like every daily job
 //! (`daily-job-scheduling.md`), but only sends once the day's 18:00 run hour
@@ -97,7 +99,8 @@ enum Delivery {
     Push,
     Email,
     /// Nothing reached the customer (send failed, or no channel at all) —
-    /// the booking stays un-stamped and is retried by the next run.
+    /// the booking stays un-stamped (a later run for the same day, e.g. a
+    /// restart that evening, tries again).
     NotDelivered,
 }
 
@@ -160,7 +163,7 @@ pub async fn remind_for_date(
                     user_id,
                     class_date = %date,
                     error = %e,
-                    "spinning reminder: delivery errored (retried next run)"
+                    "spinning reminder: delivery errored (not stamped)"
                 );
             }
         }
@@ -410,11 +413,11 @@ mod tests {
 
         let cancelled_booking_user = user(&pool, Some("c1@x")).await;
         let bid = book(&pool, cancelled_booking_user).await;
-        crate::db::classes::cancel_booking(
+        crate::db::booking_cancel::cancel_booking(
             &pool,
             bid,
             Some(cancelled_booking_user),
-            crate::db::classes::CancelKind::Customer,
+            crate::db::booking_cancel::CancelKind::Customer,
         )
         .await
         .unwrap();

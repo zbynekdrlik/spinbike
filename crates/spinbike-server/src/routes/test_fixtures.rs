@@ -125,6 +125,10 @@ struct SeedBookingRequest {
     template_id: i64,
     date: String,
     user_id: i64,
+    /// `"manual"` (default) or `"persistent"` — lets the roster E2E show the
+    /// recurring ("pravidelne") mark without a whole subscription.
+    #[serde(default)]
+    source: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -138,13 +142,17 @@ async fn seed_booking(
     _: StaffUser,
     Json(body): Json<SeedBookingRequest>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+    let source = body.source.as_deref().unwrap_or("manual");
+    if source != "manual" && source != "persistent" {
+        return Err((StatusCode::BAD_REQUEST, format!("unknown source {source}")));
+    }
     let id = crate::db::classes::create_booking(
         &state.pool,
         body.template_id,
         &body.date,
         body.user_id,
         None,
-        "manual",
+        source,
     )
     .await
     .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;

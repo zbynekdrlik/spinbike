@@ -63,13 +63,26 @@ pub async fn end_and_cancel_future(
     now: chrono::NaiveDateTime,
 ) -> Result<(u64, u64)> {
     let mut tx = pool.begin().await?;
+    let counts = end_and_cancel_in(&mut tx, user_id, template_id, now).await?;
+    tx.commit().await?;
+    Ok(counts)
+}
+
+/// [`end_and_cancel_future`] on an open connection/transaction, so
+/// [`set_subscriptions`] can apply a whole slot set atomically.
+async fn end_and_cancel_in(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: i64,
+    template_id: i64,
+    now: chrono::NaiveDateTime,
+) -> Result<(u64, u64)> {
     let ended = sqlx::query(
         "UPDATE persistent_bookings SET ended_at = datetime('now')
          WHERE user_id = ? AND template_id = ? AND ended_at IS NULL",
     )
     .bind(user_id)
     .bind(template_id)
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?
     .rows_affected();
     // `date || ' ' || '09:00:00'` vs the bound `YYYY-MM-DD HH:MM:SS` gym-local
@@ -85,10 +98,9 @@ pub async fn end_and_cancel_future(
     .bind(template_id)
     .bind(crate::booking_rules::CHARGE_CUTOFF_TIME)
     .bind(now.format("%Y-%m-%d %H:%M:%S").to_string())
-    .execute(&mut *tx)
+    .execute(&mut *conn)
     .await?
     .rows_affected();
-    tx.commit().await?;
     tracing::info!(
         user_id,
         template_id,
@@ -141,25 +153,34 @@ pub async fn set_subscriptions(
     template_ids: &[i64],
     now: chrono::NaiveDateTime,
 ) -> Result<(Vec<i64>, Vec<i64>)> {
-    let current: Vec<i64> = list_for_user(pool, user_id)
-        .await?
-        .into_iter()
-        .map(|r| r.template_id)
-        .collect();
+    // One transaction: a failure part-way never leaves a half-applied set.
+    let mut tx = pool.begin().await?;
+    let current: Vec<i64> = sqlx::query_scalar(
+        "SELECT template_id FROM persistent_bookings
+         WHERE user_id = ? AND ended_at IS NULL ORDER BY template_id",
+    )
+    .bind(user_id)
+    .fetch_all(&mut *tx)
+    .await?;
     let mut added = Vec::new();
     for &tid in template_ids {
         if !current.contains(&tid) && !added.contains(&tid) {
-            create(pool, user_id, tid).await?;
+            sqlx::query("INSERT INTO persistent_bookings (user_id, template_id) VALUES (?, ?)")
+                .bind(user_id)
+                .bind(tid)
+                .execute(&mut *tx)
+                .await?;
             added.push(tid);
         }
     }
     let mut removed = Vec::new();
     for tid in current {
         if !template_ids.contains(&tid) {
-            end_and_cancel_future(pool, user_id, tid, now).await?;
+            end_and_cancel_in(&mut tx, user_id, tid, now).await?;
             removed.push(tid);
         }
     }
+    tx.commit().await?;
     tracing::info!(
         user_id,
         ?added,

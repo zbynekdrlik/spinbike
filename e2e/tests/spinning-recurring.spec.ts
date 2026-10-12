@@ -205,7 +205,8 @@ test.describe('Staff cancel with refund (#382 R3/R8)', () => {
                 headers: { Authorization: `Bearer ${staffToken}` },
             });
             const txs: Array<{ amount: number; action: string; service_kind: string | null }> = await txResp.json();
-            const refund = txs.filter((t) => t.action === 'storno' && t.service_kind === 'group_class');
+            // The refund carries no service (it is never counted as a visit).
+            const refund = txs.filter((t) => t.action === 'storno');
             expect(refund, 'exactly one separate refund row').toHaveLength(1);
             expect(refund[0].amount).toBeCloseTo(10 - charged, 2);
 

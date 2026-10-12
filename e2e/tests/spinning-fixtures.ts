@@ -61,8 +61,9 @@ export async function listClasses(from: string, to: string, token?: string): Pro
 /**
  * A class in the CURRENT gym-local week that has not started yet (bookable
  * through the real route). On Friday-Sunday every regular class of the week
- * is already over, so a temporary late-evening template is created on
- * today's weekday; `cleanup` deactivates it again.
+ * is already over, so a temporary late-evening (23:50) template is created on
+ * today's weekday; `cleanup` deactivates it again. Known limit: a run between
+ * 23:50 and midnight Bratislava finds that class started too.
  */
 export async function bookableSlotThisWeek(
     adminToken: string,
@@ -88,11 +89,12 @@ export async function bookableSlotThisWeek(
     return {
         slot,
         cleanup: async () => {
-            await fetch(`${BASE_URL}/api/admin/templates/${id}`, {
+            const off = await fetch(`${BASE_URL}/api/admin/templates/${id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${adminToken}` },
                 body: JSON.stringify({ active: false }),
             });
+            if (!off.ok) throw new Error(`deactivating temporary template ${id} failed: ${off.status}`);
         },
     };
 }
@@ -114,17 +116,27 @@ export async function cancellableSlotWithinTwoWeeks(): Promise<{ slot: ClassOccu
 }
 
 /** Insert a booking on ANY date via the test-only fixture (staff token). */
-export async function seedBooking(staffToken: string, templateId: number, date: string, userId: number): Promise<number> {
+export async function seedBooking(
+    staffToken: string,
+    templateId: number,
+    date: string,
+    userId: number,
+    source: 'manual' | 'persistent' = 'manual',
+): Promise<number> {
     const resp = await fetch(`${BASE_URL}/api/test/seed-booking`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${staffToken}` },
-        body: JSON.stringify({ template_id: templateId, date, user_id: userId }),
+        body: JSON.stringify({ template_id: templateId, date, user_id: userId, source }),
     });
     if (resp.status !== 201) throw new Error(`seed-booking failed: ${resp.status} ${await resp.text()}`);
     return (await resp.json()).id as number;
 }
 
-/** Write the binding charge for one booking now (test-only fixture). */
+/**
+ * Write the binding charge for one booking now (test-only fixture). The E2E
+ * server's own 60-second charger may have charged a past-dated booking first
+ * (`charged: false` then) — either way the booking ends up charged.
+ */
 export async function chargeBooking(staffToken: string, bookingId: number): Promise<void> {
     const resp = await fetch(`${BASE_URL}/api/test/charge-booking`, {
         method: 'POST',
@@ -132,8 +144,6 @@ export async function chargeBooking(staffToken: string, bookingId: number): Prom
         body: JSON.stringify({ booking_id: bookingId }),
     });
     if (!resp.ok) throw new Error(`charge-booking failed: ${resp.status} ${await resp.text()}`);
-    const { charged } = await resp.json();
-    if (!charged) throw new Error(`booking ${bookingId} was not charged`);
 }
 
 /** Staff cancel (any time; refunds a charged booking). Best-effort for cleanup. */

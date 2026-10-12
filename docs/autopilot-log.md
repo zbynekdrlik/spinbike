@@ -1696,3 +1696,11 @@ extension), debit even into negative, and a push notification per renewal.
 - #380: V29 deletes the dead `center_name` setting (f3dd367).
 - #381: V30 Stopa/Vlada + delete unreferenced instructors + Tue/Thu 18:30 (dry-run on prod copy OK), `db::instructors`, admin DELETE 204/404/409, schedule shows instructor name (9e8b13e); review fixes 64b87d1 (V30 post-condition failure test, template writes 404 on unknown instructor).
 - Integrated by the supervisor as one PR (worker branch worktree-agent-a3215e280ef9bb0d4).
+
+## 2026-10-12 — #382 spinning recurring bookings, 18:00 reminder, binding 09:00 charge (v0.16.0-dev.1)
+
+- Worker branch `worktree-agent-a713f586176e6b8e8` (backup `refs/autopilot-wip/spinning-recurring-382`); version bump d5b9d36; materialiser `sweep_as_of(now)` refactor c39a5d6/453cc65.
+- RED 25a2af7 -> GREEN f8c28b5: `charger_charges_at_0900_on_the_class_day` + `charger_skips_a_cancelled_class_occurrence` (jobs/charger.rs), `sweep_never_resurrects_a_cancelled_date` / `sweep_counts_a_full_class_as_skipped_full` / `sweep_does_not_book_an_occurrence_past_its_0900_cutoff` (jobs/materialiser.rs), `customer_cannot_cancel_after_the_0900_deadline` / `staff_cancel_of_a_charged_booking_refunds_it_as_a_linked_ledger_row` / `booking_a_past_date_is_refused` / `booking_todays_already_started_class_is_refused` (tests/spinning_booking_rules.rs).
+- New: `booking_rules.rs` (pure clock-injected R1/R2/R4), V31 (`bookings.reminded_at`, `cancelled_by`, `cancel_kind`, `refund_transaction_id`), `db::booking_cancel` (staff refund = separate storno row, service NULL, rounded once; customer cancel of a charged booking refused), `db::spinner` (365-day rule), `GET/PUT /api/my/persistent-bookings`, `jobs::spinning_reminder` (18:00, per-booking dedupe), UI 418ed18 (home "Moje spinningy" card, slots on /schedule + next-week switch, "Spinning" menu entry, binding/started states, roster recurring/refund marks), E2E 62ad41e + review fixes.
+- Decisions: refund row has no service_id (visit counters); `cancel_kind` lets re-subscribe restore 'unsubscribe'-cancelled dates but never customer/staff ones; materialiser never auto-books past a class day's 09:00 cutoff; reminder startup tick only after 18:00.
+- Prod-copy dry run of V31 + queries: 9 bookings untouched (all new columns NULL), foreign_key_check/integrity ok, 149 of 563 customers are spinners.

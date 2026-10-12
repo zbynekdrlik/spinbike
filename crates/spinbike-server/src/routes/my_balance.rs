@@ -174,7 +174,7 @@ async fn my_balance(
     .map_err(internal_error)?;
 
     // 4. Spinner flag (#382 R7) — same gym-local `today` as the pass check.
-    let is_spinner = crate::db::classes::is_spinner(&state.pool, user_id, today)
+    let is_spinner = crate::db::spinner::is_spinner(&state.pool, user_id, today)
         .await
         .map_err(internal_error)?;
 

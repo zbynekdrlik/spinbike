@@ -40,9 +40,13 @@ interface Booked {
  * because the real POST /api/bookings refuses a class that already started
  * and the current week's first class is often in the past.
  */
-async function bookFreshCustomer(token: string, slot: ClassOccurrence): Promise<Booked> {
+async function bookFreshCustomer(
+    token: string,
+    slot: ClassOccurrence,
+    source: 'manual' | 'persistent' = 'manual',
+): Promise<Booked> {
     const user = await createUniqueUser(token, 0, 'PC');
-    const id = await seedBooking(token, slot.template_id, slot.date, user.user_id);
+    const id = await seedBooking(token, slot.template_id, slot.date, user.user_id, source);
     return {
         bookingId: id,
         name: user.name,
@@ -129,7 +133,9 @@ test.describe('Staff class roster participant chips (#379)', () => {
     test('participant name and remove control reach 4.5:1 contrast in dark and light themes', async ({ page }) => {
         const messages = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const booked = await bookFreshCustomer(token, await anyClassThisWeek());
+        // #382 R8: a RECURRING booking, so the chip also carries the
+        // "recurring" tag — whose contrast is pinned below too.
+        const booked = await bookFreshCustomer(token, await anyClassThisWeek(), 'persistent');
         try {
             for (const scheme of ['dark', 'light'] as const) {
                 await openRoster(page, scheme);
@@ -145,6 +151,13 @@ test.describe('Staff class roster participant chips (#379)', () => {
 
                 const fontPx = await chip.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
                 expect(fontPx, `${scheme}: chip font size`).toBeGreaterThanOrEqual(15);
+
+                // #382 R8: the recurring ("pravidelne") tag is shown and readable.
+                const tag = chip.locator(`[data-testid="participant-recurring-${booked.bookingId}"]`);
+                await expect(tag, `${scheme}: recurring tag`).toBeVisible();
+                await expect(tag).toHaveText('recurring');
+                const tagContrast = await contrastOf(tag);
+                expect(tagContrast, `${scheme}: recurring tag contrast`).toBeGreaterThanOrEqual(4.5);
             }
             assertCleanConsole(messages);
         } finally {

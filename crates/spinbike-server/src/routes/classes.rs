@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::AppState;
 use crate::auth::{AuthUser, OptionalAuthUser, StaffUser, require_live_session};
 use crate::booking_rules;
+use crate::db::booking_cancel::{self, CancelKind, CancelResult};
 use crate::db::classes as db;
 use crate::error::ApiError;
 use crate::routes::internal_error;
@@ -220,7 +221,7 @@ async fn list_participants(
         refundable: i64,
     }
 
-    // `refundable` mirrors `db::classes::cancel_booking`'s refund condition:
+    // `refundable` mirrors `db::booking_cancel::cancel_booking`'s refund condition:
     // charged, and the linked charge row is a non-voided NEGATIVE amount (a
     // pass holder's 0 EUR visit needs no refund).
     let rows = sqlx::query_as::<_, Row>(
@@ -418,9 +419,9 @@ async fn cancel_booking(
 
     // #382 R2: a customer may cancel only before 09:00 on the class day (and
     // never a charged booking). Staff/admin may cancel at any time — a
-    // charged booking is then refunded (R3, inside `db::cancel_booking`).
+    // charged booking is then refunded (R3, inside `cancel_booking`).
     let kind = if is_staff {
-        db::CancelKind::Staff
+        CancelKind::Staff
     } else {
         let class_date = NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(internal_error)?;
         let now = crate::util::now_bratislava();
@@ -434,13 +435,21 @@ async fn cancel_booking(
             );
             return Err(ApiError::conflict(ErrorCode::CancelDeadlinePassed));
         }
-        db::CancelKind::Customer
+        CancelKind::Customer
     };
 
-    db::cancel_booking(&state.pool, booking_id, Some(claims.sub), kind)
+    match booking_cancel::cancel_booking(&state.pool, booking_id, Some(claims.sub), kind)
         .await
         .map_err(internal_error)?
-        .ok_or(ApiError::NotFound(ErrorCode::BookingNotFound))?;
+    {
+        CancelResult::Cancelled(_) => {}
+        CancelResult::NotActive => return Err(ApiError::NotFound(ErrorCode::BookingNotFound)),
+        // The 09:00 charger charged it between the deadline check above and
+        // the cancel transaction — binding, same answer as a late cancel.
+        CancelResult::AlreadyCharged => {
+            return Err(ApiError::conflict(ErrorCode::CancelDeadlinePassed));
+        }
+    }
     // Broadcast booking update.
     let booked = db::get_booking_count(&state.pool, template_id, &date)
         .await

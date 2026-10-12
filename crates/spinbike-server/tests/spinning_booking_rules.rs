@@ -509,3 +509,44 @@ async fn read_endpoints_expose_started_cancel_open_source_and_refundable() {
     let (_, after) = app.request(get(&uri, &app.staff_token)).await;
     assert_eq!(after[0]["refundable"], true, "charged 5.00 -> refundable");
 }
+
+// ── Session invalidation on the customer's own slot routes ────────────────
+
+/// session-invalidation.md: a blocked or soft-deleted caller of the
+/// customer-self routes gets 401 `session_invalid` — for GET and PUT
+/// `/api/my/persistent-bookings` — and the PUT changes nothing.
+#[tokio::test]
+async fn my_slot_routes_reject_a_dead_session_with_401() {
+    for state in ["blocked = 1", "deleted_at = datetime('now')"] {
+        let app = TestApp::new().await;
+        let mon = monday_template(&app).await;
+        sqlx::query(&format!("UPDATE users SET {state} WHERE id = ?"))
+            .bind(app.customer_id)
+            .execute(&app.pool)
+            .await
+            .unwrap();
+
+        let (status, body) = app
+            .request(get("/api/my/persistent-bookings", &app.customer_token))
+            .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{state}: got {body}");
+        assert_eq!(body["error_code"], "session_invalid");
+
+        let (status, body) = app
+            .request(put_json(
+                "/api/my/persistent-bookings",
+                &app.customer_token,
+                &serde_json::json!({ "template_ids": [mon] }),
+            ))
+            .await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{state}: got {body}");
+        assert_eq!(body["error_code"], "session_invalid");
+        let subs: i64 =
+            sqlx::query_scalar("SELECT COUNT(*) FROM persistent_bookings WHERE user_id = ?")
+                .bind(app.customer_id)
+                .fetch_one(&app.pool)
+                .await
+                .unwrap();
+        assert_eq!(subs, 0, "{state}: a dead session must not subscribe");
+    }
+}
