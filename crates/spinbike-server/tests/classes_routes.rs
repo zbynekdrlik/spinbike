@@ -596,3 +596,55 @@ async fn classes_routes_are_registered() {
         assert_ne!(status, axum::http::StatusCode::NOT_FOUND, "path={path}");
     }
 }
+
+/// #378 regression: staff booking the SAME customer onto the SAME class
+/// occurrence twice hit the partial unique index `idx_bookings_active
+/// (template_id, date, user_id) WHERE cancelled_at IS NULL`, whose
+/// `DbError::UniqueViolation` fell through `internal_error` -> 500 (prod
+/// 2026-10-12 09:18). It must be a clean 409 `already_booked`, and the
+/// first booking must stay the only active one.
+#[tokio::test]
+async fn second_active_booking_same_user_class_date_returns_409_already_booked() {
+    let app = TestApp::new().await;
+    let (tid, date) = seed_monday_template(&app).await;
+
+    let body = serde_json::json!({
+        "template_id": tid,
+        "date": date,
+        "user_id": app.customer_id,
+    });
+    let (first, _) = app
+        .request(post_json("/api/bookings", &app.staff_token, &body))
+        .await;
+    assert_eq!(first, axum::http::StatusCode::CREATED);
+
+    let (second, resp) = app
+        .request(post_json("/api/bookings", &app.staff_token, &body))
+        .await;
+    assert_eq!(
+        second,
+        axum::http::StatusCode::CONFLICT,
+        "a duplicate active booking must be 409, not 500: {resp}"
+    );
+    assert_eq!(resp["error_code"].as_str(), Some("already_booked"));
+
+    // The customer's own self-booking path hits the same guard.
+    let self_body = serde_json::json!({ "template_id": tid, "date": date });
+    let (third, resp) = app
+        .request(post_json("/api/bookings", &app.customer_token, &self_body))
+        .await;
+    assert_eq!(third, axum::http::StatusCode::CONFLICT);
+    assert_eq!(resp["error_code"].as_str(), Some("already_booked"));
+
+    let active: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM bookings
+         WHERE template_id = ? AND date = ? AND user_id = ? AND cancelled_at IS NULL",
+    )
+    .bind(tid)
+    .bind(&date)
+    .bind(app.customer_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(active, 1, "the duplicate attempts must not add a booking");
+}
