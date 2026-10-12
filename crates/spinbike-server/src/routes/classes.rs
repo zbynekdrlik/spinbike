@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::AppState;
 use crate::auth::{AuthUser, OptionalAuthUser, StaffUser, require_live_session};
+use crate::booking_rules;
 use crate::db::classes as db;
 use crate::error::ApiError;
 use crate::routes::internal_error;
@@ -39,6 +40,13 @@ pub struct ClassOccurrenceResponse {
     pub user_booked: bool,
     pub user_booking_id: Option<i64>,
     pub user_booking_source: Option<String>,
+    /// #382 R4: the occurrence already started (gym-local now) — it can no
+    /// longer be booked. Computed server-side so the client never does its
+    /// own time-zone math.
+    pub started: bool,
+    /// #382 R2: a customer could still cancel a booking on this occurrence
+    /// right now (before 09:00 on the class day).
+    pub cancel_open: bool,
 }
 
 #[derive(Deserialize)]
@@ -71,6 +79,11 @@ pub struct MyBookingResponse {
     /// Class start time ("HH:MM"), joined from `class_templates`.
     pub start_time: String,
     pub instructor_name: Option<String>,
+    /// `"manual"` | `"persistent"` — the recurring mark (#382).
+    pub source: String,
+    /// #382 R2: whether the customer may still cancel this booking now
+    /// (before 09:00 on the class day and not yet charged).
+    pub cancel_open: bool,
 }
 
 /// A participant in a class (booking joined with user info).
@@ -83,6 +96,12 @@ pub struct ParticipantResponse {
     pub user_id: i64,
     pub user_name: String,
     pub user_email: String,
+    /// `"manual"` | `"persistent"` — staff marks recurring bookings
+    /// ("pravidelne", #382 R8).
+    pub source: String,
+    /// The booking carries a non-zero, non-voided charge — a staff cancel
+    /// refunds it (#382 R3/R8).
+    pub refundable: bool,
 }
 
 pub fn routes() -> Router<AppState> {
@@ -114,6 +133,9 @@ async fn list_classes(
         .await
         .map_err(internal_error)?;
 
+    // Gym-local wall clock for the started / cancel-open flags (#382) —
+    // never `chrono::Local` (bratislava-tz.md).
+    let now = crate::util::now_bratislava();
     let mut occurrences = Vec::new();
     let mut current = from;
 
@@ -167,6 +189,8 @@ async fn list_classes(
                 user_booked,
                 user_booking_id,
                 user_booking_source,
+                started: booking_rules::has_started(current, &tmpl.start_time, now),
+                cancel_open: !booking_rules::is_charge_due(current, now),
             });
         }
 
@@ -192,12 +216,21 @@ async fn list_participants(
         user_id: i64,
         user_name: String,
         user_email: String,
+        source: String,
+        refundable: i64,
     }
 
+    // `refundable` mirrors `db::classes::cancel_booking`'s refund condition:
+    // charged, and the linked charge row is a non-voided NEGATIVE amount (a
+    // pass holder's 0 EUR visit needs no refund).
     let rows = sqlx::query_as::<_, Row>(
-        "SELECT b.id AS booking_id, b.user_id AS user_id, u.name AS user_name, u.email AS user_email
+        "SELECT b.id AS booking_id, b.user_id AS user_id, u.name AS user_name, u.email AS user_email,
+                b.source AS source,
+                COALESCE(b.charged_at IS NOT NULL AND ct.amount < 0 AND ct.deleted_at IS NULL, 0)
+                    AS refundable
          FROM bookings b
          JOIN users u ON u.id = b.user_id  -- no deleted_at filter: booking history for soft-deleted users remains part of class records
+         LEFT JOIN transactions ct ON ct.id = b.charge_transaction_id
          WHERE b.template_id = ? AND b.date = ? AND b.cancelled_at IS NULL
          ORDER BY b.created_at",
     )
@@ -214,6 +247,8 @@ async fn list_participants(
                 user_id: r.user_id,
                 user_name: r.user_name,
                 user_email: r.user_email,
+                source: r.source,
+                refundable: r.refundable != 0,
             })
             .collect(),
     ))
@@ -254,6 +289,32 @@ async fn create_booking(
 
     if cancelled {
         return Err(ApiError::conflict(ErrorCode::ClassCancelled));
+    }
+
+    // #382 R4: no booking for an occurrence that already started — a past
+    // date, or today after the start time. Applies to staff too (a walk-in
+    // for a running class is recorded at the desk as a visit, not a booking).
+    let date = NaiveDate::parse_from_str(&body.date, "%Y-%m-%d")
+        .map_err(|_| super::bad_request("Invalid 'date' format, expected YYYY-MM-DD"))?;
+    let start_time: Option<String> =
+        sqlx::query_scalar("SELECT start_time FROM class_templates WHERE id = ?")
+            .bind(body.template_id)
+            .fetch_optional(&state.pool)
+            .await
+            .map_err(internal_error)?;
+    let Some(start_time) = start_time else {
+        return Err(super::bad_request("Unknown class template"));
+    };
+    if booking_rules::has_started(date, &start_time, crate::util::now_bratislava()) {
+        tracing::info!(
+            template_id = body.template_id,
+            date = %body.date,
+            start_time = %start_time,
+            user_id = booking_user_id,
+            caller = claims.sub,
+            "booking rejected: the class occurrence already started"
+        );
+        return Err(ApiError::conflict(ErrorCode::ClassAlreadyStarted));
     }
 
     // Stamp `created_by` whenever the booking's user_id differs from the caller.
@@ -334,41 +395,65 @@ async fn cancel_booking(
     // of which booking id it names.
     require_live_session(&state.pool, claims.sub).await?;
 
-    // Get the booking to check ownership.
-    let booking = sqlx::query_as::<_, db::BookingRow>(
-        "SELECT id, template_id, date, user_id, created_by, source, created_at, cancelled_at
+    // Get the booking to check ownership + the cancel deadline.
+    let booking: Option<(i64, i64, String, Option<String>)> = sqlx::query_as(
+        "SELECT user_id, template_id, date, charged_at
          FROM bookings WHERE id = ? AND cancelled_at IS NULL",
     )
     .bind(booking_id)
     .fetch_optional(&state.pool)
     .await
-    .map_err(internal_error)?
-    .ok_or(ApiError::NotFound(ErrorCode::BookingNotFound))?;
+    .map_err(internal_error)?;
+    let Some((owner_id, template_id, date, charged_at)) = booking else {
+        return Err(ApiError::NotFound(ErrorCode::BookingNotFound));
+    };
 
     // Ownership-mixed guard: own booking OR staff. Needs both the role AND
     // claims.sub (the booking owner check), so it can't move to a pure role
     // extractor and stays inline on AuthUser.
-    if booking.user_id != claims.sub && !claims.role.can_cancel_any_booking() {
+    let is_staff = claims.role.can_cancel_any_booking();
+    if owner_id != claims.sub && !is_staff {
         return Err(ApiError::Forbidden(ErrorCode::BookingNotOwned));
     }
 
-    db::cancel_booking(&state.pool, booking_id)
-        .await
-        .map_err(internal_error)?;
+    // #382 R2: a customer may cancel only before 09:00 on the class day (and
+    // never a charged booking). Staff/admin may cancel at any time — a
+    // charged booking is then refunded (R3, inside `db::cancel_booking`).
+    let kind = if is_staff {
+        db::CancelKind::Staff
+    } else {
+        let class_date = NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(internal_error)?;
+        let now = crate::util::now_bratislava();
+        if !booking_rules::customer_may_cancel(class_date, charged_at.is_some(), now) {
+            tracing::info!(
+                booking_id,
+                user_id = claims.sub,
+                class_date = %date,
+                charged = charged_at.is_some(),
+                "booking cancel rejected: past the 09:00 deadline of the class day"
+            );
+            return Err(ApiError::conflict(ErrorCode::CancelDeadlinePassed));
+        }
+        db::CancelKind::Customer
+    };
 
+    db::cancel_booking(&state.pool, booking_id, Some(claims.sub), kind)
+        .await
+        .map_err(internal_error)?
+        .ok_or(ApiError::NotFound(ErrorCode::BookingNotFound))?;
     // Broadcast booking update.
-    let booked = db::get_booking_count(&state.pool, booking.template_id, &booking.date)
+    let booked = db::get_booking_count(&state.pool, template_id, &date)
         .await
         .unwrap_or(0);
     let capacity: i64 = sqlx::query_scalar("SELECT capacity FROM class_templates WHERE id = ?")
-        .bind(booking.template_id)
+        .bind(template_id)
         .fetch_one(&state.pool)
         .await
         .unwrap_or(0);
 
     let _ = state.event_tx.send(ServerMsg::BookingUpdate {
-        template_id: booking.template_id,
-        date: booking.date,
+        template_id,
+        date,
         booked: booked as i32,
         capacity: capacity as i32,
     });
@@ -388,15 +473,23 @@ async fn my_bookings(
         .await
         .map_err(internal_error)?;
 
+    let now = crate::util::now_bratislava();
     let responses: Vec<MyBookingResponse> = bookings
         .into_iter()
-        .map(|b| MyBookingResponse {
-            id: b.id,
-            template_id: b.template_id,
-            date: b.date,
-            user_id: b.user_id,
-            start_time: b.start_time,
-            instructor_name: b.instructor_name,
+        .map(|b| {
+            let cancel_open = NaiveDate::parse_from_str(&b.date, "%Y-%m-%d")
+                .map(|d| booking_rules::customer_may_cancel(d, b.charged_at.is_some(), now))
+                .unwrap_or(false);
+            MyBookingResponse {
+                id: b.id,
+                template_id: b.template_id,
+                date: b.date,
+                user_id: b.user_id,
+                start_time: b.start_time,
+                instructor_name: b.instructor_name,
+                source: b.source,
+                cancel_open,
+            }
         })
         .collect();
 

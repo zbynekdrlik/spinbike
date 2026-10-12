@@ -1,15 +1,20 @@
-//! T-4h charger: for every uncharged, non-cancelled booking whose
-//! start-time is within 4 hours of now, create a transaction (amount 0 if
-//! the card has an active monthly pass; else debit the Spinning service
-//! price from card credit — negative credit is allowed) and stamp the
-//! booking with charged_at + charge_transaction_id.
+//! Binding charger (#382 R1): every uncharged, non-cancelled booking becomes
+//! binding at 09:00 Europe/Bratislava ON its class day and is charged from
+//! then on (a booking created after 09:00 that day is charged on the next
+//! 60-second tick). Replaces the old "4 hours before the start" rule. The
+//! charge is a transaction row (amount 0 if the customer's active monthly
+//! pass covers the class day; else the Spinning price debited from credit —
+//! negative credit is allowed) and the booking is stamped with `charged_at`
+//! + `charge_transaction_id`. Bookings on a class occurrence the staff
+//! cancelled (`class_cancellations`) are never charged — the class did not
+//! happen.
 
 use anyhow::Result;
 use sqlx::SqlitePool;
 
 pub async fn tick(pool: &SqlitePool) -> Result<usize> {
     // Gym-local wall clock (Europe/Bratislava), NOT `chrono::Local` — the
-    // charging window is a gym-local concept and must not depend on the server
+    // 09:00 cutoff is a gym-local concept and must not depend on the server
     // process's OS/TZ configuration (#205). `now_bratislava()` derives it from
     // the named IANA zone, so DST is handled automatically.
     let now_s = crate::util::now_bratislava()
@@ -18,136 +23,169 @@ pub async fn tick(pool: &SqlitePool) -> Result<usize> {
     tick_as_of(pool, &now_s).await
 }
 
-pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
-    // Find bookings whose start_time <= now + 4h, not cancelled, not charged.
-    let rows: Vec<(i64, i64, String, String, i64)> = sqlx::query_as(
-        "SELECT b.id, b.template_id, b.date, t.start_time, b.user_id
-         FROM bookings b
-         JOIN class_templates t ON t.id = b.template_id
-         WHERE b.cancelled_at IS NULL
-           AND b.charged_at IS NULL
-           AND datetime(b.date || ' ' || t.start_time, '-4 hours') <= datetime(?)",
-    )
-    .bind(now_s)
-    .fetch_all(pool)
-    .await?;
-
-    // #329: identify the Spinning service by its stable `kind`, not by its
-    // (admin-editable) `name_en` — renaming Spinning via the admin Services
-    // tab must not make this lookup miss and the whole tick error out.
+/// The Spinning service id and its price, rounded ONCE right here where the
+/// price enters the operation and reused for both the ledger
+/// `transactions.amount` INSERT and the `users.credit` UPDATE —
+/// `default_price` carries no rounding guarantee at rest (money-rounding.md
+/// / #325/#326/#343). #329: identified by its stable `kind`, never by the
+/// admin-editable `name_en`.
+async fn spinning_price(pool: &SqlitePool) -> Result<(i64, f64)> {
     let (service_id, price): (i64, f64) =
         sqlx::query_as("SELECT id, default_price FROM services WHERE kind = ?1 AND active = 1")
             .bind(spinbike_core::services::SPINNING_KIND)
             .fetch_one(pool)
             .await?;
-    // Round ONCE, right here where `price` enters the operation, and reuse
-    // this SAME rounded value for both the ledger `transactions.amount`
-    // INSERT and the `users.credit` UPDATE below — `default_price` carries
-    // no rounding guarantee at rest (money-rounding.md / #325/#326/#343).
-    let price = crate::db::users::round_cents(price);
+    Ok((service_id, crate::db::users::round_cents(price)))
+}
 
-    let mut charged = 0usize;
-    for (booking_id, _template_id, date, _start, user_id) in rows {
-        let mut tx = pool.begin().await?;
-
-        // Double-check nothing else charged it in between.
-        let still_open: Option<i64> = sqlx::query_scalar(
-            "SELECT 1 FROM bookings WHERE id = ? AND charged_at IS NULL AND cancelled_at IS NULL",
-        )
-        .bind(booking_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if still_open.is_none() {
-            tx.rollback().await?;
-            continue;
-        }
-
-        // Load user state and the expiry of the user's active monthly pass, if
-        // any. The pass is resolved through the canonical `user_active_pass`
-        // view (migration V18) — the SINGLE definition of "active pass" shared
-        // with my_balance, the user lists and get_user_pass_*. Crucially the
-        // view filters `deleted_at IS NULL`, so a VOIDED pass no longer reads as
-        // active here (the money defect fixed by #159: previously a voided pass
-        // gave a free visit with no credit debit). `date(valid_until)` coerces
-        // any legacy datetime string to YYYY-MM-DD so the comparison against the
-        // (already YYYY-MM-DD) booking date is a consistent calendar-date
-        // compare, never a raw datetime string compare.
-        let (credit, pass_valid_until): (f64, Option<String>) = sqlx::query_as(
-            "SELECT u.credit,
-                    (SELECT date(ap.valid_until) FROM user_active_pass ap
-                     WHERE ap.user_id = u.id)
-             FROM users u WHERE u.id = ?",
-        )
-        .bind(user_id)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        // A pass covers a booking when it is still valid ON the booking's date
-        // (valid_until is inclusive of the last day). Both sides are bare
-        // `YYYY-MM-DD` calendar dates already fixed in gym-local terms — the
-        // pass's `valid_until` and the class booking's own `date` — so this is
-        // an apples-to-apples calendar-date compare with NO "today"/`date('now')`
-        // involved. The gym-local-day boundary that #205 fixes therefore does
-        // not touch this comparison; it only affects the "today"-relative pass
-        // checks (door, my_balance, log_visit) which now use
-        // `util::today_bratislava()`.
-        let has_pass = match &pass_valid_until {
-            Some(s) => s.as_str() >= date.as_str(),
-            None => false,
-        };
-
-        // An active pass covering the booking day → €0 visit; otherwise the
-        // Spinning single-visit charge. #374 REMOVED visit-triggered
-        // auto-renewal (was #365): a class charge never renews a pass anymore.
-        // Continuous renewal is now the daily `jobs::pass_renewal` job's
-        // responsibility, gated on the per-user `auto_renew_pass` flag — driven
-        // by the END of the previous month, not the next class visit.
-        let amount = if has_pass { 0.0 } else { -price };
-
-        // Log the money-relevant decision for every charged booking so a
-        // "free visit" dispute can be reconstructed from logs alone.
-        tracing::debug!(
-            user_id,
-            booking_id,
-            as_of_date = %date,
-            pass_valid_until = ?pass_valid_until,
-            has_pass,
-            credit,
-            amount,
-            "charger: pass decision"
-        );
-
-        let txn_id: i64 = sqlx::query_scalar(
-            "INSERT INTO transactions (user_id, staff_id, service_id, amount, action)
-             VALUES (?, NULL, ?, ?, 'visit') RETURNING id",
-        )
-        .bind(user_id)
-        .bind(service_id)
-        .bind(amount)
-        .fetch_one(&mut *tx)
-        .await?;
-
-        // Debit the Spinning price only when no active pass covered the booking.
-        if !has_pass {
-            sqlx::query("UPDATE users SET credit = ROUND(credit - ?, 2) WHERE id = ?")
-                .bind(price)
-                .bind(user_id)
-                .execute(&mut *tx)
-                .await?;
-        }
-
-        sqlx::query(
-            "UPDATE bookings SET charged_at = datetime('now'), charge_transaction_id = ? WHERE id = ?",
-        )
-        .bind(txn_id)
-        .bind(booking_id)
-        .execute(&mut *tx)
-        .await?;
-
-        tx.commit().await?;
-        charged += 1;
+/// One charger pass as of the gym-local `now_s` (`YYYY-MM-DD HH:MM:SS`).
+pub async fn tick_as_of(pool: &SqlitePool, now_s: &str) -> Result<usize> {
+    // Due = the class day's binding cutoff (`date` + 09:00:00, the same
+    // constant `booking_rules::charge_cutoff` uses) is at or before now, the
+    // booking is still open, and its class occurrence was not cancelled.
+    let due: Vec<i64> = sqlx::query_scalar(
+        "SELECT b.id
+         FROM bookings b
+         WHERE b.cancelled_at IS NULL
+           AND b.charged_at IS NULL
+           AND datetime(b.date || ' ' || ?1) <= datetime(?2)
+           AND NOT EXISTS (SELECT 1 FROM class_cancellations cc
+                            WHERE cc.template_id = b.template_id AND cc.date = b.date)
+         ORDER BY b.date, b.id",
+    )
+    .bind(crate::booking_rules::CHARGE_CUTOFF_TIME)
+    .bind(now_s)
+    .fetch_all(pool)
+    .await?;
+    if due.is_empty() {
+        return Ok(0);
     }
+
+    let (service_id, price) = spinning_price(pool).await?;
+    let mut charged = 0usize;
+    for booking_id in due {
+        if charge_booking(pool, booking_id, service_id, price).await? {
+            charged += 1;
+        }
+    }
+    tracing::info!(charged, as_of = %now_s, "charger: binding charges written");
     Ok(charged)
+}
+
+/// Charge ONE booking right now, regardless of the clock — the test-only
+/// `/api/test/charge-booking` fixture uses it so an E2E spec can produce a
+/// charged booking without running the whole charger against a shared DB.
+/// Returns whether it was charged (false when already charged/cancelled).
+pub async fn charge_one(pool: &SqlitePool, booking_id: i64) -> Result<bool> {
+    let (service_id, price) = spinning_price(pool).await?;
+    charge_booking(pool, booking_id, service_id, price).await
+}
+
+/// Write the binding charge for one booking in ONE transaction. `price` is
+/// the already-rounded Spinning price. Returns `false` (nothing written)
+/// when the booking is no longer open — charged or cancelled in between.
+async fn charge_booking(
+    pool: &SqlitePool,
+    booking_id: i64,
+    service_id: i64,
+    price: f64,
+) -> Result<bool> {
+    let mut tx = pool.begin().await?;
+
+    // Double-check nothing else charged/cancelled it in between.
+    let open: Option<(i64, String)> = sqlx::query_as(
+        "SELECT user_id, date FROM bookings
+         WHERE id = ? AND charged_at IS NULL AND cancelled_at IS NULL",
+    )
+    .bind(booking_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((user_id, date)) = open else {
+        tx.rollback().await?;
+        tracing::debug!(booking_id, "charger: skip — booking no longer open");
+        return Ok(false);
+    };
+
+    // Load user state and the expiry of the user's active monthly pass, if
+    // any. The pass is resolved through the canonical `user_active_pass`
+    // view (migration V18) — the SINGLE definition of "active pass" shared
+    // with my_balance, the user lists and get_user_pass_*. Crucially the
+    // view filters `deleted_at IS NULL`, so a VOIDED pass no longer reads as
+    // active here (the money defect fixed by #159: previously a voided pass
+    // gave a free visit with no credit debit). `date(valid_until)` coerces
+    // any legacy datetime string to YYYY-MM-DD so the comparison against the
+    // (already YYYY-MM-DD) booking date is a consistent calendar-date
+    // compare, never a raw datetime string compare.
+    let (credit, pass_valid_until): (f64, Option<String>) = sqlx::query_as(
+        "SELECT u.credit,
+                (SELECT date(ap.valid_until) FROM user_active_pass ap
+                 WHERE ap.user_id = u.id)
+         FROM users u WHERE u.id = ?",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // A pass covers a booking when it is still valid ON the booking's date
+    // (valid_until is inclusive of the last day). Both sides are bare
+    // `YYYY-MM-DD` calendar dates already fixed in gym-local terms — the
+    // pass's `valid_until` and the class booking's own `date` — so this is
+    // an apples-to-apples calendar-date compare with NO "today"/`date('now')`
+    // involved.
+    let has_pass = match &pass_valid_until {
+        Some(s) => s.as_str() >= date.as_str(),
+        None => false,
+    };
+
+    // An active pass covering the booking day → €0 visit; otherwise the
+    // Spinning single-visit charge. #374 REMOVED visit-triggered
+    // auto-renewal (was #365): a class charge never renews a pass anymore.
+    let amount = if has_pass { 0.0 } else { -price };
+
+    let txn_id: i64 = sqlx::query_scalar(
+        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action)
+         VALUES (?, NULL, ?, ?, 'visit') RETURNING id",
+    )
+    .bind(user_id)
+    .bind(service_id)
+    .bind(amount)
+    .fetch_one(&mut *tx)
+    .await?;
+
+    // Debit the Spinning price only when no active pass covered the booking.
+    if !has_pass {
+        sqlx::query("UPDATE users SET credit = ROUND(credit - ?, 2) WHERE id = ?")
+            .bind(price)
+            .bind(user_id)
+            .execute(&mut *tx)
+            .await?;
+    }
+
+    sqlx::query(
+        "UPDATE bookings SET charged_at = datetime('now'), charge_transaction_id = ? WHERE id = ?",
+    )
+    .bind(txn_id)
+    .bind(booking_id)
+    .execute(&mut *tx)
+    .await?;
+
+    tx.commit().await?;
+
+    // Log the money-relevant decision for every charged booking so a "free
+    // visit" or "why was I charged" dispute can be reconstructed from logs
+    // alone.
+    tracing::info!(
+        user_id,
+        booking_id,
+        class_date = %date,
+        pass_valid_until = ?pass_valid_until,
+        has_pass,
+        credit_before = credit,
+        amount,
+        transaction_id = txn_id,
+        "charger: booking charged"
+    );
+    Ok(true)
 }
 
 #[cfg(test)]

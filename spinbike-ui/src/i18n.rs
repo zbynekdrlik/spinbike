@@ -235,6 +235,10 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
         // WHY the delete was refused, not the raw English text.
         ErrorCode::InstructorInUse => Some("err_instructor_in_use"),
         ErrorCode::InstructorNotFound => Some("err_instructor_not_found"),
+        // #382: both are customer-facing (the "Moje spinningy" card, the
+        // schedule's book/cancel buttons, /my/bookings).
+        ErrorCode::CancelDeadlinePassed => Some("err_cancel_deadline_passed"),
+        ErrorCode::ClassAlreadyStarted => Some("err_class_already_started"),
         ErrorCode::Internal => Some("err_internal"),
         // Staff/admin-only or not customer-facing in the 5 render sites this
         // ticket scopes to (#145) — left unmapped on purpose, NOT an
@@ -1384,6 +1388,20 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "err_instructor_not_found",
         ("Instruktor sa nenasiel", "Instructor not found"),
+    );
+    m.insert(
+        "err_cancel_deadline_passed",
+        (
+            "Odhlasit sa da len do 9:00 v den spinningu — teraz uz je rezervacia zavazna",
+            "You can only cancel until 9:00 on the class day — the booking is now binding",
+        ),
+    );
+    m.insert(
+        "err_class_already_started",
+        (
+            "Na hodinu, ktora uz zacala, sa uz neda prihlasit",
+            "This class has already started — booking is closed",
+        ),
     );
     m.insert(
         "confirm_delete_instructor",

@@ -1,6 +1,16 @@
 //! Persistent-booking materialiser: ensures a concrete booking row exists for
 //! every future occurrence of an active persistent subscription within the
-//! next 14 days. Skips occurrences where the class is full. Idempotent.
+//! next 14 days. Idempotent. Skips (#382 R5):
+//!
+//! - occurrences the staff cancelled (`class_cancellations`);
+//! - a (user, template, date) that already has a booking row — active, OR
+//!   cancelled by the customer/staff (never resurrect a date someone opted
+//!   out of; only a system `unsubscribe` cancellation may be re-created when
+//!   the customer subscribes again);
+//! - occurrences whose 09:00 binding cutoff already passed (`booking_rules`)
+//!   — auto-booking those would bind and charge the customer for a class
+//!   they never chose;
+//! - full classes (counted in `skipped_full` and warned about).
 
 use std::collections::{HashMap, HashSet};
 
@@ -32,8 +42,10 @@ struct Candidate {
 pub struct SweepSummary {
     /// Bookings actually materialised this tick.
     pub created: usize,
-    /// Candidates skipped because the class filled up before the INSERT
-    /// (an expected, per-item outcome — see the `ClassFull` arm below).
+    /// Candidates skipped because the class was full — either already in
+    /// the up-front snapshot (#382: now counted + warned, not silent) or
+    /// filled up before the INSERT (the `ClassFull` race arm below). An
+    /// expected, per-item outcome.
     pub skipped_full: usize,
     /// Candidates that failed for any other reason (DB/IO/constraint
     /// error) — also per-item, never aborts the rest of the sweep.
@@ -134,10 +146,16 @@ pub async fn sweep_as_of(pool: &SqlitePool, now: NaiveDateTime) -> Result<SweepS
         q.fetch_all(pool).await?.into_iter().collect()
     };
 
+    // Every (template, date, user) that must NOT be (re-)materialised: an
+    // active booking, or one the customer/staff cancelled (`cancel_kind`
+    // 'customer'/'staff', or NULL for a pre-V31 cancellation — treated as a
+    // deliberate opt-out). Only a system 'unsubscribe' cancellation is left
+    // out, so re-subscribing restores those dates (#382 R5).
     let existing: HashSet<(i64, String, i64)> = {
         let sql = format!(
             "SELECT template_id, date, user_id FROM bookings
-             WHERE template_id IN ({tpl_ph}) AND date IN ({date_ph}) AND cancelled_at IS NULL"
+             WHERE template_id IN ({tpl_ph}) AND date IN ({date_ph})
+               AND (cancelled_at IS NULL OR COALESCE(cancel_kind, '') <> 'unsubscribe')"
         );
         let mut q = sqlx::query_as::<_, (i64, String, i64)>(&sql);
         for t in &template_ids {
@@ -179,9 +197,31 @@ pub async fn sweep_as_of(pool: &SqlitePool, now: NaiveDateTime) -> Result<SweepS
     for c in candidates {
         let key = (c.template_id, c.date.clone());
         if cancelled.contains(&key) {
+            tracing::debug!(
+                persistent_id = c.persistent_id,
+                user_id = c.user_id,
+                template_id = c.template_id,
+                date = %c.date,
+                "materialiser: skip — class occurrence cancelled"
+            );
             continue;
         }
         if existing.contains(&(c.template_id, c.date.clone(), c.user_id)) {
+            continue;
+        }
+        // #382 R1/R5: past the class day's 09:00 cutoff a booking is binding
+        // and charged at once — never create one on the customer's behalf.
+        let past_cutoff = chrono::NaiveDate::parse_from_str(&c.date, "%Y-%m-%d")
+            .map(|d| crate::booking_rules::is_charge_due(d, now))
+            .unwrap_or(true);
+        if past_cutoff {
+            tracing::debug!(
+                persistent_id = c.persistent_id,
+                user_id = c.user_id,
+                template_id = c.template_id,
+                date = %c.date,
+                "materialiser: skip — the 09:00 binding cutoff already passed"
+            );
             continue;
         }
         // Snapshot-based pre-check: avoids attempting an INSERT we already
@@ -197,6 +237,16 @@ pub async fn sweep_as_of(pool: &SqlitePool, now: NaiveDateTime) -> Result<SweepS
             .copied()
             .unwrap_or(0);
         if booked >= capacity {
+            skipped_full += 1;
+            tracing::warn!(
+                persistent_id = c.persistent_id,
+                user_id = c.user_id,
+                template_id = c.template_id,
+                date = %c.date,
+                booked,
+                capacity,
+                "materialiser: skip — class is full, recurring booking not created for this date"
+            );
             continue;
         }
 

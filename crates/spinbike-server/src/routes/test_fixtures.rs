@@ -111,6 +111,57 @@ pub fn routes() -> Router<AppState> {
         // whole process. Only reachable under SPINBIKE_TEST_MODE=1, exactly
         // like every other route in this module.
         .route("/api/test/panic", get(trigger_panic))
+        // #382: a booking on ANY date (the real POST /api/bookings refuses a
+        // class that already started) + charging one booking on demand, so
+        // the staff cancel-with-refund E2E can build a charged booking in the
+        // roster's current week without running the whole charger against
+        // the shared E2E database.
+        .route("/api/test/seed-booking", post(seed_booking))
+        .route("/api/test/charge-booking", post(charge_booking))
+}
+
+#[derive(Deserialize)]
+struct SeedBookingRequest {
+    template_id: i64,
+    date: String,
+    user_id: i64,
+}
+
+#[derive(Deserialize)]
+struct ChargeBookingRequest {
+    booking_id: i64,
+}
+
+/// Insert a booking directly (capacity still enforced). Returns `{"id": N}`.
+async fn seed_booking(
+    State(state): State<AppState>,
+    _: StaffUser,
+    Json(body): Json<SeedBookingRequest>,
+) -> Result<(StatusCode, Json<serde_json::Value>), (StatusCode, String)> {
+    let id = crate::db::classes::create_booking(
+        &state.pool,
+        body.template_id,
+        &body.date,
+        body.user_id,
+        None,
+        "manual",
+    )
+    .await
+    .map_err(|e| (StatusCode::CONFLICT, e.to_string()))?;
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
+}
+
+/// Write the binding charge for one booking now (the charger's own per-booking
+/// path). Returns `{"charged": bool}`.
+async fn charge_booking(
+    State(state): State<AppState>,
+    _: StaffUser,
+    Json(body): Json<ChargeBookingRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let charged = crate::jobs::charger::charge_one(&state.pool, body.booking_id)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    Ok(Json(serde_json::json!({ "charged": charged })))
 }
 
 // ---------------------------------------------------------------------------

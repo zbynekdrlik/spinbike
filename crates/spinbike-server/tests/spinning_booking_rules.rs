@@ -8,7 +8,7 @@ mod helpers;
 
 use axum::http::StatusCode;
 use chrono::{Datelike, Duration, NaiveDate};
-use helpers::{TestApp, delete, post_json};
+use helpers::{TestApp, delete, get, post_json, put_json};
 use spinbike_server::db::classes as db_classes;
 
 fn today() -> NaiveDate {
@@ -232,4 +232,280 @@ async fn booking_todays_already_started_class_is_refused() {
         .await;
     assert_eq!(status, StatusCode::CONFLICT, "got {resp}");
     assert_eq!(resp["error_code"], "class_already_started");
+}
+
+// ── R5: customer-managed recurring slots ───────────────────────────────────
+
+const MONDAY_TEMPLATE_SQL: &str =
+    "SELECT id FROM class_templates WHERE weekday = 0 AND start_time = '18:00'";
+
+async fn active_persistent_bookings(app: &TestApp, user_id: i64) -> Vec<(i64, String)> {
+    sqlx::query_as(
+        "SELECT id, date FROM bookings \
+         WHERE user_id = ? AND source = 'persistent' AND cancelled_at IS NULL ORDER BY date",
+    )
+    .bind(user_id)
+    .fetch_all(&app.pool)
+    .await
+    .unwrap()
+}
+
+async fn monday_template(app: &TestApp) -> i64 {
+    sqlx::query_scalar(MONDAY_TEMPLATE_SQL)
+        .fetch_one(&app.pool)
+        .await
+        .unwrap()
+}
+
+/// #382 R5: the customer subscribes to a weekly slot themselves; the
+/// response lists every active template with the `subscribed` flag, and the
+/// bookings are materialised immediately (they show up in /api/my/bookings
+/// as recurring and cancellable).
+#[tokio::test]
+async fn customer_subscribes_to_a_weekly_slot_and_gets_bookings_at_once() {
+    let app = TestApp::new().await;
+    let mon = monday_template(&app).await;
+
+    let (status, slots) = app
+        .request(get("/api/my/persistent-bookings", &app.customer_token))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(slots.as_array().unwrap().len(), 4);
+    assert!(
+        slots
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|s| s["subscribed"] == false)
+    );
+
+    let (status, slots) = app
+        .request(put_json(
+            "/api/my/persistent-bookings",
+            &app.customer_token,
+            &serde_json::json!({ "template_ids": [mon] }),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "got {slots}");
+    let monday = slots
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["template_id"] == mon)
+        .unwrap();
+    assert_eq!(monday["subscribed"], true);
+    assert_eq!(monday["start_time"], "18:00");
+    assert_eq!(monday["instructor_name"], "Stopa");
+
+    let booked = active_persistent_bookings(&app, app.customer_id).await;
+    assert!(
+        booked.len() >= 2,
+        "the next two Mondays at least: {booked:?}"
+    );
+
+    let (status, mine) = app
+        .request(get("/api/my/bookings", &app.customer_token))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let tomorrow = (today() + Duration::days(1)).to_string();
+    let future: Vec<&serde_json::Value> = mine
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|b| b["date"].as_str().unwrap() >= tomorrow.as_str())
+        .collect();
+    assert!(!future.is_empty());
+    for b in future {
+        assert_eq!(b["source"], "persistent");
+        assert_eq!(b["cancel_open"], true, "a future date is cancellable: {b}");
+    }
+}
+
+/// #382 R5: cancelling ONE date never ends the subscription, and the
+/// materialiser never resurrects that date — not even when the customer
+/// re-saves the same slots (which triggers a sweep).
+#[tokio::test]
+async fn cancelling_one_date_keeps_the_subscription_and_is_never_resurrected() {
+    let app = TestApp::new().await;
+    let mon = monday_template(&app).await;
+    let body = serde_json::json!({ "template_ids": [mon] });
+    app.request(put_json(
+        "/api/my/persistent-bookings",
+        &app.customer_token,
+        &body,
+    ))
+    .await;
+    let booked = active_persistent_bookings(&app, app.customer_id).await;
+    let (skip_id, skip_date) = booked.last().cloned().unwrap();
+
+    let (status, _) = app
+        .request(delete(
+            &format!("/api/bookings/{skip_id}"),
+            &app.customer_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (status, slots) = app
+        .request(put_json(
+            "/api/my/persistent-bookings",
+            &app.customer_token,
+            &body,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let subscribed = slots
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|s| s["subscribed"] == true)
+        .count();
+    assert_eq!(subscribed, 1, "the subscription survives a skipped date");
+    let after = active_persistent_bookings(&app, app.customer_id).await;
+    assert!(
+        !after.iter().any(|(_, d)| *d == skip_date),
+        "the skipped {skip_date} must not come back: {after:?}"
+    );
+}
+
+/// #382 R5: dropping a slot ends it and cancels its future uncharged
+/// bookings ('unsubscribe'); an unknown template is a 400 that changes
+/// nothing.
+#[tokio::test]
+async fn dropping_a_slot_cancels_its_future_bookings_and_unknown_ids_are_rejected() {
+    let app = TestApp::new().await;
+    let mon = monday_template(&app).await;
+    app.request(put_json(
+        "/api/my/persistent-bookings",
+        &app.customer_token,
+        &serde_json::json!({ "template_ids": [mon] }),
+    ))
+    .await;
+
+    let (status, body) = app
+        .request(put_json(
+            "/api/my/persistent-bookings",
+            &app.customer_token,
+            &serde_json::json!({ "template_ids": [mon, 999_999] }),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "got {body}");
+    assert!(
+        !active_persistent_bookings(&app, app.customer_id)
+            .await
+            .is_empty(),
+        "a rejected PUT changes nothing"
+    );
+
+    let (status, _) = app
+        .request(put_json(
+            "/api/my/persistent-bookings",
+            &app.customer_token,
+            &serde_json::json!({ "template_ids": [] }),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    let left: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT id, date FROM bookings \
+         WHERE user_id = ? AND source = 'persistent' AND cancelled_at IS NULL AND date > ?",
+    )
+    .bind(app.customer_id)
+    .bind(today().to_string())
+    .fetch_all(&app.pool)
+    .await
+    .unwrap();
+    assert!(
+        left.is_empty(),
+        "future bookings must be cancelled: {left:?}"
+    );
+    let kinds: Vec<Option<String>> = sqlx::query_scalar(
+        "SELECT cancel_kind FROM bookings WHERE user_id = ? AND cancelled_at IS NOT NULL",
+    )
+    .bind(app.customer_id)
+    .fetch_all(&app.pool)
+    .await
+    .unwrap();
+    assert!(!kinds.is_empty());
+    assert!(kinds.iter().all(|k| k.as_deref() == Some("unsubscribe")));
+}
+
+// ── R7: spinner flag on the customer's home ────────────────────────────────
+
+/// #382 R7: `/api/my/balance` carries `is_spinner` — false for a gym-only
+/// customer, true once they hold a recurring slot.
+#[tokio::test]
+async fn my_balance_reports_is_spinner() {
+    let app = TestApp::new().await;
+    let (status, bal) = app
+        .request(get("/api/my/balance", &app.customer_token))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(bal["is_spinner"], false);
+
+    let mon = monday_template(&app).await;
+    app.request(put_json(
+        "/api/my/persistent-bookings",
+        &app.customer_token,
+        &serde_json::json!({ "template_ids": [mon] }),
+    ))
+    .await;
+    let (_, bal) = app
+        .request(get("/api/my/balance", &app.customer_token))
+        .await;
+    assert_eq!(bal["is_spinner"], true);
+}
+
+// ── R4/R2/R8 flags on the read endpoints ───────────────────────────────────
+
+/// The schedule exposes `started` / `cancel_open` per occurrence, computed
+/// server-side (no client time-zone math); the staff participant list
+/// exposes `source` and `refundable`.
+#[tokio::test]
+async fn read_endpoints_expose_started_cancel_open_source_and_refundable() {
+    let app = TestApp::new().await;
+    let yesterday = today() - Duration::days(1);
+    let week_ahead = today() + Duration::days(7);
+    let tid_past = template_on(&app, yesterday, "07:30").await;
+    let tid_future = template_on(&app, week_ahead, "07:45").await;
+
+    let uri = format!("/api/classes?from={yesterday}&to={yesterday}");
+    let (_, past) = app.request(get(&uri, "")).await;
+    let past = past
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["template_id"] == tid_past)
+        .unwrap()
+        .clone();
+    assert_eq!(past["started"], true);
+    assert_eq!(past["cancel_open"], false);
+
+    let uri = format!("/api/classes?from={week_ahead}&to={week_ahead}");
+    let (_, fut) = app.request(get(&uri, "")).await;
+    let fut = fut
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|o| o["template_id"] == tid_future)
+        .unwrap()
+        .clone();
+    assert_eq!(fut["started"], false);
+    assert_eq!(fut["cancel_open"], true);
+
+    sqlx::query("UPDATE users SET credit = 10.0 WHERE id = ?")
+        .bind(app.customer_id)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let bid = seed_booking(&app, tid_past, yesterday, app.customer_id).await;
+    let uri = format!("/api/classes/{tid_past}/{yesterday}/participants");
+    let (_, before) = app.request(get(&uri, &app.staff_token)).await;
+    assert_eq!(before[0]["booking_id"], bid);
+    assert_eq!(before[0]["source"], "manual");
+    assert_eq!(before[0]["refundable"], false, "not charged yet");
+    spinbike_server::jobs::charger::tick(&app.pool)
+        .await
+        .unwrap();
+    let (_, after) = app.request(get(&uri, &app.staff_token)).await;
+    assert_eq!(after[0]["refundable"], true, "charged 5.00 -> refundable");
 }
