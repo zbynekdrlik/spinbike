@@ -158,3 +158,55 @@ test.describe('Staff class roster participant chips (#379)', () => {
         }
     });
 });
+
+test.describe('Staff walk-in picker vs. customers already in the class (#378)', () => {
+    test('a booked customer is shown as already booked and cannot be picked; a free one books normally', async ({ page }) => {
+        const messages = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const booked = await bookFreshCustomerThisWeek(token);
+        const other = await createUniqueUser(token, 0, 'PW');
+        let otherBookingId: number | undefined;
+        try {
+            await openRoster(page, 'dark');
+            const card = page.locator(`[data-testid="roster-class-${booked.templateId}-${booked.date}"]`);
+            await expect(card).toBeVisible({ timeout: 10000 });
+            await expect(card.locator('.participant-chip', { hasText: booked.name })).toBeVisible();
+
+            await card.locator('[data-testid="add-walkin"]').click();
+            const form = card.locator('[data-testid="walkin-form"]');
+            await expect(form).toBeVisible();
+
+            // Already-booked customer: marked, disabled — no 409 round trip.
+            await form.locator('[data-testid="walkin-search"]').fill(booked.cardCode);
+            const bookedRow = form.locator(`[data-testid="walkin-pick-${booked.userId}"]`);
+            await expect(bookedRow).toBeVisible({ timeout: 5000 });
+            await expect(bookedRow).toHaveAttribute('data-already-booked', 'true');
+            await expect(bookedRow.locator('button')).toBeDisabled();
+            await expect(bookedRow.locator('button')).toContainText('already booked');
+
+            // A customer not yet in the class books normally.
+            await form.locator('[data-testid="walkin-search"]').fill(other.card_code);
+            const otherRow = form.locator(`[data-testid="walkin-pick-${other.user_id}"]`);
+            await expect(otherRow).toBeVisible({ timeout: 5000 });
+            await expect(otherRow).toHaveAttribute('data-already-booked', 'false');
+            await otherRow.locator('button').click();
+            await expect(card.locator('.participant-chip', { hasText: other.name })).toBeVisible({ timeout: 10000 });
+
+            // Backend effect: the second customer really holds an active booking.
+            const resp = await fetch(
+                `${BASE_URL}/api/classes/${booked.templateId}/${booked.date}/participants`,
+                { headers: { Authorization: `Bearer ${token}` } },
+            );
+            expect(resp.status).toBe(200);
+            const participants: Array<{ booking_id: number; user_id: number }> = await resp.json();
+            const mine = participants.filter((p) => p.user_id === other.user_id);
+            expect(mine).toHaveLength(1);
+            otherBookingId = mine[0].booking_id;
+
+            assertCleanConsole(messages);
+        } finally {
+            await cancelBooking(token, booked.bookingId);
+            if (otherBookingId !== undefined) await cancelBooking(token, otherBookingId);
+        }
+    });
+});

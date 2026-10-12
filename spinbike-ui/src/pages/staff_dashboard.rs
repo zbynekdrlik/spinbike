@@ -192,7 +192,7 @@ pub fn StaffDashboardPage() -> impl IntoView {
                 let actions = if !cancelled {
                     view! {
                         <div class="flex gap-1">
-                            <button class="btn btn--ghost btn--compact" on:click=move |_| set_walkin_open.update(|v| *v = !*v)>
+                            <button class="btn btn--ghost btn--compact" data-testid="add-walkin" on:click=move |_| set_walkin_open.update(|v| *v = !*v)>
                                 {move || i18n::t(lang.get(), "add_walk_in")}
                             </button>
                             <button class="btn btn--danger btn--compact" on:click=on_cancel_class disabled=move || cancel_loading.get()>
@@ -220,8 +220,9 @@ pub fn StaffDashboardPage() -> impl IntoView {
                     });
                 }
 
+                let class_testid = format!("roster-class-{template_id}-{}", slot.date);
                 view! {
-                    <div>
+                    <div data-testid=class_testid>
                         <div class=card_class>
                             <div class="list-row__main">
                                 <div class="list-row__title">{time_label}</div>
