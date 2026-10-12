@@ -4,8 +4,15 @@ import {
     assertCleanConsole,
     loginViaAPI,
     createUniqueUser,
-    bratislavaToday,
 } from './helpers';
+import {
+    ClassOccurrence,
+    apiLogin,
+    bookableSlotThisWeek,
+    listClasses,
+    seedBooking,
+    weekRange,
+} from './spinning-fixtures';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -18,16 +25,6 @@ const BASE_URL = 'http://localhost:8099';
  * schemes, at a readable size.
  */
 
-/** Monday..Sunday (YYYY-MM-DD) of the current gym-local week. */
-function currentWeekRange(): { from: string; to: string } {
-    const [y, m, d] = bratislavaToday().split('-').map(Number);
-    const today = new Date(Date.UTC(y, m - 1, d));
-    const sinceMonday = (today.getUTCDay() + 6) % 7;
-    const monday = new Date(Date.UTC(y, m - 1, d - sinceMonday));
-    const sunday = new Date(Date.UTC(y, m - 1, d - sinceMonday + 6));
-    return { from: monday.toISOString().slice(0, 10), to: sunday.toISOString().slice(0, 10) };
-}
-
 interface Booked {
     bookingId: number;
     name: string;
@@ -37,34 +34,35 @@ interface Booked {
     date: string;
 }
 
-/** Book a fresh, uniquely named customer into a class of the current week. */
-async function bookFreshCustomerThisWeek(token: string): Promise<Booked> {
+/**
+ * Put a fresh, uniquely named customer into `slot` (a class of the roster's
+ * current week). #382: the booking is seeded through the test-only fixture,
+ * because the real POST /api/bookings refuses a class that already started
+ * and the current week's first class is often in the past.
+ */
+async function bookFreshCustomer(
+    token: string,
+    slot: ClassOccurrence,
+    source: 'manual' | 'persistent' = 'manual',
+): Promise<Booked> {
     const user = await createUniqueUser(token, 0, 'PC');
-    const { from, to } = currentWeekRange();
-    const resp = await fetch(`${BASE_URL}/api/classes?from=${from}&to=${to}`, {
-        headers: { Authorization: `Bearer ${token}` },
-    });
-    if (!resp.ok) throw new Error(`list classes failed: ${resp.status} ${await resp.text()}`);
-    const classes: Array<{ template_id: number; date: string; cancelled: boolean; booked: number; capacity: number }> =
-        await resp.json();
-    const slot = classes.find((c) => !c.cancelled && c.booked < c.capacity);
-    if (!slot) throw new Error(`no bookable class in ${from}..${to}: ${JSON.stringify(classes)}`);
-
-    const book = await fetch(`${BASE_URL}/api/bookings`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ template_id: slot.template_id, date: slot.date, user_id: user.user_id }),
-    });
-    if (book.status !== 201) throw new Error(`booking failed: ${book.status} ${await book.text()}`);
-    const { id } = await book.json();
+    const id = await seedBooking(token, slot.template_id, slot.date, user.user_id, source);
     return {
-        bookingId: id as number,
+        bookingId: id,
         name: user.name,
         userId: user.user_id,
         cardCode: user.card_code,
         templateId: slot.template_id,
         date: slot.date,
     };
+}
+
+/** Any non-cancelled, non-full class of the current gym-local week. */
+async function anyClassThisWeek(): Promise<ClassOccurrence> {
+    const { from, to } = weekRange(0);
+    const slot = (await listClasses(from, to)).find((c) => !c.cancelled && c.booked < c.capacity);
+    if (!slot) throw new Error(`no class in ${from}..${to}`);
+    return slot;
 }
 
 async function cancelBooking(token: string, bookingId: number): Promise<void> {
@@ -135,7 +133,9 @@ test.describe('Staff class roster participant chips (#379)', () => {
     test('participant name and remove control reach 4.5:1 contrast in dark and light themes', async ({ page }) => {
         const messages = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const booked = await bookFreshCustomerThisWeek(token);
+        // #382 R8: a RECURRING booking, so the chip also carries the
+        // "recurring" tag — whose contrast is pinned below too.
+        const booked = await bookFreshCustomer(token, await anyClassThisWeek(), 'persistent');
         try {
             for (const scheme of ['dark', 'light'] as const) {
                 await openRoster(page, scheme);
@@ -151,6 +151,13 @@ test.describe('Staff class roster participant chips (#379)', () => {
 
                 const fontPx = await chip.evaluate((el) => parseFloat(getComputedStyle(el).fontSize));
                 expect(fontPx, `${scheme}: chip font size`).toBeGreaterThanOrEqual(15);
+
+                // #382 R8: the recurring ("pravidelne") tag is shown and readable.
+                const tag = chip.locator(`[data-testid="participant-recurring-${booked.bookingId}"]`);
+                await expect(tag, `${scheme}: recurring tag`).toBeVisible();
+                await expect(tag).toHaveText('recurring');
+                const tagContrast = await contrastOf(tag);
+                expect(tagContrast, `${scheme}: recurring tag contrast`).toBeGreaterThanOrEqual(4.5);
             }
             assertCleanConsole(messages);
         } finally {
@@ -163,7 +170,11 @@ test.describe('Staff walk-in picker vs. customers already in the class (#378)', 
     test('a booked customer is shown as already booked and cannot be picked; a free one books normally', async ({ page }) => {
         const messages = setupConsoleCheck(page);
         const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
-        const booked = await bookFreshCustomerThisWeek(token);
+        // The walk-in books through the real route, which (#382 R4) refuses
+        // a class that already started — use one that has not.
+        const adminToken = await apiLogin('admin@test.com', 'admin123');
+        const { slot, cleanup } = await bookableSlotThisWeek(adminToken);
+        const booked = await bookFreshCustomer(token, slot);
         const other = await createUniqueUser(token, 0, 'PW');
         let otherBookingId: number | undefined;
         try {
@@ -207,6 +218,7 @@ test.describe('Staff walk-in picker vs. customers already in the class (#378)', 
         } finally {
             await cancelBooking(token, booked.bookingId);
             if (otherBookingId !== undefined) await cancelBooking(token, otherBookingId);
+            await cleanup();
         }
     });
 });

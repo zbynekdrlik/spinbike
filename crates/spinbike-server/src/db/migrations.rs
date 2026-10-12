@@ -134,6 +134,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "instructors: Stopa/Vlada cleanup + Tue/Thu classes at 18:30 (#381)",
         V30_INSTRUCTORS_CLEANUP_TUE_THU_1830,
     ),
+    (
+        31,
+        "bookings: reminded_at + cancel provenance + refund link (spinning rules, #382)",
+        V31_BOOKINGS_REMINDER_CANCEL_REFUND,
+    ),
 ];
 
 /// Post-condition checks `db::run_migrations` runs at the end of a
@@ -1294,6 +1299,34 @@ DELETE FROM instructors
 
 UPDATE class_templates SET start_time = '18:30'
  WHERE (id = 2 AND weekday = 1) OR (id = 4 AND weekday = 3);
+"#;
+
+// V31: spinning recurring bookings / reminder / binding charge (#382).
+// Purely additive nullable columns on `bookings` — no backfill, no existing
+// row touched (prod 2026-10-12: 9 bookings, all charged, none cancelled):
+//
+// - `reminded_at`: when the 18:00 day-before reminder was successfully sent
+//   for THIS booking (push, or the e-mail fallback). The reminder job's
+//   per-booking dedupe — stamped only after a successful send, so a startup
+//   tick or a second run never double-sends (the per-(user, reason)
+//   `push_notify_log` cooldown is deliberately NOT reused, it would suppress
+//   the next week's reminder).
+// - `cancelled_by` / `cancel_kind`: who cancelled and in which capacity.
+//   'customer' = the customer themselves (before the 09:00 deadline),
+//   'staff' = staff/admin (any time, refund when charged), 'unsubscribe' =
+//   the system ending a recurring subscription. The materialiser never
+//   re-creates a (user, template, date) that has a 'customer'/'staff' (or
+//   legacy NULL-kind) cancellation, but may re-create one an earlier
+//   unsubscribe cancelled when the customer subscribes again.
+// - `refund_transaction_id`: the separate `transactions` row that reversed
+//   this booking's charge when staff cancelled it after it was charged —
+//   the linkage is by id, never by note text.
+const V31_BOOKINGS_REMINDER_CANCEL_REFUND: &str = r#"
+ALTER TABLE bookings ADD COLUMN reminded_at TEXT;
+ALTER TABLE bookings ADD COLUMN cancelled_by INTEGER REFERENCES users(id);
+ALTER TABLE bookings ADD COLUMN cancel_kind TEXT
+    CHECK (cancel_kind IS NULL OR cancel_kind IN ('customer', 'staff', 'unsubscribe'));
+ALTER TABLE bookings ADD COLUMN refund_transaction_id INTEGER REFERENCES transactions(id);
 "#;
 
 #[cfg(test)]
@@ -4573,5 +4606,69 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(orphan_left, 1, "V30's deletes must have rolled back");
+    }
+
+    /// V31 (#382): the four new `bookings` columns exist, are NULL for a
+    /// pre-existing row (purely additive), and `cancel_kind` only accepts
+    /// the three documented values.
+    #[tokio::test]
+    async fn v31_adds_nullable_booking_columns_and_checks_cancel_kind() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('bookings')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        for c in [
+            "reminded_at",
+            "cancelled_by",
+            "cancel_kind",
+            "refund_transaction_id",
+        ] {
+            assert!(
+                cols.contains(&c.to_string()),
+                "bookings missing {c}: {cols:?}"
+            );
+        }
+
+        let uid: i64 =
+            sqlx::query_scalar("INSERT INTO users (email, name) VALUES ('v31@x','v') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let bid: i64 = sqlx::query_scalar(
+            "INSERT INTO bookings (template_id, date, user_id) VALUES (1, '2026-10-19', ?) RETURNING id",
+        )
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let row: (Option<String>, Option<i64>, Option<String>, Option<i64>) = sqlx::query_as(
+            "SELECT reminded_at, cancelled_by, cancel_kind, refund_transaction_id \
+             FROM bookings WHERE id = ?",
+        )
+        .bind(bid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(row, (None, None, None, None));
+
+        for ok in ["customer", "staff", "unsubscribe"] {
+            sqlx::query("UPDATE bookings SET cancel_kind = ? WHERE id = ?")
+                .bind(ok)
+                .bind(bid)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("cancel_kind {ok} must be accepted: {e}"));
+        }
+        let bad = sqlx::query("UPDATE bookings SET cancel_kind = 'robot' WHERE id = ?")
+            .bind(bid)
+            .execute(&pool)
+            .await;
+        assert!(
+            bad.is_err(),
+            "an unknown cancel_kind must violate the CHECK"
+        );
     }
 }

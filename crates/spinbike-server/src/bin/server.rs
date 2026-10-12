@@ -59,6 +59,7 @@ async fn main() -> Result<()> {
         token_purge_result,
         notifications_result,
         pass_renewal_result,
+        spinning_reminder_result,
     ) = tokio::join!(
         db::users::backfill_search_text(&pool),
         spinbike_server::jobs::materialiser::sweep(&pool),
@@ -66,6 +67,10 @@ async fn main() -> Result<()> {
         spinbike_server::jobs::token_purge::tick(&pool),
         spinbike_server::jobs::notifications::tick(&pool, &push, &mail),
         spinbike_server::jobs::pass_renewal::tick(&pool, &push),
+        // #382: only sends once today's 18:00 run hour has passed (a morning
+        // restart must not remind about tomorrow early); dedupe is per
+        // booking (`bookings.reminded_at`), so this never double-sends.
+        spinbike_server::jobs::spinning_reminder::startup_tick(&pool, &push, &mail),
     );
 
     let backfilled = backfill_result?;
@@ -103,6 +108,12 @@ async fn main() -> Result<()> {
         Ok(n) if n > 0 => tracing::info!("pass_renewal: renewed {n} passes at startup"),
         Ok(_) => {}
         Err(e) => tracing::error!("startup pass_renewal tick failed: {e}"),
+    }
+
+    match spinning_reminder_result {
+        Ok(n) if n > 0 => tracing::info!("spinning reminder: sent {n} reminders at startup"),
+        Ok(_) => {}
+        Err(e) => tracing::error!("startup spinning reminder tick failed: {e}"),
     }
 
     // Charger: every 60s. `Delay` skips back-to-back catch-up ticks if a tick
@@ -201,6 +212,25 @@ async fn main() -> Result<()> {
             move |pool| {
                 let push = push.clone();
                 async move { spinbike_server::jobs::pass_renewal::tick(&pool, &push).await }
+            },
+        );
+    }
+
+    // Day-before spinning reminder (#382 R6): daily at 18:00 Bratislava-local
+    // via the shared wall-clock-aligned helper (daily-job-scheduling.md).
+    // Needs the push + mail handles, captured by the closure (#299 pattern).
+    {
+        let push = push.clone();
+        let mail = mail.clone();
+        spinbike_server::jobs::spawn_daily_job(
+            pool.clone(),
+            spinbike_server::jobs::spinning_reminder::DAILY_RUN_HOUR,
+            "spinning reminder",
+            "reminders sent",
+            move |pool| {
+                let push = push.clone();
+                let mail = mail.clone();
+                async move { spinbike_server::jobs::spinning_reminder::tick(&pool, &push, &mail).await }
             },
         );
     }

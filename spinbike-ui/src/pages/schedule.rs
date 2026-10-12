@@ -3,6 +3,7 @@ use spinbike_core::ws::ServerMsg;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
+use crate::components::MySlots;
 use crate::components::class_card::{ClassCard, ClassCardProps};
 use crate::components::day_picker::{DayPicker, DayPickerProps};
 use crate::i18n::{self, Lang};
@@ -24,10 +25,20 @@ pub struct ClassSlot {
     pub user_booked: bool,
     pub user_booking_id: Option<i64>,
     pub user_booking_source: Option<String>,
+    /// #382 R4: the occurrence already started (server, gym-local time) —
+    /// no Book button any more.
+    #[serde(default)]
+    pub started: bool,
+    /// #382 R2: a customer may still cancel a booking on it (before 09:00
+    /// on the class day) — otherwise the booking is binding.
+    #[serde(default)]
+    pub cancel_open: bool,
 }
 
-/// Compute current week (Mon-Sun) as Vec<(year, month, day)> and date strings.
-fn current_week_dates() -> (Vec<(i32, u32, u32)>, Vec<String>) {
+/// Compute the Mon-Sun week `week_offset` weeks after the current one as
+/// Vec<(year, month, day)> and date strings (#382: 0 = this week, 1 = next
+/// week, so a customer can book ahead on Friday-Sunday too).
+fn week_dates(week_offset: i32) -> (Vec<(i32, u32, u32)>, Vec<String>) {
     let now = js_sys::Date::new_0();
     let year = now.get_full_year();
     let month = now.get_month() as i32; // 0-based
@@ -36,7 +47,11 @@ fn current_week_dates() -> (Vec<(i32, u32, u32)>, Vec<String>) {
 
     let days_since_monday: i32 = if dow == 0 { 6 } else { dow as i32 - 1 };
 
-    let monday = js_sys::Date::new_with_year_month_day(year, month, day - days_since_monday);
+    let monday = js_sys::Date::new_with_year_month_day(
+        year,
+        month,
+        day - days_since_monday + 7 * week_offset,
+    );
 
     let mut dates = Vec::with_capacity(7);
     let mut date_strs = Vec::with_capacity(7);
@@ -58,8 +73,8 @@ fn current_week_dates() -> (Vec<(i32, u32, u32)>, Vec<String>) {
 #[component]
 pub fn SchedulePage() -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
-    let (dates, date_strs) = current_week_dates();
-    let date_strs_stored = date_strs.clone();
+    // #382: this week (0) or next week (1).
+    let (week, set_week) = signal(0i32);
 
     let now = js_sys::Date::new_0();
     let dow = now.get_day();
@@ -71,11 +86,11 @@ pub fn SchedulePage() -> impl IntoView {
     let (error, set_error) = signal(String::new());
     let (fetch_ver, set_fetch_ver) = signal(0u32);
 
-    let date_strs_for_fetch = date_strs_stored.clone();
     Effect::new(move || {
         let _ = fetch_ver.get();
-        let from = date_strs_for_fetch.first().cloned().unwrap_or_default();
-        let to = date_strs_for_fetch.last().cloned().unwrap_or_default();
+        let (_, date_strs) = week_dates(week.get());
+        let from = date_strs.first().cloned().unwrap_or_default();
+        let to = date_strs.last().cloned().unwrap_or_default();
         set_loading.set(true);
         spawn_local(async move {
             match api::get::<Vec<ClassSlot>>(&format!("/api/classes?from={from}&to={to}")).await {
@@ -125,11 +140,48 @@ pub fn SchedulePage() -> impl IntoView {
         });
     }
 
-    let date_strs_for_view = date_strs_stored.clone();
+    // #382 R5: a logged-in customer manages their weekly slots right here
+    // (the "Spinning" menu entry and the home card link both land on this
+    // page). Logged-out visitors only see the schedule.
+    let logged_in = crate::auth::get_token().is_some();
+    let on_slots_changed = Callback::new(move |_: ()| set_fetch_ver.update(|v| *v += 1));
+
+    // This week returns to today; next week opens on its Monday.
+    let on_this_week = move |_| {
+        set_week.set(0);
+        set_selected_idx.set(today_idx);
+    };
+    let on_next_week = move |_| {
+        set_week.set(1);
+        set_selected_idx.set(0);
+    };
 
     view! {
         <h1 class="page-title">{move || i18n::t(lang.get(), "schedule")}</h1>
-        {DayPicker(DayPickerProps { days: dates, selected_idx, set_selected_idx })}
+
+        {logged_in.then(|| view! { <MySlots on_changed=on_slots_changed /> })}
+
+        <div class="week-switch">
+            <button
+                class=move || if week.get() == 0 { "btn btn--compact btn--primary" } else { "btn btn--compact btn--ghost" }
+                data-testid="week-this"
+                on:click=on_this_week
+            >
+                {move || i18n::t(lang.get(), "week_this")}
+            </button>
+            <button
+                class=move || if week.get() == 1 { "btn btn--compact btn--primary" } else { "btn btn--compact btn--ghost" }
+                data-testid="week-next"
+                on:click=on_next_week
+            >
+                {move || i18n::t(lang.get(), "week_next")}
+            </button>
+        </div>
+
+        {move || {
+            let (dates, _) = week_dates(week.get());
+            DayPicker(DayPickerProps { days: dates, selected_idx, set_selected_idx })
+        }}
 
         {move || {
             let e = error.get();
@@ -145,8 +197,9 @@ pub fn SchedulePage() -> impl IntoView {
                 return view! { <div class="text-center mt-3"><span class="spinner"></span></div> }.into_any();
             }
 
+            let (_, date_strs) = week_dates(week.get());
             let idx = selected_idx.get();
-            let selected_date = date_strs_for_view.get(idx).cloned().unwrap_or_default();
+            let selected_date = date_strs.get(idx).cloned().unwrap_or_default();
             let day_classes: Vec<ClassSlot> = classes.get()
                 .iter()
                 .filter(|c| c.date == selected_date)

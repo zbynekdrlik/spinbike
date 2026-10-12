@@ -235,6 +235,10 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
         // WHY the delete was refused, not the raw English text.
         ErrorCode::InstructorInUse => Some("err_instructor_in_use"),
         ErrorCode::InstructorNotFound => Some("err_instructor_not_found"),
+        // #382: both are customer-facing (the "Moje spinningy" card, the
+        // schedule's book/cancel buttons, /my/bookings).
+        ErrorCode::CancelDeadlinePassed => Some("err_cancel_deadline_passed"),
+        ErrorCode::ClassAlreadyStarted => Some("err_class_already_started"),
         ErrorCode::Internal => Some("err_internal"),
         // Staff/admin-only or not customer-facing in the 5 render sites this
         // ticket scopes to (#145) — left unmapped on purpose, NOT an
@@ -1384,6 +1388,53 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "err_instructor_not_found",
         ("Instruktor sa nenasiel", "Instructor not found"),
+    );
+    // #382 — spinning recurring bookings (customer home card, slots, menu).
+    m.insert("my_spinnings", ("Moje spinningy", "My spinning classes"));
+    m.insert(
+        "my_spinnings_empty",
+        (
+            "Nemas ziadny prihlaseny spinning",
+            "You have no spinning class booked",
+        ),
+    );
+    m.insert("spinning_binding", ("zavazne", "binding"));
+    m.insert("recurring", ("pravidelne", "recurring"));
+    m.insert(
+        "spinning_manage_slots",
+        ("Pravidelne terminy a rozvrh", "Regular slots and schedule"),
+    );
+    m.insert("recurring_slots", ("Pravidelne terminy", "Regular slots"));
+    m.insert(
+        "recurring_slots_hint",
+        (
+            "Kazdy tyzden ta prihlasime automaticky. Ak raz nemozes prist, odhlas sa do 9:00 v den spinningu.",
+            "We book you every week automatically. If you can't come once, cancel by 9:00 on the class day.",
+        ),
+    );
+    m.insert("recurring_on", ("Chodit pravidelne", "Join every week"));
+    m.insert("recurring_off", ("Zrusit pravidelne", "Stop every week"));
+    m.insert("menu_spinning", ("Spinning", "Spinning"));
+    m.insert("class_started", ("Uz zacala", "Started"));
+    m.insert("week_this", ("Tento tyzden", "This week"));
+    m.insert("week_next", ("Buduci tyzden", "Next week"));
+    m.insert(
+        "cancel_booking_refund",
+        ("Zrusit a vratit kredit", "Cancel and refund credit"),
+    );
+    m.insert(
+        "err_cancel_deadline_passed",
+        (
+            "Odhlasit sa da len do 9:00 v den spinningu — teraz uz je rezervacia zavazna",
+            "You can only cancel until 9:00 on the class day — the booking is now binding",
+        ),
+    );
+    m.insert(
+        "err_class_already_started",
+        (
+            "Na hodinu, ktora uz zacala, sa uz neda prihlasit",
+            "This class has already started — booking is closed",
+        ),
     );
     m.insert(
         "confirm_delete_instructor",

@@ -15,6 +15,8 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
         "cancelled"
     } else if slot.user_booked {
         "booked"
+    } else if slot.started {
+        "past"
     } else if slot.booked >= slot.capacity {
         "full"
     } else {
@@ -71,9 +73,16 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
             set_loading.set(true);
             set_error.set(String::new());
             spawn_local(async move {
-                match api::delete(&format!("/api/bookings/{bid}")).await {
+                // delete_coded: a refused cancel (#382 R2 — the 09:00
+                // deadline passed while the page was open) shows the
+                // localized reason instead of raw server text.
+                match api::delete_coded(&format!("/api/bookings/{bid}")).await {
                     Ok(_) => on_change.run(()),
-                    Err(e) => set_error.set(e),
+                    Err(e) => set_error.set(i18n::localize_api_error(
+                        lang.get_untracked(),
+                        e.code,
+                        &e.message,
+                    )),
                 }
                 set_loading.set(false);
             });
@@ -82,14 +91,29 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
 
     let slot_cancelled = slot.cancelled;
     let slot_user_booked = slot.user_booked;
+    let slot_started = slot.started;
+    let slot_cancel_open = slot.cancel_open;
     let slot_full = slot.booked >= slot.capacity;
     let slot_booking_source = slot.user_booking_source.clone();
 
     let cancel_testid = format!("cancel-{template_id}-{}", slot.date);
     let book_testid = format!("book-{template_id}-{}", slot.date);
+    let binding_testid = format!("binding-{template_id}-{}", slot.date);
+    let started_testid = format!("started-{template_id}-{}", slot.date);
 
     let action_view = if slot_cancelled {
         view! { <span class="badge badge--cancelled">{move || i18n::t(lang.get(), "cancelled")}</span> }.into_any()
+    } else if slot_user_booked && !slot_cancel_open {
+        // #382 R2: past 09:00 on the class day the booking is binding — the
+        // customer can no longer cancel it (staff still can, with a refund).
+        view! {
+            <span class="badge" data-testid=binding_testid>{move || i18n::t(lang.get(), "spinning_binding")}</span>
+        }.into_any()
+    } else if slot_started && !slot_user_booked {
+        // #382 R4: an occurrence that already started cannot be booked.
+        view! {
+            <span class="badge badge--cancelled" data-testid=started_testid>{move || i18n::t(lang.get(), "class_started")}</span>
+        }.into_any()
     } else if !is_logged_in {
         view! { <a href="/login" class="btn btn--ghost">{move || i18n::t(lang.get(), "login_to_book")}</a> }.into_any()
     } else if slot_user_booked && slot_booking_source.as_deref() == Some("persistent") {

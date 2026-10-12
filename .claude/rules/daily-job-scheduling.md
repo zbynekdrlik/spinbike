@@ -50,7 +50,11 @@ notifications::tick(&pool, &push).await } }`).
   Currently: `notifications` = 9 (customer-visible reminders, mid-morning),
   `token_purge` = 4 (pure housekeeping, off-peak), `pass_renewal` = 5 (#374 —
   contiguous monthly-pass auto-renewal; off-peak, and BEFORE `notifications`=9
-  so a renewal suppresses that user's redundant "pass expiring" push).
+  so a renewal suppresses that user's redundant "pass expiring" push),
+  `spinning_reminder` = 18 (#382 — the owner's "day before at 18:00"; its
+  startup tick is GATED to after 18:00 so a morning restart cannot remind
+  early, and dedupe is per booking via `bookings.reminded_at`, see
+  `spinning-booking.md`).
 - `duration_until_next_bratislava_hour` (in `util.rs`) is the shared, already-tested
   helper `spawn_daily_job` itself calls — don't reinvent DST-safe scheduling per job.
 - The DELAY arithmetic is pinned per-hour in `token_purge.rs`'s `daily_run_hour_*`

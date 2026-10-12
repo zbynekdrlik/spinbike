@@ -77,6 +77,14 @@ pub enum ErrorCode {
     /// teaches at least one ACTIVE class template (#381). Reassign or
     /// deactivate the template first.
     InstructorInUse,
+    /// A CUSTOMER tried to cancel their own spinning booking after the class
+    /// day's 09:00 binding cutoff (#382 R2) — the booking is binding and is
+    /// (or is about to be) charged. Staff/admin may still cancel it (with a
+    /// refund), the customer may not.
+    CancelDeadlinePassed,
+    /// `POST /api/bookings` for a class occurrence that already started — a
+    /// past date, or today after the start time (#382 R4).
+    ClassAlreadyStarted,
     NoteOnVoidedTransaction,
     DateOnVoidedTransaction,
     /// `patch_valid_until` (`routes/transactions.rs`) rejecting an edit of
@@ -154,6 +162,8 @@ impl ErrorCode {
             ErrorCode::ClassCancelled => "Class is cancelled",
             ErrorCode::AlreadyBooked => "User is already booked into this class",
             ErrorCode::InstructorInUse => "Instructor still teaches an active class",
+            ErrorCode::CancelDeadlinePassed => "Odhlasit sa da len do 9:00 v den spinningu",
+            ErrorCode::ClassAlreadyStarted => "Na hodinu, ktora uz zacala, sa uz neda prihlasit",
             ErrorCode::NoteOnVoidedTransaction => "Cannot edit note on a voided transaction",
             ErrorCode::DateOnVoidedTransaction => "Cannot edit date on a voided transaction",
             ErrorCode::ValidUntilOnVoidedTransaction => {
@@ -306,6 +316,16 @@ mod tests {
             ErrorCode::InstructorInUse,
             "instructor_in_use",
             "Instructor still teaches an active class",
+        ),
+        (
+            ErrorCode::CancelDeadlinePassed,
+            "cancel_deadline_passed",
+            "Odhlasit sa da len do 9:00 v den spinningu",
+        ),
+        (
+            ErrorCode::ClassAlreadyStarted,
+            "class_already_started",
+            "Na hodinu, ktora uz zacala, sa uz neda prihlasit",
         ),
         (
             ErrorCode::NoteOnVoidedTransaction,

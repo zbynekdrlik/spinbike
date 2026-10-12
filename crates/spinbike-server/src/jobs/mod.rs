@@ -3,6 +3,7 @@ pub mod door_health;
 pub mod materialiser;
 pub mod notifications;
 pub mod pass_renewal;
+pub mod spinning_reminder;
 pub mod token_purge;
 
 use sqlx::SqlitePool;

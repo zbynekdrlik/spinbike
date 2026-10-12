@@ -18,6 +18,10 @@ pub struct BalanceResponse {
     pub monthly_pass_active_until: Option<String>,
     /// Last 20 transactions for this user, newest first.
     pub recent: Vec<RecentTx>,
+    /// #382 R7: the customer is a "spinner" — an active recurring slot, or
+    /// spinning within the last 365 days. Drives the "Moje spinningy" card at
+    /// the top of the home screen; gym-only customers see no spinning there.
+    pub is_spinner: bool,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -169,12 +173,18 @@ async fn my_balance(
     .await
     .map_err(internal_error)?;
 
+    // 4. Spinner flag (#382 R7) — same gym-local `today` as the pass check.
+    let is_spinner = crate::db::spinner::is_spinner(&state.pool, user_id, today)
+        .await
+        .map_err(internal_error)?;
+
     tracing::info!(
         user_id = id,
         credit,
         allow_self_entry,
         pass_active = monthly_pass_active_until.is_some(),
         recent_count = recent.len(),
+        is_spinner,
         "my_balance: ok"
     );
 
@@ -186,5 +196,6 @@ async fn my_balance(
         allow_self_entry,
         monthly_pass_active_until,
         recent,
+        is_spinner,
     }))
 }

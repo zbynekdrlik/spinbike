@@ -5,6 +5,7 @@ import {
     setEnglishLanguage,
     seedCustomerAccount,
 } from './helpers';
+import { cancellableSlotWithinTwoWeeks, mondayFirstIndex } from './spinning-fixtures';
 
 const BASE_URL = 'http://localhost:8099';
 
@@ -80,21 +81,14 @@ test.describe('Schedule and booking', () => {
             return !document.querySelector('.spinner');
         }, { timeout: 10000 });
 
-        // Find a day with classes
-        const dayPicker = page.locator('.day-picker');
-        const dayButtons = dayPicker.locator('button');
-
-        for (let i = 0; i < 5; i++) {
-            await dayButtons.nth(i).click();
-            await page.waitForTimeout(300);
-            const classCards = page.locator('.list-row');
-            if ((await classCards.count()) > 0) {
-                // Should have "Login to book" link
-                const loginLink = page.locator('a[href="/login"]', { hasText: 'Login to book' });
-                await expect(loginLink.first()).toBeVisible();
-                break;
-            }
-        }
+        // #382 R4: a class that already started shows "Started" instead of
+        // a booking link, so look at NEXT week (all of it is in the future,
+        // whatever day the suite runs on). Its Monday has a class.
+        await page.locator('[data-testid="week-next"]').click();
+        await page.waitForFunction(() => !document.querySelector('.spinner'), { timeout: 10000 });
+        await page.locator('.day-picker button').nth(0).click();
+        const loginLink = page.locator('a[href="/login"]', { hasText: 'Login to book' });
+        await expect(loginLink.first()).toBeVisible({ timeout: 10000 });
 
         assertCleanConsole(consoleMessages);
     });
@@ -119,49 +113,24 @@ test.describe('Schedule and booking', () => {
         const loginData = await loginResp.json();
         const token = loginData.token;
 
-        // Pick a weekday with a template that sits inside the current week the
-        // day-picker shows (Mon-Sun). If today is Mon-Fri pick today; on
-        // Sat/Sun fall back to Friday of the same week so the booking lands on
-        // a day still visible in the picker.
-        const now = new Date();
-        const templateDays = [1, 2, 3, 4, 5];
-        const targetDate = new Date(now);
-        if (!templateDays.includes(now.getDay())) {
-            const dayOfWeek = now.getDay(); // 6=Sat, 0=Sun
-            const daysBackToFriday = dayOfWeek === 6 ? 1 : 2;
-            targetDate.setDate(now.getDate() - daysBackToFriday);
-        }
-        const dateStr = targetDate.toISOString().split('T')[0];
-
-        // Query the Mon-Sun window of the target's week.
-        const targetDow = targetDate.getDay();
-        const daysSinceMonday = targetDow === 0 ? 6 : targetDow - 1;
-        const from = new Date(targetDate);
-        from.setDate(targetDate.getDate() - daysSinceMonday);
-        const to = new Date(from);
-        to.setDate(from.getDate() + 6);
-        const fromStr = from.toISOString().split('T')[0];
-        const toStr = to.toISOString().split('T')[0];
+        // #382: pick a class this or next week that has not started and a
+        // customer may still cancel (before 09:00 on its day) — the server's
+        // own `started` / `cancel_open` flags decide, never local date math.
+        const { slot: targetClass, week } = await cancellableSlotWithinTwoWeeks();
+        const dayIdx = mondayFirstIndex(targetClass.date);
 
         const classesResp = await fetch(
-            `${BASE_URL}/api/classes?from=${fromStr}&to=${toStr}`,
+            `${BASE_URL}/api/classes?from=${targetClass.date}&to=${targetClass.date}`,
             { headers: { Authorization: `Bearer ${token}` } }
         );
         const classes = await classesResp.json();
         // Isolation guard: a freshly seeded account must own no bookings at
-        // all. If this ever trips, the account is being shared again and the
-        // `!c.user_booked` filter below is about to fail for a reason that
-        // has nothing to do with the schedule UI (#348) -- fail here, where
-        // the message says so, instead of on an undefined `targetClass`.
+        // all (#348) -- fail here, where the message says so.
         const preBooked = classes.filter((c: any) => c.user_booked);
         expect(
             preBooked,
             'freshly seeded customer already owns bookings -- account is not isolated'
         ).toEqual([]);
-
-        const targetClass = classes.find((c: any) => c.date === dateStr && !c.cancelled && !c.user_booked);
-
-        expect(targetClass).toBeTruthy();
 
         // Book the class via API
         const bookResp = await fetch(`${BASE_URL}/api/bookings`, {
@@ -196,16 +165,19 @@ test.describe('Schedule and booking', () => {
                 return !document.querySelector('.spinner');
             }, { timeout: 10000 });
 
-            // Click the day that has the booked class.
-            // targetDate weekday (1=Mon..5=Fri) maps to day-picker index (0=Mon..4=Fri).
-            const dayIdx = targetDate.getDay() - 1;
+            // Show the booked class's week + day.
+            if (week === 1) {
+                await page.locator('[data-testid="week-next"]').click();
+                await page.waitForFunction(() => !document.querySelector('.spinner'), { timeout: 10000 });
+            }
             const dayPicker = page.locator('.day-picker');
             await dayPicker.locator('button').nth(dayIdx).click();
-            await page.waitForTimeout(500);
 
-            // Verify CANCEL button is visible (booked state shows cancel button)
-            const cancelBtn = page.locator('.list-row--booked .btn--danger');
-            await expect(cancelBtn.first()).toBeVisible({ timeout: 10000 });
+            // Verify CANCEL button is visible (booked + still cancellable)
+            const cancelBtn = page.locator(
+                `[data-testid="cancel-${targetClass.template_id}-${targetClass.date}"]`
+            );
+            await expect(cancelBtn).toBeVisible({ timeout: 10000 });
 
             // Cancel the booking via API
             const cancelResp = await fetch(`${BASE_URL}/api/bookings/${bookingId}`, {
@@ -221,12 +193,17 @@ test.describe('Schedule and booking', () => {
             await page.waitForFunction(() => {
                 return !document.querySelector('.spinner');
             }, { timeout: 10000 });
+            if (week === 1) {
+                await page.locator('[data-testid="week-next"]').click();
+                await page.waitForFunction(() => !document.querySelector('.spinner'), { timeout: 10000 });
+            }
             await dayPicker.locator('button').nth(dayIdx).click();
-            await page.waitForTimeout(500);
 
             // BOOK button should be visible again
-            const bookButton = page.locator('.list-row .btn--primary', { hasText: 'BOOK' });
-            await expect(bookButton.first()).toBeVisible({ timeout: 10000 });
+            const bookButton = page.locator(
+                `[data-testid="book-${targetClass.template_id}-${targetClass.date}"]`
+            );
+            await expect(bookButton).toBeVisible({ timeout: 10000 });
 
             assertCleanConsole(consoleMessages);
         } finally {

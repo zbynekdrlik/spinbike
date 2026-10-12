@@ -239,7 +239,7 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
                         title=i18n::t(lang.get(), "nav_more").to_string()
                         on_close=on_close_menu
                     >
-                        // These 3 links are PLAIN anchors — matches the rest
+                        // These links are PLAIN anchors — matches the rest
                         // of this app's convention (see e.g. adaptive_nav.rs's
                         // own more-sheet Settings link): a full navigation
                         // reload remounts the whole app, so `menu_open`
@@ -255,6 +255,17 @@ pub fn Navbar(auth_ver: ReadSignal<u32>) -> impl IntoView {
                             on:click=move |_| set_menu_open.set(false)
                         >
                             {move || i18n::t(lang.get(), "my_bookings")}
+                        </a>
+                        // #382: a discreet entry to the schedule / booking
+                        // page for EVERY customer (spinners also reach it
+                        // from their home card).
+                        <a
+                            href="/schedule"
+                            class="btn btn--block btn--ghost"
+                            data-testid="menu-spinning"
+                            on:click=move |_| set_menu_open.set(false)
+                        >
+                            {move || i18n::t(lang.get(), "menu_spinning")}
                         </a>
                         <a
                             href="/my/balance"
