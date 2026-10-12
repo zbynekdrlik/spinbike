@@ -155,6 +155,30 @@ async fn list_participants_returns_names_for_staff() {
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["user_name"].as_str().unwrap(), "User");
     assert_eq!(arr[0]["user_email"].as_str().unwrap(), "user@test.com");
+    // #378: the walk-in picker keys "already in this class" off user_id.
+    assert_eq!(arr[0]["user_id"].as_i64(), Some(app.customer_id));
+}
+
+/// #378: the unique index only covers ACTIVE bookings — after a cancel the
+/// same customer can book the same occurrence again (201, not 409).
+#[tokio::test]
+async fn rebooking_after_cancel_is_allowed() {
+    let app = TestApp::new().await;
+    let (tid, date) = seed_monday_template(&app).await;
+    let body = serde_json::json!({ "template_id": tid, "date": date });
+    let (status, resp) = app
+        .request(post_json("/api/bookings", &app.customer_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+    let bid = resp["id"].as_i64().unwrap();
+    let (status, _) = app
+        .request(delete(&format!("/api/bookings/{bid}"), &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::NO_CONTENT);
+    let (status, resp) = app
+        .request(post_json("/api/bookings", &app.customer_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED, "{resp}");
 }
 
 #[tokio::test]
