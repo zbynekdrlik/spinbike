@@ -252,20 +252,33 @@ pub fn StaffDashboardPage() -> impl IntoView {
                                     let set_v = set_ver;
                                     let on_cancel = move |_| {
                                         spawn_local(async move {
-                                            if api::delete(&format!("/api/bookings/{bid}")).await.is_ok() {
-                                                set_p.update(|list| list.retain(|pp| pp.booking_id != bid));
-                                                set_v.update(|v| *v += 1);
+                                            // Never swallow a failed write (admin-ui-error-handling.md):
+                                            // a failed un-book must surface, not look like success.
+                                            match api::delete(&format!("/api/bookings/{bid}")).await {
+                                                Ok(_) => {
+                                                    set_cancel_err.set(String::new());
+                                                    set_p.update(|list| list.retain(|pp| pp.booking_id != bid));
+                                                    set_v.update(|v| *v += 1);
+                                                }
+                                                Err(e) => set_cancel_err.set(i18n::tf(
+                                                    lang.get_untracked(),
+                                                    "error_format",
+                                                    &[&e],
+                                                )),
                                             }
                                         });
                                     };
+                                    // #379: token-based chip (style.css `.participant-chip`),
+                                    // never inline colours — they bypass the theme.
                                     view! {
-                                        <span class="badge" style="display:inline-flex;align-items:center;gap:4px;margin:2px 4px;padding:2px 8px;background:#e0e7ff;border-radius:12px;font-size:0.8rem">
+                                        <span class="participant-chip" data-testid=format!("participant-chip-{bid}")>
                                             {name}
                                             <button
-                                                class="btn btn--compact btn--ghost"
-                                                style="background:none;border:none;cursor:pointer;font-size:0.8rem;color:#dc2626;padding:0 2px"
+                                                type="button"
+                                                class="participant-chip__remove"
                                                 on:click=on_cancel
                                                 title=move || i18n::t(lang.get(), "cancel_booking")
+                                                aria-label=move || i18n::t(lang.get(), "cancel_booking")
                                             >
                                                 "\u{2715}"
                                             </button>
