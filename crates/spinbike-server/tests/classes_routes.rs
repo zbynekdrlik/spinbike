@@ -94,7 +94,8 @@ async fn my_bookings_returns_user_bookings() {
 
 /// #146: when the booked class HAS an instructor, `/api/my/bookings` returns
 /// its name (joined via class_templates.instructor_id) — the V6 migration
-/// seeds a Monday 18:00 template taught by "Stevo".
+/// seeds a Monday 18:00 template taught by instructor 1, which V30 (#381)
+/// renamed to "Stopa".
 #[tokio::test]
 async fn my_bookings_includes_instructor_name() {
     let app = TestApp::new().await;
@@ -122,7 +123,7 @@ async fn my_bookings_includes_instructor_name() {
     let arr = resp.as_array().unwrap();
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["start_time"].as_str().unwrap(), "18:00");
-    assert_eq!(arr[0]["instructor_name"].as_str().unwrap(), "Stevo");
+    assert_eq!(arr[0]["instructor_name"].as_str().unwrap(), "Stopa");
 }
 
 #[tokio::test]
@@ -155,6 +156,30 @@ async fn list_participants_returns_names_for_staff() {
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["user_name"].as_str().unwrap(), "User");
     assert_eq!(arr[0]["user_email"].as_str().unwrap(), "user@test.com");
+    // #378: the walk-in picker keys "already in this class" off user_id.
+    assert_eq!(arr[0]["user_id"].as_i64(), Some(app.customer_id));
+}
+
+/// #378: the unique index only covers ACTIVE bookings — after a cancel the
+/// same customer can book the same occurrence again (201, not 409).
+#[tokio::test]
+async fn rebooking_after_cancel_is_allowed() {
+    let app = TestApp::new().await;
+    let (tid, date) = seed_monday_template(&app).await;
+    let body = serde_json::json!({ "template_id": tid, "date": date });
+    let (status, resp) = app
+        .request(post_json("/api/bookings", &app.customer_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED);
+    let bid = resp["id"].as_i64().unwrap();
+    let (status, _) = app
+        .request(delete(&format!("/api/bookings/{bid}"), &app.customer_token))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::NO_CONTENT);
+    let (status, resp) = app
+        .request(post_json("/api/bookings", &app.customer_token, &body))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::CREATED, "{resp}");
 }
 
 #[tokio::test]
@@ -595,4 +620,87 @@ async fn classes_routes_are_registered() {
         let (status, _) = app.request(get(path, &app.customer_token)).await;
         assert_ne!(status, axum::http::StatusCode::NOT_FOUND, "path={path}");
     }
+}
+
+/// #378 regression: staff booking the SAME customer onto the SAME class
+/// occurrence twice hit the partial unique index `idx_bookings_active
+/// (template_id, date, user_id) WHERE cancelled_at IS NULL`, whose
+/// `DbError::UniqueViolation` fell through `internal_error` -> 500 (prod
+/// 2026-10-12 09:18). It must be a clean 409 `already_booked`, and the
+/// first booking must stay the only active one.
+#[tokio::test]
+async fn second_active_booking_same_user_class_date_returns_409_already_booked() {
+    let app = TestApp::new().await;
+    let (tid, date) = seed_monday_template(&app).await;
+
+    let body = serde_json::json!({
+        "template_id": tid,
+        "date": date,
+        "user_id": app.customer_id,
+    });
+    let (first, _) = app
+        .request(post_json("/api/bookings", &app.staff_token, &body))
+        .await;
+    assert_eq!(first, axum::http::StatusCode::CREATED);
+
+    let (second, resp) = app
+        .request(post_json("/api/bookings", &app.staff_token, &body))
+        .await;
+    assert_eq!(
+        second,
+        axum::http::StatusCode::CONFLICT,
+        "a duplicate active booking must be 409, not 500: {resp}"
+    );
+    assert_eq!(resp["error_code"].as_str(), Some("already_booked"));
+
+    // The customer's own self-booking path hits the same guard.
+    let self_body = serde_json::json!({ "template_id": tid, "date": date });
+    let (third, resp) = app
+        .request(post_json("/api/bookings", &app.customer_token, &self_body))
+        .await;
+    assert_eq!(third, axum::http::StatusCode::CONFLICT);
+    assert_eq!(resp["error_code"].as_str(), Some("already_booked"));
+
+    let active: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM bookings
+         WHERE template_id = ? AND date = ? AND user_id = ? AND cancelled_at IS NULL",
+    )
+    .bind(tid)
+    .bind(&date)
+    .bind(app.customer_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(active, 1, "the duplicate attempts must not add a booking");
+}
+
+/// #381: `/api/classes` carries the instructor's NAME (the schedule used to
+/// show only "Instruktor #<id>"), and after V30 the Tuesday + Thursday
+/// classes run at 18:30 with Vlada while Monday stays at 18:00 with Stopa.
+#[tokio::test]
+async fn list_classes_includes_instructor_name_and_tue_thu_1830() {
+    use chrono::{Datelike, Days, Weekday};
+    let app = TestApp::new().await;
+    let monday = chrono::NaiveDate::parse_from_str(&future_monday(), "%Y-%m-%d").unwrap();
+    assert_eq!(monday.weekday(), Weekday::Mon);
+    let thursday = monday + Days::new(3);
+    let uri = format!("/api/classes?from={monday}&to={thursday}");
+    let (status, resp) = app.request(get(&uri, "")).await;
+    assert_eq!(status, axum::http::StatusCode::OK);
+    let arr = resp.as_array().unwrap();
+
+    let at = |weekday: i64| -> (String, Option<String>) {
+        let c = arr
+            .iter()
+            .find(|c| c["weekday"].as_i64() == Some(weekday))
+            .unwrap_or_else(|| panic!("no class on weekday {weekday}: {arr:?}"));
+        (
+            c["start_time"].as_str().unwrap().to_string(),
+            c["instructor_name"].as_str().map(str::to_string),
+        )
+    };
+    assert_eq!(at(0), ("18:00".to_string(), Some("Stopa".to_string())));
+    assert_eq!(at(1), ("18:30".to_string(), Some("Vlada".to_string())));
+    assert_eq!(at(2), ("18:00".to_string(), Some("Stopa".to_string())));
+    assert_eq!(at(3), ("18:30".to_string(), Some("Vlada".to_string())));
 }

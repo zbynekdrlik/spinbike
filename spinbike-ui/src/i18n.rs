@@ -201,13 +201,17 @@ pub fn fmt_time_str(s: &str) -> String {
     }
 }
 
-/// The i18n key for a customer-facing API `error_code` (#145), when one
-/// exists. Only CUSTOMER-facing codes get a translation — staff/admin-only
-/// codes (`staff_required`, conflict codes, etc.) return `None` so the
-/// caller falls back to the server's raw English `error` message, exactly
-/// as before this ticket. Exhaustive match (like `tx_label_key` above) so a
-/// new `ErrorCode` variant is a compile error here until someone decides
-/// whether it needs a customer-facing translation.
+/// The i18n key for an API `error_code` (#145), when one exists. A code gets
+/// a translation when some render site shows it through
+/// [`localize_api_error`] — every customer-facing code, plus the
+/// staff/admin codes whose site was deliberately localized (#378
+/// `already_booked` in the walk-in picker, #381 `instructor_in_use` /
+/// `instructor_not_found` in the admin Instructors tab). Every other
+/// staff/admin-only code (`staff_required`, most conflict codes, etc.)
+/// returns `None` so the caller falls back to the server's raw English
+/// `error` message. Exhaustive match (like `tx_label_key` above) so a new
+/// `ErrorCode` variant is a compile error here until someone decides whether
+/// its render site needs a translation.
 pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static str> {
     use spinbike_core::errors::ErrorCode;
     match code {
@@ -224,6 +228,13 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
         ErrorCode::BookingNotFound => Some("err_booking_not_found"),
         ErrorCode::BookingNotOwned => Some("err_booking_not_owned"),
         ErrorCode::UserNotFound => Some("err_user_not_found"),
+        // #378: shown both to staff (walk-in picker) and to a customer whose
+        // own double-tap self-booking races the first one.
+        ErrorCode::AlreadyBooked => Some("err_already_booked"),
+        // #381: admin Instructors tab delete — localized so the admin reads
+        // WHY the delete was refused, not the raw English text.
+        ErrorCode::InstructorInUse => Some("err_instructor_in_use"),
+        ErrorCode::InstructorNotFound => Some("err_instructor_not_found"),
         ErrorCode::Internal => Some("err_internal"),
         // Staff/admin-only or not customer-facing in the 5 render sites this
         // ticket scopes to (#145) — left unmapped on purpose, NOT an
@@ -582,7 +593,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("cancel_booking", ("Zrusit rezervaciu", "Cancel booking"));
     m.insert("cancel_class", ("Zrusit hodinu", "Cancel Class"));
     m.insert("spots_format", ("{}/{} miest", "{}/{} spots"));
-    m.insert("instructor_format", ("Instruktor #{}", "Instructor #{}"));
+    m.insert("instructor_format", ("Instruktor: {}", "Instructor: {}"));
     m.insert(
         "login_to_book",
         ("Pre rezervaciu sa prihlaste", "Login to book"),
@@ -1355,6 +1366,35 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "err_user_not_found",
         ("Pouzivatel sa nenasiel", "User not found"),
+    );
+    m.insert(
+        "err_already_booked",
+        (
+            "Zakaznik uz je na tento spinning prihlaseny",
+            "This customer is already booked into this class",
+        ),
+    );
+    m.insert(
+        "err_instructor_in_use",
+        (
+            "Instruktor uci aktivny spinning v rozvrhu — najprv mu ho zmen alebo vypni",
+            "This instructor still teaches an active class — reassign or deactivate it first",
+        ),
+    );
+    m.insert(
+        "err_instructor_not_found",
+        ("Instruktor sa nenasiel", "Instructor not found"),
+    );
+    m.insert(
+        "confirm_delete_instructor",
+        (
+            "Natrvalo vymazat instruktora {}?",
+            "Permanently delete instructor {}?",
+        ),
+    );
+    m.insert(
+        "walkin_already_in_class",
+        ("uz prihlaseny", "already booked"),
     );
     m.insert(
         "err_internal",

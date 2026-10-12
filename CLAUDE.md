@@ -88,6 +88,8 @@ Load the skill for the area you're working in — each contains the full HOW-TO.
 Path-scoped rules under `.claude/rules/` load themselves when you touch a matching file:
 
 - version label / `.app-version` styling → `.claude/rules/ui-version-label.md` (auto-loads on `spinbike-ui/style.css`, `e2e/tests/version-display.spec.ts`)
+- data migration rewriting seeded rows / FK-referenced deletes / prod-copy dry-run → `.claude/rules/data-migrations.md` (auto-loads on `db/migrations.rs`, `db/instructors.rs`, `routes/admin.rs` — #381)
+- text contrast / theme tokens / two-scheme contrast test → `.claude/rules/ui-contrast.md` (auto-loads on `spinbike-ui/style.css`, `staff_dashboard.rs` — #379)
 - adding a new `ErrorCode` variant → `.claude/rules/error-codes.md` (auto-loads on `crates/spinbike-core/src/errors.rs`, `crates/spinbike-server/src/routes/**`, `spinbike-ui/src/i18n.rs`)
 - `AuthUser`-driven route acting on the caller's own account → `.claude/rules/session-invalidation.md` (auto-loads on `crates/spinbike-server/src/routes/**` — the blocked/deleted-user 401 contract, #268/#274/#277)
 - writing/editing an E2E fixture generator or pagination loop → `.claude/rules/e2e-fixtures.md` (auto-loads on `e2e/tests/**` — dataset-growth-safe fixtures + rank-based pagination, #288/#39)
