@@ -67,6 +67,10 @@ pub enum ErrorCode {
     EmailOrCardConflict,
     ClassFull,
     ClassCancelled,
+    /// The customer already holds an ACTIVE booking for this exact class
+    /// occurrence (`template_id` + `date`) — the partial unique index
+    /// `idx_bookings_active` rejected a second one (#378; was a 500).
+    AlreadyBooked,
     NoteOnVoidedTransaction,
     DateOnVoidedTransaction,
     /// `patch_valid_until` (`routes/transactions.rs`) rejecting an edit of
@@ -141,6 +145,7 @@ impl ErrorCode {
             ErrorCode::EmailOrCardConflict => "A user with this email or card code already exists",
             ErrorCode::ClassFull => "Class is full",
             ErrorCode::ClassCancelled => "Class is cancelled",
+            ErrorCode::AlreadyBooked => "User is already booked into this class",
             ErrorCode::NoteOnVoidedTransaction => "Cannot edit note on a voided transaction",
             ErrorCode::DateOnVoidedTransaction => "Cannot edit date on a voided transaction",
             ErrorCode::ValidUntilOnVoidedTransaction => {
@@ -278,6 +283,11 @@ mod tests {
             ErrorCode::ClassCancelled,
             "class_cancelled",
             "Class is cancelled",
+        ),
+        (
+            ErrorCode::AlreadyBooked,
+            "already_booked",
+            "User is already booked into this class",
         ),
         (
             ErrorCode::NoteOnVoidedTransaction,

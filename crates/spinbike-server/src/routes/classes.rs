@@ -73,6 +73,10 @@ pub struct MyBookingResponse {
 #[derive(Serialize)]
 pub struct ParticipantResponse {
     pub booking_id: i64,
+    /// The booked customer's id — lets the staff walk-in picker mark
+    /// customers already in the class instead of offering a booking that
+    /// would 409 `already_booked` (#378).
+    pub user_id: i64,
     pub user_name: String,
     pub user_email: String,
 }
@@ -175,12 +179,13 @@ async fn list_participants(
     #[derive(sqlx::FromRow)]
     struct Row {
         booking_id: i64,
+        user_id: i64,
         user_name: String,
         user_email: String,
     }
 
     let rows = sqlx::query_as::<_, Row>(
-        "SELECT b.id AS booking_id, u.name AS user_name, u.email AS user_email
+        "SELECT b.id AS booking_id, b.user_id AS user_id, u.name AS user_name, u.email AS user_email
          FROM bookings b
          JOIN users u ON u.id = b.user_id  -- no deleted_at filter: booking history for soft-deleted users remains part of class records
          WHERE b.template_id = ? AND b.date = ? AND b.cancelled_at IS NULL
@@ -196,6 +201,7 @@ async fn list_participants(
         rows.into_iter()
             .map(|r| ParticipantResponse {
                 booking_id: r.booking_id,
+                user_id: r.user_id,
                 user_name: r.user_name,
                 user_email: r.user_email,
             })
@@ -259,6 +265,18 @@ async fn create_booking(
     .map_err(|e| {
         if matches!(e, crate::db::DbError::ClassFull) {
             ApiError::conflict_message(ErrorCode::ClassFull, e.to_string())
+        } else if matches!(e, crate::db::DbError::UniqueViolation) {
+            // #378: the partial unique index `idx_bookings_active
+            // (template_id, date, user_id) WHERE cancelled_at IS NULL` is the
+            // source of truth for "already booked" — no racy pre-check
+            // SELECT. Its violation is an expected business outcome, not a 500.
+            tracing::info!(
+                template_id = body.template_id,
+                date = %body.date,
+                user_id = booking_user_id,
+                "booking rejected: user already holds an active booking for this class"
+            );
+            ApiError::conflict(ErrorCode::AlreadyBooked)
         } else {
             internal_error(e)
         }

@@ -39,6 +39,8 @@ fn walkin_urlencode(s: &str) -> String {
 #[allow(dead_code)]
 struct Participant {
     booking_id: i64,
+    /// #378: lets the walk-in picker mark customers already in this class.
+    user_id: i64,
     user_name: String,
     user_email: String,
 }
@@ -279,6 +281,9 @@ pub fn StaffDashboardPage() -> impl IntoView {
                                 WalkinForm(WalkinFormProps {
                                     template_id,
                                     date,
+                                    booked_user_ids: Signal::derive(move || {
+                                        participants.get().iter().map(|p| p.user_id).collect()
+                                    }),
                                     on_done: Callback::new(move |_| {
                                         set_walkin_open.set(false);
                                         set_v.update(|v| *v += 1);
@@ -301,6 +306,11 @@ pub fn StaffDashboardPage() -> impl IntoView {
 fn WalkinForm(
     template_id: i64,
     date: String,
+    /// #378: users already holding an active booking for this occurrence —
+    /// rendered as disabled "already booked" rows instead of offering a
+    /// booking that the server would reject with 409 `already_booked`.
+    #[prop(into)]
+    booked_user_ids: Signal<Vec<i64>>,
     #[prop(into)] on_done: Callback<()>,
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
@@ -350,6 +360,10 @@ fn WalkinForm(
     let date_for_pick = date.clone();
     let pick = move |user: WalkinUserHit| {
         let user_id = user.id;
+        if booked_user_ids.get_untracked().contains(&user_id) {
+            set_err.set(i18n::t(lang.get_untracked(), "err_already_booked").to_string());
+            return;
+        }
         let date = date_for_pick.clone();
         set_loading.set(true);
         set_err.set(String::new());
@@ -365,7 +379,10 @@ fn WalkinForm(
                 #[allow(dead_code)]
                 id: i64,
             }
-            match api::post::<Req, Resp>(
+            // post_json (not post): the coded error lets a 409
+            // `already_booked` (e.g. a stale participant list) render the
+            // localized Slovak banner instead of the raw English text (#378).
+            match api::post_json::<Req, Resp>(
                 "/api/bookings",
                 &Req {
                     template_id,
@@ -376,7 +393,11 @@ fn WalkinForm(
             .await
             {
                 Ok(_) => on_done.run(()),
-                Err(e) => set_err.set(e),
+                Err(e) => set_err.set(i18n::localize_api_error(
+                    lang.get_untracked(),
+                    e.code,
+                    &e.message,
+                )),
             }
             set_loading.set(false);
         });
@@ -401,16 +422,33 @@ fn WalkinForm(
                 {move || {
                     let list = results.get();
                     let is_loading = loading.get();
+                    let booked = booked_user_ids.get();
                     list.into_iter().map(|user| {
-                        let label = walkin_display(&user);
                         let pick = pick.clone();
                         let user_id = user.id;
+                        let already = booked.contains(&user_id);
+                        let label = if already {
+                            format!(
+                                "{} \u{00b7} {}",
+                                walkin_display(&user),
+                                i18n::t(lang.get(), "walkin_already_in_class")
+                            )
+                        } else {
+                            walkin_display(&user)
+                        };
+                        let btn_class = if already {
+                            "btn btn--ghost btn--compact"
+                        } else {
+                            "btn btn--primary btn--compact"
+                        };
+                        let btn_disabled = is_loading || already;
+                        let already_attr = if already { "true" } else { "false" };
                         view! {
-                            <li class="walkin-row" data-testid=format!("walkin-pick-{user_id}")>
+                            <li class="walkin-row" data-testid=format!("walkin-pick-{user_id}") data-already-booked=already_attr>
                                 <button
                                     type="button"
-                                    class="btn btn--primary btn--compact"
-                                    disabled=is_loading
+                                    class=btn_class
+                                    disabled=btn_disabled
                                     on:click=move |_| pick(user.clone())
                                 >
                                     {label}

@@ -51,9 +51,15 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
                 #[allow(dead_code)]
                 id: i64,
             }
-            match api::post::<Req, Resp>("/api/bookings", &Req { template_id, date }).await {
+            // post_json: the coded error localizes a 409 `already_booked`
+            // (double-tap race on a self-booking, #378).
+            match api::post_json::<Req, Resp>("/api/bookings", &Req { template_id, date }).await {
                 Ok(_) => on_change.run(()),
-                Err(e) => set_error.set(e),
+                Err(e) => set_error.set(i18n::localize_api_error(
+                    lang.get_untracked(),
+                    e.code,
+                    &e.message,
+                )),
             }
             set_loading.set(false);
         });

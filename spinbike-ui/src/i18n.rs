@@ -224,6 +224,9 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
         ErrorCode::BookingNotFound => Some("err_booking_not_found"),
         ErrorCode::BookingNotOwned => Some("err_booking_not_owned"),
         ErrorCode::UserNotFound => Some("err_user_not_found"),
+        // #378: shown both to staff (walk-in picker) and to a customer whose
+        // own double-tap self-booking races the first one.
+        ErrorCode::AlreadyBooked => Some("err_already_booked"),
         ErrorCode::Internal => Some("err_internal"),
         // Staff/admin-only or not customer-facing in the 5 render sites this
         // ticket scopes to (#145) — left unmapped on purpose, NOT an
@@ -1355,6 +1358,17 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "err_user_not_found",
         ("Pouzivatel sa nenasiel", "User not found"),
+    );
+    m.insert(
+        "err_already_booked",
+        (
+            "Zakaznik uz je na tento spinning prihlaseny",
+            "This customer is already booked into this class",
+        ),
+    );
+    m.insert(
+        "walkin_already_in_class",
+        ("uz prihlaseny", "already booked"),
     );
     m.insert(
         "err_internal",
