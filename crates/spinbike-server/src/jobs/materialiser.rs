@@ -5,7 +5,7 @@
 use std::collections::{HashMap, HashSet};
 
 use anyhow::Result;
-use chrono::{Datelike, Duration};
+use chrono::{Datelike, Duration, NaiveDateTime};
 use sqlx::SqlitePool;
 
 use crate::db::error::DbError;
@@ -45,7 +45,16 @@ fn placeholders(n: usize) -> String {
     std::iter::repeat_n("?", n).collect::<Vec<_>>().join(", ")
 }
 
+/// Run one sweep against the real gym-local wall clock.
 pub async fn sweep(pool: &SqlitePool) -> Result<SweepSummary> {
+    sweep_as_of(pool, crate::util::now_bratislava()).await
+}
+
+/// [`sweep`] with an injected gym-local (Europe/Bratislava) `now`, so tests
+/// can pin the time of day deterministically. Production derives `now` via
+/// `crate::util::now_bratislava()` — never `chrono::Local`
+/// (`.claude/rules/bratislava-tz.md`, #327).
+pub async fn sweep_as_of(pool: &SqlitePool, now: NaiveDateTime) -> Result<SweepSummary> {
     let persistents = crate::db::persistent_bookings::list_active_all(pool).await?;
     let templates = sqlx::query_as::<_, crate::db::classes::ClassTemplateRow>(
         "SELECT id, weekday, start_time, duration_minutes, instructor_id, capacity, active
@@ -54,7 +63,7 @@ pub async fn sweep(pool: &SqlitePool) -> Result<SweepSummary> {
     .fetch_all(pool)
     .await?;
 
-    let today = crate::util::today_bratislava();
+    let today = now.date();
 
     // Build every (template, date, user) candidate this sweep might need to
     // materialise. Unchanged filter logic from before #341 — only the
@@ -254,6 +263,13 @@ mod tests {
     use super::*;
     use crate::db::{create_memory_pool, run_migrations};
 
+    /// Gym-local midnight of today — before the 09:00 binding cutoff, so a
+    /// test's "today" occurrences are still eligible regardless of the real
+    /// time of day the suite runs at (#382).
+    fn start_of_today() -> NaiveDateTime {
+        crate::util::today_bratislava().and_hms_opt(0, 0, 0).unwrap()
+    }
+
     async fn seed(pool: &SqlitePool, weekday: i64) -> (i64, i64) {
         let uid: i64 =
             sqlx::query_scalar("INSERT INTO users (email, name) VALUES ('u@x','u') RETURNING id")
@@ -297,8 +313,9 @@ mod tests {
             "sweep() must not call chrono::Local::now() directly (OS-TZ dependent — #327)"
         );
         assert!(
-            production_src.contains("crate::util::today_bratislava()"),
-            "sweep() must derive today via the shared crate::util::today_bratislava() helper (#327)"
+            production_src.contains("crate::util::now_bratislava()"),
+            "sweep() must derive its clock via the shared crate::util::now_bratislava() helper \
+             (#327; since #382 the injected `now` also drives the 09:00 cutoff)"
         );
     }
 
@@ -311,7 +328,7 @@ mod tests {
             .await
             .unwrap();
 
-        let summary = sweep(&pool).await.unwrap();
+        let summary = sweep_as_of(&pool, start_of_today()).await.unwrap();
         assert!(summary.created >= 1, "at least one Monday in next 14 days");
 
         let sources: Vec<(String,)> =
@@ -332,8 +349,8 @@ mod tests {
             .await
             .unwrap();
 
-        let first = sweep(&pool).await.unwrap();
-        let second = sweep(&pool).await.unwrap();
+        let first = sweep_as_of(&pool, start_of_today()).await.unwrap();
+        let second = sweep_as_of(&pool, start_of_today()).await.unwrap();
         assert_eq!(second.created, 0, "second sweep should create nothing");
         assert!(first.created > 0);
     }
@@ -374,7 +391,7 @@ mod tests {
             .await
             .unwrap();
 
-        let _ = sweep(&pool).await.unwrap();
+        let _ = sweep_as_of(&pool, start_of_today()).await.unwrap();
         let got: Option<i64> =
             sqlx::query_scalar("SELECT id FROM bookings WHERE user_id=? AND date=?")
                 .bind(uid)
@@ -431,7 +448,7 @@ mod tests {
             .await
             .unwrap();
 
-        let _ = sweep(&pool).await.unwrap();
+        let _ = sweep_as_of(&pool, start_of_today()).await.unwrap();
 
         let a_today: Option<i64> = sqlx::query_scalar(
             "SELECT id FROM bookings WHERE template_id=? AND date=? AND user_id=?",
@@ -501,7 +518,7 @@ mod tests {
             .await
             .unwrap();
 
-        let _ = sweep(&pool).await.unwrap();
+        let _ = sweep_as_of(&pool, start_of_today()).await.unwrap();
 
         let tid2_booking: Option<i64> = sqlx::query_scalar(
             "SELECT id FROM bookings WHERE template_id=? AND date=? AND user_id=?",
@@ -594,7 +611,7 @@ mod tests {
         // (0..=WINDOW_DAYS) window — 3 distinct matching dates. Per date on
         // tid_full: exactly one of {A, B} wins the atomic INSERT, the other
         // gets ClassFull. tid_other has no capacity contention at all.
-        let summary = sweep(&pool)
+        let summary = sweep_as_of(&pool, start_of_today())
             .await
             .expect("a ClassFull race must not abort the whole sweep (#345)");
         assert_eq!(
@@ -714,7 +731,7 @@ mod tests {
             .await
             .unwrap();
 
-        let summary = sweep(&pool)
+        let summary = sweep_as_of(&pool, start_of_today())
             .await
             .expect("a non-ClassFull DB error must not abort the whole sweep");
 
