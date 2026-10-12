@@ -10,7 +10,7 @@ use wasm_bindgen_futures::spawn_local;
 use spinbike_core::reports::{EventKind, classify};
 
 use crate::api;
-use crate::components::{DoorButton, InstallPrompt, PushToggle, PushToggleSurface};
+use crate::components::{DoorButton, InstallPrompt, MySpinningCard, PushToggle, PushToggleSurface};
 use crate::dates;
 use crate::i18n::{self, Lang, fmt_date_short, tf};
 
@@ -30,6 +30,10 @@ struct BalanceResp {
     allow_self_entry: bool,
     monthly_pass_active_until: Option<String>,
     recent: Vec<RecentTx>,
+    /// #382 R7: recurring slot OR spinning within the last 365 days — only
+    /// then does the "Moje spinningy" card render at the top.
+    #[serde(default)]
+    is_spinner: bool,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -84,6 +88,11 @@ pub fn MyBalancePage() -> impl IntoView {
     };
     Effect::new(move |_| load());
 
+    // #382 R7: a Memo so a data refresh (e.g. after a door press) does not
+    // remount the spinning card unless the flag itself changed.
+    let is_spinner =
+        Memo::new(move |_| data.with(|d| d.as_ref().map(|d| d.is_spinner).unwrap_or(false)));
+
     let allowed_signal: Signal<bool> = Signal::derive(move || {
         data.with(|d| d.as_ref().map(|d| d.allow_self_entry).unwrap_or(false))
     });
@@ -103,6 +112,10 @@ pub fn MyBalancePage() -> impl IntoView {
         // header (Navbar) instead, so this title is the same static,
         // non-personalized one every other page already uses.
         <h1 class="page-title">{move || i18n::t(lang.get(), "my_balance")}</h1>
+
+        // #382 R7: spinners get their next classes at the very TOP of home;
+        // gym-only customers see no spinning here at all.
+        {move || is_spinner.get().then(|| view! { <MySpinningCard /> })}
 
         // Credit + pass cards — re-render reactively on data changes (no
         // remount of children; just text updates).

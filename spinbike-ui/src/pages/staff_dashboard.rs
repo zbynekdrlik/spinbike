@@ -43,6 +43,12 @@ struct Participant {
     user_id: i64,
     user_name: String,
     user_email: String,
+    /// #382 R8: `"persistent"` marks a recurring booking ("pravidelne").
+    #[serde(default)]
+    source: String,
+    /// #382 R3/R8: charged a non-zero amount — the cancel refunds it.
+    #[serde(default)]
+    refundable: bool,
 }
 
 fn current_week_range() -> (String, String) {
@@ -249,6 +255,14 @@ pub fn StaffDashboardPage() -> impl IntoView {
                                 let tags: Vec<_> = list.iter().map(|p| {
                                     let bid = p.booking_id;
                                     let name = p.user_name.clone();
+                                    let recurring = p.source == "persistent";
+                                    // #382 R3: a charged booking is refunded by
+                                    // the cancel — say so on the control.
+                                    let remove_key = if p.refundable {
+                                        "cancel_booking_refund"
+                                    } else {
+                                        "cancel_booking"
+                                    };
                                     let set_p = set_participants;
                                     let set_v = set_ver;
                                     let on_cancel = move |_| {
@@ -274,12 +288,18 @@ pub fn StaffDashboardPage() -> impl IntoView {
                                     view! {
                                         <span class="participant-chip" data-testid=format!("participant-chip-{bid}")>
                                             {name}
+                                            {recurring.then(|| view! {
+                                                <span class="participant-chip__tag" data-testid=format!("participant-recurring-{bid}")>
+                                                    {move || i18n::t(lang.get(), "recurring")}
+                                                </span>
+                                            })}
                                             <button
                                                 type="button"
                                                 class="participant-chip__remove"
+                                                data-testid=format!("participant-remove-{bid}")
                                                 on:click=on_cancel
-                                                title=move || i18n::t(lang.get(), "cancel_booking")
-                                                aria-label=move || i18n::t(lang.get(), "cancel_booking")
+                                                title=move || i18n::t(lang.get(), remove_key)
+                                                aria-label=move || i18n::t(lang.get(), remove_key)
                                             >
                                                 "\u{2715}"
                                             </button>

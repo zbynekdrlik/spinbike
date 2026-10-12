@@ -1071,6 +1071,14 @@ table tbody tr:last-child td {
     outline-offset: 1px;
 }
 
+/* #382: recurring-booking mark on a roster chip ("pravidelne"). Muted
+   token text on the chip's own --surface-3 (>= 5.6:1 in both schemes). */
+.participant-chip__tag {
+    font-size: var(--fs-xs);
+    color: var(--text-muted);
+    font-weight: 600;
+}
+
 /* Walkin (staff schedule) */
 .walkin-results {
     list-style: none;
@@ -1816,6 +1824,36 @@ body:has(.adaptive-nav) .navbar-links { display: none; }
    desk-side `.card-balance--negative` (#49) so the customer sees their debt
    at a glance. */
 .card-credit--negative .card-credit__value { color: var(--danger); }
+
+/* #382: "Moje spinningy" card (top of the customer home) and the
+   "Pravidelne terminy" list on the schedule. Theme tokens only — no inline
+   colours (ui-contrast.md). */
+.card-spinning {
+    background: var(--surface);
+    border: 1px solid var(--border-strong);
+    border-radius: 10px;
+    padding: 1rem;
+    margin-bottom: 0.75rem;
+}
+.card-spinning__title {
+    font-size: 1rem;
+    font-weight: 600;
+    color: var(--text);
+    margin: 0 0 0.5rem;
+}
+.card-spinning__empty {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+    margin-bottom: 0.5rem;
+}
+.card-spinning .btn--ghost { margin-top: 0.5rem; }
+
+/* #382: this-week / next-week switch on the customer schedule. */
+.week-switch {
+    display: flex;
+    gap: var(--s-2);
+    margin-bottom: var(--s-3);
+}
 
 .recent-visits__heading {
     font-size: 1rem;
