@@ -299,6 +299,22 @@ mod tests {
     }
 
     #[test]
+    fn reminder_omits_a_blank_instructor_name() {
+        // A whitespace-only name must not render as " ( )" — kills the
+        // `!name.trim().is_empty()` guard mutant (#382 mutation shard 4).
+        let (_, blank) = render_reminder("18:00", Some("   "));
+        assert!(
+            blank.starts_with("Zajtra mas spinning o 18:00. Ak"),
+            "{blank}"
+        );
+        let (_, padded) = render_reminder("18:30", Some("  Stopa "));
+        assert!(
+            padded.starts_with("Zajtra mas spinning o 18:30 (Stopa). Ak"),
+            "{padded}"
+        );
+    }
+
+    #[test]
     fn run_hour_is_18_and_distinct_from_the_other_daily_jobs() {
         assert_eq!(DAILY_RUN_HOUR, 18);
         for other in [
