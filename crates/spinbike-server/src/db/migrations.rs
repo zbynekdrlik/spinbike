@@ -124,6 +124,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "users: auto_renew_pass flag (per-user opt-in for the daily contiguous pass renewal job, #374)",
         V28_USERS_AUTO_RENEW_PASS,
     ),
+    (
+        29,
+        "settings: drop the dead center_name row (#380)",
+        V29_DROP_CENTER_NAME_SETTING,
+    ),
 ];
 
 /// Post-condition checks `db::run_migrations` runs at the end of a
@@ -1236,6 +1241,16 @@ UPDATE services
 // same shape as V16's `allow_self_entry`.
 const V28_USERS_AUTO_RENEW_PASS: &str = r#"
 ALTER TABLE users ADD COLUMN auto_renew_pass INTEGER NOT NULL DEFAULT 0;
+"#;
+
+// V29: remove the dead `center_name` settings row (#380). Seeded by V1
+// ("Squash Centrum Smizany") but never read by any production code — the
+// generic admin Settings tab lists every `settings` row, so the stale value
+// showed up there as if it configured something. `bike_count` stays (still
+// read by `get_bike_count`). Pure row DELETE, no schema change; a no-op on a
+// DB where the row is already gone.
+const V29_DROP_CENTER_NAME_SETTING: &str = r#"
+DELETE FROM settings WHERE key = 'center_name';
 "#;
 
 #[cfg(test)]
@@ -4314,5 +4329,39 @@ mod tests {
             bad.is_err(),
             "enforce_active_pass_invariant trigger must survive the V27 rebuild"
         );
+    }
+
+    // V29 — dead center_name setting (#380) ---------------------------------
+
+    /// Genuine upgrade from V28: the V1-seeded `center_name` row is present
+    /// (as on prod), V29 removes it and leaves `bike_count` untouched.
+    #[tokio::test]
+    async fn v29_removes_center_name_and_keeps_bike_count() {
+        let pool = pool_migrated_to(28).await;
+        let before: Option<String> =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'center_name'")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert_eq!(
+            before.as_deref(),
+            Some("Squash Centrum Smizany"),
+            "test setup: V1 seeds center_name"
+        );
+
+        run_migrations(&pool).await.unwrap();
+
+        let after: Option<String> =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'center_name'")
+                .fetch_optional(&pool)
+                .await
+                .unwrap();
+        assert_eq!(after, None, "V29 must delete the center_name row");
+        let bike_count: String =
+            sqlx::query_scalar("SELECT value FROM settings WHERE key = 'bike_count'")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(bike_count, "10", "V29 must not touch bike_count");
     }
 }
