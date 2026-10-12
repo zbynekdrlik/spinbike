@@ -267,7 +267,9 @@ mod tests {
     /// test's "today" occurrences are still eligible regardless of the real
     /// time of day the suite runs at (#382).
     fn start_of_today() -> NaiveDateTime {
-        crate::util::today_bratislava().and_hms_opt(0, 0, 0).unwrap()
+        crate::util::today_bratislava()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
     }
 
     async fn seed(pool: &SqlitePool, weekday: i64) -> (i64, i64) {
