@@ -647,7 +647,10 @@ select.form-control {
 }
 
 .seg__item {
-    flex: 1 0 auto;
+    /* Equal widths while they fit; never narrower than the label, so a row
+       that does not fit scrolls inside .seg instead of widening the page. */
+    flex: 1 1 0;
+    min-width: max-content;
     min-height: 40px;
     background: transparent;
     color: var(--text-muted);
@@ -666,7 +669,8 @@ select.form-control {
 .seg__item[aria-selected="true"] {
     background: var(--surface);
     color: var(--text);
-    box-shadow: var(--shadow);
+    /* small shadow: .seg clips at its 4px padding since it scrolls (#386) */
+    box-shadow: var(--shadow-sm);
 }
 
 .seg-body { padding-top: var(--s-3); }

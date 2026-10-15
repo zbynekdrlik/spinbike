@@ -83,6 +83,9 @@ back (standalone mode has no browser back button). Rules since #386:
   the container for `trap_tab`, so a Shift+Tab from there escaped the
   dialog whenever the sheet stayed open (busy guard, drag-off release) —
   the same "third focus state" class as above, caught in #386's review.
+  Script / screen-reader focus can still land there, so `trap_tab` treats
+  ANY focused node outside the tab cycle like the focused container
+  ("before the first"), not just `.sheet` itself.
 - A link inside a sheet closes the sheet in its OWN `on:click` (synchronous
   `set_open.set(false)`, the `nav.rs` pattern) — never rely on the route
   change alone to unmount the dialog.
@@ -94,8 +97,9 @@ back (standalone mode has no browser back button). Rules since #386:
   than the phone can be dragged sideways and displace the fixed bottom nav.
   All four admin tables are wrapped. The `.seg` segmented control scrolls on
   its own too: the SLOVAK admin tab labels (the owner's language) are ~391px
-  of min-content at 390px — check width in `sk`, not just the `en` that
-  `loginViaAPI` sets.
+  of min-content at 390px — check width in `sk` too
+  (`loginViaAPI(page, url, email, pw, 'sk')`; never stack a second language
+  init script — Playwright does not define their order).
 - iPhone behaviour is tested on the REAL WebKit engine: the `webkit-iphone`
   Playwright project (`devices['iPhone 13']`) runs only the specs matched by
   `WEBKIT_IPHONE_SPECS` in `e2e/playwright.config.ts`; CI's test-ui job

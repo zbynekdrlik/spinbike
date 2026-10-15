@@ -100,12 +100,26 @@ fn trap_tab(ev: &ev::KeyboardEvent) {
     // one-before-the-start position would, so the trap keeps working
     // immediately once something becomes focusable again, without waiting
     // for a second Tab press to hit a real descendant first.
+    //
+    // #386 review follow-up: the same applies to ANY focused node inside
+    // `.sheet` that is NOT one of the tab-cycle items — concretely the
+    // header close button (`tabindex="-1"`, deliberately excluded by
+    // `FOCUSABLE_SELECTOR`). Its `on:mousedown` stops a pointer press from
+    // focusing it, but a script `.focus()` or a screen reader's cursor can
+    // still land there, and from that spot native Shift+Tab has nothing
+    // tabbable before it inside `.sheet` and would escape the dialog. So a
+    // focused node outside the cycle is treated exactly like the focused
+    // container: "before the first" item.
     let container_node: &web_sys::Node = container.as_ref();
-    let is_container_focused = container_node.is_same_node(Some(active_node));
+    let in_cycle = (0..len).any(|i| {
+        list.get(i)
+            .is_some_and(|n| n.is_same_node(Some(active_node)))
+    });
+    let is_before_first = container_node.is_same_node(Some(active_node)) || !in_cycle;
 
     if ev.shift_key() {
         let first_is_active = first.as_ref().is_some_and(|el| is_active(el, active_node));
-        if (first_is_active || is_container_focused)
+        if (first_is_active || is_before_first)
             && let Some(last_el) = &last
         {
             ev.prevent_default();
@@ -118,7 +132,7 @@ fn trap_tab(ev: &ev::KeyboardEvent) {
         }
     } else {
         let last_is_active = last.as_ref().is_some_and(|el| is_active(el, active_node));
-        if (last_is_active || is_container_focused)
+        if (last_is_active || is_before_first)
             && let Some(first_el) = &first
         {
             ev.prevent_default();
@@ -185,12 +199,12 @@ fn is_active(el: &web_sys::HtmlElement, active_node: &web_sys::Node) -> bool {
 /// through the close callback's own LATER macrotask, so the final
 /// settled focus state is unaffected either way.
 ///
-/// The header close button (#386) never reaches this function at all: its
-/// `on:mousedown` calls `prevent_default()`, so pressing it moves focus
-/// NOWHERE (no blur, no `focusout`) in every engine — and focus therefore
-/// can never park on that `tabindex="-1"` button, which `trap_tab` would
-/// not recognise as first/last/container (the #334 "third focus state"
-/// escape, review finding on #386).
+/// A pointer press on the header close button (#386) never reaches this
+/// function: its `on:mousedown` calls `prevent_default()`, so the press
+/// moves focus nowhere (no blur, no `focusout`). Focus can still reach
+/// that `tabindex="-1"` button by script or a screen reader's cursor;
+/// `trap_tab` treats any focused node outside the tab cycle like the
+/// focused container, so Tab/Shift+Tab from there still stay inside.
 fn refocus_if_orphaned(ev: ev::FocusEvent) {
     let Some(container) = ev
         .current_target()

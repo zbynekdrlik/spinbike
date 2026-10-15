@@ -248,6 +248,17 @@ test.describe('Customer header burger menu (#319)', () => {
         await page.mouse.up();
         await expect(sheet).toBeVisible();
 
+        // Focus can still reach the tabindex=-1 button by script (or a
+        // screen reader's cursor). trap_tab must treat it as sitting before
+        // the first item: Shift+Tab wraps to the last, Tab enters the first.
+        await close.focus();
+        await expect(close).toBeFocused();
+        await page.keyboard.press('Shift+Tab');
+        await expect(sheet.locator('[data-testid="menu-logout"]')).toBeFocused();
+        await close.focus();
+        await page.keyboard.press('Tab');
+        await expect(sheet.locator('[data-testid="menu-my-bookings"]')).toBeFocused();
+
         await close.click();
         await expect(sheet).toHaveCount(0);
 

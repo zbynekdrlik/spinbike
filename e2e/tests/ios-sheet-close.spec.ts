@@ -94,17 +94,17 @@ test.describe('iPhone PWA — every overlay and sub-page has a way out (#386)', 
         test(`/settings services tab never widens the page past the phone screen (${lang})`, async ({ page }) => {
             const consoleMessages = setupConsoleCheck(page);
             await setIosStandalone(page);
-            await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
-            // loginViaAPI registers an init script forcing 'en' on every
-            // navigation; the owner uses Slovak, whose longer tab labels are
-            // what overflowed (#386 review). Init scripts run in the order
-            // they were added, so this one wins.
-            await page.addInitScript((l) => {
-                localStorage.setItem('spinbike_lang', l);
-            }, lang);
+            // The owner uses Slovak, whose longer tab labels are what
+            // overflowed (#386 review) — so measure both languages.
+            await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123', lang);
             await page.goto('/settings');
             await expect(page.locator('[data-testid="nav-more"]')).toBeVisible();
 
+            // Prove the requested language really loaded, so the sk run can
+            // never silently re-measure English.
+            await expect(page.locator('[data-testid="admin-tab-services"]')).toHaveText(
+                lang === 'sk' ? 'Sluzby' : 'Services',
+            );
             await page.locator('[data-testid="admin-tab-services"]').tap();
             const tableScroll = page.locator('[data-testid="services-table-scroll"]');
             await expect(tableScroll).toBeVisible();
