@@ -785,6 +785,10 @@ table tbody tr:last-child td {
     backdrop-filter: blur(4px);
     z-index: 200;
     animation: sheet-backdrop-in var(--dur) var(--ease-out);
+    /* #386: iOS WebKit only dispatches `click` for a tap on an element it
+       considers clickable — a plain <div> with a click handler needs
+       cursor:pointer for that. The sheet resets it below. */
+    cursor: pointer;
 }
 
 .sheet {
@@ -792,6 +796,7 @@ table tbody tr:last-child td {
     left: 0;
     right: 0;
     bottom: 0;
+    cursor: auto;
     background: var(--surface);
     border-top-left-radius: var(--r-lg);
     border-top-right-radius: var(--r-lg);
@@ -816,6 +821,58 @@ table tbody tr:last-child td {
     font-weight: 600;
     margin-bottom: var(--s-4);
     letter-spacing: -0.005em;
+}
+
+/* #386: title + explicit close button. An installed iPhone PWA has no
+   Escape key and no browser back, so every sheet carries a visible exit
+   that does not depend on the backdrop tap. 44px = iOS minimum tap target. */
+.sheet__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-3);
+    margin-bottom: var(--s-4);
+}
+
+.sheet__header .sheet__title {
+    margin-bottom: 0;
+    min-width: 0;
+}
+
+.sheet__close {
+    flex: none;
+    width: 44px;
+    height: 44px;
+    margin: calc(-1 * var(--s-2)) calc(-1 * var(--s-2)) calc(-1 * var(--s-2)) 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: none;
+    border-radius: var(--r-sm);
+    background: transparent;
+    color: var(--text);
+    font-size: 1.75rem;
+    line-height: 1;
+    cursor: pointer;
+}
+
+.sheet__close:hover,
+.sheet__close:focus-visible {
+    background: var(--surface-3);
+}
+
+/* Wide admin tables (#386): scroll inside their own box instead of
+   widening the whole page past a phone screen — a horizontally-draggable
+   page can displace the fixed bottom nav on iOS WebKit. */
+.table-scroll {
+    max-width: 100%;
+    overflow-x: auto;
+}
+
+/* Back control above a sub-page title (#386: /settings) — a standalone
+   PWA has no browser back button. */
+.page-back {
+    margin-bottom: var(--s-3);
 }
 
 .sheet__body > * + * { margin-top: var(--s-3); }

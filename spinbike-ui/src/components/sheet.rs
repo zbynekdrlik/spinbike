@@ -3,6 +3,8 @@ use leptos::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::spawn_local;
 
+use crate::i18n::{self, Lang};
+
 /// CSS selector for elements that are ACTUALLY reachable by native Tab
 /// navigation — shared by `trap_tab` below (the boundary check) and
 /// `components::nav::focus_first_in` (the #319 focus-on-open move), so the
@@ -17,8 +19,19 @@ use wasm_bindgen_futures::spawn_local;
 /// element is deliberately excluded from tab order). Using the loose
 /// selector as `first`/`last` here would silently break the trap whenever
 /// a non-tabbable element happened to be the DOM-order boundary match.
-pub(crate) const FOCUSABLE_SELECTOR: &str = "a[href], button:not([disabled]), \
-     input:not([disabled]), select:not([disabled]), textarea:not([disabled]), \
+///
+/// #386: the `:not([tabindex='-1'])` exclusion applies to EVERY clause, not
+/// only the bare `[tabindex]` one — a `<button tabindex="-1">` is just as
+/// absent from native Tab order as any other `tabindex="-1"` element. The
+/// `Sheet`'s own header close button (`sheet-close`) relies on this: it is
+/// a pointer/touch exit (an iPhone has no Escape key), deliberately kept
+/// out of the Tab cycle so it never becomes the focus-on-open target or a
+/// trap boundary — keyboard users close with Escape.
+pub(crate) const FOCUSABLE_SELECTOR: &str = "a[href]:not([tabindex='-1']), \
+     button:not([disabled]):not([tabindex='-1']), \
+     input:not([disabled]):not([tabindex='-1']), \
+     select:not([disabled]):not([tabindex='-1']), \
+     textarea:not([disabled]):not([tabindex='-1']), \
      [tabindex]:not([tabindex='-1'])";
 
 /// #320: real WAI-ARIA dialog focus trap. `ev.current_target()` is the
@@ -233,8 +246,15 @@ fn refocus_if_orphaned(ev: ev::FocusEvent) {
 ///
 /// Renders a `.sheet-backdrop` + `.sheet` with:
 /// - `.sheet__grab`  — mobile drag-handle visual
-/// - `.sheet__title` — heading
+/// - `.sheet__header` — `.sheet__title` heading plus the `.sheet__close`
+///   button (`data-testid="sheet-close"`, #386)
 /// - `.sheet__body`  — slot for children
+///
+/// Every sheet has an explicit, visible close button (#386): an installed
+/// iPhone PWA has no Escape key and no browser back button, so the
+/// backdrop tap must never be the only on-screen way out. The button has
+/// `tabindex="-1"` (see `FOCUSABLE_SELECTOR`) so it stays out of the
+/// Tab-cycle trap below; keyboard users close with Escape.
 ///
 /// Accessibility: `role="dialog"` + `aria-modal="true"` on `.sheet`. An
 /// optional `id` prop places a DOM id on `.sheet` so a trigger button can
@@ -265,7 +285,8 @@ fn refocus_if_orphaned(ev: ev::FocusEvent) {
 /// a fresh, correctly-localised sheet.
 #[component]
 pub fn Sheet(
-    /// Called when the user closes the sheet (backdrop click or Escape key).
+    /// Called when the user closes the sheet (close button, backdrop click
+    /// or Escape key).
     #[prop(into)]
     on_close: Callback<()>,
     /// Heading text displayed in `.sheet__title`.
@@ -280,31 +301,34 @@ pub fn Sheet(
     id: Option<String>,
     children: Children,
 ) -> impl IntoView {
-    let on_close_backdrop = on_close;
-    let on_close_keyboard = on_close;
     let testid_value = testid.unwrap_or_default();
     let id_value = id.unwrap_or_default();
+    // The close button's accessible name. `Sheet` is always mounted under
+    // the app's `Lang` context; fall back to Slovak (the app default) rather
+    // than panic if a future caller ever mounts it outside that tree.
+    let close_label = i18n::t(
+        use_context::<ReadSignal<Lang>>()
+            .map(|l| l.get_untracked())
+            .unwrap_or(Lang::Sk),
+        "close",
+    );
 
     // Defer on_close to next macrotask so the click / keydown event finishes
     // dispatching (and any focus/cleanup events on now-detaching DOM nodes
     // settle) before the consumer's reactive tree unmounts. Synchronous
     // on_close.run(()) here used to emit "closure invoked recursively or
-    // after being dropped" via Leptos. See #89.
-    let close_backdrop = move |_| {
-        let cb = on_close_backdrop;
+    // after being dropped" via Leptos. See #89. Shared by every close path
+    // (backdrop, close button, Escape) so they can never drift apart.
+    let defer_close = move || {
         spawn_local(async move {
             gloo_timers::future::TimeoutFuture::new(0).await;
-            cb.run(());
+            on_close.run(());
         });
     };
+    let close_backdrop = move |_: ev::MouseEvent| defer_close();
+    let close_button = move |_: ev::MouseEvent| defer_close();
     let close_keyboard = move |ev: ev::KeyboardEvent| match ev.key().as_str() {
-        "Escape" => {
-            let cb = on_close_keyboard;
-            spawn_local(async move {
-                gloo_timers::future::TimeoutFuture::new(0).await;
-                cb.run(());
-            });
-        }
+        "Escape" => defer_close(),
         "Tab" => trap_tab(&ev),
         _ => {}
     };
@@ -326,7 +350,20 @@ pub fn Sheet(
                 on:focusout=refocus_if_orphaned
             >
                 <div class="sheet__grab"></div>
-                <div class="sheet__title">{title}</div>
+                <div class="sheet__header">
+                    <div class="sheet__title">{title}</div>
+                    <button
+                        type="button"
+                        class="sheet__close"
+                        data-testid="sheet-close"
+                        tabindex="-1"
+                        aria-label=close_label
+                        title=close_label
+                        on:click=close_button
+                    >
+                        <span aria-hidden="true">"\u{00d7}"</span>
+                    </button>
+                </div>
                 <div class="sheet__body">
                     {children()}
                 </div>
