@@ -3,3 +3,13 @@ port = 8081
 
 [build]
 dist = "dist"
+# Preload ONLY the JS loader module, never the wasm. Trunk's default also
+# emits <link rel="preload" as="fetch" href="..._bg.wasm">, but WebKit
+# (iPhone/iPad Safari, the owner's device) never matches an as="fetch"
+# preload to the plain fetch() that wasm-bindgen's init() makes: the wasm
+# was downloaded TWICE on every boot and Safari logged "preloaded using link
+# preload but not used within a few seconds" (CI run 38712421537, reproduced
+# locally in Playwright WebKit with the CI build: two .wasm requests with the
+# default tag, one without it). Chromium gains nothing measurable from it —
+# the modulepreloaded JS starts the wasm fetch immediately.
+pattern_preload = '<link rel="modulepreload" href="{base}{js}" crossorigin="{crossorigin}">'
