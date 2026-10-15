@@ -7,6 +7,9 @@ paths:
   - "spinbike-ui/src/pages/reports/sheets/calendar_picker.rs"
   - "e2e/tests/nav-burger-customer.spec.ts"
   - "e2e/tests/sheet-focus-trap-disabled-window.spec.ts"
+  - "spinbike-ui/src/components/adaptive_nav.rs"
+  - "spinbike-ui/src/pages/admin.rs"
+  - "e2e/tests/ios-sheet-close.spec.ts"
 ---
 
 # `Sheet`'s Tab-cycle focus trap — the container itself is a THIRD focus state, not just first/last descendant (#334)
@@ -59,3 +62,31 @@ locally; verify the actual DOM/focus behavior via a genuine second
 `/code-review`) review pass before merging, not just your own reasoning —
 #334's fix needed a SECOND review round to catch the container-focus gap
 above, which the implementer's own careful hand-timing analysis missed.
+
+## Every overlay and sub-page needs an explicit on-screen exit — iPhone has no Escape, a standalone PWA has no back (#386)
+
+The CEO got trapped on an installed iPhone PWA: the "Viac" sheet's only
+exits were Escape (no key on iPhone) and a backdrop tap (iOS WebKit only
+fires `click` on elements it deems clickable), and `/settings` had no way
+back (standalone mode has no browser back button). Rules since #386:
+
+- `Sheet` renders a header close button (`data-testid="sheet-close"`) for
+  EVERY consumer. It has `tabindex="-1"`, and `FOCUSABLE_SELECTOR` excludes
+  `[tabindex='-1']` on EVERY clause (not just the bare `[tabindex]` one) —
+  that keeps it out of the #319 focus-on-open target and the #320/#334 trap
+  boundaries, so the burger-menu focus specs stay valid. If you ever make it
+  tabbable, those specs' first/last assertions change and must be updated
+  in their own justified commit.
+- A link inside a sheet closes the sheet in its OWN `on:click` (synchronous
+  `set_open.set(false)`, the `nav.rs` pattern) — never rely on the route
+  change alone to unmount the dialog.
+- `.sheet-backdrop` keeps `cursor: pointer` (the iOS tap insurance); `.sheet`
+  resets `cursor: auto` because cursor is inherited.
+- A sub-page reachable only from a sheet/menu (like `/settings`) carries its
+  own back control in the page header (`settings-back`).
+- Wide tables go inside `.table-scroll` (`overflow-x: auto`) — a page wider
+  than the phone can be dragged sideways and displace the fixed bottom nav.
+- iPhone behaviour is tested on the REAL WebKit engine: the `webkit-iphone`
+  Playwright project (`devices['iPhone 13']`) runs only the specs matched by
+  `WEBKIT_IPHONE_SPECS` in `e2e/playwright.config.ts`; CI's test-ui job
+  installs `webkit`. Add an iPhone-only spec there, and use `tap()`.
