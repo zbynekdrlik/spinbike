@@ -7,6 +7,9 @@ paths:
   - "spinbike-ui/src/pages/reports/sheets/calendar_picker.rs"
   - "e2e/tests/nav-burger-customer.spec.ts"
   - "e2e/tests/sheet-focus-trap-disabled-window.spec.ts"
+  - "spinbike-ui/src/components/adaptive_nav.rs"
+  - "spinbike-ui/src/pages/admin.rs"
+  - "e2e/tests/ios-sheet-close.spec.ts"
 ---
 
 # `Sheet`'s Tab-cycle focus trap — the container itself is a THIRD focus state, not just first/last descendant (#334)
@@ -37,7 +40,8 @@ cases.**
 
 ## Not every `Sheet` consumer's `on_close`/`on_cancel` defers via `TimeoutFuture::new(0)`
 
-Most do (this file's own `close_backdrop`/`close_keyboard`, `nav.rs`'s
+Most do (this file's own `close_backdrop`/`close_button`/`close_keyboard`,
+all through one shared `defer_close`, `nav.rs`'s
 `on_close_menu`, `delete_user.rs`, `edit_pass_date.rs`, `edit_tx_date.rs`,
 `edit_info_form.rs`) — but `calendar_picker.rs`'s Cancel/Confirm buttons and
 `deleted_email_conflict.rs`'s Cancel button call their callback DIRECTLY,
@@ -59,3 +63,44 @@ locally; verify the actual DOM/focus behavior via a genuine second
 `/code-review`) review pass before merging, not just your own reasoning —
 #334's fix needed a SECOND review round to catch the container-focus gap
 above, which the implementer's own careful hand-timing analysis missed.
+
+## Every overlay and sub-page needs an explicit on-screen exit — iPhone has no Escape, a standalone PWA has no back (#386)
+
+The CEO got trapped on an installed iPhone PWA: the "Viac" sheet's only
+exits were Escape (no key on iPhone) and a backdrop tap (iOS WebKit only
+fires `click` on elements it deems clickable), and `/settings` had no way
+back (standalone mode has no browser back button). Rules since #386:
+
+- `Sheet` renders a header close button (`data-testid="sheet-close"`) for
+  EVERY consumer. It has `tabindex="-1"`, and `FOCUSABLE_SELECTOR` excludes
+  `[tabindex='-1']` on EVERY clause (not just the bare `[tabindex]` one) —
+  that keeps it out of the #319 focus-on-open target and the #320/#334 trap
+  boundaries, so the burger-menu focus specs stay valid. If you ever make it
+  tabbable, those specs' first/last assertions change and must be updated
+  in their own justified commit.
+- That button ALSO needs `on:mousedown` → `prevent_default()`: Chromium
+  focuses a clicked `tabindex="-1"` button, which is neither first, last nor
+  the container for `trap_tab`, so a Shift+Tab from there escaped the
+  dialog whenever the sheet stayed open (busy guard, drag-off release) —
+  the same "third focus state" class as above, caught in #386's review.
+  Script / screen-reader focus can still land there, so `trap_tab` treats
+  ANY focused node outside the tab cycle like the focused container
+  ("before the first"), not just `.sheet` itself.
+- A link inside a sheet closes the sheet in its OWN `on:click` (synchronous
+  `set_open.set(false)`, the `nav.rs` pattern) — never rely on the route
+  change alone to unmount the dialog.
+- `.sheet-backdrop` keeps `cursor: pointer` (the iOS tap insurance); `.sheet`
+  resets `cursor: auto` because cursor is inherited.
+- A sub-page reachable only from a sheet/menu (like `/settings`) carries its
+  own back control in the page header (`settings-back`).
+- Wide tables go inside `.table-scroll` (`overflow-x: auto`) — a page wider
+  than the phone can be dragged sideways and displace the fixed bottom nav.
+  All four admin tables are wrapped. The `.seg` segmented control scrolls on
+  its own too: the SLOVAK admin tab labels (the owner's language) are ~391px
+  of min-content at 390px — check width in `sk` too
+  (`loginViaAPI(page, url, email, pw, 'sk')`; never stack a second language
+  init script — Playwright does not define their order).
+- iPhone behaviour is tested on the REAL WebKit engine: the `webkit-iphone`
+  Playwright project (`devices['iPhone 13']`) runs only the specs matched by
+  `WEBKIT_IPHONE_SPECS` in `e2e/playwright.config.ts`; CI's test-ui job
+  installs `webkit`. Add an iPhone-only spec there, and use `tap()`.

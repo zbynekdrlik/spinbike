@@ -101,24 +101,32 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
                             // when the flag is off). Links to /door (NOT
                             // /my/balance) so admin/staff see ONLY the hold-
                             // button, not the customer-facing credit/pass UI.
+                            //
+                            // #386: every link in this sheet closes the sheet
+                            // in its OWN click handler (same as nav.rs's
+                            // customer menu) — never rely on the route change
+                            // alone to unmount a dialog; on an iPhone PWA a
+                            // sheet left open has no Escape/back way out.
                             <a
                                 href="/door"
                                 class="btn btn--block btn--ghost"
                                 data-testid="more-open-door"
+                                on:click=move |_| set_more_open.set(false)
                             >
                                 {move || i18n::t(lang.get(), "door_button_idle")}
                             </a>
                             {if is_admin {
                                 // Settings moved here from the bottom-nav per #82.
-                                // Plain anchor — full navigation reload, parent
-                                // closure unmounts the sheet on auth_ver bump or
-                                // route change.
+                                // Closes the sheet itself on click (#386), not
+                                // only via the parent closure re-rendering on
+                                // the route change.
                                 view! {
                                     <a
                                         href="/settings"
                                         class="btn btn--block btn--ghost"
                                         data-testid="more-settings"
                                         aria-current=if settings_active { "page" } else { "false" }
+                                        on:click=move |_| set_more_open.set(false)
                                     >
                                         {move || i18n::t(lang.get(), "nav_settings")}
                                     </a>
