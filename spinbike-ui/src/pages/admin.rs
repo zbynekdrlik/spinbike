@@ -322,9 +322,11 @@ fn TemplatesTab() -> impl IntoView {
                 }.into_any()
             }).collect();
             view! {
-                <table>
-                    <tbody>{rows}</tbody>
-                </table>
+                <div class="table-scroll">
+                    <table>
+                        <tbody>{rows}</tbody>
+                    </table>
+                </div>
             }.into_any()
         }}
     }
@@ -475,9 +477,11 @@ fn InstructorsTab() -> impl IntoView {
                 }.into_any()
             }).collect();
             view! {
-                <table>
-                    <tbody>{rows}</tbody>
-                </table>
+                <div class="table-scroll">
+                    <table>
+                        <tbody>{rows}</tbody>
+                    </table>
+                </div>
             }.into_any()
         }}
     }
@@ -715,7 +719,8 @@ fn ServicesTab() -> impl IntoView {
                 }.into_any()
             }).collect();
             // #386: the services table is wider than a phone screen; it
-            // scrolls inside its own box instead of widening the page.
+            // scrolls inside its own box instead of widening the page (all
+            // four admin tables use the same `.table-scroll` wrapper).
             view! {
                 <div class="table-scroll" data-testid="services-table-scroll">
                     <table>
@@ -893,9 +898,11 @@ fn SettingsTab() -> impl IntoView {
                 view! { <tr><td>{key}</td><td>{value}</td></tr> }
             }).collect();
             view! {
-                <table>
-                    <tbody>{rows}</tbody>
-                </table>
+                <div class="table-scroll">
+                    <table>
+                        <tbody>{rows}</tbody>
+                    </table>
+                </div>
             }.into_any()
         }}
     }

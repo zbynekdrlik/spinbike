@@ -640,10 +640,14 @@ select.form-control {
     border-radius: var(--r);
     padding: 4px;
     gap: 2px;
+    /* #386: never widen the page — the Slovak admin tab labels need ~391px
+       at a 390px phone width; the control scrolls on its own instead. */
+    max-width: 100%;
+    overflow-x: auto;
 }
 
 .seg__item {
-    flex: 1;
+    flex: 1 0 auto;
     min-height: 40px;
     background: transparent;
     color: var(--text-muted);

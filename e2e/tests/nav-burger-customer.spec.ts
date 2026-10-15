@@ -210,4 +210,47 @@ test.describe('Customer header burger menu (#319)', () => {
 
         assertCleanConsole(messages);
     });
+
+    // #386: every Sheet has a header close button (tabindex=-1, outside the
+    // Tab cycle). Chromium would focus a pressed tabindex=-1 button, which
+    // trap_tab sees as neither first, last nor the container — Shift+Tab
+    // then escaped the dialog. Pressing it must leave focus where it was,
+    // and a full click must close the sheet.
+    test('pressing the sheet close button never parks focus on it; clicking it closes the menu (#386)', async ({ page }) => {
+        const messages = setupConsoleCheck(page);
+        const { email, password } = await seedNamedCustomer(BASE_URL, 'Close Presser');
+        await loginViaAPI(page, BASE_URL, email, password);
+        await page.goto('/my/balance');
+
+        const burger = page.locator('[data-testid="navbar-burger"]');
+        await burger.click();
+        const sheet = page.locator('[data-testid="navbar-menu-sheet"]');
+        await expect(sheet).toBeVisible();
+        await expect(sheet.locator('[data-testid="menu-my-bookings"]')).toBeFocused();
+
+        const close = sheet.locator('[data-testid="sheet-close"]');
+        await expect(close).toBeVisible();
+        const box = await close.boundingBox();
+        if (!box) throw new Error('sheet-close has no bounding box');
+        // Press WITHOUT releasing over the button (no click), then check focus.
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+        await page.mouse.down();
+        await expect(close).not.toBeFocused();
+        await expect(sheet.locator('[data-testid="menu-my-bookings"]')).toBeFocused();
+        await page.keyboard.press('Shift+Tab');
+        await expect(sheet.locator('[data-testid="menu-logout"]')).toBeFocused();
+        // Drag off the button onto the sheet's own title before releasing:
+        // the click (if any) lands on the shared `.sheet__header` ancestor,
+        // never the button or the backdrop, so the sheet stays open.
+        const titleBox = await sheet.locator('.sheet__title').boundingBox();
+        if (!titleBox) throw new Error('sheet title has no bounding box');
+        await page.mouse.move(titleBox.x + 4, titleBox.y + titleBox.height / 2);
+        await page.mouse.up();
+        await expect(sheet).toBeVisible();
+
+        await close.click();
+        await expect(sheet).toHaveCount(0);
+
+        assertCleanConsole(messages);
+    });
 });

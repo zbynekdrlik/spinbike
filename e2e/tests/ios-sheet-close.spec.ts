@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { loginViaAPI, setupConsoleCheck, assertCleanConsole, setIosStandalone } from './helpers';
 
 const BASE_URL = 'http://localhost:8099';
@@ -13,58 +13,75 @@ const BASE_URL = 'http://localhost:8099';
  * Runs ONLY in the `webkit-iphone` Playwright project (real WebKit engine +
  * the iPhone 13 descriptor: touch, mobile viewport, iOS user agent) — see
  * playwright.config.ts. Every interaction is a `tap()`, the way a finger
- * reaches the app.
+ * reaches the app. Each exit is its own test so a regression in one never
+ * hides behind an earlier failing step.
  */
+
+/** Standalone iPhone PWA, admin signed in, sitting on `path`. */
+async function openAsAdmin(page: Page, path: string): Promise<void> {
+    await setIosStandalone(page);
+    await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+    await page.goto(path);
+    await expect(page.locator('[data-testid="nav-more"]')).toBeVisible();
+}
+
+async function openMoreSheet(page: Page): Promise<void> {
+    await page.locator('[data-testid="nav-more"]').tap();
+    await expect(page.locator('[data-testid="more-sheet"]')).toBeVisible();
+}
+
+async function expectSheetGone(page: Page): Promise<void> {
+    await expect(page.locator('[data-testid="more-sheet"]')).toHaveCount(0);
+    await expect(page.locator('.sheet-backdrop')).toHaveCount(0);
+}
+
 test.describe('iPhone PWA — every overlay and sub-page has a way out (#386)', () => {
-    test('More sheet closes via its close button and backdrop; /settings has a back control', async ({ page }) => {
+    test('Viac -> Nastavenia lands on /settings with the sheet gone and the bottom nav usable', async ({ page }) => {
         const consoleMessages = setupConsoleCheck(page);
-        await setIosStandalone(page);
-        await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+        await openAsAdmin(page, '/staff');
 
-        await page.goto('/staff');
-        const more = page.locator('[data-testid="nav-more"]');
-        await expect(more).toBeVisible();
-
-        // 1. Viac -> Nastavenia lands on /settings with the sheet GONE and
-        //    the bottom nav usable again.
-        await more.tap();
-        await expect(page.locator('[data-testid="more-sheet"]')).toBeVisible();
+        await openMoreSheet(page);
         await page.locator('[data-testid="more-settings"]').tap();
         await expect(page).toHaveURL(/\/settings$/);
-        await expect(page.locator('.sheet-backdrop')).toHaveCount(0);
+        await expectSheetGone(page);
         await expect(page.locator('[data-testid="nav-desk"]')).toBeVisible();
 
-        // 2. The sheet carries its own visible close button that closes it.
-        await more.tap();
-        await expect(page.locator('[data-testid="more-sheet"]')).toBeVisible();
+        assertCleanConsole(consoleMessages);
+    });
+
+    test('the More sheet has a visible close button that closes it', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await openAsAdmin(page, '/staff');
+
+        await openMoreSheet(page);
         const close = page.locator('[data-testid="more-sheet"] [data-testid="sheet-close"]');
         await expect(close).toBeVisible();
         await close.tap();
-        await expect(page.locator('[data-testid="more-sheet"]')).toHaveCount(0);
-        await expect(page.locator('.sheet-backdrop')).toHaveCount(0);
+        await expectSheetGone(page);
+        await expect(page).toHaveURL(/\/staff$/);
 
-        // 3. A tap on the backdrop (the dimmed area ABOVE the bottom sheet)
-        //    closes it too, under the real WebKit engine.
-        await more.tap();
-        await expect(page.locator('[data-testid="more-sheet"]')).toBeVisible();
+        assertCleanConsole(consoleMessages);
+    });
+
+    test('a tap on the backdrop closes the sheet (and the backdrop is marked clickable for iOS)', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await openAsAdmin(page, '/staff');
+
+        await openMoreSheet(page);
+        // iOS WebKit only dispatches `click` for a tap on an element it
+        // considers clickable; cursor:pointer is what marks a plain <div>.
+        await expect(page.locator('.sheet-backdrop')).toHaveCSS('cursor', 'pointer');
+        // The dimmed area ABOVE the bottom sheet.
         await page.locator('.sheet-backdrop').tap({ position: { x: 20, y: 20 } });
-        await expect(page.locator('[data-testid="more-sheet"]')).toHaveCount(0);
-        await expect(page.locator('.sheet-backdrop')).toHaveCount(0);
+        await expectSheetGone(page);
 
-        // 4. The Sluzby (services) table scrolls inside its own wrapper
-        //    instead of widening the whole page past the phone screen
-        //    (a horizontally-draggable page can displace the fixed nav).
-        await page.locator('[data-testid="admin-tab-services"]').tap();
-        const tableScroll = page.locator('[data-testid="services-table-scroll"]');
-        await expect(tableScroll).toBeVisible();
-        await expect(tableScroll).toHaveCSS('overflow-x', 'auto');
-        const pageOverflow = await page.evaluate(
-            () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
-        );
-        expect(pageOverflow, 'the /settings page must not scroll horizontally on a phone').toBeLessThanOrEqual(0);
+        assertCleanConsole(consoleMessages);
+    });
 
-        // 5. /settings has its own back control in the page header — the
-        //    standalone PWA has no browser back button.
+    test('/settings has a back control in its header that returns to the desk', async ({ page }) => {
+        const consoleMessages = setupConsoleCheck(page);
+        await openAsAdmin(page, '/settings');
+
         const back = page.locator('[data-testid="settings-back"]');
         await expect(back).toBeVisible();
         await back.tap();
@@ -72,4 +89,32 @@ test.describe('iPhone PWA — every overlay and sub-page has a way out (#386)', 
 
         assertCleanConsole(consoleMessages);
     });
+
+    for (const lang of ['en', 'sk'] as const) {
+        test(`/settings services tab never widens the page past the phone screen (${lang})`, async ({ page }) => {
+            const consoleMessages = setupConsoleCheck(page);
+            await setIosStandalone(page);
+            await loginViaAPI(page, BASE_URL, 'admin@test.com', 'admin123');
+            // loginViaAPI registers an init script forcing 'en' on every
+            // navigation; the owner uses Slovak, whose longer tab labels are
+            // what overflowed (#386 review). Init scripts run in the order
+            // they were added, so this one wins.
+            await page.addInitScript((l) => {
+                localStorage.setItem('spinbike_lang', l);
+            }, lang);
+            await page.goto('/settings');
+            await expect(page.locator('[data-testid="nav-more"]')).toBeVisible();
+
+            await page.locator('[data-testid="admin-tab-services"]').tap();
+            const tableScroll = page.locator('[data-testid="services-table-scroll"]');
+            await expect(tableScroll).toBeVisible();
+            await expect(tableScroll).toHaveCSS('overflow-x', 'auto');
+            const pageOverflow = await page.evaluate(
+                () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+            );
+            expect(pageOverflow, `the /settings page must not scroll horizontally on a phone (${lang})`).toBeLessThanOrEqual(0);
+
+            assertCleanConsole(consoleMessages);
+        });
+    }
 });

@@ -155,7 +155,8 @@ fn is_active(el: &web_sys::HtmlElement, active_node: &web_sys::Node) -> bool {
 /// A `focusout` with a `related_target` outside `.sheet` ALSO fires on
 /// every LEGITIMATE close (Escape, backdrop click, an item link navigating
 /// away). Most close paths (this file's own `close_backdrop`/
-/// `close_keyboard`, `nav.rs`'s `on_close_menu`, `delete_user.rs`,
+/// `close_button`/`close_keyboard` — all via the shared `defer_close` —
+/// `nav.rs`'s `on_close_menu`, `delete_user.rs`,
 /// `edit_pass_date.rs`, `edit_tx_date.rs`, `edit_info_form.rs`) unmount
 /// `.sheet` via a `TimeoutFuture::new(0)`-deferred `show.set(false)` —
 /// but NOT all of them: `calendar_picker.rs`'s Cancel/Confirm and
@@ -183,6 +184,13 @@ fn is_active(el: &web_sys::HtmlElement, active_node: &web_sys::Node) -> bool {
 /// trigger step (only `nav.rs`'s burger menu, currently) schedules that
 /// through the close callback's own LATER macrotask, so the final
 /// settled focus state is unaffected either way.
+///
+/// The header close button (#386) never reaches this function at all: its
+/// `on:mousedown` calls `prevent_default()`, so pressing it moves focus
+/// NOWHERE (no blur, no `focusout`) in every engine — and focus therefore
+/// can never park on that `tabindex="-1"` button, which `trap_tab` would
+/// not recognise as first/last/container (the #334 "third focus state"
+/// escape, review finding on #386).
 fn refocus_if_orphaned(ev: ev::FocusEvent) {
     let Some(container) = ev
         .current_target()
@@ -305,7 +313,10 @@ pub fn Sheet(
     let id_value = id.unwrap_or_default();
     // The close button's accessible name. `Sheet` is always mounted under
     // the app's `Lang` context; fall back to Slovak (the app default) rather
-    // than panic if a future caller ever mounts it outside that tree.
+    // than panic if a future caller ever mounts it outside that tree. Read
+    // untracked on purpose: every consumer mounts the Sheet inside a
+    // `show`-gated closure, so a language change takes effect on the next
+    // open, exactly like the `title` prop (see the doc comment above).
     let close_label = i18n::t(
         use_context::<ReadSignal<Lang>>()
             .map(|l| l.get_untracked())
@@ -359,6 +370,7 @@ pub fn Sheet(
                         tabindex="-1"
                         aria-label=close_label
                         title=close_label
+                        on:mousedown=|ev: ev::MouseEvent| ev.prevent_default()
                         on:click=close_button
                     >
                         <span aria-hidden="true">"\u{00d7}"</span>

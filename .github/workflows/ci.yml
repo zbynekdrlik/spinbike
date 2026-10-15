@@ -310,8 +310,11 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-playwright-${{ hashFiles('e2e/package-lock.json') }}
+          # #386: own key — this job also installs webkit (webkit-iphone project),
+          # so a chromium-only cache hit must not skip re-saving the webkit bundle.
+          key: ${{ runner.os }}-playwright-webkit-${{ hashFiles('e2e/package-lock.json') }}
           restore-keys: |
+            ${{ runner.os }}-playwright-webkit-
             ${{ runner.os }}-playwright-
 
       - name: Install Playwright
