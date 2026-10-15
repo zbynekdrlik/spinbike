@@ -10,6 +10,7 @@ paths:
   - "spinbike-ui/src/components/adaptive_nav.rs"
   - "spinbike-ui/src/pages/admin.rs"
   - "e2e/tests/ios-sheet-close.spec.ts"
+  - "spinbike-ui/Trunk.toml"
 ---
 
 # `Sheet`'s Tab-cycle focus trap — the container itself is a THIRD focus state, not just first/last descendant (#334)
@@ -104,3 +105,17 @@ back (standalone mode has no browser back button). Rules since #386:
   Playwright project (`devices['iPhone 13']`) runs only the specs matched by
   `WEBKIT_IPHONE_SPECS` in `e2e/playwright.config.ts`; CI's test-ui job
   installs `webkit`. Add an iPhone-only spec there, and use `tap()`.
+  WebKit console gotchas (CI run 38712421537): do NOT emulate standalone
+  (`setIosStandalone`) unless the code under test branches on it — every
+  standalone boot fires the 2 s-min-gap launch beacon and back-to-back tests
+  get a 429 console error; and never let Trunk preload the wasm
+  (`spinbike-ui/Trunk.toml` `pattern_preload`) — WebKit never reuses an
+  `as="fetch"` preload, downloads the wasm twice and warns.
+  Local WebKit without root: `npx playwright install webkit`, `apt-get
+  download` + `dpkg -x` the missing libs (list them with `ldd` on
+  `~/.cache/ms-playwright/webkit-*/minibrowser-wpe/bin/MiniBrowser`, add the
+  mesa EGL/dri packages), and launch via an `executablePath` wrapper that
+  sets `LD_LIBRARY_PATH`, `__EGL_VENDOR_LIBRARY_DIRS`, `LIBGL_DRIVERS_PATH`,
+  `EGL_PLATFORM=surfaceless` (the bundle's own wrapper overwrites
+  `LD_LIBRARY_PATH`). Pair it with the CI `spinbike-server` artifact on
+  :8099 to run the real spec.
