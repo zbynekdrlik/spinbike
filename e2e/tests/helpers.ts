@@ -139,13 +139,25 @@ export function assertCleanConsole(messages: string[]) {
  * Tests assert against English strings; set localStorage before the WASM loads.
  */
 export async function setEnglishLanguage(page: Page) {
-    await page.addInitScript(() => {
+    await setLanguage(page, 'en');
+}
+
+/**
+ * Force the UI language before any page load (init script, re-applied on
+ * every navigation). `setEnglishLanguage` is the default for the suite; a
+ * spec that must check the Slovak UI (the owner's language) passes 'sk'
+ * through `loginViaAPI`'s `lang` parameter so only ONE init script ever
+ * sets the language — Playwright does not define the evaluation order of
+ * several init scripts (#386 review).
+ */
+export async function setLanguage(page: Page, lang: 'en' | 'sk') {
+    await page.addInitScript((l: string) => {
         try {
-            localStorage.setItem('spinbike_lang', 'en');
+            localStorage.setItem('spinbike_lang', l);
         } catch {
             // ignore — storage not ready
         }
-    });
+    }, lang);
 }
 
 /**
@@ -216,7 +228,13 @@ export async function selectMonthlyPass(page: Page): Promise<void> {
  * Login via API and store the token in localStorage so the WASM app picks it up.
  * Returns the raw JWT token so callers can pass it to API requests (e.g. seed endpoints).
  */
-export async function loginViaAPI(page: Page, baseURL: string, email: string, password: string): Promise<string> {
+export async function loginViaAPI(
+    page: Page,
+    baseURL: string,
+    email: string,
+    password: string,
+    lang: 'en' | 'sk' = 'en',
+): Promise<string> {
     const resp = await fetch(`${baseURL}/api/auth/login`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -261,7 +279,7 @@ export async function loginViaAPI(page: Page, baseURL: string, email: string, pa
     // .claude/skills/e2e-testing/SKILL.md's #276/#258 entries. Keeping the
     // injection as a plain, single `page.evaluate()` call preserves the
     // exact same one-shot semantics this suite already relies on.)
-    await setEnglishLanguage(page);
+    await setLanguage(page, lang);
     await page.goto('/manifest.json');
     await page.evaluate((authData: { token: string; user: { id: number; email: string; name: string; role: string } }) => {
         localStorage.setItem('spinbike_token', authData.token);

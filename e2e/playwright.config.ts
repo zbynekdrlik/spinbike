@@ -1,4 +1,9 @@
-import { defineConfig } from '@playwright/test';
+import { defineConfig, devices } from '@playwright/test';
+
+// #386: specs that must run under the REAL WebKit engine on an iPhone
+// descriptor (touch, mobile viewport, iOS UA). Everything else stays on the
+// default Chromium project, exactly as before.
+const WEBKIT_IPHONE_SPECS = /ios-sheet-close\.spec\.ts$/;
 
 export default defineConfig({
     testDir: './tests',
@@ -16,4 +21,19 @@ export default defineConfig({
         baseURL: 'http://localhost:8099',
         headless: true,
     },
+    projects: [
+        {
+            name: 'chromium',
+            use: { browserName: 'chromium' },
+            testIgnore: WEBKIT_IPHONE_SPECS,
+        },
+        {
+            // CI installs the webkit browser for this project
+            // (.github/workflows/ci.yml, test-ui job). The smoke jobs grep
+            // for '@smoke' only, so they never launch webkit.
+            name: 'webkit-iphone',
+            use: { ...devices['iPhone 13'] },
+            testMatch: WEBKIT_IPHONE_SPECS,
+        },
+    ],
 });

@@ -68,6 +68,16 @@ pub fn AdminPage() -> impl IntoView {
         .collect();
 
     view! {
+        // #386: an installed (standalone) PWA has no browser back button and
+        // the bottom nav can be hidden behind an overlay, so /settings
+        // carries its own way back to the desk in the page header.
+        <a
+            href="/staff"
+            class="btn btn--ghost btn--compact page-back"
+            data-testid="settings-back"
+        >
+            {move || i18n::t(lang.get(), "back_to_desk")}
+        </a>
         <h1 class="page-title">{move || i18n::t(lang.get(), "admin")}</h1>
         <Segmented
             items=seg_items
@@ -312,9 +322,11 @@ fn TemplatesTab() -> impl IntoView {
                 }.into_any()
             }).collect();
             view! {
-                <table>
-                    <tbody>{rows}</tbody>
-                </table>
+                <div class="table-scroll">
+                    <table>
+                        <tbody>{rows}</tbody>
+                    </table>
+                </div>
             }.into_any()
         }}
     }
@@ -465,9 +477,11 @@ fn InstructorsTab() -> impl IntoView {
                 }.into_any()
             }).collect();
             view! {
-                <table>
-                    <tbody>{rows}</tbody>
-                </table>
+                <div class="table-scroll">
+                    <table>
+                        <tbody>{rows}</tbody>
+                    </table>
+                </div>
             }.into_any()
         }}
     }
@@ -704,10 +718,15 @@ fn ServicesTab() -> impl IntoView {
                     }}
                 }.into_any()
             }).collect();
+            // #386: the services table is wider than a phone screen; it
+            // scrolls inside its own box instead of widening the page (all
+            // four admin tables use the same `.table-scroll` wrapper).
             view! {
-                <table>
-                    <tbody>{rows}</tbody>
-                </table>
+                <div class="table-scroll" data-testid="services-table-scroll">
+                    <table>
+                        <tbody>{rows}</tbody>
+                    </table>
+                </div>
             }.into_any()
         }}
     }
@@ -879,9 +898,11 @@ fn SettingsTab() -> impl IntoView {
                 view! { <tr><td>{key}</td><td>{value}</td></tr> }
             }).collect();
             view! {
-                <table>
-                    <tbody>{rows}</tbody>
-                </table>
+                <div class="table-scroll">
+                    <table>
+                        <tbody>{rows}</tbody>
+                    </table>
+                </div>
             }.into_any()
         }}
     }

@@ -952,6 +952,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
 
     // Nav (bottom tabs + sidebar labels)
     m.insert("nav_desk", ("Desk", "Desk"));
+    m.insert("back_to_desk", ("Spat na Desk", "Back to Desk"));
     m.insert("nav_schedule", ("Plan", "Schedule"));
     m.insert("nav_reports", ("Prehlad", "Reports"));
     m.insert("nav_settings", ("Nastavenia", "Settings"));
