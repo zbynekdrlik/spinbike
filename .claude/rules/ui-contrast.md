@@ -2,7 +2,9 @@
 paths:
   - "spinbike-ui/style.css"
   - "spinbike-ui/src/pages/staff_dashboard.rs"
-  - "e2e/tests/staff-participant-chip.spec.ts"
+  - "spinbike-ui/src/pages/staff_spinning/**"
+  - "e2e/tests/staff-participant-table.spec.ts"
+  - "e2e/tests/staff-spinning.spec.ts"
 ---
 
 # Text contrast — theme tokens only, pinned by a Playwright test (#379)
@@ -18,8 +20,14 @@ paths:
   resting text colour.
 - **Test both schemes**: `page.emulateMedia({ colorScheme: 'dark' | 'light' })`
   before `goto`, then compute contrast from `getComputedStyle` walking up to
-  the first opaque background (helper `contrastOf` in
-  `e2e/tests/staff-participant-chip.spec.ts` — reuse it).
+  the first opaque background (helper `contrastOf`, exported from
+  `e2e/tests/helpers.ts` since #385 — reuse it).
+- **State tints (#385 occupancy grid):** plain per-scheme tokens
+  (`--occ-low-bg` / `--occ-mid-bg` / `--occ-full-bg`, defined in BOTH `:root`
+  blocks) with `--text` / `--text-muted` on top. The spec pins every
+  fill-level x past/cancelled combination by injecting probe buttons with
+  the real classes into a grid cell — data-independent, so a missing tint in
+  one scheme fails even when no seeded class happens to be full.
 - Prefer plain tokens over `color-mix(...)` for anything a contrast test
   reads: Chromium returns a computed `color-mix` as `color(srgb r g b)`
   (0-1 floats), not `rgb()` — the helper parses both, ad-hoc regexes won't.

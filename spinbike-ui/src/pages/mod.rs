@@ -8,6 +8,7 @@ pub mod my_settings;
 pub mod reports;
 pub mod schedule;
 pub mod staff_dashboard;
+pub mod staff_spinning;
 pub mod welcome;
 
 pub use admin::AdminPage as SettingsPage;

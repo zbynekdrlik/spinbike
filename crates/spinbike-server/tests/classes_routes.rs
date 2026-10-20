@@ -50,6 +50,39 @@ async fn list_classes_returns_occurrences_in_range() {
     assert_eq!(cap_at("18:00"), Some(19));
 }
 
+/// #385: the staff grid asks for 56 days; the cap is 62 days INCLUSIVE.
+/// 62 days answers 200 with the last day's occurrences present, 63 days is a
+/// 400 `range_too_long` (the boundary kills `>`/`>=` and `+ 1` mutants).
+#[tokio::test]
+async fn list_classes_caps_the_range_at_62_days() {
+    use chrono::{Duration, NaiveDate};
+    let app = TestApp::new().await;
+    // A Monday, so the V6-seeded Monday 18:00 template recurs on day 1 and
+    // the range ends on a Monday too (day 57 = from + 56).
+    let from = NaiveDate::from_ymd_opt(2026, 4, 13).unwrap();
+
+    let to_ok = from + Duration::days(61);
+    let (status, resp) = app
+        .request(get(&format!("/api/classes?from={from}&to={to_ok}"), ""))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::OK, "62 days: {resp}");
+    let last_monday = (from + Duration::days(56)).to_string();
+    assert!(
+        resp.as_array()
+            .unwrap()
+            .iter()
+            .any(|o| o["date"].as_str() == Some(last_monday.as_str())),
+        "the 8-week grid range is fully served"
+    );
+
+    let to_long = from + Duration::days(62);
+    let (status, resp) = app
+        .request(get(&format!("/api/classes?from={from}&to={to_long}"), ""))
+        .await;
+    assert_eq!(status, axum::http::StatusCode::BAD_REQUEST, "63 days");
+    assert_eq!(resp["error_code"], "range_too_long");
+}
+
 #[tokio::test]
 async fn list_classes_rejects_bad_date() {
     let app = TestApp::new().await;

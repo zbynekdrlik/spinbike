@@ -111,6 +111,7 @@ use crate::pages::my_settings::MySettingsPage;
 use crate::pages::reports::ReportsPage;
 use crate::pages::schedule::SchedulePage;
 use crate::pages::staff_dashboard::StaffDashboardPage;
+use crate::pages::staff_spinning::StaffSpinningPage;
 use crate::pages::welcome::WelcomePage;
 
 #[component]
@@ -163,6 +164,9 @@ pub fn App() -> impl IntoView {
                         // Admin schedule view (rosters, walk-in, cancel) lives at /schedule.
                         // /staff/classes kept as alias for back-compat.
                         <Route path=path!("/staff/classes") view=|| staff_gated(|| StaffDashboardPage().into_any()) />
+                        // #385: the CEO's spinning screen — 8-week occupancy
+                        // grid + class detail table (the "Spinning" nav tab).
+                        <Route path=path!("/staff/spinning") view=|| staff_gated(|| StaffSpinningPage().into_any()) />
                         <Route path=path!("/schedule") view=ScheduleRoute />
                         <Route path=path!("/reports") view=|| staff_gated(|| ReportsPage().into_any()) />
                         <Route path=path!("/settings") view=|| staff_gated(|| AdminPage().into_any()) />
