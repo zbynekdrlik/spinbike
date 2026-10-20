@@ -116,6 +116,10 @@ pub enum ErrorCode {
     /// `conflict_deleted_at`).
     EmailBelongsToDeletedAccount,
     // --- 400 Bad Request (the human message carries the specifics) ---
+    /// `GET /api/classes` asked for more than 62 days at once (#385). The
+    /// staff 8-week grid asks for 56; the cap keeps a typo'd or hostile
+    /// range from making the per-day occurrence loop run for years.
+    RangeTooLong,
     BadRequest,
     // --- 429 Too Many Requests ---
     /// Rate limit hit on a public auth endpoint — e.g. too many login-code
@@ -181,6 +185,7 @@ impl ErrorCode {
                 "User already has a recorded visit/entry today; pass force=true to log anyway"
             }
             ErrorCode::EmailBelongsToDeletedAccount => "This email belongs to a deleted account",
+            ErrorCode::RangeTooLong => "Date range too long (max 62 days)",
             ErrorCode::BadRequest => "Bad request",
             ErrorCode::TooManyRequests => "Too many attempts, please try again later",
             ErrorCode::MailNotConfigured => "mail_not_configured",
@@ -371,6 +376,11 @@ mod tests {
             ErrorCode::EmailBelongsToDeletedAccount,
             "email_belongs_to_deleted_account",
             "This email belongs to a deleted account",
+        ),
+        (
+            ErrorCode::RangeTooLong,
+            "range_too_long",
+            "Date range too long (max 62 days)",
         ),
         (ErrorCode::BadRequest, "bad_request", "Bad request"),
         (

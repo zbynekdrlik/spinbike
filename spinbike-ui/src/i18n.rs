@@ -239,6 +239,12 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
         // schedule's book/cancel buttons, /my/bookings).
         ErrorCode::CancelDeadlinePassed => Some("err_cancel_deadline_passed"),
         ErrorCode::ClassAlreadyStarted => Some("err_class_already_started"),
+        // #385: the staff spinning screen renders every booking 409 and the
+        // grid's range error in the staff's language (spec: "409s render
+        // their i18n text"), not the server's raw English.
+        ErrorCode::ClassFull => Some("err_class_full"),
+        ErrorCode::ClassCancelled => Some("err_class_cancelled"),
+        ErrorCode::RangeTooLong => Some("err_range_too_long"),
         ErrorCode::Internal => Some("err_internal"),
         // Staff/admin-only or not customer-facing in the 5 render sites this
         // ticket scopes to (#145) — left unmapped on purpose, NOT an
@@ -257,8 +263,6 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
         | ErrorCode::EmailConflict
         | ErrorCode::CardCodeConflict
         | ErrorCode::EmailOrCardConflict
-        | ErrorCode::ClassFull
-        | ErrorCode::ClassCancelled
         | ErrorCode::NoteOnVoidedTransaction
         | ErrorCode::DateOnVoidedTransaction
         | ErrorCode::ValidUntilOnVoidedTransaction
@@ -1447,6 +1451,21 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "walkin_already_in_class",
         ("uz prihlaseny", "already booked"),
+    );
+    m.insert(
+        "err_class_full",
+        ("Hodina je plne obsadena", "This class is full"),
+    );
+    m.insert(
+        "err_class_cancelled",
+        ("Tato hodina je zrusena", "This class is cancelled"),
+    );
+    m.insert(
+        "err_range_too_long",
+        (
+            "Prilis dlhe obdobie (najviac 62 dni)",
+            "Date range too long (max 62 days)",
+        ),
     );
     m.insert(
         "err_internal",
