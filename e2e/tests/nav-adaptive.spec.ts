@@ -27,8 +27,11 @@ test.describe('Adaptive nav', () => {
         // Existing route-tab assertions
         await page.locator('[data-testid="nav-reports"]').click();
         await expect(page).toHaveURL(/\/reports/);
+        // #385: the schedule tab opens the staff spinning screen.
         await page.locator('[data-testid="nav-schedule"]').click();
-        await expect(page).toHaveURL(/\/schedule/);
+        await expect(page).toHaveURL(/\/staff\/spinning$/);
+        await expect(page.locator('[data-testid="nav-schedule"]')).toHaveAttribute('aria-current', 'page');
+        await expect(page.locator('[data-testid="nav-desk"]')).toHaveAttribute('aria-current', 'false');
         // Settings now reached via the More sheet (#82).
         await page.locator('[data-testid="nav-more"]').click();
         await expect(page.locator('[data-testid="more-sheet"]')).toBeVisible();

@@ -29,8 +29,13 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
             }
             let is_admin = u.role.is_admin();
             let path = current_path();
-            let desk_active = path.starts_with("/staff");
-            let schedule_active = path.starts_with("/schedule");
+            // #385: the schedule tab now opens the staff spinning screen;
+            // /schedule and /staff/classes (the current-week summary) still
+            // light it up, and none of the three lights up Desk.
+            let schedule_active = path.starts_with("/staff/spinning")
+                || path.starts_with("/staff/classes")
+                || path.starts_with("/schedule");
+            let desk_active = path.starts_with("/staff") && !schedule_active;
             let reports_active = path.starts_with("/reports");
             // Settings active state still drives more-sheet aria-current
             // even though the link itself moved into the sheet (#82).
@@ -60,11 +65,11 @@ pub fn AdaptiveNav(auth_ver: ReadSignal<u32>) -> impl IntoView {
                         <span class="adaptive-nav__icon" inner_html=ICON_DESK></span>
                         <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_desk")}</span>
                     </a>
-                    <a href="/schedule" class="adaptive-nav__item"
+                    <a href="/staff/spinning" class="adaptive-nav__item"
                        data-testid="nav-schedule"
                        aria-current=if schedule_active { "page" } else { "false" }>
                         <span class="adaptive-nav__icon" inner_html=ICON_SCHEDULE></span>
-                        <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_schedule")}</span>
+                        <span class="adaptive-nav__label">{move || i18n::t(lang.get(), "nav_spinning")}</span>
                     </a>
                     {if is_admin {
                         view! {

@@ -4,6 +4,9 @@ import { defineConfig, devices } from '@playwright/test';
 // descriptor (touch, mobile viewport, iOS UA). Everything else stays on the
 // default Chromium project, exactly as before.
 const WEBKIT_IPHONE_SPECS = /ios-sheet-close\.spec\.ts$/;
+// #385: specs that run in BOTH projects — Chromium AND the real-WebKit
+// iPhone (the CEO runs the staff spinning screen on his phone).
+const BOTH_ENGINE_SPECS = /staff-spinning\.spec\.ts$/;
 
 export default defineConfig({
     testDir: './tests',
@@ -33,7 +36,7 @@ export default defineConfig({
             // for '@smoke' only, so they never launch webkit.
             name: 'webkit-iphone',
             use: { ...devices['iPhone 13'] },
-            testMatch: WEBKIT_IPHONE_SPECS,
+            testMatch: [WEBKIT_IPHONE_SPECS, BOTH_ENGINE_SPECS],
         },
     ],
 });
