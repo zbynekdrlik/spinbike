@@ -203,9 +203,12 @@ export async function openStaffSpinningCell(page: Page, templateId: number, date
     await expect(
         detail.locator('[data-testid^="spin-row-"], [data-testid="spin-participants-empty"]').first(),
     ).toBeVisible({ timeout: 10000 });
-    await expect(detail.locator('[data-testid="spin-participants-empty"]')).not.toHaveText(/Loading/, {
-        timeout: 10000,
-    });
+    // The placeholder row doubles as the loading row ("Nacitavam..." /
+    // "Loading..."), and is absent once real rows render — so assert no
+    // LOADING placeholder remains rather than reading a row that may not exist.
+    await expect(
+        detail.locator('[data-testid="spin-participants-empty"]').filter({ hasText: /Nacitavam|Loading/ }),
+    ).toHaveCount(0, { timeout: 10000 });
 }
 
 /** Day-picker button index (0 = Monday) of a YYYY-MM-DD date. */
