@@ -1491,6 +1491,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert("spin_state_waiting", ("caka na 9:00", "waiting for 9:00"));
     m.insert("spin_state_charged", ("strhnute", "charged"));
     m.insert("spin_state_free", ("zadarmo", "free"));
+    m.insert("spin_state_voided", ("strhnutie zrusene", "charge voided"));
     m.insert("spin_unbook", ("Odhlasit", "Unbook"));
     m.insert("spin_end_persistent", ("Ukoncit natrvalo", "End permanent"));
     m.insert(

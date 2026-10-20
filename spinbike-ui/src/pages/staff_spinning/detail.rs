@@ -57,10 +57,10 @@ fn title(slot: &ClassSlot, lang: Lang) -> String {
 }
 
 #[component]
-pub fn ClassDetail(slot: ClassSlot, #[prop(into)] on_changed: Callback<()>) -> impl IntoView {
+pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
-    let template_id = slot.template_id;
-    let date = slot.date.clone();
+    let template_id = occurrence.template_id;
+    let date = occurrence.date.clone();
     let (participants, set_participants) = signal(Vec::<Participant>::new());
     let (loaded, set_loaded) = signal(false);
     let (err, set_err) = signal(String::new());
@@ -149,15 +149,15 @@ pub fn ClassDetail(slot: ClassSlot, #[prop(into)] on_changed: Callback<()>) -> i
     };
 
     let header_title = {
-        let slot = slot.clone();
-        move || title(&slot, lang.get())
+        let occurrence = occurrence.clone();
+        move || title(&occurrence, lang.get())
     };
-    let booked = slot.booked;
-    let capacity = slot.capacity;
-    let cancelled = slot.cancelled;
-    let once_allowed = !slot.cancelled && !slot.started;
+    let booked = occurrence.booked;
+    let capacity = occurrence.capacity;
+    let cancelled = occurrence.cancelled;
+    let once_allowed = !occurrence.cancelled && !occurrence.started;
     // Not reactive on purpose: the detail remounts on every reload anyway.
-    let add_label = slot_label(&slot, lang.get_untracked());
+    let add_label = slot_label(&occurrence, lang.get_untracked());
 
     view! {
         <section class="card spin-detail" data-testid="spin-detail" data-template-id=template_id.to_string() data-date=date.clone()>
@@ -330,7 +330,7 @@ pub fn ClassDetail(slot: ClassSlot, #[prop(into)] on_changed: Callback<()>) -> i
             <AddPerson
                 template_id=template_id
                 date=date.clone()
-                slot_label=add_label
+                weekly_label=add_label
                 once_allowed=once_allowed
                 booked_user_ids=Signal::derive(move || {
                     participants.get().iter().map(|p| p.user_id).collect::<Vec<_>>()

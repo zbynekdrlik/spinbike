@@ -82,7 +82,7 @@ pub fn StaffDashboardPage() -> impl IntoView {
                 };
                 view! {
                     <a
-                        href="/staff/spinning"
+                        href=model::occurrence_href(slot.template_id, &slot.date)
                         class=row_class
                         data-testid=format!("roster-class-{}-{}", slot.template_id, slot.date)
                     >

@@ -31,7 +31,12 @@ pub fn StaffSpinningPage() -> impl IntoView {
     let (loaded, set_loaded) = signal(false);
     let (error, set_error) = signal(String::new());
     let (reload, set_reload) = signal(0u32);
-    let (selected, set_selected) = signal(None::<(i64, String)>);
+    // `/staff/spinning?t=<template_id>&d=<YYYY-MM-DD>` opens that class's
+    // detail directly (the /schedule summary rows link here that way).
+    let preselect = web_sys::window()
+        .and_then(|w| w.location().search().ok())
+        .and_then(|s| model::parse_preselect(&s));
+    let (selected, set_selected) = signal(preselect);
     let req = RequestId::new();
 
     Effect::new(move |_| {
@@ -82,7 +87,10 @@ pub fn StaffSpinningPage() -> impl IntoView {
                 }.into_any();
             }
             let l = lang.get();
-            let sel = selected.get();
+            // NOTE: `selected` is deliberately NOT read here — each cell
+            // tracks it in its own reactive attributes, so a tap does not
+            // rebuild the table (which would reset its horizontal scroll on a
+            // phone, #385 review).
             let header: Vec<_> = cols.iter().map(|c| {
                 let day = i18n::t(l, DAY_KEYS[c.weekday.clamp(0, 6) as usize]);
                 let instr = c.instructor_name.clone().unwrap_or_default();
@@ -100,7 +108,6 @@ pub fn StaffSpinningPage() -> impl IntoView {
                     let Some(slot) = model::find_slot(&list, tid, &date) else {
                         return view! { <td class="occ-grid__none">"\u{2014}"</td> }.into_any();
                     };
-                    let is_selected = sel.as_ref() == Some(&(tid, date.clone()));
                     let mut class = format!(
                         "occ-cell {}",
                         model::fill_level(slot.booked, slot.capacity).css()
@@ -111,9 +118,6 @@ pub fn StaffSpinningPage() -> impl IntoView {
                     if slot.started {
                         class.push_str(" occ-cell--past");
                     }
-                    if is_selected {
-                        class.push_str(" occ-cell--selected");
-                    }
                     let label = if slot.cancelled {
                         i18n::t(l, "spin_cancelled_short").to_string()
                     } else if slot.booked >= slot.capacity {
@@ -122,12 +126,30 @@ pub fn StaffSpinningPage() -> impl IntoView {
                         format!("{}/{}", slot.booked, slot.capacity)
                     };
                     let testid = format!("occ-cell-{tid}-{date}");
-                    let pressed = if is_selected { "true" } else { "false" };
+                    let is_selected = {
+                        let date = date.clone();
+                        move || {
+                            selected.with(|s| {
+                                s.as_ref().is_some_and(|(t, d)| *t == tid && *d == date)
+                            })
+                        }
+                    };
+                    let class_now = {
+                        let is_selected = is_selected.clone();
+                        move || {
+                            if is_selected() {
+                                format!("{class} occ-cell--selected")
+                            } else {
+                                class.clone()
+                            }
+                        }
+                    };
+                    let pressed = move || if is_selected() { "true" } else { "false" };
                     view! {
                         <td>
                             <button
                                 type="button"
-                                class=class
+                                class=class_now
                                 data-testid=testid
                                 aria-pressed=pressed
                                 on:click=move |_| set_selected.set(Some((tid, date.clone())))
@@ -166,7 +188,7 @@ pub fn StaffSpinningPage() -> impl IntoView {
                 }).into_any();
             };
             match model::find_slot(&slots.get(), tid, &date) {
-                Some(slot) => view! { <ClassDetail slot=slot.clone() on_changed=on_changed /> }.into_any(),
+                Some(slot) => view! { <ClassDetail occurrence=slot.clone() on_changed=on_changed /> }.into_any(),
                 None => ().into_any(),
             }
         }}

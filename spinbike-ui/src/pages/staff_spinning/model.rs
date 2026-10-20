@@ -171,9 +171,11 @@ pub enum ChargeState {
     Waiting,
     /// Charged a real amount (a staff cancel refunds it).
     Charged,
-    /// Charged nothing — a pass holder's free visit, or the charge row was
-    /// voided. Nothing is owed for this booking right now.
+    /// Charged 0 EUR — a pass holder's free visit.
     Free,
+    /// Charged, but the charge row was voided at the desk afterwards — no
+    /// money is held for this booking any more.
+    Voided,
 }
 
 pub fn charge_state(charged: bool, charged_amount: Option<f64>) -> ChargeState {
@@ -184,7 +186,10 @@ pub fn charge_state(charged: bool, charged_amount: Option<f64>) -> ChargeState {
         // Money is rounded to cents server-side; anything under half a cent
         // is a zero-amount (free) visit.
         Some(a) if a >= 0.005 => ChargeState::Charged,
-        _ => ChargeState::Free,
+        Some(_) => ChargeState::Free,
+        // The server sends no amount for a charged booking only when its
+        // charge row was voided.
+        None => ChargeState::Voided,
     }
 }
 
@@ -194,6 +199,7 @@ impl ChargeState {
             ChargeState::Waiting => "spin_state_waiting",
             ChargeState::Charged => "spin_state_charged",
             ChargeState::Free => "spin_state_free",
+            ChargeState::Voided => "spin_state_voided",
         }
     }
 }
@@ -202,7 +208,11 @@ impl ChargeState {
 /// name, both case-insensitive (`users.name` is one "First Last" field).
 pub fn surname_key(name: &str) -> (String, String) {
     let full = name.trim().to_lowercase();
-    let last = full.split_whitespace().last().unwrap_or("").to_string();
+    let last = full
+        .split_whitespace()
+        .next_back()
+        .unwrap_or("")
+        .to_string();
     (last, full)
 }
 
@@ -229,6 +239,28 @@ pub fn customer_href(p: &Participant) -> String {
         Some(code) => format!("/staff?card={}", urlencoding_light(code)),
         None => format!("/staff?q={}", urlencoding_light(p.user_name.trim())),
     }
+}
+
+/// The class preselected by the URL query (`?t=<template_id>&d=<YYYY-MM-DD>`,
+/// order-free), if both parts are present and well-formed.
+pub fn parse_preselect(search: &str) -> Option<(i64, String)> {
+    let mut tid = None;
+    let mut date = None;
+    for kv in search.trim_start_matches('?').split('&') {
+        if let Some(v) = kv.strip_prefix("t=") {
+            tid = v.parse::<i64>().ok();
+        } else if let Some(v) = kv.strip_prefix("d=") {
+            date = NaiveDate::parse_from_str(v, "%Y-%m-%d")
+                .ok()
+                .map(|d| d.to_string());
+        }
+    }
+    Some((tid?, date?))
+}
+
+/// Link that opens the staff spinning screen on one class occurrence.
+pub fn occurrence_href(template_id: i64, date: &str) -> String {
+    format!("/staff/spinning?t={template_id}&d={date}")
 }
 
 #[cfg(test)]
@@ -341,7 +373,8 @@ mod tests {
         assert_eq!(charge_state(true, Some(5.0)), ChargeState::Charged);
         assert_eq!(charge_state(true, Some(0.01)), ChargeState::Charged);
         assert_eq!(charge_state(true, Some(0.0)), ChargeState::Free);
-        assert_eq!(charge_state(true, None), ChargeState::Free);
+        assert_eq!(charge_state(true, None), ChargeState::Voided);
+        assert_eq!(ChargeState::Voided.i18n_key(), "spin_state_voided");
         assert_eq!(ChargeState::Waiting.i18n_key(), "spin_state_waiting");
     }
 
@@ -358,6 +391,27 @@ mod tests {
             names,
             vec!["peter adamec", "Cher", "Anna Novakova", "Jana Zelena"]
         );
+    }
+
+    #[wasm_bindgen_test]
+    fn preselect_query_round_trips_and_rejects_garbage() {
+        assert_eq!(
+            parse_preselect("?t=4&d=2026-10-21"),
+            Some((4, "2026-10-21".to_string()))
+        );
+        assert_eq!(
+            parse_preselect("?d=2026-10-21&x=1&t=4"),
+            Some((4, "2026-10-21".to_string()))
+        );
+        let href = occurrence_href(4, "2026-10-21");
+        assert_eq!(
+            parse_preselect(href.split_once('?').unwrap().1),
+            Some((4, "2026-10-21".to_string()))
+        );
+        assert_eq!(parse_preselect(""), None);
+        assert_eq!(parse_preselect("?t=4"), None);
+        assert_eq!(parse_preselect("?t=x&d=2026-10-21"), None);
+        assert_eq!(parse_preselect("?t=4&d=2026-13-01"), None);
     }
 
     #[wasm_bindgen_test]

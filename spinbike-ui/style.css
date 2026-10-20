@@ -1120,7 +1120,7 @@ table tbody tr:last-child td {
 }
 
 .occ-grid__none {
-    color: var(--text-dim);
+    color: var(--text-muted);
 }
 
 .occ-cell {

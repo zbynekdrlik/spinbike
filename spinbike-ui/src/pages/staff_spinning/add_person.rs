@@ -35,7 +35,7 @@ pub fn AddPerson(
     /// The occurrence date (`YYYY-MM-DD`).
     date: String,
     /// "Po 18:00" — the weekly slot the permanent enrolment repeats.
-    slot_label: String,
+    weekly_label: String,
     /// The one-off booking is offered only while the occurrence is bookable
     /// (not cancelled, not started — the server's own flags).
     once_allowed: bool,
@@ -63,7 +63,10 @@ pub fn AddPerson(
         let q_at_start = q.clone();
         spawn_local(async move {
             gloo_timers::future::TimeoutFuture::new(250).await;
-            if query.get_untracked() != q_at_start {
+            // `try_` reads: the picker remounts on every cell tap / reload,
+            // so the signal may already be disposed when this resolves — a
+            // plain `get_untracked` on a disposed signal panics the WASM app.
+            if query.try_get_untracked().as_ref() != Some(&q_at_start) {
                 return;
             }
             let encoded = urlencoding_light(&q_at_start);
@@ -71,7 +74,7 @@ pub fn AddPerson(
                 .await
             {
                 Ok(list) => {
-                    if query.get_untracked() == q_at_start {
+                    if query.try_get_untracked().as_ref() == Some(&q_at_start) {
                         set_results.set(list);
                     }
                 }
@@ -214,7 +217,7 @@ pub fn AddPerson(
                                         disabled=is_busy
                                         on:click=move |_| book_persistent(uid)
                                     >
-                                        {i18n::tf(l, "spin_add_persistent_format", &[&slot_label])}
+                                        {i18n::tf(l, "spin_add_persistent_format", &[&weekly_label])}
                                     </button>
                                 </div>
                             }.into_any()

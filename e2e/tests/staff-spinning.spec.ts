@@ -34,11 +34,11 @@ import {
 async function slotWithNextWeek(): Promise<{ slot: ClassOccurrence; next: ClassOccurrence }> {
     const w1 = weekRange(1);
     const w2 = weekRange(2);
-    const thisWeek = await listClasses(w1.from, w1.to);
-    const nextWeek = await listClasses(w2.from, w2.to);
-    for (const slot of thisWeek) {
+    const week1 = await listClasses(w1.from, w1.to);
+    const week2 = await listClasses(w2.from, w2.to);
+    for (const slot of week1) {
         if (slot.cancelled || slot.started || slot.booked + 2 > slot.capacity) continue;
-        const next = nextWeek.find(
+        const next = week2.find(
             (c) => c.template_id === slot.template_id && !c.cancelled && c.booked + 1 <= c.capacity,
         );
         if (next) return { slot, next };
@@ -114,6 +114,15 @@ test.describe('Staff spinning screen (#385)', () => {
                 'href',
                 `/staff?card=${customer.card_code}`,
             );
+
+            // A deep link (the /schedule summary rows use it) opens the
+            // class directly.
+            await page.goto(`/staff/spinning?t=${slot.template_id}&d=${slot.date}`);
+            await expect(page.locator('[data-testid="spin-detail"]')).toHaveAttribute('data-date', slot.date);
+            await expect(page.locator(`[data-testid="spin-name-${bookingId}"]`)).toHaveText(customer.name);
+            await expect(
+                page.locator(`[data-testid="occ-cell-${slot.template_id}-${slot.date}"]`),
+            ).toHaveAttribute('aria-pressed', 'true');
             assertCleanConsole(messages);
         } finally {
             await staffCancel(token, bookingId);

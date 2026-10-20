@@ -523,7 +523,10 @@ mod tests {
             .await
             .unwrap();
         let first = sweep_as_of(&pool, start_of_today()).await.unwrap();
-        assert!(first.created >= 2, "two or three Mondays in the window");
+        assert!(
+            first.created >= 8,
+            "eight or nine Mondays in the 8-week window"
+        );
 
         // The customer skips the LAST materialised Monday.
         let (bid, date): (i64, String) = sqlx::query_as(
@@ -626,7 +629,11 @@ mod tests {
 
         let ten_am = today.and_hms_opt(10, 0, 0).unwrap();
         let summary = sweep_as_of(&pool, ten_am).await.unwrap();
-        assert_eq!(summary.created, 2, "only the two FUTURE weekly occurrences");
+        assert_eq!(
+            summary.created,
+            MATCHING_DATES - 1,
+            "every FUTURE weekly occurrence in the window, not today's"
+        );
         let today_booking: Option<i64> =
             sqlx::query_scalar("SELECT id FROM bookings WHERE user_id = ? AND date = ?")
                 .bind(uid)
