@@ -188,7 +188,8 @@ pub fn charge_state(charged: bool, charged_amount: Option<f64>) -> ChargeState {
         Some(a) if a >= 0.005 => ChargeState::Charged,
         Some(_) => ChargeState::Free,
         // The server sends no amount for a charged booking only when its
-        // charge row was voided.
+        // charge row was voided (or, defensively, is missing — every charge
+        // path today links one: charger.rs, booking_cancel.rs).
         None => ChargeState::Voided,
     }
 }

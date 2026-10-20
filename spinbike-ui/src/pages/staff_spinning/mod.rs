@@ -21,6 +21,22 @@ use crate::util::RequestId;
 
 use detail::ClassDetail;
 
+/// Keep the selected class in the address bar (`?t=&d=`), so a reload or a
+/// shared link reopens it. `replaceState` on purpose: no history entry per
+/// tap, and no router navigation (which would rebuild the page).
+fn remember_selection(template_id: i64, date: &str) {
+    let Some(history) = web_sys::window().and_then(|w| w.history().ok()) else {
+        return;
+    };
+    if let Err(e) = history.replace_state_with_url(
+        &wasm_bindgen::JsValue::NULL,
+        "",
+        Some(&model::occurrence_href(template_id, date)),
+    ) {
+        web_sys::console::warn_1(&e);
+    }
+}
+
 #[component]
 pub fn StaffSpinningPage() -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
@@ -33,9 +49,11 @@ pub fn StaffSpinningPage() -> impl IntoView {
     let (reload, set_reload) = signal(0u32);
     // `/staff/spinning?t=<template_id>&d=<YYYY-MM-DD>` opens that class's
     // detail directly (the /schedule summary rows link here that way).
-    let preselect = web_sys::window()
-        .and_then(|w| w.location().search().ok())
-        .and_then(|s| model::parse_preselect(&s));
+    // Read through the ROUTER's location, not `window.location`: on an
+    // in-app link click the router renders the new route before it pushes
+    // the URL, so `window.location.search` would still be the old one.
+    let preselect =
+        model::parse_preselect(&leptos_router::hooks::use_location().search.get_untracked());
     let (selected, set_selected) = signal(preselect);
     let req = RequestId::new();
 
@@ -90,7 +108,9 @@ pub fn StaffSpinningPage() -> impl IntoView {
             // NOTE: `selected` is deliberately NOT read here — each cell
             // tracks it in its own reactive attributes, so a tap does not
             // rebuild the table (which would reset its horizontal scroll on a
-            // phone, #385 review).
+            // phone, #385 review). A WRITE (enrol/unbook/cancel) does reload
+            // `slots` and rebuild it — accepted: the detail sits below the
+            // grid, and the counts must be fresh.
             let header: Vec<_> = cols.iter().map(|c| {
                 let day = i18n::t(l, DAY_KEYS[c.weekday.clamp(0, 6) as usize]);
                 let instr = c.instructor_name.clone().unwrap_or_default();
@@ -152,7 +172,10 @@ pub fn StaffSpinningPage() -> impl IntoView {
                                 class=class_now
                                 data-testid=testid
                                 aria-pressed=pressed
-                                on:click=move |_| set_selected.set(Some((tid, date.clone())))
+                                on:click=move |_| {
+                                    set_selected.set(Some((tid, date.clone())));
+                                    remember_selection(tid, &date);
+                                }
                             >
                                 {label}
                             </button>
@@ -189,7 +212,11 @@ pub fn StaffSpinningPage() -> impl IntoView {
             };
             match model::find_slot(&slots.get(), tid, &date) {
                 Some(slot) => view! { <ClassDetail occurrence=slot.clone() on_changed=on_changed /> }.into_any(),
-                None => ().into_any(),
+                // A deep link to a class outside the grid (or not loaded
+                // yet): show the hint instead of nothing.
+                None => loaded.get().then(|| view! {
+                    <p class="text-muted mt-2" data-testid="spin-pick-hint">{i18n::t(lang.get(), "spin_pick_cell")}</p>
+                }).into_any(),
             }
         }}
     }

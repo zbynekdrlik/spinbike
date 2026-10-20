@@ -282,7 +282,7 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
                                     <tr data-testid=format!("spin-row-{bid}") data-user-id=uid.to_string() data-source=p.source.clone()>
                                         <td>{i + 1}</td>
                                         <td>
-                                            <a href=href data-testid=format!("spin-name-{bid}")>{p.user_name.clone()}</a>
+                                            <a href=href rel="external" data-testid=format!("spin-name-{bid}")>{p.user_name.clone()}</a>
                                         </td>
                                         <td>{phone_cell}</td>
                                         <td class=credit_class data-testid=format!("spin-credit-{bid}")>

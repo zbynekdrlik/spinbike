@@ -115,18 +115,62 @@ test.describe('Staff spinning screen (#385)', () => {
                 `/staff?card=${customer.card_code}`,
             );
 
-            // A deep link (the /schedule summary rows use it) opens the
-            // class directly.
+            // Tapping another cell keeps the SAME table node (no rebuild ->
+            // a phone keeps its horizontal scroll position).
+            const grid = page.locator('[data-testid="occ-grid"]');
+            await grid.evaluate((el) => {
+                (el as HTMLElement).dataset.probe = 'kept';
+            });
+            const other = page
+                .locator(
+                    `[data-testid^="occ-cell-"]:not([data-testid="occ-cell-${slot.template_id}-${slot.date}"])`,
+                )
+                .first();
+            await other.click();
+            await expect(other).toHaveAttribute('aria-pressed', 'true');
+            await expect(grid).toHaveAttribute('data-probe', 'kept');
+            // The selection is kept in the address bar for a reload.
+            const otherId = (await other.getAttribute('data-testid'))!.replace('occ-cell-', '');
+            const [otherTid, ...otherDate] = otherId.split('-');
+            expect(page.url()).toContain(`/staff/spinning?t=${otherTid}&d=${otherDate.join('-')}`);
+
+            // A deep link opens the class directly.
             await page.goto(`/staff/spinning?t=${slot.template_id}&d=${slot.date}`);
             await expect(page.locator('[data-testid="spin-detail"]')).toHaveAttribute('data-date', slot.date);
             await expect(page.locator(`[data-testid="spin-name-${bookingId}"]`)).toHaveText(customer.name);
             await expect(
                 page.locator(`[data-testid="occ-cell-${slot.template_id}-${slot.date}"]`),
             ).toHaveAttribute('aria-pressed', 'true');
+
+            // The name opens the customer's detail at the desk.
+            await page.locator(`[data-testid="spin-name-${bookingId}"]`).click();
+            await expect(page).toHaveURL(new RegExp(`/staff\\?card=${customer.card_code}$`));
+            await expect(page.locator('[data-testid="action-panel"]')).toBeVisible({ timeout: 10000 });
             assertCleanConsole(messages);
         } finally {
             await staffCancel(token, bookingId);
         }
+    });
+
+    test('a /schedule summary row opens that class on the spinning screen', async ({ page }) => {
+        const messages = setupConsoleCheck(page);
+        await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const { from, to } = weekRange(0);
+        const slot = (await listClasses(from, to)).find((c) => !c.cancelled);
+        if (!slot) throw new Error(`no class in ${from}..${to}`);
+
+        await page.goto('/schedule');
+        // In-app (client-side) navigation — the router renders the new route
+        // before it pushes the URL, which the preselect must survive.
+        await page.locator(`[data-testid="roster-class-${slot.template_id}-${slot.date}"]`).click();
+        await expect(page).toHaveURL(/\/staff\/spinning\?/);
+        await expect(page.locator('[data-testid="spin-detail"]')).toHaveAttribute('data-date', slot.date, {
+            timeout: 10000,
+        });
+        await expect(
+            page.locator(`[data-testid="occ-cell-${slot.template_id}-${slot.date}"]`),
+        ).toHaveAttribute('aria-pressed', 'true');
+        assertCleanConsole(messages);
     });
 
     test('enrol once and permanently, unbook, end the permanent slot', async ({ page }) => {
