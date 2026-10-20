@@ -10,6 +10,7 @@
  * in Europe/Bratislava time — never re-derived here) and seed past-date
  * bookings through the test-only `/api/test/seed-booking` fixture.
  */
+import { Page, expect } from '@playwright/test';
 import { bratislavaToday, bratislavaDateOffset } from './helpers';
 
 export const BASE_URL = 'http://localhost:8099';
@@ -153,6 +154,61 @@ export async function staffCancel(staffToken: string, bookingId: number): Promis
         headers: { Authorization: `Bearer ${staffToken}` },
     });
     return resp.status;
+}
+
+/** One row of the staff participants endpoint (#385 shape). */
+export interface ParticipantRow {
+    booking_id: number;
+    user_id: number;
+    user_name: string;
+    source: 'manual' | 'persistent';
+    refundable: boolean;
+    phone: string | null;
+    card_code: string | null;
+    credit: number;
+    charged: boolean;
+    charged_amount: number | null;
+}
+
+export async function listParticipants(
+    staffToken: string,
+    templateId: number,
+    date: string,
+): Promise<ParticipantRow[]> {
+    const resp = await fetch(`${BASE_URL}/api/classes/${templateId}/${date}/participants`, {
+        headers: { Authorization: `Bearer ${staffToken}` },
+    });
+    if (!resp.ok) throw new Error(`participants failed: ${resp.status} ${await resp.text()}`);
+    return resp.json();
+}
+
+/**
+ * Open the staff spinning screen (#385) and tap the grid cell of one class
+ * occurrence; resolves once that occurrence's detail table has loaded. The
+ * occurrence must lie inside the 8-week grid (current week + 7).
+ */
+export async function openStaffSpinningCell(page: Page, templateId: number, date: string): Promise<void> {
+    if (!page.url().includes('/staff/spinning')) {
+        await page.goto('/staff/spinning');
+    }
+    const cell = page.locator(`[data-testid="occ-cell-${templateId}-${date}"]`);
+    await expect(cell).toBeVisible({ timeout: 10000 });
+    await cell.click();
+    await expect(cell).toHaveAttribute('aria-pressed', 'true');
+    const detail = page.locator('[data-testid="spin-detail"]');
+    await expect(detail).toHaveAttribute('data-date', date);
+    await expect(detail).toHaveAttribute('data-template-id', String(templateId));
+    // The table finished loading: rows, or the "nobody is booked" row (never
+    // the transient loading text).
+    await expect(
+        detail.locator('[data-testid^="spin-row-"], [data-testid="spin-participants-empty"]').first(),
+    ).toBeVisible({ timeout: 10000 });
+    // The placeholder row doubles as the loading row ("Nacitavam..." /
+    // "Loading..."), and is absent once real rows render — so assert no
+    // LOADING placeholder remains rather than reading a row that may not exist.
+    await expect(
+        detail.locator('[data-testid="spin-participants-empty"]').filter({ hasText: /Nacitavam|Loading/ }),
+    ).toHaveCount(0, { timeout: 10000 });
 }
 
 /** Day-picker button index (0 = Monday) of a YYYY-MM-DD date. */

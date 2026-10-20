@@ -42,6 +42,10 @@ pub enum ApiError {
     },
     /// 400 — the message carries the validation specifics; code is `bad_request`.
     BadRequest(String),
+    /// 400 with a SPECIFIC machine code and that code's canonical message —
+    /// for a validation failure the UI branches on (e.g. `range_too_long`,
+    /// #385), where the generic `bad_request` would hide what went wrong.
+    BadRequestCode(ErrorCode),
     /// 429 — rate limit hit on a public endpoint; message from the code.
     TooManyRequests(ErrorCode),
     /// 503 — message from the code.
@@ -103,6 +107,9 @@ impl ApiError {
             ApiError::BadRequest(msg) => {
                 (StatusCode::BAD_REQUEST, ErrorCode::BadRequest, msg, None)
             }
+            ApiError::BadRequestCode(c) => {
+                (StatusCode::BAD_REQUEST, c, c.message().to_string(), None)
+            }
             ApiError::TooManyRequests(c) => (
                 StatusCode::TOO_MANY_REQUESTS,
                 c,
@@ -156,6 +163,14 @@ mod tests {
         assert_eq!(status, StatusCode::FORBIDDEN);
         assert_eq!(body["error_code"], "staff_required");
         assert_eq!(body["error"], "Staff access required");
+    }
+
+    #[test]
+    fn bad_request_code_maps_status_code_and_message() {
+        let (status, body) = parts_of(ApiError::BadRequestCode(ErrorCode::RangeTooLong));
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error_code"], "range_too_long");
+        assert_eq!(body["error"], "Date range too long (max 62 days)");
     }
 
     #[test]

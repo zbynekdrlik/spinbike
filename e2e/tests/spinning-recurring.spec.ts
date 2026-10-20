@@ -13,6 +13,7 @@ import {
     seedBooking,
     chargeBooking,
     staffCancel,
+    openStaffSpinningCell,
 } from './spinning-fixtures';
 
 /**
@@ -24,9 +25,9 @@ import {
  * - R5: a customer subscribes to a weekly slot on /schedule and immediately
  *   sees the materialised bookings at the top of home ("Moje spinningy");
  *   cancelling ONE date removes only that date, the subscription stays.
- * - R3/R8: staff cancel a CHARGED booking from the roster chip (labelled
- *   "Cancel and refund credit") and the customer's credit comes back as a
- *   separate storno ledger row.
+ * - R3/R8: staff cancel a CHARGED booking from the staff spinning table
+ *   (#385; labelled "Cancel and refund credit", confirmed inline) and the
+ *   customer's credit comes back as a separate storno ledger row.
  */
 
 interface Slot {
@@ -163,7 +164,7 @@ test.describe('Spinning on the customer home + menu (#382)', () => {
 });
 
 test.describe('Staff cancel with refund (#382 R3/R8)', () => {
-    test('cancelling a charged booking from the roster chip refunds the credit as a separate ledger row', async ({
+    test('cancelling a charged booking from the staff table refunds the credit as a separate ledger row', async ({
         page,
     }) => {
         const messages = setupConsoleCheck(page);
@@ -188,16 +189,20 @@ test.describe('Staff cancel with refund (#382 R3/R8)', () => {
             const charged = await creditOf();
             expect(charged, 'the binding charge debited the Spinning price').toBeLessThan(10);
 
-            await page.goto('/staff/classes');
-            await page.waitForSelector('h1.page-title');
-            const roster = page.locator(`[data-testid="roster-class-${slot.template_id}-${slot.date}"]`);
-            await expect(roster).toBeVisible({ timeout: 10000 });
-            const chip = roster.locator(`[data-testid="participant-chip-${bookingId}"]`);
-            await expect(chip).toBeVisible({ timeout: 10000 });
-            const remove = chip.locator(`[data-testid="participant-remove-${bookingId}"]`);
-            await expect(remove).toHaveAttribute('title', 'Cancel and refund credit');
+            // #385: the roster is the staff spinning screen's TABLE now.
+            await openStaffSpinningCell(page, slot.template_id, slot.date);
+            const row = page.locator(`[data-testid="spin-row-${bookingId}"]`);
+            await expect(row).toBeVisible({ timeout: 10000 });
+            await expect(page.locator(`[data-testid="spin-state-${bookingId}"]`)).toHaveText('charged');
+            const remove = page.locator(`[data-testid="spin-unbook-${bookingId}"]`);
+            await expect(remove).toHaveText('Cancel and refund credit');
             await remove.click();
-            await expect(chip).toHaveCount(0, { timeout: 10000 });
+            // The inline confirmation says the credit comes back.
+            await expect(page.locator('[data-testid="spin-confirm-text"]')).toContainText(
+                `The ${(10 - charged).toFixed(2)} € charged goes back to their credit`,
+            );
+            await page.locator('[data-testid="spin-confirm-yes"]').click();
+            await expect(row).toHaveCount(0, { timeout: 10000 });
             cancelled = true;
 
             expect(await creditOf(), 'credit restored').toBeCloseTo(10, 2);

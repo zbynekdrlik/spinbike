@@ -510,6 +510,97 @@ async fn read_endpoints_expose_started_cancel_open_source_and_refundable() {
     assert_eq!(after[0]["refundable"], true, "charged 5.00 -> refundable");
 }
 
+/// #385: the staff participants table reads phone, card code, current
+/// credit and the charge state from ONE participants call — uncharged
+/// (`charged=false`, no amount), charged (`charged=true`, the positive
+/// amount taken, credit reflects the debit), a free (0 EUR) charge
+/// (`charged_amount = 0.0`, never `-0.0`), and a voided charge row
+/// (`charged=true`, `charged_amount = null`).
+#[tokio::test]
+async fn participants_carry_phone_card_credit_and_charge_state() {
+    let app = TestApp::new().await;
+    let yesterday = today() - Duration::days(1);
+    let tid = template_on(&app, yesterday, "07:35").await;
+    sqlx::query(
+        "UPDATE users SET credit = 10.0, phone = '+421900111222', card_code = 'PT-385' \
+         WHERE id = ?",
+    )
+    .bind(app.customer_id)
+    .execute(&app.pool)
+    .await
+    .unwrap();
+    let bid = seed_booking(&app, tid, yesterday, app.customer_id).await;
+    let uri = format!("/api/classes/{tid}/{yesterday}/participants");
+
+    let (status, before) = app.request(get(&uri, &app.staff_token)).await;
+    assert_eq!(status, StatusCode::OK, "got {before}");
+    let p = &before[0];
+    assert_eq!(p["booking_id"], bid);
+    assert_eq!(p["phone"], "+421900111222");
+    assert_eq!(p["card_code"], "PT-385");
+    assert_eq!(p["credit"].as_f64(), Some(10.0));
+    assert_eq!(p["charged"], false, "not charged before 09:00 ran");
+    assert!(
+        p["charged_amount"].is_null(),
+        "no amount while uncharged: {p}"
+    );
+
+    spinbike_server::jobs::charger::tick(&app.pool)
+        .await
+        .unwrap();
+    let (_, after) = app.request(get(&uri, &app.staff_token)).await;
+    let p = &after[0];
+    assert_eq!(p["charged"], true);
+    let amount = p["charged_amount"]
+        .as_f64()
+        .expect("charged amount present");
+    assert!(amount > 0.0, "positive amount taken: {p}");
+    assert_eq!(
+        p["credit"].as_f64(),
+        Some(credit_of(&app, app.customer_id).await),
+        "current credit, after the debit"
+    );
+    assert!((10.0 - amount - p["credit"].as_f64().unwrap()).abs() < 1e-9);
+
+    let charge_tx: i64 =
+        sqlx::query_scalar("SELECT charge_transaction_id FROM bookings WHERE id = ?")
+            .bind(bid)
+            .fetch_one(&app.pool)
+            .await
+            .unwrap();
+    // A pass holder's free visit: the linked row is 0 EUR -> "zadarmo".
+    sqlx::query("UPDATE transactions SET amount = 0.0 WHERE id = ?")
+        .bind(charge_tx)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (_, free) = app.request(get(&uri, &app.staff_token)).await;
+    assert_eq!(free[0]["charged"], true);
+    assert_eq!(free[0]["charged_amount"].as_f64(), Some(0.0));
+    assert_eq!(free[0]["refundable"], false, "nothing to refund on 0 EUR");
+    assert!(
+        !free[0]["charged_amount"].to_string().starts_with('-'),
+        "never -0.0: {}",
+        free[0]["charged_amount"]
+    );
+
+    sqlx::query("UPDATE transactions SET deleted_at = datetime('now') WHERE id = ?")
+        .bind(charge_tx)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    let (_, voided) = app.request(get(&uri, &app.staff_token)).await;
+    assert_eq!(
+        voided[0]["charged"], true,
+        "the booking itself stays charged"
+    );
+    assert!(
+        voided[0]["charged_amount"].is_null(),
+        "a voided charge row carries no amount: {}",
+        voided[0]
+    );
+}
+
 // ── Session invalidation on the customer's own slot routes ────────────────
 
 /// session-invalidation.md: a blocked or soft-deleted caller of the

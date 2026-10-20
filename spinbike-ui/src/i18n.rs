@@ -239,6 +239,12 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
         // schedule's book/cancel buttons, /my/bookings).
         ErrorCode::CancelDeadlinePassed => Some("err_cancel_deadline_passed"),
         ErrorCode::ClassAlreadyStarted => Some("err_class_already_started"),
+        // #385: the staff spinning screen renders every booking 409 and the
+        // grid's range error in the staff's language (spec: "409s render
+        // their i18n text"), not the server's raw English.
+        ErrorCode::ClassFull => Some("err_class_full"),
+        ErrorCode::ClassCancelled => Some("err_class_cancelled"),
+        ErrorCode::RangeTooLong => Some("err_range_too_long"),
         ErrorCode::Internal => Some("err_internal"),
         // Staff/admin-only or not customer-facing in the 5 render sites this
         // ticket scopes to (#145) — left unmapped on purpose, NOT an
@@ -257,8 +263,6 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
         | ErrorCode::EmailConflict
         | ErrorCode::CardCodeConflict
         | ErrorCode::EmailOrCardConflict
-        | ErrorCode::ClassFull
-        | ErrorCode::ClassCancelled
         | ErrorCode::NoteOnVoidedTransaction
         | ErrorCode::DateOnVoidedTransaction
         | ErrorCode::ValidUntilOnVoidedTransaction
@@ -697,7 +701,6 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
 
     // Staff dashboard
     m.insert("staff_dashboard", ("Panel personalu", "Staff Dashboard"));
-    m.insert("add_walk_in", ("+ Navstevnik", "+ Walk-in"));
     m.insert("booked_format", ("{}/{} rezervovanych", "{}/{} booked"));
     m.insert(
         "enter_valid_user_id",
@@ -953,7 +956,7 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     // Nav (bottom tabs + sidebar labels)
     m.insert("nav_desk", ("Desk", "Desk"));
     m.insert("back_to_desk", ("Spat na Desk", "Back to Desk"));
-    m.insert("nav_schedule", ("Plan", "Schedule"));
+    m.insert("nav_spinning", ("Spinning", "Spinning"));
     m.insert("nav_reports", ("Prehlad", "Reports"));
     m.insert("nav_settings", ("Nastavenia", "Settings"));
     m.insert("nav_more", ("Viac", "More"));
@@ -1447,6 +1450,90 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
     m.insert(
         "walkin_already_in_class",
         ("uz prihlaseny", "already booked"),
+    );
+    m.insert(
+        "err_class_full",
+        ("Hodina je plne obsadena", "This class is full"),
+    );
+    m.insert(
+        "err_class_cancelled",
+        ("Tato hodina je zrusena", "This class is cancelled"),
+    );
+    // #385 — staff spinning screen (/staff/spinning).
+    m.insert("spin_title", ("Spinning", "Spinning"));
+    m.insert("spin_week", ("Tyzden", "Week"));
+    m.insert("spin_cancelled_short", ("zrusene", "cancelled"));
+    m.insert(
+        "spin_no_classes",
+        (
+            "V rozvrhu nie su ziadne hodiny",
+            "There are no classes in the schedule",
+        ),
+    );
+    m.insert(
+        "spin_pick_cell",
+        (
+            "Klikni na termin a uvidis, kto je prihlaseny",
+            "Tap a class to see who is booked",
+        ),
+    );
+    m.insert("spin_loading", ("Nacitavam...", "Loading..."));
+    m.insert(
+        "spin_no_participants",
+        ("Nikto nie je prihlaseny", "Nobody is booked"),
+    );
+    m.insert("spin_col_credit", ("Kredit", "Credit"));
+    m.insert("spin_col_kind", ("Prihlaseny", "Booked"));
+    m.insert("spin_col_state", ("Stav", "Status"));
+    m.insert("spin_col_actions", ("Akcie", "Actions"));
+    m.insert("spin_kind_persistent", ("natrvalo", "permanent"));
+    m.insert("spin_kind_once", ("jednorazovo", "one-off"));
+    m.insert("spin_state_waiting", ("caka na 9:00", "waiting for 9:00"));
+    m.insert("spin_state_charged", ("strhnute", "charged"));
+    m.insert("spin_state_free", ("zadarmo", "free"));
+    m.insert("spin_state_voided", ("strhnutie zrusene", "charge voided"));
+    m.insert("spin_unbook", ("Odhlasit", "Unbook"));
+    m.insert("spin_end_persistent", ("Ukoncit natrvalo", "End permanent"));
+    m.insert(
+        "spin_confirm_unbook",
+        ("Odhlasit {} z tohto terminu?", "Unbook {} from this class?"),
+    );
+    m.insert(
+        "spin_confirm_unbook_refund",
+        (
+            "Odhlasit {}? Strhnutych {} \u{20ac} sa vrati na kredit.",
+            "Unbook {}? The {} \u{20ac} charged goes back to their credit.",
+        ),
+    );
+    m.insert(
+        "spin_confirm_end_persistent",
+        (
+            "Ukoncit natrvalo {}? Zrusi aj buduce terminy.",
+            "End {}'s permanent booking? Future classes are cancelled too.",
+        ),
+    );
+    m.insert(
+        "spin_confirm_cancel_class",
+        (
+            "Naozaj zrusit celu hodinu?",
+            "Really cancel the whole class?",
+        ),
+    );
+    m.insert("spin_confirm_yes", ("Ano, potvrdit", "Yes, confirm"));
+    m.insert("spin_confirm_no", ("Spat", "Back"));
+    m.insert("spin_add_title", ("Pridat", "Add"));
+    m.insert("spin_add_once", ("Len na tento termin", "This class only"));
+    m.insert(
+        "spin_add_persistent_format",
+        ("Natrvalo kazdy {}", "Every {} permanently"),
+    );
+    m.insert("spin_open_screen", ("Otvorit Spinning", "Open Spinning"));
+    m.insert(
+        "err_range_too_long",
+        (
+            "Prilis dlhe obdobie (najviac 62 dni)",
+            "Date range too long (max 62 days)",
+        ),
     );
     m.insert(
         "err_internal",

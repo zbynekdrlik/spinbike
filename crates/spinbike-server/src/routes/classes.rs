@@ -17,6 +17,12 @@ use crate::routes::internal_error;
 use spinbike_core::errors::ErrorCode;
 use spinbike_core::ws::ServerMsg;
 
+/// The longest `GET /api/classes` range accepted, in calendar days
+/// INCLUSIVE of both ends (#385). The staff 8-week occupancy grid asks for
+/// 56 (Monday .. Sunday seven weeks later); anything above this cap is a 400
+/// `range_too_long` instead of a per-day loop over an arbitrary span.
+pub const MAX_RANGE_DAYS: i64 = 62;
+
 #[derive(Deserialize)]
 pub struct ScheduleQuery {
     pub from: String,
@@ -103,6 +109,21 @@ pub struct ParticipantResponse {
     /// The booking carries a non-zero, non-voided charge — a staff cancel
     /// refunds it (#382 R3/R8).
     pub refundable: bool,
+    /// #385 staff table: the customer's phone, so the desk can call a
+    /// regular who never installed the app.
+    pub phone: Option<String>,
+    /// #385: the customer's card code — the staff table links the name to
+    /// the desk's customer detail (`/staff?card=<code>`).
+    pub card_code: Option<String>,
+    /// #385: the customer's CURRENT credit (negative = owes money).
+    pub credit: f64,
+    /// #385: the 09:00 binding charge already ran for this booking
+    /// (`bookings.charged_at` set) — "strhnute"/"zadarmo" vs "caka na 9:00".
+    pub charged: bool,
+    /// #385: the amount the linked, NON-voided charge row took (positive;
+    /// `0.0` for a pass holder's free visit). `None` while uncharged, or
+    /// when the charge row was voided.
+    pub charged_amount: Option<f64>,
 }
 
 pub fn routes() -> Router<AppState> {
@@ -126,6 +147,17 @@ async fn list_classes(
         .map_err(|_| super::bad_request("Invalid 'from' date format, expected YYYY-MM-DD"))?;
     let to = NaiveDate::parse_from_str(&query.to, "%Y-%m-%d")
         .map_err(|_| super::bad_request("Invalid 'to' date format, expected YYYY-MM-DD"))?;
+    let days_inclusive = (to - from).num_days() + 1;
+    if days_inclusive > MAX_RANGE_DAYS {
+        tracing::info!(
+            from = %from,
+            to = %to,
+            days_inclusive,
+            max = MAX_RANGE_DAYS,
+            "class list rejected: range too long"
+        );
+        return Err(ApiError::BadRequestCode(ErrorCode::RangeTooLong));
+    }
 
     let templates = db::list_active_templates(&state.pool)
         .await
@@ -219,16 +251,27 @@ async fn list_participants(
         user_email: String,
         source: String,
         refundable: i64,
+        phone: Option<String>,
+        card_code: Option<String>,
+        credit: f64,
+        charged: i64,
+        charged_amount: Option<f64>,
     }
 
     // `refundable` mirrors `db::booking_cancel::cancel_booking`'s refund condition:
     // charged, and the linked charge row is a non-voided NEGATIVE amount (a
-    // pass holder's 0 EUR visit needs no refund).
+    // pass holder's 0 EUR visit needs no refund). `charged_amount` is that
+    // same linked row's amount as a positive number, NULL while uncharged or
+    // once the row was voided (#385) — one SELECT, same joins.
     let rows = sqlx::query_as::<_, Row>(
-        "SELECT b.id AS booking_id, b.user_id AS user_id, u.name AS user_name, u.email AS user_email,
+        "SELECT b.id AS booking_id, b.user_id AS user_id, u.name AS user_name, COALESCE(u.email, '') AS user_email,
                 b.source AS source,
                 COALESCE(b.charged_at IS NOT NULL AND ct.amount < 0 AND ct.deleted_at IS NULL, 0)
-                    AS refundable
+                    AS refundable,
+                u.phone AS phone, u.card_code AS card_code, u.credit AS credit,
+                (b.charged_at IS NOT NULL) AS charged,
+                CASE WHEN b.charged_at IS NOT NULL AND ct.id IS NOT NULL AND ct.deleted_at IS NULL
+                     THEN ABS(ct.amount) END AS charged_amount
          FROM bookings b
          JOIN users u ON u.id = b.user_id  -- no deleted_at filter: booking history for soft-deleted users remains part of class records
          LEFT JOIN transactions ct ON ct.id = b.charge_transaction_id
@@ -250,6 +293,11 @@ async fn list_participants(
                 user_email: r.user_email,
                 source: r.source,
                 refundable: r.refundable != 0,
+                phone: r.phone,
+                card_code: r.card_code,
+                credit: r.credit,
+                charged: r.charged != 0,
+                charged_amount: r.charged_amount,
             })
             .collect(),
     ))

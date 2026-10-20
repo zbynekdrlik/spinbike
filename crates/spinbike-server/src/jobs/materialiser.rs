@@ -1,6 +1,7 @@
 //! Persistent-booking materialiser: ensures a concrete booking row exists for
 //! every future occurrence of an active persistent subscription within the
-//! next 14 days. Idempotent. Skips (#382 R5):
+//! next [`WINDOW_DAYS`] days (8 weeks — the staff planning horizon, #385).
+//! Idempotent. Skips (#382 R5):
 //!
 //! - occurrences the staff cancelled (`class_cancellations`);
 //! - a (user, template, date) that already has a booking row — active, OR
@@ -20,7 +21,11 @@ use sqlx::SqlitePool;
 
 use crate::db::error::DbError;
 
-pub const WINDOW_DAYS: i64 = 14;
+/// How far ahead (days, inclusive of today = offset 0) recurring bookings
+/// are materialised. 56 = 8 weeks, the owner's staff planning horizon
+/// (#385, ROZHODNUTE 2026-10-19): staff see — and can cancel ahead, e.g. a
+/// holiday — every regular's booking across the whole 8-week grid.
+pub const WINDOW_DAYS: i64 = 56;
 
 /// One (persistent booking, occurrence date) pair the sweep needs to check
 /// and possibly materialise.
@@ -314,6 +319,12 @@ mod tests {
     use super::*;
     use crate::db::{create_memory_pool, run_migrations};
 
+    /// How many occurrences of TODAY's weekday fall inside the
+    /// `0..=WINDOW_DAYS` window (offsets 0, 7, 14, ...) — derived from the
+    /// constant so a horizon change never silently invalidates the counts
+    /// below (#385: 14 -> 56 days, 3 -> 9 dates).
+    const MATCHING_DATES: usize = (WINDOW_DAYS / 7 + 1) as usize;
+
     /// Gym-local midnight of today — before the 09:00 binding cutoff, so a
     /// test's "today" occurrences are still eligible regardless of the real
     /// time of day the suite runs at (#382).
@@ -382,7 +393,10 @@ mod tests {
             .unwrap();
 
         let summary = sweep_as_of(&pool, start_of_today()).await.unwrap();
-        assert!(summary.created >= 1, "at least one Monday in next 14 days");
+        assert!(
+            summary.created >= 1,
+            "at least one Monday inside the window"
+        );
 
         let sources: Vec<(String,)> =
             sqlx::query_as("SELECT source FROM bookings WHERE user_id = ?")
@@ -391,6 +405,47 @@ mod tests {
                 .await
                 .unwrap();
         assert!(sources.iter().all(|(s,)| s == "persistent"));
+    }
+
+    /// #385: the horizon is the owner's 8 weeks — a subscription on today's
+    /// weekday is materialised on day 56 (the last offset of the window)
+    /// and never on day 63, one booking per matching week.
+    #[tokio::test]
+    async fn sweep_materialises_exactly_eight_weeks_ahead() {
+        assert_eq!(WINDOW_DAYS, 56, "owner decision #385: 8-week horizon");
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let today = crate::util::today_bratislava();
+        let weekday = today.weekday().num_days_from_monday() as i64;
+        let tid = crate::db::classes::create_template(&pool, weekday, "06:00", 45, None, 5)
+            .await
+            .unwrap();
+        let uid: i64 =
+            sqlx::query_scalar("INSERT INTO users (email, name) VALUES ('w@x','w') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        crate::db::persistent_bookings::create(&pool, uid, tid)
+            .await
+            .unwrap();
+
+        let summary = sweep_as_of(&pool, start_of_today()).await.unwrap();
+        assert_eq!(summary.created, 9, "offsets 0, 7, ..., 56");
+
+        let dates: Vec<String> = sqlx::query_scalar(
+            "SELECT date FROM bookings WHERE user_id = ? AND template_id = ? ORDER BY date",
+        )
+        .bind(uid)
+        .bind(tid)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        let day56 = (today + Duration::days(56)).to_string();
+        let day63 = (today + Duration::days(63)).to_string();
+        assert_eq!(dates.len(), 9);
+        assert_eq!(dates.first(), Some(&today.to_string()));
+        assert_eq!(dates.last(), Some(&day56), "day 56 is inside the window");
+        assert!(!dates.contains(&day63), "day 63 is outside the window");
     }
 
     #[tokio::test]
@@ -468,7 +523,10 @@ mod tests {
             .await
             .unwrap();
         let first = sweep_as_of(&pool, start_of_today()).await.unwrap();
-        assert!(first.created >= 2, "two or three Mondays in the window");
+        assert!(
+            first.created >= 8,
+            "eight or nine Mondays in the 8-week window"
+        );
 
         // The customer skips the LAST materialised Monday.
         let (bid, date): (i64, String) = sqlx::query_as(
@@ -571,7 +629,11 @@ mod tests {
 
         let ten_am = today.and_hms_opt(10, 0, 0).unwrap();
         let summary = sweep_as_of(&pool, ten_am).await.unwrap();
-        assert_eq!(summary.created, 2, "only the two FUTURE weekly occurrences");
+        assert_eq!(
+            summary.created,
+            MATCHING_DATES - 1,
+            "every FUTURE weekly occurrence in the window, not today's"
+        );
         let today_booking: Option<i64> =
             sqlx::query_scalar("SELECT id FROM bookings WHERE user_id = ? AND date = ?")
                 .bind(uid)
@@ -787,25 +849,26 @@ mod tests {
             .await
             .unwrap();
 
-        // Today's weekday recurs at offsets 0, 7 and 14 inside the 15-day
-        // (0..=WINDOW_DAYS) window — 3 distinct matching dates. Per date on
+        // Today's weekday recurs at offsets 0, 7, 14, ... inside the
+        // (0..=WINDOW_DAYS) window — MATCHING_DATES distinct dates. Per date on
         // tid_full: exactly one of {A, B} wins the atomic INSERT, the other
         // gets ClassFull. tid_other has no capacity contention at all.
         let summary = sweep_as_of(&pool, start_of_today())
             .await
             .expect("a ClassFull race must not abort the whole sweep (#345)");
         assert_eq!(
-            summary.created, 6,
-            "3 winners on the capacity-1 template (one per matching date) + \
-             3 bookings for user C on the unrelated template"
+            summary.created,
+            2 * MATCHING_DATES,
+            "one winner per matching date on the capacity-1 template + \
+             one booking per matching date for user C on the unrelated template"
         );
         // Pins the exact `skipped_full` VALUE (not just the side effects
         // below) — kills the `197:30 replace += with *=` mutant on
-        // `skipped_full += 1`, which a value-blind test never noticed: 3
-        // losers (one per matching date), stuck permanently at 0 under a
+        // `skipped_full += 1`, which a value-blind test never noticed: one
+        // loser per matching date, stuck permanently at 0 under a
         // `*= 1` mutant since the counter starts at 0.
         assert_eq!(
-            summary.skipped_full, 3,
+            summary.skipped_full, MATCHING_DATES,
             "one ClassFull loser per matching date (A or B, whichever lost the atomic \
              INSERT race) — the mutation-testing follow-up to #345"
         );
@@ -818,7 +881,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            full_count, 3,
+            full_count, MATCHING_DATES as i64,
             "capacity-1 template must end up with exactly one booking per matching date \
              (capacity respected, and not zero — proving the sweep didn't abort)"
         );
@@ -833,7 +896,7 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            other_count, 3,
+            other_count, MATCHING_DATES as i64,
             "user C's bookings on the unrelated template must all be created — a \
              ClassFull race on the OTHER template must never suppress materialisation \
              for everyone else this tick (#345)"
@@ -852,8 +915,8 @@ mod tests {
     /// to force this without real concurrency: `persistent_bookings.user_id`
     /// is `ON DELETE CASCADE`, so a normal user delete would cascade away
     /// the very candidate this test needs — toggling `PRAGMA foreign_keys`
-    /// off around the delete leaves the persistent booking (and its 3
-    /// matching candidate dates, same offsets-0/7/14 window as the
+    /// off around the delete leaves the persistent booking (and its
+    /// MATCHING_DATES candidate dates, same offsets-0/7/14/... window as the
     /// ClassFull test above) intact. Turning FK enforcement back on before
     /// calling `sweep()` then makes `create_booking()`'s own INSERT fail
     /// its `bookings.user_id` FK check every time — a genuine
@@ -915,12 +978,12 @@ mod tests {
             .await
             .expect("a non-ClassFull DB error must not abort the whole sweep");
 
-        // 3 matching dates (offsets 0, 7, 14) for tid_gone — every one of
+        // MATCHING_DATES dates (offsets 0, 7, 14, ...) for tid_gone — every one of
         // them fails create_booking()'s bookings.user_id FK check. Exact
         // equality (not just >0) is what kills the `*= 1` mutant, which
         // would otherwise silently leave `errored` pinned at 0 forever.
         assert_eq!(
-            summary.errored, 3,
+            summary.errored, MATCHING_DATES,
             "one FK-violation error per matching date for the deleted user"
         );
         assert_eq!(
@@ -928,7 +991,7 @@ mod tests {
             "no capacity contention in this test"
         );
         assert_eq!(
-            summary.created, 3,
+            summary.created, MATCHING_DATES,
             "user C's bookings on the unrelated template must all be created — an \
              unrelated DB error must never suppress materialisation for everyone \
              else this tick"
@@ -944,8 +1007,8 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(
-            other_count, 3,
-            "side-effect check: user C actually got 3 bookings"
+            other_count, MATCHING_DATES as i64,
+            "side-effect check: user C actually got one booking per matching date"
         );
 
         let gone_count: i64 =

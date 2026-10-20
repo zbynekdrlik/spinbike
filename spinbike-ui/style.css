@@ -89,6 +89,12 @@
     --pass-hover:     color-mix(in srgb, var(--pass) 85%, black);
     --pass-fg:        #1a1306;
 
+    /* #385 staff occupancy grid tints (dark). Plain colours — a contrast
+       test reads them; --text >= 4.5:1 and --text-muted >= 4.5:1 on each. */
+    --occ-low-bg:  #1b1e25;
+    --occ-mid-bg:  #1e3a5f;
+    --occ-full-bg: #5b2424;
+
     /* Legacy radius aliases */
     --radius-sm: var(--r-sm);
     --radius:    var(--r);
@@ -122,6 +128,9 @@
         --danger:        #dc2626;
         --info:          color-mix(in srgb, var(--brand) 90%, black);
         --pass:          #d97706;
+        --occ-low-bg:    #f1f3f7;
+        --occ-mid-bg:    #dbeafe;
+        --occ-full-bg:   #fee2e2;
         --shadow:        0 2px 8px rgba(13, 20, 45, 0.07);
         --shadow-lg:     0 16px 48px rgba(13, 20, 45, 0.12);
         --shadow-sm:     0 1px 2px rgba(13, 20, 45, 0.05);
@@ -1077,71 +1086,139 @@ table tbody tr:last-child td {
 }
 
 /* ========================================================================
-   22. PARTICIPANTS LIST
+   22. STAFF SPINNING SCREEN (#385) — occupancy grid + class detail table
    ======================================================================== */
 
-.participants-list {
-    background: var(--surface-2);
-    border: 1px solid var(--border);
-    border-radius: var(--r);
-    padding: var(--s-2) var(--s-3);
-    font-size: var(--fs-sm);
-    color: var(--text-muted);
-}
-
-/* One booked customer on the staff class roster (#379). Theme tokens only —
-   no inline colours: --text on --surface-3 is >= 12:1 in dark and >= 14:1
-   in light; the remove control uses --text-muted (>= 5.6:1 in both) and
-   only turns --danger on hover/focus. Contrast is pinned by
-   e2e/tests/staff-participant-chip.spec.ts in both colour schemes. */
-.participant-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: var(--s-1);
-    margin: 2px 4px;
-    padding: 2px 4px 2px 10px;
-    min-height: 28px;
-    border-radius: var(--r-pill);
-    background: var(--surface-3);
-    border: 1px solid var(--border-strong);
-    color: var(--text);
-    font-size: 0.95rem;
-    font-weight: 500;
+/* Occupancy grid: one cell per class occurrence, tinted by how full it is.
+   Tint backgrounds are plain per-scheme tokens (--occ-*, defined in both
+   :root blocks) so the contrast test in e2e/tests/staff-spinning.spec.ts can
+   read them; text is --text (past: --text-muted), >= 4.5:1 on every tint in
+   both schemes. */
+.occ-grid th,
+.occ-grid td {
+    padding: var(--s-1);
+    text-align: center;
     white-space: nowrap;
 }
 
-.participant-chip__remove {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 24px;
-    min-height: 24px;
-    padding: 0 4px;
-    border: none;
-    border-radius: var(--r-pill);
-    background: transparent;
+.occ-grid thead th {
+    text-transform: none;
+    letter-spacing: 0;
     color: var(--text-muted);
-    font-size: 0.9rem;
-    line-height: 1;
+}
+
+.occ-grid__instr {
+    font-weight: 400;
+    color: var(--text-muted);
+}
+
+.occ-grid__week {
+    text-align: left;
+    color: var(--text);
+    background: var(--surface);
+    font-weight: 600;
+}
+
+.occ-grid__none {
+    color: var(--text-muted);
+}
+
+.occ-cell {
+    width: 100%;
+    min-width: 64px;
+    min-height: var(--tap-min);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--r-sm);
+    color: var(--text);
+    font-size: var(--fs-sm);
+    font-weight: 600;
     cursor: pointer;
 }
 
-.participant-chip__remove:hover,
-.participant-chip__remove:focus-visible {
-    color: var(--danger);
-}
+.occ-cell--low       { background: var(--occ-low-bg); }
+.occ-cell--mid       { background: var(--occ-mid-bg); }
+.occ-cell--full      { background: var(--occ-full-bg); }
+.occ-cell--cancelled { background: var(--surface-3); color: var(--text-muted); font-weight: 400; }
+.occ-cell--past      { color: var(--text-muted); font-weight: 400; }
 
-.participant-chip__remove:focus-visible {
-    outline: 2px solid var(--brand);
+.occ-cell--selected,
+.occ-cell:focus-visible {
+    outline: 3px solid var(--brand);
     outline-offset: 1px;
 }
 
-/* #382: recurring-booking mark on a roster chip ("pravidelne"). Muted
-   token text on the chip's own --surface-3 (>= 5.6:1 in both schemes). */
-.participant-chip__tag {
-    font-size: var(--fs-xs);
+.spin-detail {
+    margin-top: var(--s-4);
+}
+
+.spin-detail__head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: var(--s-2);
+    margin-bottom: var(--s-3);
+}
+
+.spin-detail__title {
+    font-size: var(--fs-md);
+}
+
+.spin-detail__count {
     color: var(--text-muted);
     font-weight: 600;
+}
+
+.spin-table td {
+    vertical-align: middle;
+}
+
+.spin-table__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-1);
+}
+
+.spin-confirm {
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    color: var(--text);
+    margin-bottom: var(--s-3);
+}
+
+.spin-confirm__actions {
+    display: flex;
+    gap: var(--s-2);
+    margin-top: var(--s-2);
+}
+
+.spin-add {
+    margin-top: var(--s-4);
+}
+
+.spin-add__row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--s-2);
+    padding: var(--s-1) 0;
+    border-bottom: 1px solid var(--border);
+}
+
+.spin-add__name {
+    color: var(--text);
+}
+
+.spin-add__actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--s-1);
+}
+
+/* /schedule summary rows are links into /staff/spinning (#385). */
+a.list-row {
+    text-decoration: none;
+    color: inherit;
 }
 
 /* Walkin (staff schedule) */

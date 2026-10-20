@@ -13,9 +13,11 @@ paths:
   - "spinbike-ui/src/components/my_spinning.rs"
   - "spinbike-ui/src/components/class_card.rs"
   - "spinbike-ui/src/pages/schedule.rs"
+  - "spinbike-ui/src/pages/staff_spinning/**"
   - "e2e/tests/spinning-*.ts"
   - "e2e/tests/schedule.spec.ts"
-  - "e2e/tests/staff-participant-chip.spec.ts"
+  - "e2e/tests/staff-participant-table.spec.ts"
+  - "e2e/tests/staff-spinning.spec.ts"
 ---
 
 # Spinning bookings: 09:00 binding charge, deadlines, recurring slots (#382)
@@ -81,6 +83,22 @@ runs a full materialiser sweep so the home card shows the bookings at once.
 The materialiser does NOT book an occurrence whose cutoff already passed (a
 slot created on the class day after 09:00 must not bind + charge a class the
 customer never chose) and counts + warns a full class (`skipped_full`).
+
+## 8-week horizon + the staff spinning screen (#385)
+
+`materialiser::WINDOW_DAYS = 56` (offsets `0..=56`, i.e. today's weekday
+recurs 9 times) — the owner's 8-week planning horizon, shared with the staff
+screen `/staff/spinning` (`spinbike-ui/src/pages/staff_spinning/`): an
+occupancy grid of the current week + 7 from ONE `GET /api/classes` (capped
+server-side at 62 inclusive days -> 400 `range_too_long`), and a class
+detail TABLE (no chips) that reuses the existing booking / persistent /
+cancel endpoints. Materialiser tests derive their date counts from the
+constant (`MATCHING_DATES`), never a literal.
+
+The staff participants payload carries `phone`, `card_code`, current
+`credit`, `charged` and `charged_amount` (the NON-voided linked charge row,
+positive; `0.0` = free pass visit). The UI's "Stav" is computed from those
+two fields only (`model::charge_state`) — never from the time of day.
 
 ## Charger also skips cancelled class occurrences
 

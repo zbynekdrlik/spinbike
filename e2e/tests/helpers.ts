@@ -1,4 +1,4 @@
-import { Page, expect } from '@playwright/test';
+import { Locator, Page, expect } from '@playwright/test';
 
 /**
  * Today's date in Europe/Bratislava, as YYYY-MM-DD — matches the server's
@@ -453,5 +453,57 @@ export async function stubPushDenied(page: Page): Promise<void> {
                 get: () => 'denied',
             });
         }
+    });
+}
+
+/**
+ * WCAG contrast of `fg`'s text colour against the EFFECTIVE background behind
+ * it (walks up the ancestors, compositing translucent layers), computed in
+ * the page from `getComputedStyle` (#379; shared since #385 — the staff
+ * participant table and the spinning occupancy grid both pin their contrast
+ * with it, in both colour schemes). Parses both `rgb()` and Chromium's
+ * `color(srgb ...)` computed form.
+ */
+export async function contrastOf(fg: Locator): Promise<number> {
+    return fg.evaluate((el) => {
+        type RGBA = [number, number, number, number];
+        const parse = (s: string): RGBA => {
+            const nums = (s.match(/[\d.]+/g) ?? []).map(Number);
+            if (s.startsWith('color(srgb')) {
+                return [nums[0] * 255, nums[1] * 255, nums[2] * 255, nums.length > 3 ? nums[3] : 1];
+            }
+            return [nums[0], nums[1], nums[2], nums.length > 3 ? nums[3] : 1];
+        };
+        const over = (top: RGBA, bottom: RGBA): RGBA => {
+            const a = top[3];
+            return [
+                top[0] * a + bottom[0] * (1 - a),
+                top[1] * a + bottom[1] * (1 - a),
+                top[2] * a + bottom[2] * (1 - a),
+                1,
+            ];
+        };
+        const layers: RGBA[] = [];
+        let node: Element | null = el;
+        while (node) {
+            const bg = parse(getComputedStyle(node).backgroundColor);
+            if (bg[3] > 0) {
+                layers.push(bg);
+                if (bg[3] >= 1) break;
+            }
+            node = node.parentElement;
+        }
+        let bg: RGBA = [255, 255, 255, 1];
+        for (let i = layers.length - 1; i >= 0; i--) bg = over(layers[i], bg);
+        const fgc = over(parse(getComputedStyle(el).color), bg);
+        const lum = (c: RGBA) => {
+            const ch = c.slice(0, 3).map((v) => {
+                const x = v / 255;
+                return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+            });
+            return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+        };
+        const [hi, lo] = [lum(fgc), lum(bg)].sort((a, b) => b - a);
+        return (hi + 0.05) / (lo + 0.05);
     });
 }
