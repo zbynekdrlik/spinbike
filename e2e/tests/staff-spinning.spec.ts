@@ -132,7 +132,15 @@ test.describe('Staff spinning screen (#385)', () => {
             // The selection is kept in the address bar for a reload.
             const otherId = (await other.getAttribute('data-testid'))!.replace('occ-cell-', '');
             const [otherTid, ...otherDate] = otherId.split('-');
-            expect(page.url()).toContain(`/staff/spinning?t=${otherTid}&d=${otherDate.join('-')}`);
+            await expect(page).toHaveURL(
+                new RegExp(`/staff/spinning\\?t=${otherTid}&d=${otherDate.join('-')}$`),
+            );
+
+            // A deep link to a class outside the grid shows the hint, not a blank page.
+            await page.goto(`/staff/spinning?t=999999&d=${slot.date}`);
+            await expect(page.locator('[data-testid^="occ-week-"]')).toHaveCount(8, { timeout: 10000 });
+            await expect(page.locator('[data-testid="spin-pick-hint"]')).toBeVisible();
+            await expect(page.locator('[data-testid="spin-detail"]')).toHaveCount(0);
 
             // A deep link opens the class directly.
             await page.goto(`/staff/spinning?t=${slot.template_id}&d=${slot.date}`);
