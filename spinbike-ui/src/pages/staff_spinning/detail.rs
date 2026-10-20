@@ -272,9 +272,12 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
                                 let name_unbook = p.user_name.clone();
                                 let name_end = p.user_name.clone();
                                 let phone_cell = match p.phone.clone().filter(|ph| !ph.trim().is_empty()) {
-                                    Some(ph) => view! {
-                                        <a href=format!("tel:{}", ph.replace(' ', "")) data-testid=format!("spin-phone-{bid}")>{ph}</a>
-                                    }.into_any(),
+                                    Some(ph) => {
+                                        let tel = format!("tel:{}", ph.replace(' ', ""));
+                                        view! {
+                                            <a href=tel data-testid=format!("spin-phone-{bid}")>{ph}</a>
+                                        }.into_any()
+                                    }
                                     None => view! { <span class="text-muted">"\u{2014}"</span> }.into_any(),
                                 };
                                 let unbook_key = if refund.is_some() { "cancel_booking_refund" } else { "spin_unbook" };
