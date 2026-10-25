@@ -56,6 +56,9 @@ pub struct TestApp {
     /// The same MailHandle wired into the AppState — lets tests read
     /// `mail.last_captured()` after driving an endpoint in capture mode.
     pub mail: MailHandle,
+    /// The AppState's WebSocket broadcast sender — `events.subscribe()`
+    /// BEFORE a request lets a test assert what the route broadcast (#389).
+    pub events: broadcast::Sender<spinbike_core::ws::ServerMsg>,
 }
 
 impl TestApp {
@@ -199,6 +202,7 @@ impl TestApp {
             h
         };
 
+        let events = event_tx.clone();
         let state = AppState {
             pool: pool.clone(),
             event_tx,
@@ -243,6 +247,7 @@ impl TestApp {
             customer_id,
             customer_card_id,
             mail,
+            events,
         }
     }
 

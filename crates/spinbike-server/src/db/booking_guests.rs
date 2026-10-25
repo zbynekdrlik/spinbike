@@ -265,8 +265,10 @@ pub async fn set_guests(
         return Ok(SetGuestsResult::ClassFull);
     }
 
-    if charged {
-        if guests > old_guests {
+    // Money moves only once the booking is charged: more guests are charged
+    // at once, fewer are refunded. (`Equal` returned early above.)
+    match (charged, guests.cmp(&old_guests)) {
+        (true, std::cmp::Ordering::Greater) => {
             let (service_id, price) = spinning_price(&mut tx).await?;
             change.charged = charge_guest_seats(
                 &mut tx,
@@ -278,7 +280,8 @@ pub async fn set_guests(
                 guests - old_guests,
             )
             .await?;
-        } else {
+        }
+        (true, std::cmp::Ordering::Less) => {
             change.refunded = release_guest_seats(
                 &mut tx,
                 booking_id,
@@ -289,6 +292,7 @@ pub async fn set_guests(
             .await?
             .refunded;
         }
+        _ => {}
     }
 
     tx.commit().await?;
@@ -536,6 +540,153 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(held_paid, 1, "the remaining guest is still paid for");
+    }
+
+    /// Insert one held guest-charge link of `amount` for `booking_id` (a
+    /// direct ledger row, as the charger would write it).
+    async fn link_charge(pool: &SqlitePool, booking_id: i64, user_id: i64, amount: f64) -> i64 {
+        let txn: i64 = sqlx::query_scalar(
+            "INSERT INTO transactions (user_id, service_id, amount, action)
+             VALUES (?, (SELECT id FROM services WHERE kind = 'group_class'), ?, 'visit')
+             RETURNING id",
+        )
+        .bind(user_id)
+        .bind(amount)
+        .fetch_one(pool)
+        .await
+        .unwrap();
+        sqlx::query_scalar(
+            "INSERT INTO booking_guest_charges (booking_id, transaction_id) VALUES (?, ?) RETURNING id",
+        )
+        .bind(booking_id)
+        .bind(txn)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    async fn storno_count(pool: &SqlitePool, user_id: i64) -> i64 {
+        sqlx::query_scalar(
+            "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND action = 'storno'",
+        )
+        .bind(user_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+    }
+
+    /// A released seat whose charge took nothing (0 EUR) — or even a positive
+    /// amount — is released WITHOUT a refund row and without crediting.
+    #[tokio::test]
+    async fn release_refunds_only_negative_charges() {
+        let pool = setup().await;
+        let tid = create_template(&pool, 0, "18:00", 60, None, 10)
+            .await
+            .unwrap();
+        let host = make_user(&pool, "z@x", 7.0).await;
+        let b = create_booking(&pool, tid, "2026-11-09", host, None, "manual")
+            .await
+            .unwrap();
+        link_charge(&pool, b, host, 0.0).await;
+        link_charge(&pool, b, host, 3.0).await;
+
+        let mut conn = pool.acquire().await.unwrap();
+        let out = release_guest_seats(&mut conn, b, host, None, None)
+            .await
+            .unwrap();
+        drop(conn);
+        assert_eq!(out.released, 2);
+        assert_eq!(out.refunded, 0.0);
+        assert_eq!(storno_count(&pool, host).await, 0, "no refund row");
+        assert_eq!(credit(&pool, host).await, 7.0, "credit untouched");
+        let refund_links: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM booking_guest_charges
+              WHERE booking_id = ? AND refund_transaction_id IS NOT NULL",
+        )
+        .bind(b)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(refund_links, 0);
+    }
+
+    /// `released` counts every seat given back; `count` limits it.
+    #[tokio::test]
+    async fn release_reports_how_many_seats_it_released() {
+        let pool = setup().await;
+        let tid = create_template(&pool, 1, "18:00", 60, None, 10)
+            .await
+            .unwrap();
+        let host = make_user(&pool, "r@x", 0.0).await;
+        let b = create_booking(&pool, tid, "2026-11-10", host, None, "manual")
+            .await
+            .unwrap();
+        for _ in 0..3 {
+            link_charge(&pool, b, host, -5.0).await;
+        }
+        let mut conn = pool.acquire().await.unwrap();
+        let two = release_guest_seats(&mut conn, b, host, None, Some(2))
+            .await
+            .unwrap();
+        assert_eq!(
+            two,
+            GuestRelease {
+                released: 2,
+                refunded: 10.0
+            }
+        );
+        let rest = release_guest_seats(&mut conn, b, host, None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            rest,
+            GuestRelease {
+                released: 1,
+                refunded: 5.0
+            }
+        );
+        let none = release_guest_seats(&mut conn, b, host, None, None)
+            .await
+            .unwrap();
+        assert_eq!(
+            none,
+            GuestRelease {
+                released: 0,
+                refunded: 0.0
+            }
+        );
+    }
+
+    /// Staff setting the SAME count on a charged booking moves no money.
+    #[tokio::test]
+    async fn same_count_on_a_charged_booking_charges_and_refunds_nothing() {
+        let pool = setup().await;
+        let tid = create_template(&pool, 2, "18:00", 60, None, 10)
+            .await
+            .unwrap();
+        let host = make_user(&pool, "s@x", 20.0).await;
+        let b = create_booking(&pool, tid, "2026-11-11", host, None, "manual")
+            .await
+            .unwrap();
+        changed(set_guests(&pool, b, 2, Some(host), false).await.unwrap());
+        crate::jobs::charger::charge_one(&pool, b).await.unwrap();
+        let after_charge = credit(&pool, host).await;
+        let rows_before: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+
+        let c = changed(set_guests(&pool, b, 2, None, true).await.unwrap());
+        assert_eq!(
+            (c.old_guests, c.guests, c.charged, c.refunded),
+            (2, 2, 0.0, 0.0)
+        );
+        assert_eq!(credit(&pool, host).await, after_charge);
+        let rows_after: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(rows_after, rows_before, "no ledger row written");
     }
 
     #[tokio::test]

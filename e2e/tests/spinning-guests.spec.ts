@@ -103,13 +103,33 @@ test.describe('Spinning guests paid by the host (#389)', () => {
             await expect(count).toHaveText('Guests: 0', { timeout: 10000 });
             await expect(minus).toBeDisabled();
 
+            // CI run 40226732848 (chromium): the PUT succeeded but the card
+            // never refreshed. The server broadcasts the new occupancy over
+            // the WebSocket BEFORE it answers the PUT; when that broadcast
+            // lands first it re-renders the class list, which disposes the
+            // card — and the card's in-flight "refresh" callback with it.
+            // Pin that ordering: hold every guest-change response until the
+            // WS-driven seat count is already on screen, then release it.
+            const card = page.locator('.list-row', { has: count });
+            let expectedSeats = seatsBefore;
+            await page.route('**/api/bookings/*/guests', async (route) => {
+                const response = await route.fetch();
+                await expect(card).toContainText(new RegExp(`(^|\\D)${expectedSeats}/${slot.capacity}\\b`), {
+                    timeout: 10000,
+                });
+                await route.fulfill({ response });
+            });
+
+            expectedSeats = seatsBefore + 1;
             await plus.click();
             await expect(count).toHaveText('Guests: 1', { timeout: 10000 });
+            expectedSeats = seatsBefore + 2;
             await plus.click();
             await expect(count).toHaveText('Guests: 2', { timeout: 10000 });
             expect(await myBookingGuests(token, bookingId)).toBe(2);
             expect(await seatsOf(slot)).toBe(seatsBefore + 2);
 
+            expectedSeats = seatsBefore + 1;
             await minus.click();
             await expect(count).toHaveText('Guests: 1', { timeout: 10000 });
             expect(await myBookingGuests(token, bookingId)).toBe(1);
