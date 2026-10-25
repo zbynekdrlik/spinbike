@@ -37,7 +37,7 @@ pub async fn tick(pool: &SqlitePool) -> Result<usize> {
 /// the charge prices the same way).
 async fn spinning_price(pool: &SqlitePool) -> Result<(i64, f64)> {
     let mut conn = pool.acquire().await?;
-    Ok(crate::db::booking_guests::spinning_price(&mut *conn).await?)
+    Ok(crate::db::booking_guests::spinning_price(&mut conn).await?)
 }
 
 /// One charger pass as of the gym-local `now_s` (`YYYY-MM-DD HH:MM:SS`).
@@ -166,7 +166,7 @@ async fn charge_booking(
     // #389: every guest is one more Spinning charge from the host's credit —
     // never covered by the host's pass.
     let guest_amount = crate::db::booking_guests::charge_guest_seats(
-        &mut *tx, booking_id, user_id, None, service_id, price, guests,
+        &mut tx, booking_id, user_id, None, service_id, price, guests,
     )
     .await?;
 

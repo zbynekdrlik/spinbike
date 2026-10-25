@@ -166,7 +166,7 @@ pub async fn cancel_booking(
         {
             let refund = crate::db::users::round_cents(-amount);
             let refund_id =
-                write_refund(&mut *tx, user_id, cancelled_by, refund, REFUND_NOTE).await?;
+                write_refund(&mut tx, user_id, cancelled_by, refund, REFUND_NOTE).await?;
             outcome.refunded = Some(refund);
             outcome.refund_transaction_id = Some(refund_id);
         }
@@ -176,7 +176,7 @@ pub async fn cancel_booking(
     // charged guest seat (the host paid for them).
     if kind == CancelKind::Staff && charged_at.is_some() {
         outcome.guest_refunded = crate::db::booking_guests::release_guest_seats(
-            &mut *tx,
+            &mut tx,
             booking_id,
             user_id,
             cancelled_by,

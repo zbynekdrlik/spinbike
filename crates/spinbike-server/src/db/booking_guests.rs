@@ -267,9 +267,9 @@ pub async fn set_guests(
 
     if charged {
         if guests > old_guests {
-            let (service_id, price) = spinning_price(&mut *tx).await?;
+            let (service_id, price) = spinning_price(&mut tx).await?;
             change.charged = charge_guest_seats(
-                &mut *tx,
+                &mut tx,
                 booking_id,
                 user_id,
                 actor,
@@ -280,7 +280,7 @@ pub async fn set_guests(
             .await?;
         } else {
             change.refunded = release_guest_seats(
-                &mut *tx,
+                &mut tx,
                 booking_id,
                 user_id,
                 actor,

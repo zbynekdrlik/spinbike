@@ -31,4 +31,15 @@ ignore = [
     # mysql/postgres features are ever enabled for this workspace, or once
     # RUSTSEC-2023-0071 gets a fixed release.
     "RUSTSEC-2023-0071",
+    # RUSTSEC-2026-0387 — crypto-bigint timing variability in operations
+    # meant to be constant-time; patched only in >= 0.7.6. Our crypto-bigint
+    # 0.5.5 arrives solely via web-push 0.11.0 (the latest release) ->
+    # jwt-simple -> p256/k256 -> elliptic-curve 0.13, which cannot take 0.7.
+    # Exposure: the server signs a VAPID JWT with its private key when it
+    # sends a push (daily jobs / staff actions); a client cannot trigger
+    # signing on demand nor observe its timing from across the Cloudflare
+    # tunnel, so the side channel is not practically reachable.
+    # Re-check when web-push / jwt-simple move to elliptic-curve 0.14
+    # (`cargo tree -i crypto-bigint`), then drop this ignore. (#389, 2026-10-25)
+    "RUSTSEC-2026-0387",
 ]
