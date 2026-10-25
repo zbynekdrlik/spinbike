@@ -5,6 +5,7 @@ import {
     loginViaAPI,
     createUniqueUser,
     contrastOf,
+    boundaryContrastOf,
 } from './helpers';
 import {
     BASE_URL,
@@ -12,6 +13,7 @@ import {
     listClasses,
     listParticipants,
     openStaffSpinningCell,
+    seedBooking,
     staffCancel,
     weekRange,
 } from './spinning-fixtures';
@@ -190,7 +192,11 @@ test.describe('Staff spinning screen (#385)', () => {
         try {
             await openStaffSpinningCell(page, slot.template_id, slot.date);
             const cell = page.locator(`[data-testid="occ-cell-${slot.template_id}-${slot.date}"]`);
-            const before = (await listParticipants(token, slot.template_id, slot.date)).length;
+            // The cell counts SEATS (host + guests, #389), not participant rows.
+            const seatsNow = async () =>
+                (await listClasses(slot.date, slot.date)).find((c) => c.template_id === slot.template_id)!
+                    .booked;
+            const before = await seatsNow();
 
             // "Len na tento termin" -> the row appears, the cell counts +1.
             const onceHit = await findInAddPerson(page, once.card_code, once.user_id);
@@ -299,4 +305,49 @@ test.describe('Staff spinning screen (#385)', () => {
         }
         assertCleanConsole(messages);
     });
+
+    // #389 (owner relays CEO Stevo: "Trvala rezervacia na nb nevidno maly
+    // kontrast"): the detail's action buttons were `.btn--ghost` — a
+    // transparent fill, a `--border` outline and a muted label — and on a
+    // laptop did not read as buttons at all. Every action button must have a
+    // readable label (>= 4.5:1) AND a visible boundary (fill or border
+    // >= 3:1 against the card behind it), in both colour schemes.
+    test('action buttons are visible: label >= 4.5:1, boundary >= 3:1 (dark + light)', async ({ page }) => {
+        const messages = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const { slot } = await slotWithNextWeek();
+        const regular = await createUniqueUser(token, 0, 'SV');
+        const searched = await createUniqueUser(token, 0, 'SW');
+        const bookingId = await seedBooking(token, slot.template_id, slot.date, regular.user_id, 'persistent');
+        try {
+            for (const scheme of ['dark', 'light'] as const) {
+                await page.emulateMedia({ colorScheme: scheme });
+                await page.goto('/staff/spinning');
+                await openStaffSpinningCell(page, slot.template_id, slot.date);
+                await findInAddPerson(page, searched.card_code, searched.user_id);
+                await page.locator('[data-testid="spin-cancel-class"]').click();
+                await expect(page.locator('[data-testid="spin-confirm"]')).toBeVisible();
+                const buttons = [
+                    'spin-cancel-class',
+                    'spin-confirm-no',
+                    `spin-unbook-${bookingId}`,
+                    `spin-end-persistent-${bookingId}`,
+                    `spin-add-persistent-${searched.user_id}`,
+                    `spin-add-once-${searched.user_id}`,
+                ];
+                for (const id of buttons) {
+                    const btn = page.locator(`[data-testid="${id}"]`);
+                    await expect(btn, `${scheme}: ${id} rendered`).toHaveCount(1);
+                    expect(await contrastOf(btn), `${scheme}: ${id} label`).toBeGreaterThanOrEqual(4.5);
+                    expect(await boundaryContrastOf(btn), `${scheme}: ${id} boundary`).toBeGreaterThanOrEqual(3);
+                }
+                await page.locator('[data-testid="spin-confirm-no"]').click();
+                await expect(page.locator('[data-testid="spin-confirm"]')).toHaveCount(0);
+            }
+            assertCleanConsole(messages);
+        } finally {
+            await staffCancel(token, bookingId);
+        }
+    });
 });
+

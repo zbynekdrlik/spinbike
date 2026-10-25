@@ -39,20 +39,6 @@ balloons to 10-20 GB.
 
 When designing ANY CI workflow touching the self-hosted runner, the workflow must use `needs: [<build-job>]` + `actions/download-artifact`. No Rust build commands on the runner.
 
-## Subagent prompts must not instruct local Rust builds
-
-When dispatching subagents to implement SpinBike Rust/Leptos tasks, the prompt must NOT tell them to run `cargo test`, `cargo build`, `cargo clippy`, `cargo check`, or `trunk build` — even for TDD RED/GREEN verification. CI is authoritative.
-
-**Correct subagent instruction pattern:**
-1. Write code + tests
-2. `cargo fmt --all --check` (the ONE allowed local cargo command)
-3. `git add <explicit paths>` + `git commit`
-4. Report DONE / BLOCKED
-
-Skip the compile-and-verify step. If a step genuinely requires a local build (e.g. verify a new WASM signature compiles before handing off), note it explicitly and justify — never include it as a default TDD step.
-
-**Nuance (from #159): this bans making `cargo test` a routine/default TDD step in a DISPATCHED subagent's prompt — it does NOT ban the primary worker on a bug-fix ticket from using the airuleset Tier-0 bypass (`# airuleset:build-ok` inline, or `AIRULESET_ALLOW_LOCAL_BUILD=1`) for ONE scoped, targeted run to prove `regression-test-first.md`'s "watch RED fail, watch GREEN pass" requirement, when the fix is money-critical or the correctness risk is high enough that CI-only verification is not enough confidence before push.** That's a deliberate, justified, single-purpose exception — not a default habit: run the ONE specific new test (not `cargo test` unscoped), revert-to-buggy → confirm fail → restore-fix → confirm pass → move on. Never leave it running in a loop, never use it to avoid writing the fix, and always still let CI be the final authority (push and monitor the full suite regardless of what the local run showed).
-
 ## `spinbike-ui` is a SEPARATE cargo workspace — root `cargo fmt --check` never sees it (CI DOES, but only in the `Build WASM (UI)` job — a local skip still costs a full cycle)
 
 `spinbike-ui/Cargo.toml` is its own workspace; root `Cargo.toml` has
@@ -69,8 +55,7 @@ end-to-end; it now HARD-FAILS CI (confirmed live on #239/#240/#242: one
 mis-formatted multi-arg `assert_eq!` in a new `relative_date.rs` test failed
 `Build WASM (UI)` on the first push). **The remaining gap is COST, not
 correctness:** the root-level local pre-push check
-(`cargo fmt --all --check`, the one command `CLAUDE.md`/`ci-deploy` sanction
-locally) still does NOT run the UI-scoped variant, so skipping the manual
+(`cargo fmt --all --check`) still does NOT run the UI-scoped variant, so skipping the manual
 double-check burns one full ~15-min CI cycle discovering a fmt nit that a
 5-second local command would have caught.
 
@@ -95,12 +80,12 @@ stale by ~2 minor versions (workspace pinned at `0.13.18`, whole crates like
 bump a dependency:
 
 ```bash
-cargo metadata --format-version 1 > /dev/null   # resolution only — NO compile, NO target/ artifacts (allowed locally)
+cargo metadata --format-version 1 > /dev/null   # resolution only, no compile
 git add Cargo.lock                              # explicit path
 ```
 
 `cargo metadata` writes `Cargo.lock` (adds the new subtree, preserves existing
-pins) without any of the banned heavy builds. Commit the lock in the same PR —
+pins). Commit the lock in the same PR —
 a dep addition without a lock update is an incomplete, non-reproducible change
 (code review will flag it). Expect a large diff the first time (it also flushes
 the accumulated staleness); confirm no `openssl`/native-tls entries leak in
@@ -675,10 +660,9 @@ real deployment with mail genuinely unconfigured. When you add a NEW
 5xx-returning path, ask whether the condition is really transient (keep
 5xx) or a stable config/precondition state (prefer a 4xx) BEFORE shipping.
 
-## `Ok(x.await?)` where `x`'s fn already returns the exact same `Result<T>` is a clippy CI failure, not a local one
+## `Ok(x.await?)` where `x`'s fn already returns the exact same `Result<T>` is a clippy failure
 
-Since local `cargo clippy` is banned (only `cargo fmt --all --check` runs
-locally — see above), a thin wrapper fn that just delegates to another
+A thin wrapper fn that just delegates to another
 async fn of the SAME return type — e.g. `pub async fn tick(pool) ->
 Result<u64> { Ok(inner(pool).await?) }` — passes `fmt` clean and looks
 correct, but fails CI's `cargo clippy --all-targets -- -D warnings` on
@@ -921,23 +905,6 @@ test — same pattern already used in `my-balance-movements.spec.ts`. Do this
 proactively for any new test asserting Slovak text, rather than discovering
 it via a CI failure.
 
-## The `block-tier0-local-build.sh` hook false-positives on the literal text "cargo test" inside a COMMIT MESSAGE, not just an actual command
-
-This is a global airuleset hook (Tier-0 local-build ban), not a project file
-— but a `git commit -m "..."` whose heredoc BODY merely *mentions* the
-phrase "cargo test" in prose (e.g. explaining why RED can't be verified
-locally: "local cargo test is banned in this repo") gets BLOCKED before
-either `git add` or `git commit` runs — the hook scans the whole Bash
-command string for the pattern, not just the parts that are actual shell
-commands. The failure mode is confusing: it looks like a real block, but
-`git status` afterward shows nothing staged (the whole compound `add &&
-commit` never ran). Fix: reword the commit message to avoid the literal
-substring — e.g. "local Rust test execution is banned" instead of "local
-cargo test is banned" — and always run `git add` and `git commit` as
-SEPARATE Bash calls anyway (the same discipline the push-gate gotcha above
-already requires), so a block on the commit doesn't also silently skip the
-staging.
-
 ## `Cargo.lock` can show as modified in `git status` even when you never ran `cargo` yourself — don't sweep it into an unrelated ticket's commit
 
 Observed during #151 (a pure frontend copy/i18n change, no dependency touched):
@@ -987,8 +954,7 @@ don't retry the same `gh pr` command, it will fail identically every time.
 
 `spinbike-ui` is a SEPARATE cargo workspace (see the fmt entry above) — and
 so is clippy. Running `cargo clippy --manifest-path spinbike-ui/Cargo.toml
---target wasm32-unknown-unknown -- -D warnings` locally (Tier-0 `build-ok`
-bypass) does **NOT** cover the root `spinbike-server`/`spinbike-core`
+--target wasm32-unknown-unknown -- -D warnings` does **NOT** cover the root `spinbike-server`/`spinbike-core`
 workspace, and vice versa. #261 touched mostly server-side Rust (a new
 migration, new `db`/`routes` code, new integration tests) plus one UI
 component — checked UI clippy before the first push, skipped server clippy,

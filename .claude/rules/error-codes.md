@@ -27,12 +27,8 @@ ONE of them is covered by the workspace's local pre-push gate (#268).
    `[workspace]` in its `Cargo.toml` and is deliberately excluded from the
    root workspace (see project `CLAUDE.md`'s Architecture section), so
    `--workspace` never type-checks it. A new `ErrorCode` variant that isn't
-   added to this match will ONLY fail in CI's `Build WASM (UI)` /
-   `Test (UI)` job, costing a full CI cycle if missed locally. There is no
-   local Tier-0-sanctioned way to catch this ahead of push (`cargo check`
-   on `spinbike-ui` isn't in the allowed local command list, and
-   `cargo build`/`trunk build` are banned) — the safest habit is to grep
-   for `error_code_key` and manually walk the match by eye whenever you add
+   added to this match fails only a `spinbike-ui`-scoped build (CI's
+   `Build WASM (UI)` / `Test (UI)`). Grep for `error_code_key` and manually walk the match by eye whenever you add
    an `ErrorCode` variant, deciding: does this code need its own
    `err_*` i18n key (customer-facing, no dedicated handler builds its own
    copy), or does it belong in the trailing `| ... => None` disjunction
@@ -62,9 +58,6 @@ ONE of them is covered by the workspace's local pre-push gate (#268).
 ## `sqlx::query_as` tuple size — clippy `type_complexity`
 
 A `query_as::<_, (A, B, C, D, E, F, G)>` tuple of ~6+ elements trips
-`clippy::type_complexity` under this project's `-D warnings` CI gate (and
-under a local `cargo clippy --workspace --all-targets -- -D warnings` run,
-which IS Tier-0-sanctioned and should be run before push on any multi-column
-query change). Fix: a local `type FooRow = (A, B, C, ...);` alias right
+`clippy::type_complexity` under this project's `-D warnings` CI gate. Fix: a local `type FooRow = (A, B, C, ...);` alias right
 above the query — no behavior change, same tuple, just named. Cheaper than
 discovering it in CI.

@@ -726,10 +726,8 @@ cycles.
 --all-targets --target wasm32-unknown-unknown -- -D warnings` BEFORE `trunk
 build`. So a clippy LINT (not just a compile error) fails the whole UI build —
 and `Test (UI)` (`wasm-pack test --node`) can go GREEN on the same commit
-because it only *compiles* the lib, it doesn't run clippy. Under the Tier-0
-no-local-builds policy you cannot run clippy locally (only `cargo fmt --all
---check` + `cd e2e && npx tsc --noEmit`), so these lints surface ONLY on CI and
-cost a full ~15-min cycle. Write clippy-clean UI Rust the first time:
+because it only *compiles* the lib, it doesn't run clippy. Write clippy-clean
+UI Rust the first time:
 
 - **`clippy::collapsible_if`** — nested `if A { if let Some(x) = y { … } }` must be
   a let-chain: `if A && let Some(x) = y { … }` (edition 2024 UI, let-chains are

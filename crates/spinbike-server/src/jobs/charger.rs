@@ -8,6 +8,11 @@
 //! and `charge_transaction_id`. Bookings on a class occurrence the staff
 //! cancelled (`class_cancellations`) are never charged — the class did not
 //! happen.
+//!
+//! #389: a booking's GUESTS are charged in the same transaction — one `visit`
+//! row per guest, ALWAYS the Spinning price from the host's credit (the
+//! host's monthly pass covers only the host), each linked from
+//! `booking_guest_charges` (`db::booking_guests`).
 
 use anyhow::Result;
 use sqlx::SqlitePool;
@@ -23,19 +28,16 @@ pub async fn tick(pool: &SqlitePool) -> Result<usize> {
     tick_as_of(pool, &now_s).await
 }
 
-/// The Spinning service id and its price, rounded ONCE right here where the
-/// price enters the operation and reused for both the ledger
+/// The Spinning service id and its price, rounded ONCE where the price
+/// enters the operation and reused for both the ledger
 /// `transactions.amount` INSERT and the `users.credit` UPDATE —
 /// `default_price` carries no rounding guarantee at rest (money-rounding.md
-/// / #325/#326/#343). #329: identified by its stable `kind`, never by the
-/// admin-editable `name_en`.
+/// / #325/#326/#343). The single definition lives in
+/// `db::booking_guests::spinning_price` (#389: a staff guest increase after
+/// the charge prices the same way).
 async fn spinning_price(pool: &SqlitePool) -> Result<(i64, f64)> {
-    let (service_id, price): (i64, f64) =
-        sqlx::query_as("SELECT id, default_price FROM services WHERE kind = ?1 AND active = 1")
-            .bind(spinbike_core::services::SPINNING_KIND)
-            .fetch_one(pool)
-            .await?;
-    Ok((service_id, crate::db::users::round_cents(price)))
+    let mut conn = pool.acquire().await?;
+    Ok(crate::db::booking_guests::spinning_price(&mut conn).await?)
 }
 
 /// One charger pass as of the gym-local `now_s` (`YYYY-MM-DD HH:MM:SS`).
@@ -93,14 +95,14 @@ async fn charge_booking(
     let mut tx = pool.begin().await?;
 
     // Double-check nothing else charged/cancelled it in between.
-    let open: Option<(i64, String)> = sqlx::query_as(
-        "SELECT user_id, date FROM bookings
+    let open: Option<(i64, String, i64)> = sqlx::query_as(
+        "SELECT user_id, date, guests FROM bookings
          WHERE id = ? AND charged_at IS NULL AND cancelled_at IS NULL",
     )
     .bind(booking_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((user_id, date)) = open else {
+    let Some((user_id, date, guests)) = open else {
         tx.rollback().await?;
         tracing::debug!(booking_id, "charger: skip — booking no longer open");
         return Ok(false);
@@ -161,6 +163,13 @@ async fn charge_booking(
             .await?;
     }
 
+    // #389: every guest is one more Spinning charge from the host's credit —
+    // never covered by the host's pass.
+    let guest_amount = crate::db::booking_guests::charge_guest_seats(
+        &mut tx, booking_id, user_id, None, service_id, price, guests,
+    )
+    .await?;
+
     sqlx::query(
         "UPDATE bookings SET charged_at = datetime('now'), charge_transaction_id = ? WHERE id = ?",
     )
@@ -183,6 +192,8 @@ async fn charge_booking(
         credit_before = credit,
         amount,
         transaction_id = txn_id,
+        guests,
+        guest_amount,
         "charger: booking charged"
     );
     Ok(true)
@@ -365,6 +376,97 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(visit_count, 1, "exactly one visit transaction expected");
+    }
+
+    async fn set_guests_raw(pool: &SqlitePool, bid: i64, guests: i64) {
+        sqlx::query("UPDATE bookings SET guests = ? WHERE id = ?")
+            .bind(guests)
+            .bind(bid)
+            .execute(pool)
+            .await
+            .unwrap();
+    }
+
+    /// (amount, note) of every guest charge row linked to `bid`.
+    async fn guest_rows(pool: &SqlitePool, bid: i64) -> Vec<(f64, Option<String>, String)> {
+        sqlx::query_as(
+            "SELECT t.amount, t.note, t.action FROM booking_guest_charges g
+               JOIN transactions t ON t.id = g.transaction_id
+              WHERE g.booking_id = ? ORDER BY g.id",
+        )
+        .bind(bid)
+        .fetch_all(pool)
+        .await
+        .unwrap()
+    }
+
+    /// #389: the host's monthly pass covers ONLY the host — each guest is a
+    /// full Spinning charge from the host's credit, one ledger row per guest.
+    #[tokio::test]
+    async fn charger_charges_each_guest_from_credit_even_with_pass() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (uid, bid) = seed_booking(&pool, true, 12.0).await;
+        set_guests_raw(&pool, bid, 2).await;
+        assert_eq!(tick_as_of(&pool, &now_at_14()).await.unwrap(), 1);
+
+        let host_amount: f64 = sqlx::query_scalar(
+            "SELECT t.amount FROM bookings b JOIN transactions t ON t.id = b.charge_transaction_id
+              WHERE b.id = ?",
+        )
+        .bind(bid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(host_amount, 0.0, "the pass covers the host");
+        let rows = guest_rows(&pool, bid).await;
+        assert_eq!(rows.len(), 2, "one ledger row per guest");
+        for (amount, note, action) in &rows {
+            assert_eq!(*amount, -5.0);
+            assert_eq!(
+                note.as_deref(),
+                Some(crate::db::booking_guests::GUEST_CHARGE_NOTE)
+            );
+            assert_eq!(action, "visit");
+        }
+        let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(credit, 2.0, "12 - 2 guests x 5");
+        // Every seat is a Spinning visit row for attendance (host + guests).
+        let visits: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM transactions t JOIN services s ON s.id = t.service_id
+              WHERE t.user_id = ? AND t.action = 'visit' AND s.kind = ?",
+        )
+        .bind(uid)
+        .bind(spinbike_core::services::SPINNING_KIND)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(visits, 3);
+    }
+
+    /// #389: without a pass, host + guests all come out of the credit, and
+    /// the credit may go negative (same as the host's own charge).
+    #[tokio::test]
+    async fn charger_charges_host_and_guests_without_pass_into_negative() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let (uid, bid) = seed_booking(&pool, false, 7.0).await;
+        set_guests_raw(&pool, bid, 1).await;
+        tick_as_of(&pool, &now_at_14()).await.unwrap();
+        assert_eq!(guest_rows(&pool, bid).await.len(), 1);
+        let credit: f64 = sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+            .bind(uid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(credit, -3.0, "7 - host 5 - guest 5");
+        // Idempotent: a second tick charges neither the host nor the guest again.
+        assert_eq!(tick_as_of(&pool, &now_at_14()).await.unwrap(), 0);
+        assert_eq!(guest_rows(&pool, bid).await.len(), 1);
     }
 
     #[tokio::test]

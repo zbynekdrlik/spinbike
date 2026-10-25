@@ -6,12 +6,14 @@ paths:
   - "crates/spinbike-server/src/jobs/spinning_reminder.rs"
   - "crates/spinbike-server/src/db/classes.rs"
   - "crates/spinbike-server/src/db/booking_cancel.rs"
+  - "crates/spinbike-server/src/db/booking_guests.rs"
   - "crates/spinbike-server/src/db/spinner.rs"
   - "crates/spinbike-server/src/db/persistent_bookings.rs"
   - "crates/spinbike-server/src/routes/classes.rs"
   - "crates/spinbike-server/src/routes/persistent_bookings.rs"
   - "spinbike-ui/src/components/my_spinning.rs"
   - "spinbike-ui/src/components/class_card.rs"
+  - "spinbike-ui/src/components/guest_stepper.rs"
   - "spinbike-ui/src/pages/schedule.rs"
   - "spinbike-ui/src/pages/staff_spinning/**"
   - "e2e/tests/spinning-*.ts"
@@ -99,6 +101,37 @@ The staff participants payload carries `phone`, `card_code`, current
 `credit`, `charged` and `charged_amount` (the NON-voided linked charge row,
 positive; `0.0` = free pass visit). The UI's "Stav" is computed from those
 two fields only (`model::charge_state`) — never from the time of day.
+
+## Guests paid by the host (#389, `db::booking_guests`)
+
+Owner ROZHODNUTÉ 2026-10-25 ("Approach A"): a guest is a COUNT on the
+host's own booking (`bookings.guests`, V32, CHECK 0..=4 =
+`spinbike_core::booking::MAX_GUESTS`), no name, no account.
+
+- **Seats, not rows.** Every capacity read uses `booking_guests::SEATS_SQL`
+  (`COALESCE(SUM(1 + guests), 0)`): `create_booking`'s guard,
+  `get_booking_count` (`/api/classes` `booked`, the WS broadcast, the staff
+  grid), `list_upcoming_for_user`, the materialiser pre-check. A new
+  occupancy query that counts `COUNT(*)` rows is a bug.
+- **Charge.** The charger writes, besides the host's row, one `visit` row
+  per guest — ALWAYS the Spinning price from the host's credit (the host's
+  pass covers only the host), each linked from `booking_guest_charges`
+  (`transaction_id`; `released_at` + `refund_transaction_id` once given
+  back). Attendance (KPI) counts every seat; the host's OWN per-customer
+  visit counter (`/api/users/{id}/stats`) excludes the guest rows.
+- **Change** = `PUT /api/bookings/{id}/guests` -> `booking_guests::set_guests`:
+  customer until the cancel deadline (`customer_may_cancel`, 409
+  `guests_deadline_passed`), staff any time; over capacity 409 `class_full`
+  (the conditional UPDATE is the authority). After the charge a staff
+  increase charges the added seats at once, a decrease refunds them
+  (voided seats released first), and a staff cancel refunds host + every
+  held guest seat. All refunds go through `booking_cancel::write_refund`
+  (storno, `service_id` NULL).
+- **Recurring slots never carry guests** — guests live on the dated booking
+  only; the materialiser creates bookings with `guests = 0`.
+- UI: `components::guest_stepper` (customer card "+ host" while
+  `cancel_open`; staff table "Hostia" any time). The reminder says
+  "s N hostami ... aj za hosti".
 
 ## Charger also skips cancelled class occurrences
 

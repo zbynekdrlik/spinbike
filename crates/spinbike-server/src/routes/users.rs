@@ -876,8 +876,14 @@ async fn user_stats(
 ) -> Result<Json<StatsResponse>, ApiError> {
     // #329: identified by the stable `kind` column, not the admin-editable
     // `name_en`. #339: the placeholder-building + subquery text itself is
-    // now the shared `class_visit_filter_sql` helper.
-    let visit_filter_sql = class_visit_filter_sql("service_id");
+    // now the shared `class_visit_filter_sql` helper. #389: a guest's seat
+    // is charged on the HOST's account (one `visit` row per guest, linked
+    // from `booking_guest_charges`) — it counts in the gym's attendance, but
+    // it is not the host's own visit, so this per-customer counter skips it.
+    let visit_filter_sql = format!(
+        "{} AND id NOT IN (SELECT transaction_id FROM booking_guest_charges)",
+        class_visit_filter_sql("service_id")
+    );
 
     // Gym-local (Europe/Bratislava) month/year boundaries, as UTC-instant
     // strings bound as params — so "this month" / "this year" key off the GYM
