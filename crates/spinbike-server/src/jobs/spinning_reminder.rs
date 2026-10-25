@@ -78,17 +78,28 @@ fn tomorrow_of(today: NaiveDate) -> Result<NaiveDate> {
 }
 
 /// The reminder text (Slovak, UNACCENTED — the notification-string
-/// convention). The instructor is omitted when the class has none.
-pub fn render_reminder(start_time: &str, instructor: Option<&str>) -> (String, String) {
+/// convention). The instructor is omitted when the class has none. #389: a
+/// host bringing guests is reminded of them too — and that the 09:00 charge
+/// covers the guests as well.
+pub fn render_reminder(
+    start_time: &str,
+    instructor: Option<&str>,
+    guests: i64,
+) -> (String, String) {
     let who = match instructor {
         Some(name) if !name.trim().is_empty() => format!(" ({})", name.trim()),
         _ => String::new(),
     };
+    let (with_guests, charge_note) = match guests {
+        n if n <= 0 => (String::new(), ""),
+        1 => (" s 1 hostom".to_string(), " aj za hosta"),
+        n => (format!(" s {n} hostami"), " aj za hosti"),
+    };
     (
         "Zajtra mas spinning".to_string(),
         format!(
-            "Zajtra mas spinning o {start_time}{who}. Ak nemozes prist, odhlas sa do 9:00, \
-             inak sa kredit strhne."
+            "Zajtra mas spinning o {start_time}{who}{with_guests}. Ak nemozes prist, \
+             odhlas sa do 9:00, inak sa kredit strhne{charge_note}."
         ),
     )
 }
@@ -112,10 +123,10 @@ pub async fn remind_for_date(
     mail: &MailHandle,
     date: NaiveDate,
 ) -> Result<usize> {
-    // (booking_id, user_id, start_time, instructor_name, email)
-    type DueRow = (i64, i64, String, Option<String>, Option<String>);
+    // (booking_id, user_id, start_time, instructor_name, email, guests)
+    type DueRow = (i64, i64, String, Option<String>, Option<String>, i64);
     let due: Vec<DueRow> = sqlx::query_as(
-        "SELECT b.id, b.user_id, t.start_time, i.name, u.email
+        "SELECT b.id, b.user_id, t.start_time, i.name, u.email, b.guests
            FROM bookings b
            JOIN class_templates t ON t.id = b.template_id
            LEFT JOIN instructors i ON i.id = t.instructor_id
@@ -135,8 +146,8 @@ pub async fn remind_for_date(
 
     let candidates = due.len();
     let mut sent = 0usize;
-    for (booking_id, user_id, start_time, instructor, email) in due {
-        let (title, body) = render_reminder(&start_time, instructor.as_deref());
+    for (booking_id, user_id, start_time, instructor, email, guests) in due {
+        let (title, body) = render_reminder(&start_time, instructor.as_deref(), guests);
         match deliver(pool, push, mail, user_id, email.as_deref(), &title, &body).await {
             Ok(Delivery::NotDelivered) => {}
             Ok(channel) => {
@@ -153,6 +164,7 @@ pub async fn remind_for_date(
                     user_id,
                     class_date = %date,
                     start_time = %start_time,
+                    guests,
                     ?channel,
                     "spinning reminder: sent"
                 );
@@ -286,28 +298,48 @@ mod tests {
 
     #[test]
     fn reminder_text_is_unaccented_slovak_with_time_and_instructor() {
-        let (title, body) = render_reminder("18:30", Some("Vlada"));
+        let (title, body) = render_reminder("18:30", Some("Vlada"), 0);
         assert_eq!(title, "Zajtra mas spinning");
         assert_eq!(
             body,
             "Zajtra mas spinning o 18:30 (Vlada). Ak nemozes prist, odhlas sa do 9:00, \
              inak sa kredit strhne."
         );
-        let (_, no_instr) = render_reminder("18:00", None);
+        let (_, no_instr) = render_reminder("18:00", None, 0);
         assert!(no_instr.starts_with("Zajtra mas spinning o 18:00. Ak"));
         assert!(body.is_ascii(), "unaccented");
+    }
+
+    /// #389: the host's reminder names the guests and that they are charged too.
+    #[test]
+    fn reminder_mentions_the_guest_count() {
+        let (_, one) = render_reminder("18:30", Some("Vlada"), 1);
+        assert_eq!(
+            one,
+            "Zajtra mas spinning o 18:30 (Vlada) s 1 hostom. Ak nemozes prist, \
+             odhlas sa do 9:00, inak sa kredit strhne aj za hosta."
+        );
+        let (_, three) = render_reminder("18:00", None, 3);
+        assert_eq!(
+            three,
+            "Zajtra mas spinning o 18:00 s 3 hostami. Ak nemozes prist, \
+             odhlas sa do 9:00, inak sa kredit strhne aj za hosti."
+        );
+        assert!(three.is_ascii(), "unaccented");
+        let (_, none) = render_reminder("18:00", None, 0);
+        assert!(!none.contains("host"), "{none}");
     }
 
     #[test]
     fn reminder_omits_a_blank_instructor_name() {
         // A whitespace-only name must not render as " ( )" — kills the
         // `!name.trim().is_empty()` guard mutant (#382 mutation shard 4).
-        let (_, blank) = render_reminder("18:00", Some("   "));
+        let (_, blank) = render_reminder("18:00", Some("   "), 0);
         assert!(
             blank.starts_with("Zajtra mas spinning o 18:00. Ak"),
             "{blank}"
         );
-        let (_, padded) = render_reminder("18:30", Some("  Stopa "));
+        let (_, padded) = render_reminder("18:30", Some("  Stopa "), 0);
         assert!(
             padded.starts_with("Zajtra mas spinning o 18:30 (Stopa). Ak"),
             "{padded}"

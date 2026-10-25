@@ -85,6 +85,10 @@ pub enum ErrorCode {
     /// `POST /api/bookings` for a class occurrence that already started — a
     /// past date, or today after the start time (#382 R4).
     ClassAlreadyStarted,
+    /// A CUSTOMER tried to change the guest count of their booking after the
+    /// class day's 09:00 binding cutoff (#389 — same deadline as a cancel,
+    /// `booking_rules::customer_may_cancel`). Staff may still change it.
+    GuestsDeadlinePassed,
     NoteOnVoidedTransaction,
     DateOnVoidedTransaction,
     /// `patch_valid_until` (`routes/transactions.rs`) rejecting an edit of
@@ -120,6 +124,8 @@ pub enum ErrorCode {
     /// staff 8-week grid asks for 56; the cap keeps a typo'd or hostile
     /// range from making the per-day occurrence loop run for years.
     RangeTooLong,
+    /// `PUT /api/bookings/{id}/guests` outside 0..=`booking::MAX_GUESTS` (#389).
+    TooManyGuests,
     BadRequest,
     // --- 429 Too Many Requests ---
     /// Rate limit hit on a public auth endpoint — e.g. too many login-code
@@ -168,6 +174,7 @@ impl ErrorCode {
             ErrorCode::InstructorInUse => "Instructor still teaches an active class",
             ErrorCode::CancelDeadlinePassed => "Odhlasit sa da len do 9:00 v den spinningu",
             ErrorCode::ClassAlreadyStarted => "Na hodinu, ktora uz zacala, sa uz neda prihlasit",
+            ErrorCode::GuestsDeadlinePassed => "Hosti sa daju menit len do 9:00 v den spinningu",
             ErrorCode::NoteOnVoidedTransaction => "Cannot edit note on a voided transaction",
             ErrorCode::DateOnVoidedTransaction => "Cannot edit date on a voided transaction",
             ErrorCode::ValidUntilOnVoidedTransaction => {
@@ -186,6 +193,7 @@ impl ErrorCode {
             }
             ErrorCode::EmailBelongsToDeletedAccount => "This email belongs to a deleted account",
             ErrorCode::RangeTooLong => "Date range too long (max 62 days)",
+            ErrorCode::TooManyGuests => "Najviac 4 hostia na jednu rezervaciu",
             ErrorCode::BadRequest => "Bad request",
             ErrorCode::TooManyRequests => "Too many attempts, please try again later",
             ErrorCode::MailNotConfigured => "mail_not_configured",
@@ -333,6 +341,11 @@ mod tests {
             "Na hodinu, ktora uz zacala, sa uz neda prihlasit",
         ),
         (
+            ErrorCode::GuestsDeadlinePassed,
+            "guests_deadline_passed",
+            "Hosti sa daju menit len do 9:00 v den spinningu",
+        ),
+        (
             ErrorCode::NoteOnVoidedTransaction,
             "note_on_voided_transaction",
             "Cannot edit note on a voided transaction",
@@ -381,6 +394,11 @@ mod tests {
             ErrorCode::RangeTooLong,
             "range_too_long",
             "Date range too long (max 62 days)",
+        ),
+        (
+            ErrorCode::TooManyGuests,
+            "too_many_guests",
+            "Najviac 4 hostia na jednu rezervaciu",
         ),
         (ErrorCode::BadRequest, "bad_request", "Bad request"),
         (

@@ -1,4 +1,5 @@
 pub mod booking_cancel;
+pub mod booking_guests;
 pub mod classes;
 pub mod error;
 pub mod instructors;

@@ -2,7 +2,7 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
-    routing::{delete, get, post},
+    routing::{delete, get, post, put},
 };
 use chrono::{Datelike, NaiveDate};
 use serde::{Deserialize, Serialize};
@@ -11,6 +11,7 @@ use crate::AppState;
 use crate::auth::{AuthUser, OptionalAuthUser, StaffUser, require_live_session};
 use crate::booking_rules;
 use crate::db::booking_cancel::{self, CancelKind, CancelResult};
+use crate::db::booking_guests::{self, SetGuestsResult};
 use crate::db::classes as db;
 use crate::error::ApiError;
 use crate::routes::internal_error;
@@ -47,6 +48,9 @@ pub struct ClassOccurrenceResponse {
     pub user_booked: bool,
     pub user_booking_id: Option<i64>,
     pub user_booking_source: Option<String>,
+    /// #389: guests on the caller's own booking (0 when none / not booked) —
+    /// the customer card's "+ host" stepper starts from it.
+    pub user_booking_guests: i64,
     /// #382 R4: the occurrence already started (gym-local now) — it can no
     /// longer be booked. Computed server-side so the client never does its
     /// own time-zone math.
@@ -91,6 +95,8 @@ pub struct MyBookingResponse {
     /// #382 R2: whether the customer may still cancel this booking now
     /// (before 09:00 on the class day and not yet charged).
     pub cancel_open: bool,
+    /// #389: guests the customer brings (each paid from their credit).
+    pub guests: i64,
 }
 
 /// A participant in a class (booking joined with user info).
@@ -124,6 +130,28 @@ pub struct ParticipantResponse {
     /// `0.0` for a pass holder's free visit). `None` while uncharged, or
     /// when the charge row was voided.
     pub charged_amount: Option<f64>,
+    /// #389: guests on this booking (each takes a seat, paid by the host).
+    pub guests: i64,
+    /// #389: what the host's still-held, non-voided GUEST charges took
+    /// (positive; 0.0 while uncharged) — a staff cancel refunds it too.
+    pub guest_charged_amount: f64,
+}
+
+/// `PUT /api/bookings/{id}/guests` body (#389).
+#[derive(Deserialize)]
+pub struct SetGuestsRequest {
+    pub guests: i64,
+}
+
+/// `PUT /api/bookings/{id}/guests` response (#389).
+#[derive(Serialize)]
+pub struct SetGuestsResponse {
+    pub booking_id: i64,
+    pub guests: i64,
+    /// Credit debited now (staff added guests after the 09:00 charge).
+    pub charged: f64,
+    /// Credit refunded now (staff removed guests after the 09:00 charge).
+    pub refunded: f64,
 }
 
 pub fn routes() -> Router<AppState> {
@@ -135,6 +163,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/api/bookings", post(create_booking))
         .route("/api/bookings/{id}", delete(cancel_booking))
+        .route("/api/bookings/{id}/guests", put(set_guests))
         .route("/api/my/bookings", get(my_bookings))
 }
 
@@ -192,19 +221,21 @@ async fn list_classes(
                 .unwrap_or(0);
 
             // Check if authenticated user has a booking for this class.
-            let (user_booked, user_booking_id, user_booking_source) = if let Some(ref c) = claims {
-                let bookings = db::list_bookings_for_class(&state.pool, tmpl.id, &date_str)
-                    .await
-                    .unwrap_or_default();
-                let user_booking = bookings.iter().find(|b| b.user_id == c.sub);
-                (
-                    user_booking.is_some(),
-                    user_booking.map(|b| b.id),
-                    user_booking.map(|b| b.source.clone()),
-                )
-            } else {
-                (false, None, None)
-            };
+            let (user_booked, user_booking_id, user_booking_source, user_booking_guests) =
+                if let Some(ref c) = claims {
+                    let bookings = db::list_bookings_for_class(&state.pool, tmpl.id, &date_str)
+                        .await
+                        .unwrap_or_default();
+                    let user_booking = bookings.iter().find(|b| b.user_id == c.sub);
+                    (
+                        user_booking.is_some(),
+                        user_booking.map(|b| b.id),
+                        user_booking.map(|b| b.source.clone()),
+                        user_booking.map(|b| b.guests).unwrap_or(0),
+                    )
+                } else {
+                    (false, None, None, 0)
+                };
 
             occurrences.push(ClassOccurrenceResponse {
                 template_id: tmpl.id,
@@ -222,6 +253,7 @@ async fn list_classes(
                 user_booked,
                 user_booking_id,
                 user_booking_source,
+                user_booking_guests,
                 started: booking_rules::has_started(current, &tmpl.start_time, now),
                 cancel_open: !booking_rules::is_charge_due(current, now),
             });
@@ -256,6 +288,8 @@ async fn list_participants(
         credit: f64,
         charged: i64,
         charged_amount: Option<f64>,
+        guests: i64,
+        guest_charged_amount: f64,
     }
 
     // `refundable` mirrors `db::booking_cancel::cancel_booking`'s refund condition:
@@ -271,7 +305,14 @@ async fn list_participants(
                 u.phone AS phone, u.card_code AS card_code, u.credit AS credit,
                 (b.charged_at IS NOT NULL) AS charged,
                 CASE WHEN b.charged_at IS NOT NULL AND ct.id IS NOT NULL AND ct.deleted_at IS NULL
-                     THEN ABS(ct.amount) END AS charged_amount
+                     THEN ABS(ct.amount) END AS charged_amount,
+                b.guests AS guests,
+                COALESCE((SELECT ROUND(SUM(-gt.amount), 2)
+                            FROM booking_guest_charges g
+                            JOIN transactions gt ON gt.id = g.transaction_id
+                           WHERE g.booking_id = b.id AND g.released_at IS NULL
+                             AND gt.deleted_at IS NULL AND gt.amount < 0), 0.0)
+                    AS guest_charged_amount
          FROM bookings b
          JOIN users u ON u.id = b.user_id  -- no deleted_at filter: booking history for soft-deleted users remains part of class records
          LEFT JOIN transactions ct ON ct.id = b.charge_transaction_id
@@ -298,6 +339,8 @@ async fn list_participants(
                 credit: r.credit,
                 charged: r.charged != 0,
                 charged_amount: r.charged_amount,
+                guests: r.guests,
+                guest_charged_amount: r.guest_charged_amount,
             })
             .collect(),
     ))
@@ -406,22 +449,7 @@ async fn create_booking(
         }
     })?;
 
-    // Broadcast booking update.
-    let booked = db::get_booking_count(&state.pool, body.template_id, &body.date)
-        .await
-        .unwrap_or(0);
-    let capacity: i64 = sqlx::query_scalar("SELECT capacity FROM class_templates WHERE id = ?")
-        .bind(body.template_id)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap_or(0);
-
-    let _ = state.event_tx.send(ServerMsg::BookingUpdate {
-        template_id: body.template_id,
-        date: body.date.clone(),
-        booked: booked as i32,
-        capacity: capacity as i32,
-    });
+    broadcast_occupancy(&state, body.template_id, &body.date).await;
 
     Ok((
         StatusCode::CREATED,
@@ -498,8 +526,15 @@ async fn cancel_booking(
             return Err(ApiError::conflict(ErrorCode::CancelDeadlinePassed));
         }
     }
-    // Broadcast booking update.
-    let booked = db::get_booking_count(&state.pool, template_id, &date)
+    broadcast_occupancy(&state, template_id, &date).await;
+
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Broadcast the occupancy (seats) of one class occurrence to every
+/// connected schedule.
+async fn broadcast_occupancy(state: &AppState, template_id: i64, date: &str) {
+    let booked = db::get_booking_count(&state.pool, template_id, date)
         .await
         .unwrap_or(0);
     let capacity: i64 = sqlx::query_scalar("SELECT capacity FROM class_templates WHERE id = ?")
@@ -507,15 +542,102 @@ async fn cancel_booking(
         .fetch_one(&state.pool)
         .await
         .unwrap_or(0);
-
     let _ = state.event_tx.send(ServerMsg::BookingUpdate {
         template_id,
-        date,
+        date: date.to_string(),
         booked: booked as i32,
         capacity: capacity as i32,
     });
+}
 
-    Ok(StatusCode::NO_CONTENT)
+/// #389: set how many guests the booking's host brings (and pays for).
+/// Owner or staff only. A customer may change it until 09:00 on the class
+/// day (the cancel deadline, `booking_rules::customer_may_cancel`); staff at
+/// any time — after the charge an increase is charged and a decrease
+/// refunded at once (`db::booking_guests::set_guests`).
+async fn set_guests(
+    State(state): State<AppState>,
+    AuthUser(claims): AuthUser,
+    Path(booking_id): Path<i64>,
+    Json(body): Json<SetGuestsRequest>,
+) -> Result<Json<SetGuestsResponse>, ApiError> {
+    require_live_session(&state.pool, claims.sub).await?;
+
+    if !spinbike_core::booking::guests_in_range(body.guests) {
+        tracing::info!(
+            booking_id,
+            caller = claims.sub,
+            guests = body.guests,
+            "guest change rejected: out of range"
+        );
+        return Err(ApiError::BadRequestCode(ErrorCode::TooManyGuests));
+    }
+
+    let booking: Option<(i64, i64, String, Option<String>)> = sqlx::query_as(
+        "SELECT user_id, template_id, date, charged_at
+         FROM bookings WHERE id = ? AND cancelled_at IS NULL",
+    )
+    .bind(booking_id)
+    .fetch_optional(&state.pool)
+    .await
+    .map_err(internal_error)?;
+    let Some((owner_id, template_id, date, charged_at)) = booking else {
+        return Err(ApiError::NotFound(ErrorCode::BookingNotFound));
+    };
+
+    let is_staff = claims.role.can_cancel_any_booking();
+    if owner_id != claims.sub && !is_staff {
+        return Err(ApiError::Forbidden(ErrorCode::BookingNotOwned));
+    }
+    if db::is_occurrence_cancelled(&state.pool, template_id, &date)
+        .await
+        .map_err(internal_error)?
+    {
+        return Err(ApiError::conflict(ErrorCode::ClassCancelled));
+    }
+    if !is_staff {
+        let class_date = NaiveDate::parse_from_str(&date, "%Y-%m-%d").map_err(internal_error)?;
+        let now = crate::util::now_bratislava();
+        if !booking_rules::customer_may_cancel(class_date, charged_at.is_some(), now) {
+            tracing::info!(
+                booking_id,
+                user_id = claims.sub,
+                class_date = %date,
+                charged = charged_at.is_some(),
+                "guest change rejected: past the 09:00 deadline of the class day"
+            );
+            return Err(ApiError::conflict(ErrorCode::GuestsDeadlinePassed));
+        }
+    }
+
+    let change = match booking_guests::set_guests(
+        &state.pool,
+        booking_id,
+        body.guests,
+        Some(claims.sub),
+        is_staff,
+    )
+    .await
+    .map_err(internal_error)?
+    {
+        SetGuestsResult::Changed(c) => c,
+        SetGuestsResult::NotActive => return Err(ApiError::NotFound(ErrorCode::BookingNotFound)),
+        // The 09:00 charger charged it after the deadline check above.
+        SetGuestsResult::AlreadyCharged => {
+            return Err(ApiError::conflict(ErrorCode::GuestsDeadlinePassed));
+        }
+        SetGuestsResult::ClassFull => return Err(ApiError::conflict(ErrorCode::ClassFull)),
+    };
+
+    if change.guests != change.old_guests {
+        broadcast_occupancy(&state, template_id, &date).await;
+    }
+    Ok(Json(SetGuestsResponse {
+        booking_id,
+        guests: change.guests,
+        charged: change.charged,
+        refunded: change.refunded,
+    }))
 }
 
 async fn my_bookings(
@@ -546,6 +668,7 @@ async fn my_bookings(
                 instructor_name: b.instructor_name,
                 source: b.source,
                 cancel_open,
+                guests: b.guests,
             }
         })
         .collect();

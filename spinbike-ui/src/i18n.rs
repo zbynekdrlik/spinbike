@@ -239,6 +239,9 @@ pub fn error_code_key(code: spinbike_core::errors::ErrorCode) -> Option<&'static
         // schedule's book/cancel buttons, /my/bookings).
         ErrorCode::CancelDeadlinePassed => Some("err_cancel_deadline_passed"),
         ErrorCode::ClassAlreadyStarted => Some("err_class_already_started"),
+        // #389: the guest stepper on the customer's class card + staff table.
+        ErrorCode::GuestsDeadlinePassed => Some("err_guests_deadline_passed"),
+        ErrorCode::TooManyGuests => Some("err_too_many_guests"),
         // #385: the staff spinning screen renders every booking 409 and the
         // grid's range error in the staff's language (spec: "409s render
         // their i18n text"), not the server's raw English.
@@ -1431,6 +1434,20 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         (
             "Odhlasit sa da len do 9:00 v den spinningu — teraz uz je rezervacia zavazna",
             "You can only cancel until 9:00 on the class day — the booking is now binding",
+        ),
+    );
+    m.insert(
+        "err_guests_deadline_passed",
+        (
+            "Hosti sa daju menit len do 9:00 v den spinningu",
+            "Guests can only be changed until 9:00 on the class day",
+        ),
+    );
+    m.insert(
+        "err_too_many_guests",
+        (
+            "Najviac 4 hostia na jednu rezervaciu",
+            "At most 4 guests per booking",
         ),
     );
     m.insert(
