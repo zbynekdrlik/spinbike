@@ -168,6 +168,10 @@ export interface ParticipantRow {
     credit: number;
     charged: boolean;
     charged_amount: number | null;
+    /** #389: guests on the booking (each a seat, paid by the host). */
+    guests: number;
+    /** #389: what the host's still-held guest charges took (positive). */
+    guest_charged_amount: number;
 }
 
 export async function listParticipants(

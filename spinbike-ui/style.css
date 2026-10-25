@@ -1226,6 +1226,20 @@ table tbody tr:last-child td {
     margin-top: var(--s-4);
 }
 
+/* #389: "- / Hostia: N / + host" — the host's guest count (customer class
+   card) and the staff table's "Hostia" cell. */
+.guest-stepper {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    margin-top: var(--s-1);
+}
+.guest-stepper__count {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+}
+
 .spin-add__row {
     display: flex;
     flex-wrap: wrap;

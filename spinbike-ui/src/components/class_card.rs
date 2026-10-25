@@ -5,6 +5,7 @@ use crate::api;
 use crate::auth;
 use crate::i18n::{self, Lang};
 use crate::pages::schedule::ClassSlot;
+use spinbike_core::booking::MAX_GUESTS;
 
 #[component]
 pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl IntoView {
@@ -89,6 +90,45 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
         }
     };
 
+    // #389: the host's guest count, changed with the "+ host" stepper while
+    // the booking is still cancellable (before 09:00 on the class day). Each
+    // guest takes a seat and is charged from the host's credit at 09:00.
+    let guests = slot.user_booking_guests;
+    let set_guests_to = move |n: i64| {
+        let Some(bid) = booking_id else {
+            return;
+        };
+        set_loading.set(true);
+        set_error.set(String::new());
+        spawn_local(async move {
+            #[derive(serde::Serialize)]
+            struct Req {
+                guests: i64,
+            }
+            #[derive(serde::Deserialize)]
+            struct Resp {
+                #[allow(dead_code)]
+                guests: i64,
+            }
+            // A refused change (deadline passed, class full) shows its
+            // localized reason — never swallowed.
+            match api::put_json::<Req, Resp>(
+                &format!("/api/bookings/{bid}/guests"),
+                &Req { guests: n },
+            )
+            .await
+            {
+                Ok(_) => on_change.run(()),
+                Err(e) => set_error.set(i18n::localize_api_error(
+                    lang.get_untracked(),
+                    e.code,
+                    &e.message,
+                )),
+            }
+            set_loading.set(false);
+        });
+    };
+
     let slot_cancelled = slot.cancelled;
     let slot_user_booked = slot.user_booked;
     let slot_started = slot.started;
@@ -100,6 +140,58 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
     let book_testid = format!("book-{template_id}-{}", slot.date);
     let binding_testid = format!("binding-{template_id}-{}", slot.date);
     let started_testid = format!("started-{template_id}-{}", slot.date);
+    let guests_testid = format!("guests-{template_id}-{}", slot.date);
+    let guests_count_testid = format!("guests-count-{template_id}-{}", slot.date);
+    let guests_minus_testid = format!("guests-minus-{template_id}-{}", slot.date);
+    let guests_plus_testid = format!("guests-plus-{template_id}-{}", slot.date);
+
+    // Stepper while the customer may still change it; afterwards (binding)
+    // just the count, when there are guests.
+    let guests_view = if !is_logged_in || !slot_user_booked || slot_cancelled {
+        None
+    } else if slot_cancel_open {
+        let plus_blocked = guests >= MAX_GUESTS || slot_full;
+        Some(
+            view! {
+                <div class="guest-stepper" data-testid=guests_testid>
+                    <button
+                        type="button"
+                        class="btn btn--outline btn--compact guest-stepper__btn"
+                        data-testid=guests_minus_testid
+                        aria-label=move || i18n::t(lang.get(), "guest_remove")
+                        disabled=move || loading.get() || guests == 0
+                        on:click=move |_| set_guests_to(guests - 1)
+                    >
+                        "−"
+                    </button>
+                    <span class="guest-stepper__count" data-testid=guests_count_testid>
+                        {move || i18n::tf(lang.get(), "guests_count_format", &[&guests.to_string()])}
+                    </span>
+                    <button
+                        type="button"
+                        class="btn btn--outline btn--compact guest-stepper__btn"
+                        data-testid=guests_plus_testid
+                        disabled=move || loading.get() || plus_blocked
+                        on:click=move |_| set_guests_to(guests + 1)
+                    >
+                        {move || i18n::t(lang.get(), "guest_add")}
+                    </button>
+                </div>
+            }
+            .into_any(),
+        )
+    } else if guests > 0 {
+        Some(
+            view! {
+                <div class="list-row__sub" data-testid=guests_count_testid>
+                    {move || i18n::tf(lang.get(), "guests_count_format", &[&guests.to_string()])}
+                </div>
+            }
+            .into_any(),
+        )
+    } else {
+        None
+    };
 
     let action_view = if slot_cancelled {
         view! { <span class="badge badge--cancelled">{move || i18n::t(lang.get(), "cancelled")}</span> }.into_any()
@@ -157,6 +249,7 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
                     </div>
                 })}
                 <div class="list-row__sub">{move || i18n::tf(lang.get(), "spots_format", &[&booked.to_string(), &capacity.to_string()])}</div>
+                {guests_view}
                 {move || {
                     let e = error.get();
                     if e.is_empty() {

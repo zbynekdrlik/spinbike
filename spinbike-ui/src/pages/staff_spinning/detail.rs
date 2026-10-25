@@ -2,10 +2,13 @@
 //! facts + "Zrusit hodinu", the participants TABLE (no chips — owner
 //! decision), per-row "Odhlasit" / "Ukoncit natrvalo", and "Pridat" below.
 //!
-//! Every write is confirmed inline first (a confirm panel in the detail, no
-//! `window.confirm` — it behaves inconsistently in an installed iPhone PWA)
-//! and never swallowed: a failure shows the server's (localized) error in the
-//! panel, success reloads grid + table (`admin-ui-error-handling.md`).
+//! Every cancel is confirmed inline first (a confirm panel in the detail, no
+//! `window.confirm` — it behaves inconsistently in an installed iPhone PWA).
+//! The "Hostia" +/- stepper (#389) writes directly, one guest per tap — it is
+//! a count the desk adjusts as people arrive, and the server answers every
+//! tap with the exact charge/refund it made. No write is ever swallowed: a
+//! failure shows the server's (localized) error in the panel, success
+//! reloads grid + table (`admin-ui-error-handling.md`).
 
 use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
@@ -13,6 +16,7 @@ use wasm_bindgen_futures::spawn_local;
 use crate::api;
 use crate::i18n::{self, DAY_KEYS, Lang};
 use crate::pages::schedule::ClassSlot;
+use spinbike_core::booking::MAX_GUESTS;
 
 use super::add_person::AddPerson;
 use super::model::{self, Participant};
@@ -148,6 +152,38 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
         }
     };
 
+    // #389: set a booking's guest count (staff: any time; after the 09:00
+    // charge the server charges an added guest / refunds a removed one).
+    let change_guests = move |booking_id: i64, guests: i64| {
+        set_busy.set(true);
+        set_err.set(String::new());
+        spawn_local(async move {
+            #[derive(serde::Serialize)]
+            struct Req {
+                guests: i64,
+            }
+            #[derive(serde::Deserialize)]
+            struct Resp {
+                #[allow(dead_code)]
+                guests: i64,
+            }
+            let res = api::put_json::<Req, Resp>(
+                &format!("/api/bookings/{booking_id}/guests"),
+                &Req { guests },
+            )
+            .await;
+            set_busy.set(false);
+            match res {
+                Ok(_) => on_changed.run(()),
+                Err(e) => set_err.set(i18n::localize_api_error(
+                    lang.get_untracked(),
+                    e.code,
+                    &e.message,
+                )),
+            }
+        });
+    };
+
     let header_title = {
         let occurrence = occurrence.clone();
         move || title(&occurrence, lang.get())
@@ -156,6 +192,7 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
     let capacity = occurrence.capacity;
     let cancelled = occurrence.cancelled;
     let once_allowed = !occurrence.cancelled && !occurrence.started;
+    let seats_full = booked >= capacity;
     // Not reactive on purpose: the detail remounts on every reload anyway.
     let add_label = slot_label(&occurrence, lang.get_untracked());
 
@@ -244,6 +281,7 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
                             <th>{move || i18n::t(lang.get(), "name")}</th>
                             <th>{move || i18n::t(lang.get(), "phone")}</th>
                             <th>{move || i18n::t(lang.get(), "spin_col_credit")}</th>
+                            <th>{move || i18n::t(lang.get(), "spin_col_guests")}</th>
                             <th>{move || i18n::t(lang.get(), "spin_col_kind")}</th>
                             <th>{move || i18n::t(lang.get(), "spin_col_state")}</th>
                             <th>{move || i18n::t(lang.get(), "spin_col_actions")}</th>
@@ -257,7 +295,7 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
                                 let key = if loaded.get() { "spin_no_participants" } else { "spin_loading" };
                                 return view! {
                                     <tr data-testid="spin-participants-empty">
-                                        <td colspan="7" class="text-muted">{i18n::t(l, key)}</td>
+                                        <td colspan="8" class="text-muted">{i18n::t(l, key)}</td>
                                     </tr>
                                 }.into_any();
                             }
@@ -268,7 +306,9 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
                                 let persistent = p.is_persistent();
                                 let state = model::charge_state(p.charged, p.charged_amount);
                                 let credit_class = if p.credit < 0.0 { "credit-negative" } else { "" };
-                                let refund = if p.refundable { p.charged_amount } else { None };
+                                let refund = p.refund_on_cancel();
+                                let guests = p.guests;
+                                let plus_blocked = cancelled || seats_full || guests >= MAX_GUESTS;
                                 let name_unbook = p.user_name.clone();
                                 let name_end = p.user_name.clone();
                                 let phone_cell = match p.phone.clone().filter(|ph| !ph.trim().is_empty()) {
@@ -290,6 +330,33 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
                                         <td>{phone_cell}</td>
                                         <td class=credit_class data-testid=format!("spin-credit-{bid}")>
                                             {format!("{:.2} \u{20ac}", p.credit)}
+                                        </td>
+                                        <td>
+                                            <div class="guest-stepper" data-testid=format!("spin-guests-{bid}")>
+                                                <button
+                                                    type="button"
+                                                    class="btn btn--outline btn--compact"
+                                                    data-testid=format!("spin-guests-minus-{bid}")
+                                                    aria-label=i18n::t(l, "guest_remove")
+                                                    disabled=move || busy.get() || cancelled || guests == 0
+                                                    on:click=move |_| change_guests(bid, guests - 1)
+                                                >
+                                                    "−"
+                                                </button>
+                                                <span class="guest-stepper__count" data-testid=format!("spin-guests-count-{bid}")>
+                                                    {guests}
+                                                </span>
+                                                <button
+                                                    type="button"
+                                                    class="btn btn--outline btn--compact"
+                                                    data-testid=format!("spin-guests-plus-{bid}")
+                                                    aria-label=i18n::t(l, "guest_add")
+                                                    disabled=move || busy.get() || plus_blocked
+                                                    on:click=move |_| change_guests(bid, guests + 1)
+                                                >
+                                                    "+"
+                                                </button>
+                                            </div>
                                         </td>
                                         <td data-testid=format!("spin-kind-{bid}")>
                                             {i18n::t(l, if persistent { "spin_kind_persistent" } else { "spin_kind_once" })}

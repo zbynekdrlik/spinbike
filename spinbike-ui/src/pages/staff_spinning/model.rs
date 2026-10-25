@@ -39,11 +39,30 @@ pub struct Participant {
     pub charged: bool,
     #[serde(default)]
     pub charged_amount: Option<f64>,
+    /// #389: guests on the booking (each takes a seat, paid by the host).
+    #[serde(default)]
+    pub guests: i64,
+    /// #389: what the host's still-held guest charges took (positive).
+    #[serde(default)]
+    pub guest_charged_amount: f64,
 }
 
 impl Participant {
     pub fn is_persistent(&self) -> bool {
         self.source == "persistent"
+    }
+
+    /// What a staff cancel of this booking gives back (#382 R3 + #389): the
+    /// host's refundable charge plus every still-held guest charge, rounded
+    /// to cents; `None` when nothing would be refunded.
+    pub fn refund_on_cancel(&self) -> Option<f64> {
+        let host = if self.refundable {
+            self.charged_amount.unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        let total = ((host + self.guest_charged_amount) * 100.0).round() / 100.0;
+        (total > 0.0).then_some(total)
     }
 }
 
@@ -290,6 +309,7 @@ mod tests {
             user_booked: false,
             user_booking_id: None,
             user_booking_source: None,
+            user_booking_guests: 0,
             started: false,
             cancel_open: true,
         }
@@ -307,7 +327,26 @@ mod tests {
             credit: 0.0,
             charged: false,
             charged_amount: None,
+            guests: 0,
+            guest_charged_amount: 0.0,
         }
+    }
+
+    /// #389: the staff cancel confirm shows host + guest refunds together.
+    #[wasm_bindgen_test]
+    fn refund_on_cancel_adds_guest_charges_to_the_host_refund() {
+        let mut p = person(1, "A B");
+        assert_eq!(p.refund_on_cancel(), None, "uncharged: nothing to refund");
+        p.charged = true;
+        p.charged_amount = Some(0.0);
+        p.guests = 2;
+        p.guest_charged_amount = 10.0;
+        assert_eq!(p.refund_on_cancel(), Some(10.0), "pass host, 2 paid guests");
+        p.refundable = true;
+        p.charged_amount = Some(5.0);
+        assert_eq!(p.refund_on_cancel(), Some(15.0));
+        p.guest_charged_amount = 0.0;
+        assert_eq!(p.refund_on_cancel(), Some(5.0));
     }
 
     #[wasm_bindgen_test]

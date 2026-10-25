@@ -1406,6 +1406,11 @@ static TRANSLATIONS: LazyLock<TransMap> = LazyLock::new(|| {
         ),
     );
     m.insert("spinning_binding", ("zavazne", "binding"));
+    // #389 — guests paid from the host's credit.
+    m.insert("guests_count_format", ("Hostia: {}", "Guests: {}"));
+    m.insert("guest_add", ("+ host", "+ guest"));
+    m.insert("guest_remove", ("Odobrat hosta", "Remove guest"));
+    m.insert("spin_col_guests", ("Hostia", "Guests"));
     m.insert("recurring", ("pravidelne", "recurring"));
     m.insert(
         "spinning_manage_slots",
