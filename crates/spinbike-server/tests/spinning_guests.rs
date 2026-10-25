@@ -321,3 +321,59 @@ async fn guest_rows_do_not_inflate_the_hosts_own_visit_count() {
     assert_eq!(status, StatusCode::OK, "got {stats}");
     assert_eq!(stats["totals"]["all_time"]["visits"], 1);
 }
+
+/// Every BookingUpdate the route broadcast so far (non-blocking drain).
+fn drain(
+    rx: &mut tokio::sync::broadcast::Receiver<spinbike_core::ws::ServerMsg>,
+) -> Vec<(i64, String, i32, i32)> {
+    let mut out = Vec::new();
+    while let Ok(msg) = rx.try_recv() {
+        if let spinbike_core::ws::ServerMsg::BookingUpdate {
+            template_id,
+            date,
+            booked,
+            capacity,
+        } = msg
+        {
+            out.push((template_id, date, booked, capacity));
+        }
+    }
+    out
+}
+
+/// A guest change broadcasts the new SEAT count to every open schedule
+/// (WebSocket BookingUpdate) — and a "change" to the same count broadcasts
+/// nothing (nothing changed).
+#[tokio::test]
+async fn guest_change_broadcasts_seats_only_when_the_count_changes() {
+    let app = TestApp::new().await;
+    let day = today() + Duration::days(7);
+    let tid = template_on(&app, day, 10).await;
+    let bid = seed_booking(&app, tid, day, app.customer_id).await;
+    let mut rx = app.events.subscribe();
+
+    let (status, _) = app
+        .request(put_json(
+            &guests_uri(bid),
+            &app.customer_token,
+            &json!({"guests": 2}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        drain(&mut rx),
+        vec![(tid, day.to_string(), 3, 10)],
+        "one update: host + 2 guests = 3 of 10 seats"
+    );
+
+    let (status, body) = app
+        .request(put_json(
+            &guests_uri(bid),
+            &app.customer_token,
+            &json!({"guests": 2}),
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "got {body}");
+    assert_eq!(body["guests"], 2);
+    assert!(drain(&mut rx).is_empty(), "same count -> no broadcast");
+}

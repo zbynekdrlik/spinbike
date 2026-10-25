@@ -440,6 +440,74 @@ mod tests {
         assert_eq!(stornos, 0);
     }
 
+    /// Guest seats are given back ONLY by a staff cancel of a CHARGED
+    /// booking: a staff cancel of an uncharged booking (and a customer cancel)
+    /// leaves any guest-charge link untouched — no release, no refund.
+    #[tokio::test]
+    async fn guest_seats_released_only_for_a_staff_cancel_of_a_charged_booking() {
+        let pool = setup().await;
+        let host = make_user(&pool, "gu@test.com").await;
+        let staff = make_user(&pool, "gst@test.com").await;
+        let tid = create_template(&pool, 2, "18:00", 60, None, 10)
+            .await
+            .unwrap();
+        // A held guest-charge link on an UNCHARGED booking (as if a guest
+        // charge existed while `charged_at` is still NULL).
+        let link_on = |bid: i64| {
+            let pool = pool.clone();
+            async move {
+                let txn: i64 = sqlx::query_scalar(
+                    "INSERT INTO transactions (user_id, service_id, amount, action)
+                     VALUES (?, (SELECT id FROM services WHERE kind = 'group_class'), -5.0, 'visit')
+                     RETURNING id",
+                )
+                .bind(host)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+                sqlx::query(
+                    "INSERT INTO booking_guest_charges (booking_id, transaction_id) VALUES (?, ?)",
+                )
+                .bind(bid)
+                .bind(txn)
+                .execute(&pool)
+                .await
+                .unwrap();
+            }
+        };
+        for (date, kind, by) in [
+            ("2026-11-23", CancelKind::Staff, staff),
+            ("2026-11-30", CancelKind::Customer, host),
+        ] {
+            let bid = create_booking(&pool, tid, date, host, None, "manual")
+                .await
+                .unwrap();
+            link_on(bid).await;
+            let out = outcome(cancel_booking(&pool, bid, Some(by), kind).await.unwrap());
+            assert_eq!(out.guest_refunded, 0.0, "{kind:?}");
+            let released: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM booking_guest_charges
+                  WHERE booking_id = ? AND released_at IS NOT NULL",
+            )
+            .bind(bid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+            assert_eq!(
+                released, 0,
+                "{kind:?}: an uncharged booking keeps its links"
+            );
+        }
+        let stornos: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND action = 'storno'",
+        )
+        .bind(host)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stornos, 0);
+    }
+
     async fn credit_of(pool: &SqlitePool, uid: i64) -> f64 {
         sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
             .bind(uid)
