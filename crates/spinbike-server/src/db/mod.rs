@@ -319,6 +319,8 @@ mod tests {
         // `push_notify_log` + `push_subscriptions` — sort after
         // `persistent_bookings`, before `schema_version`.
         let expected = vec![
+            // V32 (#389): per-guest charge links.
+            "booking_guest_charges",
             "bookings",
             "class_cancellations",
             "class_templates",
