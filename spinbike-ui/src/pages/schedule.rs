@@ -147,7 +147,16 @@ pub fn SchedulePage() -> impl IntoView {
     // (the "Spinning" menu entry and the home card link both land on this
     // page). Logged-out visitors only see the schedule.
     let logged_in = crate::auth::get_token().is_some();
-    let on_slots_changed = Callback::new(move |_: ()| set_fetch_ver.update(|v| *v += 1));
+    // ONE page-owned "reload the week" callback (#389). It must NOT be created
+    // inside the class-list render closure below: every WebSocket
+    // BookingUpdate re-runs that closure and disposes everything created in
+    // it — and a card's own write (book / cancel / guests) triggers exactly
+    // such a broadcast BEFORE its HTTP response arrives. A card-scoped
+    // callback was then already disposed when the response came back, so the
+    // reload silently never happened (CI run 40226732848: the guest count
+    // stayed at 0). Owned by the page, it outlives any card re-render.
+    let reload = Callback::new(move |_: ()| set_fetch_ver.update(|v| *v += 1));
+    let on_slots_changed = reload;
 
     // This week returns to today; next week opens on its Monday.
     let on_this_week = move |_| {
@@ -216,10 +225,9 @@ pub fn SchedulePage() -> impl IntoView {
             }
 
             let cards: Vec<_> = day_classes.into_iter().map(|slot| {
-                let set_fv = set_fetch_ver;
                 ClassCard(ClassCardProps {
                     slot,
-                    on_change: Callback::new(move |_| set_fv.update(|v| *v += 1)),
+                    on_change: reload,
                 })
             }).collect();
 
