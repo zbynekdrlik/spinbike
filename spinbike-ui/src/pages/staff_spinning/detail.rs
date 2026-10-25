@@ -217,7 +217,7 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
                             </button>
                             <button
                                 type="button"
-                                class="btn btn--ghost btn--compact"
+                                class="btn btn--outline btn--compact"
                                 data-testid="spin-confirm-no"
                                 disabled=move || busy.get()
                                 on:click=move |_| set_pending.set(None)
@@ -298,7 +298,7 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
                                         <td class="spin-table__actions">
                                             <button
                                                 type="button"
-                                                class="btn btn--ghost btn--compact"
+                                                class="btn btn--outline btn--compact"
                                                 data-testid=format!("spin-unbook-{bid}")
                                                 on:click=move |_| set_pending.set(Some(Pending::Unbook {
                                                     booking_id: bid,
@@ -311,7 +311,7 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
                                             {persistent.then(|| view! {
                                                 <button
                                                     type="button"
-                                                    class="btn btn--ghost btn--compact"
+                                                    class="btn btn--outline btn--compact"
                                                     data-testid=format!("spin-end-persistent-{bid}")
                                                     on:click=move |_| set_pending.set(Some(Pending::EndPersistent {
                                                         user_id: uid,

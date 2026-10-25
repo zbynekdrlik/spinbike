@@ -212,7 +212,7 @@ pub fn AddPerson(
                                     {once_btn}
                                     <button
                                         type="button"
-                                        class="btn btn--ghost btn--compact"
+                                        class="btn btn--outline-brand btn--compact"
                                         data-testid=format!("spin-add-persistent-{uid}")
                                         disabled=is_busy
                                         on:click=move |_| book_persistent(uid)
