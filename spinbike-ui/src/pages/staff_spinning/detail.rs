@@ -350,7 +350,7 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
                                         <td>
                                             <GuestStepper
                                                 prefix="spin-guests"
-                                                key=bid.to_string()
+                                                item_key=bid.to_string()
                                                 guests=guests
                                                 count_text=Signal::derive(move || guests.to_string())
                                                 plus_text=Signal::derive(|| "+".to_string())

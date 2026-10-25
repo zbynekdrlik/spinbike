@@ -29,14 +29,14 @@ pub async fn put_guests(booking_id: i64, guests: i64) -> Result<(), api::ApiErro
     .map(|_| ())
 }
 
-/// Test ids: `{prefix}-{key}` (wrapper), `{prefix}-minus-{key}`,
-/// `{prefix}-count-{key}`, `{prefix}-plus-{key}`.
+/// Test ids: `{prefix}-{item_key}` (wrapper), `{prefix}-minus-{item_key}`,
+/// `{prefix}-count-{item_key}`, `{prefix}-plus-{item_key}`.
 #[component]
 pub fn GuestStepper(
     /// `"guests"` (customer card) | `"spin-guests"` (staff table).
     prefix: &'static str,
     /// `"{template_id}-{date}"` (customer) | `"{booking_id}"` (staff).
-    key: String,
+    item_key: String,
     /// The current guest count.
     guests: i64,
     /// What the count shows ("Guests: 2" / "2").
@@ -58,24 +58,24 @@ pub fn GuestStepper(
 ) -> impl IntoView {
     let lang = use_context::<ReadSignal<Lang>>().expect("Lang context");
     view! {
-        <div class="guest-stepper" data-testid=format!("{prefix}-{key}")>
+        <div class="guest-stepper" data-testid=format!("{prefix}-{item_key}")>
             <button
                 type="button"
                 class="btn btn--outline btn--compact"
-                data-testid=format!("{prefix}-minus-{key}")
+                data-testid=format!("{prefix}-minus-{item_key}")
                 aria-label=move || i18n::t(lang.get(), "guest_remove")
                 disabled=move || busy.get() || minus_blocked || guests == 0
                 on:click=move |_| on_set.run(guests - 1)
             >
                 "−"
             </button>
-            <span class="guest-stepper__count" data-testid=format!("{prefix}-count-{key}")>
+            <span class="guest-stepper__count" data-testid=format!("{prefix}-count-{item_key}")>
                 {move || count_text.get()}
             </span>
             <button
                 type="button"
                 class="btn btn--outline btn--compact"
-                data-testid=format!("{prefix}-plus-{key}")
+                data-testid=format!("{prefix}-plus-{item_key}")
                 aria-label=move || i18n::t(lang.get(), "guest_add")
                 disabled=move || busy.get() || plus_blocked
                 on:click=move |_| on_set.run(guests + 1)

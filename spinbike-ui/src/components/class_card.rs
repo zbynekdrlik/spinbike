@@ -140,7 +140,7 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
             view! {
                 <GuestStepper
                     prefix="guests"
-                    key=guests_key
+                    item_key=guests_key
                     guests=guests
                     count_text=Signal::derive(move || {
                         i18n::tf(lang.get(), "guests_count_format", &[&guests.to_string()])
