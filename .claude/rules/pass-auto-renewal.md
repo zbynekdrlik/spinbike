@@ -42,8 +42,7 @@ on their own row (the gym auto-bills them). DB helper:
 it has to be added to the struct AND to EVERY `sqlx` `query_as::<_, UserRow>`
 / `UserRowWithPass` SELECT column list (currently ~13: 8 in `db/users.rs`, 2
 join SELECTs, 3 in `routes/payments.rs`) — sqlx `FromRow` maps by name, so a
-missed SELECT is a RUNTIME `ColumnNotFound`, not a compile error, and Tier-0
-(`cargo fmt` only) can't catch it locally — it only fails in CI. Grep the
+missed SELECT is a RUNTIME `ColumnNotFound`, not a compile error. Grep the
 existing `allow_self_entry`/`auto_renew_pass` sites and add the new column
 alongside each. `UserByMovementRow` and `my_balance`'s named tuple have their
 OWN explicit column lists (NOT `UserRow`) — leave them unless the UI there

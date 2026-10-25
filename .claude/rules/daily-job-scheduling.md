@@ -91,9 +91,8 @@ notifications::tick(&pool, &push).await } }`).
   private `use sqlx::SqlitePool;` at the top of `jobs/mod.rs` is visible to
   `mod tests` via `super::SqlitePool`, but the BARE identifier `SqlitePool` in a
   test helper's own `where F: Fn(SqlitePool) -> Fut` does NOT resolve without an
-  explicit import in `tests`'s own scope — this is an `E0425` compile error the
-  `Lint` CI job catches (NOT `cargo fmt`, so it survives the Tier-0 local
-  fmt-only check and costs a full CI cycle). Fully-qualify (`sqlx::SqlitePool`)
+  explicit import in `tests`'s own scope — this is an `E0425` compile error.
+  Fully-qualify (`sqlx::SqlitePool`)
   instead of adding a redundant `use` when it's the only reference in scope.
 - **A log-gating branch (`Ok(n) if n > 0 => tracing::info!(...)`) has NO
   observable side effect other than the log line itself** — a test that only

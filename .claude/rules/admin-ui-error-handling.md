@@ -75,5 +75,4 @@ On `update_*`, only validate a field the caller is actually SETTING: an
 untouched existing value on an unrelated edit (a rename) must not start failing
 PUT requests it never asked to change. Use a let-chain
 (`if let Some(dp) = body.default_price && dp < 0.0`) — a nested
-`if { if let ... }` trips `clippy::collapsible_if`, which is deny-level in CI
-and cannot be caught by the Tier-0 local checks.
+`if { if let ... }` trips `clippy::collapsible_if`, which is deny-level in CI.

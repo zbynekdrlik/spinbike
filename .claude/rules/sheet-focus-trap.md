@@ -53,14 +53,10 @@ or logic that assumes "every close path defers", `grep -n "on_close\.\|on_cancel
 across the 8 call sites and check each one, rather than assuming from the
 majority pattern.
 
-## Local verification limits — CI is authoritative for this file
+## Event-timing changes here need a second independent review
 
-`spinbike-ui` is Tier-0-restricted (no local `cargo build`/`cargo check`/
-`cargo test`, no local Playwright) — any `web_sys::`/event-timing change
-here can only be reasoned through by hand plus `cargo fmt --all --check`
-(both repo root AND `spinbike-ui/`) and `cd e2e && npx tsc --noEmit`
-locally; verify the actual DOM/focus behavior via a genuine second
-(ideally independent, e.g. `superpowers:requesting-code-review` +
+For any `web_sys::`/event-timing change here, verify the actual DOM/focus
+behavior via a genuine second (ideally independent, e.g. `superpowers:requesting-code-review` +
 `/code-review`) review pass before merging, not just your own reasoning —
 #334's fix needed a SECOND review round to catch the container-focus gap
 above, which the implementer's own careful hand-timing analysis missed.

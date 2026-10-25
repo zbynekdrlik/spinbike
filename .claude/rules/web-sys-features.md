@@ -15,13 +15,10 @@ dependency graph means MANY features are already enabled transitively**
 though `spinbike-ui/Cargo.toml`'s own `web-sys` feature list looks short),
 but a feature nothing else in the graph needs (e.g. `NodeList`, needed for
 `Element::query_selector_all`) is genuinely NOT compiled in until you add
-it explicitly, and using it without the feature is a **compile error CI
-will catch** — costing a full CI cycle if missed, since this project's
-Tier-0 local-build policy bans `cargo check`/`cargo build` from most
-dispatched workers (see project CLAUDE.md's Pre-Push Checks).
+it explicitly, and using it without the feature is a **compile error**.
 
 **Before pushing code that uses a `web_sys::` type/method not already used
-elsewhere in the codebase**, verify the feature gate WITHOUT compiling:
+elsewhere in the codebase**, verify the feature gate:
 
 ```bash
 # 1. Find the exact feature(s) a method needs — grep the actual crate
@@ -32,10 +29,7 @@ grep -n -B6 "pub fn query_selector_all" \
 # → look for the #[cfg(feature = "...")] line directly above the fn
 
 # 2. Check whether that feature is ALREADY enabled transitively before
-#    assuming you need to add it (cargo metadata resolution only, no
-#    compile/codegen — safe under Tier-0, though it's a `cargo` invocation
-#    outside the two sanctioned pre-push commands, so treat it as a
-#    verification tool, not a routine local-build step):
+#    assuming you need to add it (resolution only, no compile):
 cd spinbike-ui && cargo tree -e features -i web-sys | grep '"NodeList"'
 # → no output means NOT enabled transitively; add it to Cargo.toml's
 #   web-sys features list

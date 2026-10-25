@@ -48,8 +48,6 @@ PORT=3000 DATABASE_PATH=./data.db JWT_SECRET=your-secret cargo run --bin spinbik
 cargo fmt --all --check
 ```
 
-Do NOT run `cargo clippy`, `cargo test`, or `cargo build` locally unless debugging — these create large build artifacts. Clippy and tests run on CI.
-
 ## Version Management
 
 Single source of truth: `VERSION` file. Sync to all Cargo.toml files:
@@ -101,7 +99,7 @@ Path-scoped rules under `.claude/rules/` load themselves when you touch a matchi
 - Any new day-boundary / local-time computation in a job or route → `.claude/rules/bratislava-tz.md` (auto-loads on `crates/spinbike-server/src/util.rs`, `crates/spinbike-server/src/jobs/**`, `crates/spinbike-server/src/routes/**` — never `chrono::Local`, always the shared `crate::util` helpers; the recurring #205/#222/#327/#330 bug class + the source-invariant regression-test pattern for it)
 - Predaj permanentky za 0 € (a služba s nulovou cenou) → `.claude/rules/zero-price-is-deliberate.md` (auto-loads on `routes/payments.rs|users.rs|admin.rs`, `dashboard/action_form.rs` — ZÁMER majiteľa pre vyrovnanie v naturáliách, nikdy to neopravovať ako chybu, #342)
 - Any new money-mutating write (`users.credit` / `transactions.amount`) → `.claude/rules/money-rounding.md` (auto-loads on `db/users.rs`, `routes/payments.rs|users.rs|door.rs|admin.rs|charger.rs` — round ONCE and reuse everywhere, check prod for real drift before assuming a backfill is needed, #325/#326)
-- Adding a new `web_sys::` API surface to `spinbike-ui` → `.claude/rules/web-sys-features.md` (auto-loads on `spinbike-ui/Cargo.toml` — verify the Cargo feature gate without compiling, since local `cargo check` is Tier-0-banned, #320)
+- Adding a new `web_sys::` API surface to `spinbike-ui` → `.claude/rules/web-sys-features.md` (auto-loads on `spinbike-ui/Cargo.toml` — verify the Cargo feature gate is declared, #320)
 - Touching `Sheet`'s Tab-cycle focus trap (`trap_tab`/`refocus_if_orphaned` in `sheet.rs`) or any `Sheet` consumer's close/cancel handler → `.claude/rules/sheet-focus-trap.md` (auto-loads on `sheet.rs`, `nav.rs`, the dashboard sheets, `deleted_email_conflict.rs`, `calendar_picker.rs` — the container-itself-is-a-focus-state gotcha + the non-uniform close-defer pattern, #334; every overlay/sub-page needs an explicit close/back control + the `webkit-iphone` Playwright project, #386)
 - Identifying a class-visit service (Fitness/Spinning), or adding a new `services.kind` value → `.claude/rules/service-kind.md` (auto-loads on `crates/spinbike-core/src/services.rs`, `jobs/charger.rs`, `routes/payments.rs|users.rs|admin.rs`, `db/users.rs|reports.rs`, `dashboard/mod.rs|action_form.rs` — identify by the stable `kind` column, never admin-editable `name_en`/`name_sk`; a new kind needs its own i18n badge key or it renders "???", #186/#329)
 - Creating a synthetic account on PROD (mail testing, auth verification) → `.claude/rules/prod-test-data.md` (auto-loads on `crates/spinbike-server/src/mail/**`, `crates/spinbike-server/src/auth/**`, `routes/auth.rs`, `e2e/tests/auth*.spec.ts` — clean up same-ticket, check `deleted_at IS NULL` filters first, prod-DELETE approval+backup, #333)

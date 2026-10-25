@@ -88,17 +88,14 @@ When `evaluate_reason`/`tick_as_of` gained its 4th parameter (`&MailHandle`,
 today)` — but MISSED 6 more call sites inside
 `low_credit_full_anti_spam_sequence_cooldown_episode_cap_then_rearm`, which
 uses its own locally-scoped `day0`/`day8`/`day16` variables instead of the
-common `today`/`test_today()` names. The tree still compiled locally
-(Tier-0 forbids local `cargo build`/`clippy`/`test`, so `cargo fmt --all
---check` never caught it) and only failed on CI's `Lint` (clippy) job —
-one wasted CI cycle. **The fix: after ANY mechanical replace across a
+common `today`/`test_today()` names. Only CI's `Lint` (clippy) job caught
+it — one wasted CI cycle. **The fix: after ANY mechanical replace across a
 function's call sites, re-grep with ONLY the stable prefix** —
 `tick_as_of(&pool, &push,` (never `test_today()`/`today`, which vary per
 test) — **and count the matches against the known total** (e.g. `grep -c
 "async fn" | grep -c test` for "how many test functions exist" vs. `grep
 -c` for "how many now have the new arg"). A mismatch means a call site
-still has the OLD arg count and will only surface as a compile error on
-CI, never locally under this project's Tier-0 policy.
+still has the OLD arg count.
 
 ## VAPID key
 
