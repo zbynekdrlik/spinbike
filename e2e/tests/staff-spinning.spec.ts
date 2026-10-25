@@ -12,6 +12,7 @@ import {
     listClasses,
     listParticipants,
     openStaffSpinningCell,
+    seedBooking,
     staffCancel,
     weekRange,
 } from './spinning-fixtures';
@@ -299,4 +300,107 @@ test.describe('Staff spinning screen (#385)', () => {
         }
         assertCleanConsole(messages);
     });
+
+    // #389 (owner relays CEO Stevo: "Trvala rezervacia na nb nevidno maly
+    // kontrast"): the detail's action buttons were `.btn--ghost` — a
+    // transparent fill, a `--border` outline and a muted label — and on a
+    // laptop did not read as buttons at all. Every action button must have a
+    // readable label (>= 4.5:1) AND a visible boundary (fill or border
+    // >= 3:1 against the card behind it), in both colour schemes.
+    test('action buttons are visible: label >= 4.5:1, boundary >= 3:1 (dark + light)', async ({ page }) => {
+        const messages = setupConsoleCheck(page);
+        const token = await loginViaAPI(page, BASE_URL, 'staff@test.com', 'staff123');
+        const { slot } = await slotWithNextWeek();
+        const regular = await createUniqueUser(token, 0, 'SV');
+        const searched = await createUniqueUser(token, 0, 'SW');
+        const bookingId = await seedBooking(token, slot.template_id, slot.date, regular.user_id, 'persistent');
+        try {
+            for (const scheme of ['dark', 'light'] as const) {
+                await page.emulateMedia({ colorScheme: scheme });
+                await page.goto('/staff/spinning');
+                await openStaffSpinningCell(page, slot.template_id, slot.date);
+                await findInAddPerson(page, searched.card_code, searched.user_id);
+                await page.locator('[data-testid="spin-cancel-class"]').click();
+                await expect(page.locator('[data-testid="spin-confirm"]')).toBeVisible();
+                const buttons = [
+                    'spin-cancel-class',
+                    'spin-confirm-no',
+                    `spin-unbook-${bookingId}`,
+                    `spin-end-persistent-${bookingId}`,
+                    `spin-add-persistent-${searched.user_id}`,
+                    `spin-add-once-${searched.user_id}`,
+                ];
+                for (const id of buttons) {
+                    const btn = page.locator(`[data-testid="${id}"]`);
+                    await expect(btn, `${scheme}: ${id} rendered`).toHaveCount(1);
+                    expect(await contrastOf(btn), `${scheme}: ${id} label`).toBeGreaterThanOrEqual(4.5);
+                    expect(await boundaryContrastOf(btn), `${scheme}: ${id} boundary`).toBeGreaterThanOrEqual(3);
+                }
+                await page.locator('[data-testid="spin-confirm-no"]').click();
+                await expect(page.locator('[data-testid="spin-confirm"]')).toHaveCount(0);
+            }
+            assertCleanConsole(messages);
+        } finally {
+            await staffCancel(token, bookingId);
+        }
+    });
 });
+
+/**
+ * WCAG contrast of a button's BOUNDARY against the surface behind it: the
+ * better of its own (composited) fill and its border colour, each against the
+ * effective background of its parent (WCAG 1.4.11 non-text contrast, 3:1).
+ */
+async function boundaryContrastOf(btn: import('@playwright/test').Locator): Promise<number> {
+    return btn.evaluate((el) => {
+        type RGBA = [number, number, number, number];
+        const parse = (s: string): RGBA => {
+            const nums = (s.match(/[\d.]+/g) ?? []).map(Number);
+            if (s.startsWith('color(srgb')) {
+                return [nums[0] * 255, nums[1] * 255, nums[2] * 255, nums.length > 3 ? nums[3] : 1];
+            }
+            return [nums[0], nums[1], nums[2], nums.length > 3 ? nums[3] : 1];
+        };
+        const over = (top: RGBA, bottom: RGBA): RGBA => {
+            const a = top[3];
+            return [
+                top[0] * a + bottom[0] * (1 - a),
+                top[1] * a + bottom[1] * (1 - a),
+                top[2] * a + bottom[2] * (1 - a),
+                1,
+            ];
+        };
+        const effectiveBg = (start: Element | null): RGBA => {
+            const layers: RGBA[] = [];
+            let node = start;
+            while (node) {
+                const bg = parse(getComputedStyle(node).backgroundColor);
+                if (bg[3] > 0) {
+                    layers.push(bg);
+                    if (bg[3] >= 1) break;
+                }
+                node = node.parentElement;
+            }
+            let bg: RGBA = [255, 255, 255, 1];
+            for (let i = layers.length - 1; i >= 0; i--) bg = over(layers[i], bg);
+            return bg;
+        };
+        const lum = (c: RGBA) => {
+            const ch = c.slice(0, 3).map((v) => {
+                const x = v / 255;
+                return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
+            });
+            return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
+        };
+        const ratio = (a: RGBA, b: RGBA) => {
+            const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+            return (hi + 0.05) / (lo + 0.05);
+        };
+        const behind = effectiveBg(el.parentElement);
+        const style = getComputedStyle(el);
+        const fill = over(parse(style.backgroundColor), behind);
+        const borderWidth = parseFloat(style.borderTopWidth) || 0;
+        const border = borderWidth > 0 ? over(parse(style.borderTopColor), behind) : behind;
+        return Math.max(ratio(fill, behind), ratio(border, behind));
+    });
+}
