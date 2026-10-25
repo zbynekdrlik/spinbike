@@ -1,3 +1,4 @@
+use crate::db::booking_guests::SEATS_SQL;
 use crate::db::error::{DbError, Result};
 use sqlx::SqlitePool;
 
@@ -22,6 +23,8 @@ pub struct BookingRow {
     pub source: String,
     pub created_at: String,
     pub cancelled_at: Option<String>,
+    /// Guests the host brings (#389) — each takes one more seat.
+    pub guests: i64,
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -114,10 +117,13 @@ pub async fn is_occurrence_cancelled(
     Ok(count > 0)
 }
 
+/// Seats taken on one class occurrence — every active booking counts its
+/// host plus its guests (#389), so capacity, the schedule's "x/y" and the
+/// staff occupancy grid all count people, not booking rows.
 pub async fn get_booking_count(pool: &SqlitePool, template_id: i64, date: &str) -> Result<i64> {
-    let count: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM bookings WHERE template_id = ? AND date = ? AND cancelled_at IS NULL",
-    )
+    let count: i64 = sqlx::query_scalar(&format!(
+        "SELECT {SEATS_SQL} FROM bookings WHERE template_id = ? AND date = ? AND cancelled_at IS NULL"
+    ))
     .bind(template_id)
     .bind(date)
     .fetch_one(pool)
@@ -125,7 +131,8 @@ pub async fn get_booking_count(pool: &SqlitePool, template_id: i64, date: &str) 
     Ok(count)
 }
 
-/// Create a booking with atomic capacity enforcement via a single INSERT with subquery.
+/// Create a booking with atomic capacity enforcement via a single INSERT with
+/// subquery. The new booking takes one seat; the guard counts SEATS (#389).
 pub async fn create_booking(
     pool: &SqlitePool,
     template_id: i64,
@@ -134,14 +141,14 @@ pub async fn create_booking(
     created_by: Option<i64>,
     source: &str,
 ) -> Result<i64> {
-    let result = sqlx::query_scalar::<_, i64>(
+    let result = sqlx::query_scalar::<_, i64>(&format!(
         "INSERT INTO bookings (template_id, date, user_id, created_by, source)
          SELECT ?1, ?2, ?3, ?4, ?5
-         WHERE (SELECT COUNT(*) FROM bookings
+         WHERE (SELECT {SEATS_SQL} FROM bookings
                 WHERE template_id = ?1 AND date = ?2 AND cancelled_at IS NULL)
                < (SELECT capacity FROM class_templates WHERE id = ?1)
-         RETURNING id",
-    )
+         RETURNING id"
+    ))
     .bind(template_id)
     .bind(date)
     .bind(user_id)
@@ -161,7 +168,7 @@ pub async fn list_bookings_for_class(
     date: &str,
 ) -> Result<Vec<BookingRow>> {
     let bookings = sqlx::query_as::<_, BookingRow>(
-        "SELECT id, template_id, date, user_id, created_by, source, created_at, cancelled_at
+        "SELECT id, template_id, date, user_id, created_by, source, created_at, cancelled_at, guests
          FROM bookings WHERE template_id = ? AND date = ? AND cancelled_at IS NULL ORDER BY created_at",
     )
     .bind(template_id)
@@ -191,6 +198,8 @@ pub struct BookingWithClassRow {
     pub source: String,
     /// Set once the binding 09:00 charge ran (#382: no customer cancel).
     pub charged_at: Option<String>,
+    /// Guests the host brings (#389).
+    pub guests: i64,
 }
 
 pub async fn list_user_bookings(
@@ -206,7 +215,7 @@ pub async fn list_user_bookings(
     let today = crate::util::today_bratislava();
     let bookings = sqlx::query_as::<_, BookingWithClassRow>(
         "SELECT b.id, b.template_id, b.date, b.user_id, \
-                ct.start_time, i.name AS instructor_name, b.source, b.charged_at \
+                ct.start_time, i.name AS instructor_name, b.source, b.charged_at, b.guests \
            FROM bookings b \
            JOIN class_templates ct ON ct.id = b.template_id \
            LEFT JOIN instructors i ON i.id = ct.instructor_id \
@@ -274,9 +283,7 @@ pub async fn list_upcoming_for_user(
             .fetch_optional(pool)
             .await?;
 
-            let booked: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM bookings WHERE template_id = ? AND date = ? AND cancelled_at IS NULL"
-            ).bind(t.id).bind(&date_s).fetch_one(pool).await?;
+            let booked = get_booking_count(pool, t.id, &date_s).await?;
 
             let my_row: Option<(i64, String)> = sqlx::query_as(
                 "SELECT id, source FROM bookings
@@ -424,6 +431,7 @@ mod tests {
         assert_eq!(b.source, "persistent");
         assert!(!b.created_at.is_empty());
         assert_eq!(b.cancelled_at, None);
+        assert_eq!(b.guests, 0);
     }
 
     #[tokio::test]

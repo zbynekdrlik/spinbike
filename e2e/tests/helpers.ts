@@ -457,15 +457,21 @@ export async function stubPushDenied(page: Page): Promise<void> {
 }
 
 /**
- * WCAG contrast of `fg`'s text colour against the EFFECTIVE background behind
- * it (walks up the ancestors, compositing translucent layers), computed in
- * the page from `getComputedStyle` (#379; shared since #385 — the staff
- * participant table and the spinning occupancy grid both pin their contrast
- * with it, in both colour schemes). Parses both `rgb()` and Chromium's
- * `color(srgb ...)` computed form.
+ * WCAG contrast measured in the page from `getComputedStyle` (#379; shared
+ * since #385, boundary mode since #389). Backgrounds are the EFFECTIVE
+ * colour behind the element (walks up the ancestors, compositing translucent
+ * layers). Parses both `rgb()` and Chromium's `color(srgb ...)` computed form.
+ *
+ * - `'text'`: the element's text colour against its effective background.
+ * - `'boundary'`: the better of the element's own (composited) fill and its
+ *   border colour, each against the effective background of its PARENT —
+ *   WCAG 1.4.11 non-text contrast, "can I see where the button is?".
+ *
+ * One in-page implementation for both, so the parsing/compositing/luminance
+ * math exists exactly once.
  */
-export async function contrastOf(fg: Locator): Promise<number> {
-    return fg.evaluate((el) => {
+async function measureContrast(el: Locator, mode: 'text' | 'boundary'): Promise<number> {
+    return el.evaluate((node, m) => {
         type RGBA = [number, number, number, number];
         const parse = (s: string): RGBA => {
             const nums = (s.match(/[\d.]+/g) ?? []).map(Number);
@@ -483,19 +489,21 @@ export async function contrastOf(fg: Locator): Promise<number> {
                 1,
             ];
         };
-        const layers: RGBA[] = [];
-        let node: Element | null = el;
-        while (node) {
-            const bg = parse(getComputedStyle(node).backgroundColor);
-            if (bg[3] > 0) {
-                layers.push(bg);
-                if (bg[3] >= 1) break;
+        const effectiveBg = (start: Element | null): RGBA => {
+            const layers: RGBA[] = [];
+            let cur = start;
+            while (cur) {
+                const bg = parse(getComputedStyle(cur).backgroundColor);
+                if (bg[3] > 0) {
+                    layers.push(bg);
+                    if (bg[3] >= 1) break;
+                }
+                cur = cur.parentElement;
             }
-            node = node.parentElement;
-        }
-        let bg: RGBA = [255, 255, 255, 1];
-        for (let i = layers.length - 1; i >= 0; i--) bg = over(layers[i], bg);
-        const fgc = over(parse(getComputedStyle(el).color), bg);
+            let bg: RGBA = [255, 255, 255, 1];
+            for (let i = layers.length - 1; i >= 0; i--) bg = over(layers[i], bg);
+            return bg;
+        };
         const lum = (c: RGBA) => {
             const ch = c.slice(0, 3).map((v) => {
                 const x = v / 255;
@@ -503,7 +511,33 @@ export async function contrastOf(fg: Locator): Promise<number> {
             });
             return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
         };
-        const [hi, lo] = [lum(fgc), lum(bg)].sort((a, b) => b - a);
-        return (hi + 0.05) / (lo + 0.05);
-    });
+        const ratio = (a: RGBA, b: RGBA) => {
+            const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+            return (hi + 0.05) / (lo + 0.05);
+        };
+        const style = getComputedStyle(node);
+        if (m === 'text') {
+            const bg = effectiveBg(node);
+            return ratio(over(parse(style.color), bg), bg);
+        }
+        const behind = effectiveBg(node.parentElement);
+        const fill = over(parse(style.backgroundColor), behind);
+        const borderWidth = parseFloat(style.borderTopWidth) || 0;
+        const border = borderWidth > 0 ? over(parse(style.borderTopColor), behind) : behind;
+        return Math.max(ratio(fill, behind), ratio(border, behind));
+    }, mode);
+}
+
+/** WCAG contrast of `fg`'s text against the effective background behind it. */
+export async function contrastOf(fg: Locator): Promise<number> {
+    return measureContrast(fg, 'text');
+}
+
+/**
+ * WCAG non-text contrast of a control's BOUNDARY (fill or border, whichever
+ * is stronger) against the surface behind it (#389 — a ghost button whose
+ * outline is ~1.3:1 against the card does not read as a button).
+ */
+export async function boundaryContrastOf(control: Locator): Promise<number> {
+    return measureContrast(control, 'boundary');
 }

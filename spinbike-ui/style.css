@@ -58,6 +58,7 @@
     --text-dim:      #72767f;
     --brand:         #60a5fa;
     --brand-tint:    rgba(96, 165, 250, 0.14);
+    --on-brand:      #0a1f10;
     --danger:        #f87171;
     --info:          color-mix(in srgb, var(--brand) 90%, black);
     --pass:          #fbbf24;
@@ -125,6 +126,8 @@
         --text-dim:      #8a8f9b;
         --brand:         #2563eb;
         --brand-tint:    rgba(37, 99, 235, 0.10);
+        /* #389: the dark label was 3.3:1 on the light-scheme brand blue. */
+        --on-brand:      #ffffff;
         --danger:        #dc2626;
         --info:          color-mix(in srgb, var(--brand) 90%, black);
         --pass:          #d97706;
@@ -370,12 +373,12 @@ a:hover { text-decoration: underline; }
 .btn--primary {
     background: var(--brand);
     border-color: var(--brand);
-    color: #0a1f10;
+    color: var(--on-brand);
     font-weight: 600;
 }
 .btn--primary:hover:not(:disabled) {
-    background: #1fb357;
-    border-color: #1fb357;
+    background: color-mix(in srgb, var(--brand) 85%, black);
+    border-color: color-mix(in srgb, var(--brand) 85%, black);
 }
 
 .btn--danger {
@@ -396,6 +399,34 @@ a:hover { text-decoration: underline; }
 .btn--ghost:hover:not(:disabled) {
     background: var(--surface-2);
     color: var(--text);
+}
+
+/* Visible secondary action (#389): `.btn--ghost`'s `--border` outline is
+   ~1.3:1 against a card and its label muted — on a laptop it did not read as
+   a button at all. A `--text-muted` outline (>= 5:1 against --surface in both
+   schemes) + full-contrast label. Used on the staff spinning screen; the
+   global `.btn--ghost` stays as it is for the pages that rely on it. */
+.btn--outline {
+    background: var(--surface-2);
+    border-color: var(--text-muted);
+    color: var(--text);
+}
+.btn--outline:hover:not(:disabled) {
+    background: var(--surface-3);
+    border-color: var(--text);
+}
+
+/* Strong-outline brand action next to a solid `.btn--primary` (#389:
+   "Natrvalo kazdy ..." beside "Len na tento termin") — same hue, clearly a
+   button, visibly secondary to the solid one. */
+.btn--outline-brand {
+    background: transparent;
+    border-color: var(--brand);
+    color: var(--brand);
+    font-weight: 600;
+}
+.btn--outline-brand:hover:not(:disabled) {
+    background: var(--brand-tint);
 }
 
 .btn--info {
@@ -1193,6 +1224,20 @@ table tbody tr:last-child td {
 
 .spin-add {
     margin-top: var(--s-4);
+}
+
+/* #389: "- / Hostia: N / + host" — the host's guest count (customer class
+   card) and the staff table's "Hostia" cell. */
+.guest-stepper {
+    display: flex;
+    align-items: center;
+    gap: var(--s-2);
+    margin-top: var(--s-1);
+}
+.guest-stepper__count {
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
 }
 
 .spin-add__row {

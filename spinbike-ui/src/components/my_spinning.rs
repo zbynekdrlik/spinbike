@@ -32,6 +32,9 @@ struct MyBooking {
     source: String,
     #[serde(default)]
     cancel_open: bool,
+    /// #389: guests the customer brings (paid from their credit).
+    #[serde(default)]
+    guests: i64,
 }
 
 /// "Po 13.10. 18:30" — weekday short name + short date + start time.
@@ -93,6 +96,7 @@ pub fn MySpinningCard() -> impl IntoView {
                     let title = booking_title(&b.date, &b.start_time, lang_now);
                     let recurring = b.source == "persistent";
                     let instructor = b.instructor_name.clone();
+                    let guests = b.guests;
                     let end = if b.cancel_open {
                         let (busy, set_busy) = signal(false);
                         let on_cancel = move |_| {
@@ -141,6 +145,11 @@ pub fn MySpinningCard() -> impl IntoView {
                                     {instructor}
                                     {recurring.then(|| view! {
                                         <span class="badge badge--inline">{i18n::t(lang_now, "recurring")}</span>
+                                    })}
+                                    {(guests > 0).then(|| view! {
+                                        <span class="badge badge--inline" data-testid=format!("my-spinning-guests-{bid}")>
+                                            {i18n::tf(lang_now, "guests_count_format", &[&guests.to_string()])}
+                                        </span>
                                     })}
                                 </div>
                             </div>

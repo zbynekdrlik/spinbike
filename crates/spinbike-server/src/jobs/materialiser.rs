@@ -174,9 +174,11 @@ pub async fn sweep_as_of(pool: &SqlitePool, now: NaiveDateTime) -> Result<SweepS
 
     let booked_counts: HashMap<(i64, String), i64> = {
         let sql = format!(
-            "SELECT template_id, date, COUNT(*) AS cnt FROM bookings
+            "SELECT template_id, date, {seats} AS cnt FROM bookings
              WHERE template_id IN ({tpl_ph}) AND date IN ({date_ph}) AND cancelled_at IS NULL
-             GROUP BY template_id, date"
+             GROUP BY template_id, date",
+            // Seats, not rows: a host's guests take seats too (#389).
+            seats = crate::db::booking_guests::SEATS_SQL,
         );
         let mut q = sqlx::query_as::<_, (i64, String, i64)>(&sql);
         for t in &template_ids {

@@ -51,6 +51,9 @@ pub struct CancelOutcome {
     pub refunded: Option<f64>,
     /// The separate refund `transactions` row, linked from the booking.
     pub refund_transaction_id: Option<i64>,
+    /// Credit refunded for the host's charged GUEST seats (#389), one
+    /// `storno` row per seat, linked from `booking_guest_charges`.
+    pub guest_refunded: f64,
 }
 
 /// Result of [`cancel_booking`].
@@ -65,6 +68,38 @@ pub enum CancelResult {
     AlreadyCharged,
     /// Cancelled (and refunded when applicable).
     Cancelled(CancelOutcome),
+}
+
+/// Write ONE booking refund inside the caller's transaction: a separate
+/// `storno` ledger row of the (already rounded, positive) `refund` with the
+/// refunding staff id and NO `service_id` — so the per-service visit
+/// counters and `last_visit_at` never count a refund as one more visit — and
+/// the matching credit. The single refund write the host cancel (here) and a
+/// guest seat release (`db::booking_guests`, #389) both use. Returns the
+/// refund row's id, for the caller to link by id (never by `note`).
+pub(crate) async fn write_refund(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: i64,
+    staff_id: Option<i64>,
+    refund: f64,
+    note: &str,
+) -> Result<i64> {
+    let refund_id: i64 = sqlx::query_scalar(
+        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, note)
+         VALUES (?, ?, NULL, ?, 'storno', ?) RETURNING id",
+    )
+    .bind(user_id)
+    .bind(staff_id)
+    .bind(refund)
+    .bind(note)
+    .fetch_one(&mut *conn)
+    .await?;
+    sqlx::query("UPDATE users SET credit = ROUND(credit + ?, 2) WHERE id = ?")
+        .bind(refund)
+        .bind(user_id)
+        .execute(&mut *conn)
+        .await?;
+    Ok(refund_id)
 }
 
 /// Cancel one ACTIVE booking.
@@ -113,6 +148,7 @@ pub async fn cancel_booking(
     let mut outcome = CancelOutcome {
         refunded: None,
         refund_transaction_id: None,
+        guest_refunded: 0.0,
     };
 
     if kind == CancelKind::Staff
@@ -129,24 +165,25 @@ pub async fn cancel_booking(
             && amount < 0.0
         {
             let refund = crate::db::users::round_cents(-amount);
-            let refund_id: i64 = sqlx::query_scalar(
-                "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, note)
-                 VALUES (?, ?, NULL, ?, 'storno', ?) RETURNING id",
-            )
-            .bind(user_id)
-            .bind(cancelled_by)
-            .bind(refund)
-            .bind(REFUND_NOTE)
-            .fetch_one(&mut *tx)
-            .await?;
-            sqlx::query("UPDATE users SET credit = ROUND(credit + ?, 2) WHERE id = ?")
-                .bind(refund)
-                .bind(user_id)
-                .execute(&mut *tx)
-                .await?;
+            let refund_id =
+                write_refund(&mut *tx, user_id, cancelled_by, refund, REFUND_NOTE).await?;
             outcome.refunded = Some(refund);
             outcome.refund_transaction_id = Some(refund_id);
         }
+    }
+
+    // #389: a staff cancel of a charged booking also gives back every
+    // charged guest seat (the host paid for them).
+    if kind == CancelKind::Staff && charged_at.is_some() {
+        outcome.guest_refunded = crate::db::booking_guests::release_guest_seats(
+            &mut *tx,
+            booking_id,
+            user_id,
+            cancelled_by,
+            None,
+        )
+        .await?
+        .refunded;
     }
 
     let updated = sqlx::query(
@@ -176,6 +213,7 @@ pub async fn cancel_booking(
         kind = kind.as_str(),
         refunded = ?outcome.refunded,
         refund_transaction_id = ?outcome.refund_transaction_id,
+        guest_refunded = outcome.guest_refunded,
         "booking cancelled"
     );
     Ok(CancelResult::Cancelled(outcome))
@@ -388,7 +426,8 @@ mod tests {
             out,
             CancelOutcome {
                 refunded: None,
-                refund_transaction_id: None
+                refund_transaction_id: None,
+                guest_refunded: 0.0,
             }
         );
         let stornos: i64 = sqlx::query_scalar(
@@ -399,5 +438,71 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(stornos, 0);
+    }
+
+    async fn credit_of(pool: &SqlitePool, uid: i64) -> f64 {
+        sqlx::query_scalar("SELECT credit FROM users WHERE id = ?")
+            .bind(uid)
+            .fetch_one(pool)
+            .await
+            .unwrap()
+    }
+
+    /// #389: a staff cancel of a charged booking refunds the host's seat AND
+    /// every charged guest seat (one storno row each, `service_id` NULL); a
+    /// customer cancel of an uncharged booking with guests moves no money.
+    #[tokio::test]
+    async fn staff_cancel_refunds_host_and_guest_seats() {
+        let pool = setup().await;
+        let host: i64 = sqlx::query_scalar(
+            "INSERT INTO users (email, name, credit) VALUES ('gh@test.com', 'H', 30.0) RETURNING id",
+        )
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let staff = make_user(&pool, "gs@test.com").await;
+        let tid = create_template(&pool, 1, "18:00", 60, None, 10)
+            .await
+            .unwrap();
+        let bid = create_booking(&pool, tid, "2026-11-09", host, None, "manual")
+            .await
+            .unwrap();
+        crate::db::booking_guests::set_guests(&pool, bid, 2, Some(host), false)
+            .await
+            .unwrap();
+        assert!(crate::jobs::charger::charge_one(&pool, bid).await.unwrap());
+        assert_eq!(credit_of(&pool, host).await, 15.0, "30 - 3 seats x 5");
+
+        let out = outcome(
+            cancel_booking(&pool, bid, Some(staff), CancelKind::Staff)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(out.refunded, Some(5.0));
+        assert_eq!(out.guest_refunded, 10.0);
+        assert_eq!(credit_of(&pool, host).await, 30.0);
+        let stornos: Vec<(f64, Option<i64>)> = sqlx::query_as(
+            "SELECT amount, service_id FROM transactions WHERE user_id = ? AND action = 'storno'",
+        )
+        .bind(host)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(stornos, vec![(5.0, None), (5.0, None), (5.0, None)]);
+
+        // Uncharged booking with guests: a customer cancel moves no money.
+        let bid2 = create_booking(&pool, tid, "2026-11-16", host, None, "manual")
+            .await
+            .unwrap();
+        crate::db::booking_guests::set_guests(&pool, bid2, 3, Some(host), false)
+            .await
+            .unwrap();
+        let out2 = outcome(
+            cancel_booking(&pool, bid2, Some(host), CancelKind::Customer)
+                .await
+                .unwrap(),
+        );
+        assert_eq!(out2.guest_refunded, 0.0);
+        assert_eq!(credit_of(&pool, host).await, 30.0);
     }
 }

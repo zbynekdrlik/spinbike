@@ -25,6 +25,9 @@ pub struct ClassSlot {
     pub user_booked: bool,
     pub user_booking_id: Option<i64>,
     pub user_booking_source: Option<String>,
+    /// #389: guests on the caller's own booking (the "+ host" stepper).
+    #[serde(default)]
+    pub user_booking_guests: i64,
     /// #382 R4: the occurrence already started (server, gym-local time) —
     /// no Book button any more.
     #[serde(default)]

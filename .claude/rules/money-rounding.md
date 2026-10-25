@@ -6,6 +6,8 @@ paths:
   - "crates/spinbike-server/src/routes/door.rs"
   - "crates/spinbike-server/src/routes/admin.rs"
   - "crates/spinbike-server/src/jobs/charger.rs"
+  - "crates/spinbike-server/src/db/booking_guests.rs"
+  - "crates/spinbike-server/src/db/booking_cancel.rs"
 ---
 
 # Money writes — round ONCE, reuse EVERYWHERE (#325/#326)
@@ -44,7 +46,10 @@ boundary, `charger.rs`'s 09:00 binding Spinning charge (#343, rule moved
 from "4 hours before" by #382), `db::classes::cancel_booking`'s staff
 refund row + credit (#382 — rounded once from the charge row's amount),
 `db::users::auto_renew_pass`'s expired-pass renewal debit + ledger row (#365,
-`.claude/rules/pass-auto-renewal.md`). Any
+`.claude/rules/pass-auto-renewal.md`), `db::booking_guests`'s per-guest
+charge (`charge_guest_seats`, the price rounded once in `spinning_price`) and
+seat refund (`release_guest_seats` -> `booking_cancel::write_refund`, the one
+storno+credit write both refunds share, #389). Any
 NEW money-mutating write site should follow the same shape — round once,
 right after the value enters the function, reuse it everywhere.
 

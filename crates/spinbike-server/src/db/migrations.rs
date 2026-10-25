@@ -139,6 +139,11 @@ pub(crate) static MIGRATIONS: &[(i64, &str, &str)] = &[
         "bookings: reminded_at + cancel provenance + refund link (spinning rules, #382)",
         V31_BOOKINGS_REMINDER_CANCEL_REFUND,
     ),
+    (
+        32,
+        "bookings: guests count + booking_guest_charges ledger link (host pays for guests, #389)",
+        V32_BOOKING_GUESTS,
+    ),
 ];
 
 /// Post-condition checks `db::run_migrations` runs at the end of a
@@ -1327,6 +1332,36 @@ ALTER TABLE bookings ADD COLUMN cancelled_by INTEGER REFERENCES users(id);
 ALTER TABLE bookings ADD COLUMN cancel_kind TEXT
     CHECK (cancel_kind IS NULL OR cancel_kind IN ('customer', 'staff', 'unsubscribe'));
 ALTER TABLE bookings ADD COLUMN refund_transaction_id INTEGER REFERENCES transactions(id);
+"#;
+
+// V32: guests on a spinning booking (#389, owner ROZHODNUTÉ 2026-10-25 —
+// "Approach A": a guest is a COUNT on the host's own booking, no name, no
+// account). Purely additive — every existing booking gets `guests = 0`.
+//
+// - `bookings.guests`: extra seats the host brings (0..=4, CHECK-enforced
+//   as a backstop for `spinbike_core::booking::MAX_GUESTS`). Capacity is
+//   counted in SEATS = SUM(1 + guests) over the active bookings.
+// - `booking_guest_charges`: one row per CHARGED guest seat, linking the
+//   booking to the host's `visit` ledger row the 09:00 charger (or a staff
+//   increase after the charge) wrote for that seat. `released_at` marks a
+//   seat given back (staff reduced the guests or cancelled the booking);
+//   `refund_transaction_id` is the separate `storno` row when that release
+//   refunded a non-voided, negative charge. The link is by id — never by
+//   note text (same rule as `bookings.refund_transaction_id`, V31).
+const V32_BOOKING_GUESTS: &str = r#"
+ALTER TABLE bookings ADD COLUMN guests INTEGER NOT NULL DEFAULT 0
+    CHECK (guests BETWEEN 0 AND 4);
+
+CREATE TABLE booking_guest_charges (
+    id                    INTEGER PRIMARY KEY AUTOINCREMENT,
+    booking_id            INTEGER NOT NULL REFERENCES bookings(id),
+    transaction_id        INTEGER NOT NULL REFERENCES transactions(id),
+    released_at           TEXT,
+    refund_transaction_id INTEGER REFERENCES transactions(id),
+    created_at            TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX idx_booking_guest_charges_booking ON booking_guest_charges(booking_id);
 "#;
 
 #[cfg(test)]
@@ -4670,5 +4705,60 @@ mod tests {
             bad.is_err(),
             "an unknown cancel_kind must violate the CHECK"
         );
+    }
+
+    /// V32 (#389): `bookings.guests` defaults to 0 for an existing row, only
+    /// accepts 0..=4, and the guest-charge link table exists.
+    #[tokio::test]
+    async fn v32_adds_guests_column_and_guest_charge_table() {
+        let pool = create_memory_pool().await.unwrap();
+        run_migrations(&pool).await.unwrap();
+        let uid: i64 =
+            sqlx::query_scalar("INSERT INTO users (email, name) VALUES ('v32@x','v') RETURNING id")
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        let bid: i64 = sqlx::query_scalar(
+            "INSERT INTO bookings (template_id, date, user_id) VALUES (1, '2026-10-26', ?) RETURNING id",
+        )
+        .bind(uid)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        let guests: i64 = sqlx::query_scalar("SELECT guests FROM bookings WHERE id = ?")
+            .bind(bid)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(guests, 0);
+        for ok in [0, 1, 4] {
+            sqlx::query("UPDATE bookings SET guests = ? WHERE id = ?")
+                .bind(ok)
+                .bind(bid)
+                .execute(&pool)
+                .await
+                .unwrap_or_else(|e| panic!("guests {ok} must be accepted: {e}"));
+        }
+        for bad in [-1, 5] {
+            let r = sqlx::query("UPDATE bookings SET guests = ? WHERE id = ?")
+                .bind(bad)
+                .bind(bid)
+                .execute(&pool)
+                .await;
+            assert!(r.is_err(), "guests {bad} must violate the CHECK");
+        }
+        let cols: Vec<String> =
+            sqlx::query_scalar("SELECT name FROM pragma_table_info('booking_guest_charges')")
+                .fetch_all(&pool)
+                .await
+                .unwrap();
+        for c in [
+            "booking_id",
+            "transaction_id",
+            "released_at",
+            "refund_transaction_id",
+        ] {
+            assert!(cols.contains(&c.to_string()), "missing {c}: {cols:?}");
+        }
     }
 }

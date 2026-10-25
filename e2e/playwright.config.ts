@@ -6,7 +6,8 @@ import { defineConfig, devices } from '@playwright/test';
 const WEBKIT_IPHONE_SPECS = /ios-sheet-close\.spec\.ts$/;
 // #385: specs that run in BOTH projects — Chromium AND the real-WebKit
 // iPhone (the CEO runs the staff spinning screen on his phone).
-const BOTH_ENGINE_SPECS = /staff-spinning\.spec\.ts$/;
+// #389: guests — customers book on phones, the CEO adjusts guests on his.
+const BOTH_ENGINE_SPECS = /(staff-spinning|spinning-guests)\.spec\.ts$/;
 
 export default defineConfig({
     testDir: './tests',
