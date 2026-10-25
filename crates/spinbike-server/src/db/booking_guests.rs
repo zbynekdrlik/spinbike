@@ -100,10 +100,12 @@ pub struct GuestRelease {
 }
 
 /// Release up to `count` (`None` = all) still-held CHARGED guest seats of
-/// `booking_id`, newest first, inside the caller's transaction. A seat whose
-/// charge row is non-voided and negative gets ONE `storno` refund row
-/// (positive, `released_by` as staff, `service_id` NULL) and the host is
-/// credited; the amount is rounded once and reused for both writes.
+/// `booking_id` inside the caller's transaction — seats whose charge row was
+/// already voided first (that money is back already), then newest first. A
+/// seat whose charge row is non-voided and negative gets ONE `storno` refund
+/// row (positive, `released_by` as staff, `service_id` NULL) and the host is
+/// credited (`booking_cancel::write_refund`); the amount is rounded once and
+/// reused for both writes.
 pub async fn release_guest_seats(
     conn: &mut SqliteConnection,
     booking_id: i64,
@@ -116,7 +118,7 @@ pub async fn release_guest_seats(
            FROM booking_guest_charges g
            JOIN transactions t ON t.id = g.transaction_id
           WHERE g.booking_id = ? AND g.released_at IS NULL
-          ORDER BY g.id DESC
+          ORDER BY (t.deleted_at IS NULL), g.id DESC
           LIMIT ?",
     )
     .bind(booking_id)
@@ -129,21 +131,14 @@ pub async fn release_guest_seats(
         let refund_id = match amount {
             Some(a) if a < 0.0 => {
                 let refund = crate::db::users::round_cents(-a);
-                let id: i64 = sqlx::query_scalar(
-                    "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, note)
-                     VALUES (?, ?, NULL, ?, 'storno', ?) RETURNING id",
+                let id = crate::db::booking_cancel::write_refund(
+                    conn,
+                    host_user_id,
+                    released_by,
+                    refund,
+                    GUEST_REFUND_NOTE,
                 )
-                .bind(host_user_id)
-                .bind(released_by)
-                .bind(refund)
-                .bind(GUEST_REFUND_NOTE)
-                .fetch_one(&mut *conn)
                 .await?;
-                sqlx::query("UPDATE users SET credit = ROUND(credit + ?, 2) WHERE id = ?")
-                    .bind(refund)
-                    .bind(host_user_id)
-                    .execute(&mut *conn)
-                    .await?;
                 out.refunded = crate::db::users::round_cents(out.refunded + refund);
                 Some(id)
             }
@@ -241,6 +236,7 @@ pub async fn set_guests(
     let updated = sqlx::query(&format!(
         "UPDATE bookings SET guests = ?1
           WHERE id = ?2 AND cancelled_at IS NULL
+            AND (?5 OR charged_at IS NULL)
             AND (?1 <= guests
                  OR (SELECT {SEATS_SQL} FROM bookings
                       WHERE template_id = ?3 AND date = ?4 AND cancelled_at IS NULL)
@@ -251,6 +247,7 @@ pub async fn set_guests(
     .bind(booking_id)
     .bind(template_id)
     .bind(&date)
+    .bind(staff)
     .execute(&mut *tx)
     .await?
     .rows_affected();
@@ -502,6 +499,43 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(released, 1);
+    }
+
+    /// A seat whose charge was already voided (money back) is released
+    /// FIRST: reducing 2 -> 1 must keep the guest who is still paid for.
+    #[tokio::test]
+    async fn reduce_releases_a_voided_seat_before_a_paid_one() {
+        let pool = setup().await;
+        let tid = create_template(&pool, 6, "18:00", 60, None, 10)
+            .await
+            .unwrap();
+        let host = make_user(&pool, "w@x", 20.0).await;
+        let b = create_booking(&pool, tid, "2026-11-07", host, None, "manual")
+            .await
+            .unwrap();
+        changed(set_guests(&pool, b, 2, Some(host), false).await.unwrap());
+        crate::jobs::charger::charge_one(&pool, b).await.unwrap();
+        // Void the OLDER guest charge (lower link id).
+        sqlx::query(
+            "UPDATE transactions SET deleted_at = datetime('now')
+              WHERE id = (SELECT transaction_id FROM booking_guest_charges
+                           WHERE booking_id = ? ORDER BY id LIMIT 1)",
+        )
+        .bind(b)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let c = changed(set_guests(&pool, b, 1, None, true).await.unwrap());
+        assert_eq!(c.refunded, 0.0, "the voided seat goes, no second refund");
+        let held_paid: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM booking_guest_charges g JOIN transactions t ON t.id = g.transaction_id
+              WHERE g.booking_id = ? AND g.released_at IS NULL AND t.deleted_at IS NULL",
+        )
+        .bind(b)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        assert_eq!(held_paid, 1, "the remaining guest is still paid for");
     }
 
     #[tokio::test]

@@ -14,6 +14,7 @@ use leptos::prelude::*;
 use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
+use crate::components::guest_stepper::{GuestStepper, put_guests};
 use crate::i18n::{self, DAY_KEYS, Lang};
 use crate::pages::schedule::ClassSlot;
 use spinbike_core::booking::MAX_GUESTS;
@@ -36,6 +37,57 @@ enum Pending {
         user_id: i64,
         name: String,
     },
+}
+
+impl Pending {
+    /// The confirm panel's question for this write.
+    fn question(&self, l: Lang) -> String {
+        match self {
+            Pending::CancelClass => i18n::t(l, "spin_confirm_cancel_class").to_string(),
+            Pending::Unbook {
+                name,
+                refund: Some(amount),
+                ..
+            } => i18n::tf(
+                l,
+                "spin_confirm_unbook_refund",
+                &[name, &format!("{amount:.2}")],
+            ),
+            Pending::Unbook {
+                name, refund: None, ..
+            } => i18n::tf(l, "spin_confirm_unbook", &[name]),
+            Pending::EndPersistent { name, .. } => {
+                i18n::tf(l, "spin_confirm_end_persistent", &[name])
+            }
+        }
+    }
+}
+
+/// Load one occurrence's participants (sorted by surname) into the table,
+/// or its localized error; `loaded` flips either way.
+fn load_participants(
+    template_id: i64,
+    date: String,
+    lang: ReadSignal<Lang>,
+    set_participants: WriteSignal<Vec<Participant>>,
+    set_err: WriteSignal<String>,
+    set_loaded: WriteSignal<bool>,
+) {
+    spawn_local(async move {
+        match api::get_coded::<Vec<Participant>>(&format!(
+            "/api/classes/{template_id}/{date}/participants"
+        ))
+        .await
+        {
+            Ok(list) => set_participants.set(model::sorted_by_surname(list)),
+            Err(e) => set_err.set(i18n::localize_api_error(
+                lang.get_untracked(),
+                e.code,
+                &e.message,
+            )),
+        }
+        set_loaded.set(true);
+    });
 }
 
 /// "Po 18:00" for the slot of `slot`.
@@ -71,24 +123,14 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
     let (pending, set_pending) = signal(None::<Pending>);
     let (busy, set_busy) = signal(false);
 
-    {
-        let date = date.clone();
-        spawn_local(async move {
-            match api::get_coded::<Vec<Participant>>(&format!(
-                "/api/classes/{template_id}/{date}/participants"
-            ))
-            .await
-            {
-                Ok(list) => set_participants.set(model::sorted_by_surname(list)),
-                Err(e) => set_err.set(i18n::localize_api_error(
-                    lang.get_untracked(),
-                    e.code,
-                    &e.message,
-                )),
-            }
-            set_loaded.set(true);
-        });
-    }
+    load_participants(
+        template_id,
+        date.clone(),
+        lang,
+        set_participants,
+        set_err,
+        set_loaded,
+    );
 
     // Run the confirmed write; success reloads the page data, failure stays
     // visible in the panel.
@@ -158,20 +200,7 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
         set_busy.set(true);
         set_err.set(String::new());
         spawn_local(async move {
-            #[derive(serde::Serialize)]
-            struct Req {
-                guests: i64,
-            }
-            #[derive(serde::Deserialize)]
-            struct Resp {
-                #[allow(dead_code)]
-                guests: i64,
-            }
-            let res = api::put_json::<Req, Resp>(
-                &format!("/api/bookings/{booking_id}/guests"),
-                &Req { guests },
-            )
-            .await;
+            let res = put_guests(booking_id, guests).await;
             set_busy.set(false);
             match res {
                 Ok(_) => on_changed.run(()),
@@ -224,20 +253,7 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
 
             {move || pending.get().map(|p| {
                 let l = lang.get();
-                let question = match &p {
-                    Pending::CancelClass => i18n::t(l, "spin_confirm_cancel_class").to_string(),
-                    Pending::Unbook { name, refund: Some(amount), .. } => i18n::tf(
-                        l,
-                        "spin_confirm_unbook_refund",
-                        &[name, &format!("{amount:.2}")],
-                    ),
-                    Pending::Unbook { name, refund: None, .. } => {
-                        i18n::tf(l, "spin_confirm_unbook", &[name])
-                    }
-                    Pending::EndPersistent { name, .. } => {
-                        i18n::tf(l, "spin_confirm_end_persistent", &[name])
-                    }
-                };
+                let question = p.question(l);
                 let run_pending = run_pending.clone();
                 view! {
                     <div class="alert spin-confirm" role="alertdialog" data-testid="spin-confirm">
@@ -332,31 +348,17 @@ pub fn ClassDetail(occurrence: ClassSlot, #[prop(into)] on_changed: Callback<()>
                                             {format!("{:.2} \u{20ac}", p.credit)}
                                         </td>
                                         <td>
-                                            <div class="guest-stepper" data-testid=format!("spin-guests-{bid}")>
-                                                <button
-                                                    type="button"
-                                                    class="btn btn--outline btn--compact"
-                                                    data-testid=format!("spin-guests-minus-{bid}")
-                                                    aria-label=i18n::t(l, "guest_remove")
-                                                    disabled=move || busy.get() || cancelled || guests == 0
-                                                    on:click=move |_| change_guests(bid, guests - 1)
-                                                >
-                                                    "−"
-                                                </button>
-                                                <span class="guest-stepper__count" data-testid=format!("spin-guests-count-{bid}")>
-                                                    {guests}
-                                                </span>
-                                                <button
-                                                    type="button"
-                                                    class="btn btn--outline btn--compact"
-                                                    data-testid=format!("spin-guests-plus-{bid}")
-                                                    aria-label=i18n::t(l, "guest_add")
-                                                    disabled=move || busy.get() || plus_blocked
-                                                    on:click=move |_| change_guests(bid, guests + 1)
-                                                >
-                                                    "+"
-                                                </button>
-                                            </div>
+                                            <GuestStepper
+                                                prefix="spin-guests"
+                                                key=bid.to_string()
+                                                guests=guests
+                                                count_text=Signal::derive(move || guests.to_string())
+                                                plus_text=Signal::derive(|| "+".to_string())
+                                                busy=busy
+                                                minus_blocked=cancelled
+                                                plus_blocked=plus_blocked
+                                                on_set=move |n: i64| change_guests(bid, n)
+                                            />
                                         </td>
                                         <td data-testid=format!("spin-kind-{bid}")>
                                             {i18n::t(l, if persistent { "spin_kind_persistent" } else { "spin_kind_once" })}

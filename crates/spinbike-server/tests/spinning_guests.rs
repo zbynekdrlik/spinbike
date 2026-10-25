@@ -283,3 +283,41 @@ async fn staff_changes_guests_after_the_charge_with_refund_and_charge() {
     assert_eq!(status, StatusCode::NO_CONTENT);
     assert_eq!(credit_of(&app, app.customer_id).await, 20.0);
 }
+
+/// The guest seats count in the gym's attendance (one `visit` row each), but
+/// the host's own per-customer visit counter counts only the host.
+#[tokio::test]
+async fn guest_rows_do_not_inflate_the_hosts_own_visit_count() {
+    let app = TestApp::new().await;
+    let yesterday = today() - Duration::days(1);
+    let tid = template_on(&app, yesterday, 10).await;
+    let bid = seed_booking(&app, tid, yesterday, app.customer_id).await;
+    sqlx::query("UPDATE bookings SET guests = 2 WHERE id = ?")
+        .bind(bid)
+        .execute(&app.pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        spinbike_server::jobs::charger::tick(&app.pool)
+            .await
+            .unwrap(),
+        1
+    );
+    let visit_rows: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM transactions WHERE user_id = ? AND action = 'visit'",
+    )
+    .bind(app.customer_id)
+    .fetch_one(&app.pool)
+    .await
+    .unwrap();
+    assert_eq!(visit_rows, 3, "host + 2 guest seats in the ledger");
+
+    let (status, stats) = app
+        .request(get(
+            &format!("/api/users/{}/stats", app.customer_id),
+            &app.staff_token,
+        ))
+        .await;
+    assert_eq!(status, StatusCode::OK, "got {stats}");
+    assert_eq!(stats["totals"]["all_time"]["visits"], 1);
+}

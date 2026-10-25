@@ -532,16 +532,29 @@ async fn cancel_booking(
 }
 
 /// Broadcast the occupancy (seats) of one class occurrence to every
-/// connected schedule.
+/// connected schedule. Best-effort: the write already committed, so a failed
+/// read is logged and the broadcast skipped (never a misleading `0/0`).
 async fn broadcast_occupancy(state: &AppState, template_id: i64, date: &str) {
-    let booked = db::get_booking_count(&state.pool, template_id, date)
-        .await
-        .unwrap_or(0);
-    let capacity: i64 = sqlx::query_scalar("SELECT capacity FROM class_templates WHERE id = ?")
-        .bind(template_id)
-        .fetch_one(&state.pool)
-        .await
-        .unwrap_or(0);
+    let booked = match db::get_booking_count(&state.pool, template_id, date).await {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::warn!(template_id, date, error = ?e, "occupancy broadcast skipped: seat count failed");
+            return;
+        }
+    };
+    let capacity: i64 = match sqlx::query_scalar(
+        "SELECT capacity FROM class_templates WHERE id = ?",
+    )
+    .bind(template_id)
+    .fetch_one(&state.pool)
+    .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!(template_id, date, error = ?e, "occupancy broadcast skipped: capacity read failed");
+            return;
+        }
+    };
     let _ = state.event_tx.send(ServerMsg::BookingUpdate {
         template_id,
         date: date.to_string(),
@@ -587,6 +600,12 @@ async fn set_guests(
 
     let is_staff = claims.role.can_cancel_any_booking();
     if owner_id != claims.sub && !is_staff {
+        tracing::info!(
+            booking_id,
+            caller = claims.sub,
+            owner_id,
+            "guest change rejected: not the caller's booking"
+        );
         return Err(ApiError::Forbidden(ErrorCode::BookingNotOwned));
     }
     if db::is_occurrence_cancelled(&state.pool, template_id, &date)

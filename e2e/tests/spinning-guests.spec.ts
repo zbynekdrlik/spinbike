@@ -5,6 +5,7 @@ import {
     loginViaAPI,
     seedCustomerAccount,
     createUniqueUser,
+    bratislavaToday,
 } from './helpers';
 import {
     BASE_URL,
@@ -30,12 +31,19 @@ import {
  * customers book on their phones, the CEO runs the staff screen on his.
  */
 
-/** A not-yet-started class (this or next week) the customer may still change, with `seats` free seats. */
+/** A future class (this or next week, not today) the customer may still change, with `seats` free seats. */
 async function slotWithFreeSeats(seats: number): Promise<{ slot: ClassOccurrence; week: 0 | 1 }> {
     for (const week of [0, 1] as const) {
         const { from, to } = weekRange(week);
         const slot = (await listClasses(from, to)).find(
-            (c) => !c.cancelled && !c.started && c.cancel_open && c.booked + seats <= c.capacity,
+            // Never today: `cancel_open` flips at 09:00 on the class day, so a
+            // run around 08:59 would race the deadline mid-test.
+            (c) =>
+                c.date !== bratislavaToday() &&
+                !c.cancelled &&
+                !c.started &&
+                c.cancel_open &&
+                c.booked + seats <= c.capacity,
         );
         if (slot) return { slot, week };
     }

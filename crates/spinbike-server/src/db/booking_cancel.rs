@@ -70,6 +70,38 @@ pub enum CancelResult {
     Cancelled(CancelOutcome),
 }
 
+/// Write ONE booking refund inside the caller's transaction: a separate
+/// `storno` ledger row of the (already rounded, positive) `refund` with the
+/// refunding staff id and NO `service_id` — so the per-service visit
+/// counters and `last_visit_at` never count a refund as one more visit — and
+/// the matching credit. The single refund write the host cancel (here) and a
+/// guest seat release (`db::booking_guests`, #389) both use. Returns the
+/// refund row's id, for the caller to link by id (never by `note`).
+pub(crate) async fn write_refund(
+    conn: &mut sqlx::SqliteConnection,
+    user_id: i64,
+    staff_id: Option<i64>,
+    refund: f64,
+    note: &str,
+) -> Result<i64> {
+    let refund_id: i64 = sqlx::query_scalar(
+        "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, note)
+         VALUES (?, ?, NULL, ?, 'storno', ?) RETURNING id",
+    )
+    .bind(user_id)
+    .bind(staff_id)
+    .bind(refund)
+    .bind(note)
+    .fetch_one(&mut *conn)
+    .await?;
+    sqlx::query("UPDATE users SET credit = ROUND(credit + ?, 2) WHERE id = ?")
+        .bind(refund)
+        .bind(user_id)
+        .execute(&mut *conn)
+        .await?;
+    Ok(refund_id)
+}
+
 /// Cancel one ACTIVE booking.
 ///
 /// For [`CancelKind::Staff`], a booking charged a NON-ZERO amount (a pass
@@ -133,21 +165,8 @@ pub async fn cancel_booking(
             && amount < 0.0
         {
             let refund = crate::db::users::round_cents(-amount);
-            let refund_id: i64 = sqlx::query_scalar(
-                "INSERT INTO transactions (user_id, staff_id, service_id, amount, action, note)
-                 VALUES (?, ?, NULL, ?, 'storno', ?) RETURNING id",
-            )
-            .bind(user_id)
-            .bind(cancelled_by)
-            .bind(refund)
-            .bind(REFUND_NOTE)
-            .fetch_one(&mut *tx)
-            .await?;
-            sqlx::query("UPDATE users SET credit = ROUND(credit + ?, 2) WHERE id = ?")
-                .bind(refund)
-                .bind(user_id)
-                .execute(&mut *tx)
-                .await?;
+            let refund_id =
+                write_refund(&mut *tx, user_id, cancelled_by, refund, REFUND_NOTE).await?;
             outcome.refunded = Some(refund);
             outcome.refund_transaction_id = Some(refund_id);
         }

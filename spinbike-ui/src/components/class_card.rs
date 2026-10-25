@@ -3,6 +3,7 @@ use wasm_bindgen_futures::spawn_local;
 
 use crate::api;
 use crate::auth;
+use crate::components::guest_stepper::{GuestStepper, put_guests};
 use crate::i18n::{self, Lang};
 use crate::pages::schedule::ClassSlot;
 use spinbike_core::booking::MAX_GUESTS;
@@ -101,23 +102,9 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
         set_loading.set(true);
         set_error.set(String::new());
         spawn_local(async move {
-            #[derive(serde::Serialize)]
-            struct Req {
-                guests: i64,
-            }
-            #[derive(serde::Deserialize)]
-            struct Resp {
-                #[allow(dead_code)]
-                guests: i64,
-            }
             // A refused change (deadline passed, class full) shows its
             // localized reason — never swallowed.
-            match api::put_json::<Req, Resp>(
-                &format!("/api/bookings/{bid}/guests"),
-                &Req { guests: n },
-            )
-            .await
-            {
+            match put_guests(bid, n).await {
                 Ok(_) => on_change.run(()),
                 Err(e) => set_error.set(i18n::localize_api_error(
                     lang.get_untracked(),
@@ -140,10 +127,8 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
     let book_testid = format!("book-{template_id}-{}", slot.date);
     let binding_testid = format!("binding-{template_id}-{}", slot.date);
     let started_testid = format!("started-{template_id}-{}", slot.date);
-    let guests_testid = format!("guests-{template_id}-{}", slot.date);
-    let guests_count_testid = format!("guests-count-{template_id}-{}", slot.date);
-    let guests_minus_testid = format!("guests-minus-{template_id}-{}", slot.date);
-    let guests_plus_testid = format!("guests-plus-{template_id}-{}", slot.date);
+    let guests_key = format!("{template_id}-{}", slot.date);
+    let guests_count_testid = format!("guests-count-{guests_key}");
 
     // Stepper while the customer may still change it; afterwards (binding)
     // just the count, when there are guests.
@@ -153,30 +138,19 @@ pub fn ClassCard(slot: ClassSlot, #[prop(into)] on_change: Callback<()>) -> impl
         let plus_blocked = guests >= MAX_GUESTS || slot_full;
         Some(
             view! {
-                <div class="guest-stepper" data-testid=guests_testid>
-                    <button
-                        type="button"
-                        class="btn btn--outline btn--compact guest-stepper__btn"
-                        data-testid=guests_minus_testid
-                        aria-label=move || i18n::t(lang.get(), "guest_remove")
-                        disabled=move || loading.get() || guests == 0
-                        on:click=move |_| set_guests_to(guests - 1)
-                    >
-                        "−"
-                    </button>
-                    <span class="guest-stepper__count" data-testid=guests_count_testid>
-                        {move || i18n::tf(lang.get(), "guests_count_format", &[&guests.to_string()])}
-                    </span>
-                    <button
-                        type="button"
-                        class="btn btn--outline btn--compact guest-stepper__btn"
-                        data-testid=guests_plus_testid
-                        disabled=move || loading.get() || plus_blocked
-                        on:click=move |_| set_guests_to(guests + 1)
-                    >
-                        {move || i18n::t(lang.get(), "guest_add")}
-                    </button>
-                </div>
+                <GuestStepper
+                    prefix="guests"
+                    key=guests_key
+                    guests=guests
+                    count_text=Signal::derive(move || {
+                        i18n::tf(lang.get(), "guests_count_format", &[&guests.to_string()])
+                    })
+                    plus_text=Signal::derive(move || i18n::t(lang.get(), "guest_add").to_string())
+                    busy=loading
+                    minus_blocked=false
+                    plus_blocked=plus_blocked
+                    on_set=move |n: i64| set_guests_to(n)
+                />
             }
             .into_any(),
         )

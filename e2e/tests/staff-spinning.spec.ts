@@ -5,6 +5,7 @@ import {
     loginViaAPI,
     createUniqueUser,
     contrastOf,
+    boundaryContrastOf,
 } from './helpers';
 import {
     BASE_URL,
@@ -191,7 +192,11 @@ test.describe('Staff spinning screen (#385)', () => {
         try {
             await openStaffSpinningCell(page, slot.template_id, slot.date);
             const cell = page.locator(`[data-testid="occ-cell-${slot.template_id}-${slot.date}"]`);
-            const before = (await listParticipants(token, slot.template_id, slot.date)).length;
+            // The cell counts SEATS (host + guests, #389), not participant rows.
+            const seatsNow = async () =>
+                (await listClasses(slot.date, slot.date)).find((c) => c.template_id === slot.template_id)!
+                    .booked;
+            const before = await seatsNow();
 
             // "Len na tento termin" -> the row appears, the cell counts +1.
             const onceHit = await findInAddPerson(page, once.card_code, once.user_id);
@@ -346,61 +351,3 @@ test.describe('Staff spinning screen (#385)', () => {
     });
 });
 
-/**
- * WCAG contrast of a button's BOUNDARY against the surface behind it: the
- * better of its own (composited) fill and its border colour, each against the
- * effective background of its parent (WCAG 1.4.11 non-text contrast, 3:1).
- */
-async function boundaryContrastOf(btn: import('@playwright/test').Locator): Promise<number> {
-    return btn.evaluate((el) => {
-        type RGBA = [number, number, number, number];
-        const parse = (s: string): RGBA => {
-            const nums = (s.match(/[\d.]+/g) ?? []).map(Number);
-            if (s.startsWith('color(srgb')) {
-                return [nums[0] * 255, nums[1] * 255, nums[2] * 255, nums.length > 3 ? nums[3] : 1];
-            }
-            return [nums[0], nums[1], nums[2], nums.length > 3 ? nums[3] : 1];
-        };
-        const over = (top: RGBA, bottom: RGBA): RGBA => {
-            const a = top[3];
-            return [
-                top[0] * a + bottom[0] * (1 - a),
-                top[1] * a + bottom[1] * (1 - a),
-                top[2] * a + bottom[2] * (1 - a),
-                1,
-            ];
-        };
-        const effectiveBg = (start: Element | null): RGBA => {
-            const layers: RGBA[] = [];
-            let node = start;
-            while (node) {
-                const bg = parse(getComputedStyle(node).backgroundColor);
-                if (bg[3] > 0) {
-                    layers.push(bg);
-                    if (bg[3] >= 1) break;
-                }
-                node = node.parentElement;
-            }
-            let bg: RGBA = [255, 255, 255, 1];
-            for (let i = layers.length - 1; i >= 0; i--) bg = over(layers[i], bg);
-            return bg;
-        };
-        const lum = (c: RGBA) => {
-            const ch = c.slice(0, 3).map((v) => {
-                const x = v / 255;
-                return x <= 0.03928 ? x / 12.92 : Math.pow((x + 0.055) / 1.055, 2.4);
-            });
-            return 0.2126 * ch[0] + 0.7152 * ch[1] + 0.0722 * ch[2];
-        };
-        const ratio = (a: RGBA, b: RGBA) => {
-            const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
-            return (hi + 0.05) / (lo + 0.05);
-        };
-        const behind = effectiveBg(el.parentElement);
-        const style = getComputedStyle(el);
-        const fill = over(parse(style.backgroundColor), behind);
-        const borderWidth = parseFloat(style.borderTopWidth) || 0;
-        const border = borderWidth > 0 ? over(parse(style.borderTopColor), behind) : behind;
-        return Math.max(ratio(fill, behind), ratio(border, behind));
-    });
-}
